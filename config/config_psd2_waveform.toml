@@ -1,0 +1,32 @@
+# DELILA DAQ Configuration - PSD2 Waveform Viewing
+# Purpose: ch16 positive 1Vpp 22kHz signal waveform display
+# Usage: ./scripts/start_daq.sh config/config_psd2_waveform.toml
+
+[operator]
+experiment_name = "PSD2_Waveform"
+
+[network]
+# PSD2 digitizer (VX2730)
+[[network.sources]]
+id = 0
+name = "psd2-waveform"
+type = "psd2"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig2://172.18.4.56"
+config_file = "config/digitizers/psd2_waveform.json"
+pipeline_order = 1
+
+# Merger
+[network.merger]
+subscribe = ["tcp://localhost:5555"]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+# Monitor (waveform viewing via web UI)
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

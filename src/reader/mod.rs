@@ -12,7 +12,8 @@ pub mod decoder;
 pub use crate::config::FirmwareType;
 pub use caen::{CaenError, CaenHandle, EndpointHandle};
 pub use decoder::{
-    DataType, DecodeResult, EventData, Psd1Config, Psd1Decoder, Psd2Config, Psd2Decoder, Waveform,
+    DataType, DecodeResult, EventData, Pha1Config, Pha1Decoder, Psd1Config, Psd1Decoder,
+    Psd2Config, Psd2Decoder, Waveform,
 };
 
 use crate::common::{
@@ -56,6 +57,7 @@ pub enum ReaderError {
 enum DecoderKind {
     Psd2(Psd2Decoder),
     Psd1(Psd1Decoder),
+    Pha1(Pha1Decoder),
 }
 
 impl DecoderKind {
@@ -63,6 +65,7 @@ impl DecoderKind {
         match self {
             Self::Psd2(d) => d.classify(raw),
             Self::Psd1(d) => d.classify(raw),
+            Self::Pha1(d) => d.classify(raw),
         }
     }
 
@@ -70,6 +73,7 @@ impl DecoderKind {
         match self {
             Self::Psd2(d) => d.decode(raw),
             Self::Psd1(d) => d.decode(raw),
+            Self::Pha1(d) => d.decode(raw),
         }
     }
 }
@@ -111,7 +115,7 @@ impl Default for ReaderConfig {
             firmware: FirmwareType::PSD2,
             module_id: 0,
             read_timeout_ms: 100,
-            buffer_size: 1024 * 1024, // 1MB
+            buffer_size: 64 * 1024 * 1024, // 64MB - CAEN FELib has no bounds check
             heartbeat_interval_ms: 1000,
             time_step_ns: 2.0, // 500 MHz ADC = 2ns per sample
             config_file: None,
@@ -130,7 +134,7 @@ impl ReaderConfig {
         let firmware = match source.source_type {
             crate::config::SourceType::Psd2 => FirmwareType::PSD2,
             crate::config::SourceType::Psd1 => FirmwareType::PSD1,
-            crate::config::SourceType::Pha1 => FirmwareType::PHA,
+            crate::config::SourceType::Pha1 => FirmwareType::PHA1,
             // Emulator/Zle sources shouldn't create a Reader — caller should handle
             _ => return None,
         };
@@ -143,7 +147,7 @@ impl ReaderConfig {
             firmware,
             module_id: source.module_id.unwrap_or(source_id as u8),
             read_timeout_ms: 100,
-            buffer_size: 1024 * 1024, // 1MB
+            buffer_size: 64 * 1024 * 1024, // 64MB - CAEN FELib has no bounds check
             heartbeat_interval_ms: 1000,
             time_step_ns: source.time_step_ns.unwrap_or(2.0),
             config_file: source.config_file.clone(),
@@ -360,9 +364,9 @@ impl Reader {
         &self.metrics
     }
 
-    /// Convert EventData to CommonEventData
-    fn convert_event(event: &EventData) -> CommonEventData {
-        if let Some(ref wf) = event.waveform {
+    /// Convert EventData to CommonEventData (consumes event, zero-copy for waveforms)
+    fn convert_event(event: EventData) -> CommonEventData {
+        if let Some(wf) = event.waveform {
             CommonEventData::with_waveform(
                 event.module,
                 event.channel,
@@ -371,12 +375,12 @@ impl Reader {
                 event.timestamp_ns,
                 event.flags as u64,
                 CommonWaveform {
-                    analog_probe1: wf.analog_probe1.clone(),
-                    analog_probe2: wf.analog_probe2.clone(),
-                    digital_probe1: wf.digital_probe1.clone(),
-                    digital_probe2: wf.digital_probe2.clone(),
-                    digital_probe3: wf.digital_probe3.clone(),
-                    digital_probe4: wf.digital_probe4.clone(),
+                    analog_probe1: wf.analog_probe1,   // move, not clone
+                    analog_probe2: wf.analog_probe2,   // move
+                    digital_probe1: wf.digital_probe1, // move
+                    digital_probe2: wf.digital_probe2, // move
+                    digital_probe3: wf.digital_probe3, // move
+                    digital_probe4: wf.digital_probe4, // move
                     time_resolution: wf.time_resolution,
                     trigger_threshold: wf.trigger_threshold,
                 },
@@ -437,7 +441,7 @@ impl Reader {
     /// Respects state machine: only arms/starts digitizer when state transitions occur.
     fn read_loop(
         config: ReaderConfig,
-        tx: mpsc::UnboundedSender<decoder::RawData>,
+        tx: mpsc::Sender<decoder::RawData>,
         state_rx: watch::Receiver<ComponentState>,
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
@@ -457,6 +461,15 @@ impl Reader {
         let mut hw_armed = false;
         let mut hw_running = false;
         let mut prev_state = ComponentState::Idle;
+
+        // Pre-allocate reusable read buffer.
+        // CAEN FELib does NOT check buffer bounds — undersized buffers cause SIGBUS.
+        // Must be large enough for worst-case data (high rate + waveforms).
+        let mut read_buffer: Vec<u8> = vec![0u8; config.buffer_size];
+        info!(
+            buffer_size = config.buffer_size,
+            "ReadLoop buffer allocated"
+        );
 
         loop {
             // Check shutdown flag
@@ -556,8 +569,8 @@ impl Reader {
                 continue;
             }
 
-            // Read data from digitizer
-            match endpoint.read_data(config.read_timeout_ms, config.buffer_size) {
+            // Read data from digitizer (reusing pre-allocated buffer)
+            match endpoint.read_data(config.read_timeout_ms, &mut read_buffer) {
                 Ok(Some(raw)) => {
                     metrics
                         .bytes_read
@@ -569,13 +582,39 @@ impl Reader {
                     // Update queue length metric (approximate)
                     metrics.queue_length.fetch_add(1, Ordering::Relaxed);
 
-                    if tx.send(decoder_raw).is_err() {
-                        warn!("Decode channel closed, stopping read loop");
+                    // Send to decode channel with back-pressure retry.
+                    // NOTE: blocking_send() causes TLS fatal error on macOS,
+                    // so we use try_send() + retry loop instead.
+                    // Check shutdown/state on each retry to avoid hanging on Stop.
+                    let mut pending = decoder_raw;
+                    let mut channel_closed = false;
+                    loop {
+                        match tx.try_send(pending) {
+                            Ok(()) => break,
+                            Err(mpsc::error::TrySendError::Full(returned)) => {
+                                // Check if we should stop retrying
+                                if shutdown.load(Ordering::Relaxed)
+                                    || *state_rx.borrow() != ComponentState::Running
+                                {
+                                    warn!("Dropping pending data during shutdown/stop");
+                                    break;
+                                }
+                                pending = returned;
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                warn!("Decode channel closed, stopping read loop");
+                                channel_closed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if channel_closed {
                         break;
                     }
                 }
                 Ok(None) => {
-                    // Timeout - no data available, continue
+                    // Timeout - no data available, continue polling
                 }
                 Err(e) => {
                     // Check if it's a stop signal
@@ -583,7 +622,7 @@ impl Reader {
                         info!("Received STOP signal from digitizer");
                         break;
                     }
-                    error!(error = %e, "Read error");
+                    error!(error = %e, code = e.code, "Read error");
                     // Continue on non-fatal errors
                 }
             }
@@ -600,7 +639,7 @@ impl Reader {
     /// DecodeLoop task - decodes raw data and publishes via ZMQ
     async fn decode_loop(
         config: ReaderConfig,
-        mut rx: mpsc::UnboundedReceiver<decoder::RawData>,
+        mut rx: mpsc::Receiver<decoder::RawData>,
         mut data_socket: publish::Publish,
         metrics: Arc<ReaderMetrics>,
         state_rx: watch::Receiver<ComponentState>,
@@ -627,10 +666,13 @@ impl Reader {
                 };
                 DecoderKind::Psd1(Psd1Decoder::new(psd1_config))
             }
-            FirmwareType::PHA => {
-                return Err(ReaderError::Config(
-                    "PHA1 decoder not yet implemented".to_string(),
-                ));
+            FirmwareType::PHA1 => {
+                let pha1_config = Pha1Config {
+                    time_step_ns: config.time_step_ns,
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                };
+                DecoderKind::Pha1(Pha1Decoder::new(pha1_config))
             }
         };
 
@@ -655,10 +697,17 @@ impl Reader {
                 _ = heartbeat_ticker.tick(), if use_heartbeat && *state_rx.borrow() == ComponentState::Running => {
                     let hb = Message::heartbeat(config.source_id, heartbeat_counter);
                     heartbeat_counter += 1;
-                    let bytes = hb.to_msgpack()?;
-                    let msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                    data_socket.send(msg).await?;
-                    debug!(counter = heartbeat_counter, "Published heartbeat");
+                    match hb.to_msgpack() {
+                        Ok(bytes) => {
+                            let msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
+                            if let Err(e) = data_socket.send(msg).await {
+                                warn!(error = %e, "Failed to send heartbeat");
+                            } else {
+                                debug!(counter = heartbeat_counter, "Published heartbeat");
+                            }
+                        }
+                        Err(e) => warn!(error = %e, "Failed to serialize heartbeat"),
+                    }
                 }
 
                 // Receive raw data from ReadLoop
@@ -673,36 +722,47 @@ impl Reader {
                             match data_type {
                                 DataType::Event => {
                                     // Decode events
+                                    let raw_size = raw_data.size;
+                                    let raw_n_events = raw_data.n_events;
                                     let events = decoder.decode(&raw_data);
 
                                     if events.is_empty() {
+                                        warn!(raw_size, raw_n_events, "Decoded 0 events from raw data");
                                         continue;
                                     }
 
-                                    // Convert to EventDataBatch
+                                    // Convert to EventDataBatch (consuming events for zero-copy waveform move)
+                                    let n_events = events.len();
                                     let mut batch = EventDataBatch::with_capacity(
                                         config.source_id,
                                         sequence_number,
-                                        events.len(),
+                                        n_events,
                                     );
 
-                                    for event in &events {
+                                    for event in events {
                                         batch.push(Self::convert_event(event));
                                     }
 
                                     // Update metrics
-                                    metrics.events_decoded.fetch_add(events.len() as u64, Ordering::Relaxed);
+                                    metrics.events_decoded.fetch_add(n_events as u64, Ordering::Relaxed);
 
                                     // Publish
                                     let msg = Message::data(batch);
-                                    let bytes = msg.to_msgpack()?;
-                                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                                    data_socket.send(zmq_msg).await?;
-
-                                    sequence_number += 1;
-                                    metrics.batches_published.fetch_add(1, Ordering::Relaxed);
-
-                                    debug!(events = events.len(), seq = sequence_number - 1, "Decoded and published batch");
+                                    match msg.to_msgpack() {
+                                        Ok(bytes) => {
+                                            let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
+                                            if let Err(e) = data_socket.send(zmq_msg).await {
+                                                error!(error = %e, events = n_events, "Failed to send event batch via ZMQ");
+                                            } else {
+                                                sequence_number += 1;
+                                                metrics.batches_published.fetch_add(1, Ordering::Relaxed);
+                                                debug!(events = n_events, seq = sequence_number - 1, "Decoded and published batch");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!(error = %e, events = n_events, "Failed to serialize event batch");
+                                        }
+                                    }
                                 }
                                 DataType::Start => {
                                     info!("Received START signal from digitizer");
@@ -715,10 +775,17 @@ impl Reader {
                                     info!("Received STOP signal from digitizer");
                                     // Send EOS
                                     let eos = Message::eos(config.source_id);
-                                    let bytes = eos.to_msgpack()?;
-                                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                                    data_socket.send(zmq_msg).await?;
-                                    info!(source_id = config.source_id, "Published EOS");
+                                    match eos.to_msgpack() {
+                                        Ok(bytes) => {
+                                            let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
+                                            if let Err(e) = data_socket.send(zmq_msg).await {
+                                                error!(error = %e, "Failed to send EOS via ZMQ");
+                                            } else {
+                                                info!(source_id = config.source_id, "Published EOS");
+                                            }
+                                        }
+                                        Err(e) => error!(error = %e, "Failed to serialize EOS"),
+                                    }
                                 }
                                 DataType::Unknown => {
                                     warn!("Received unknown data type");
@@ -759,7 +826,7 @@ impl Reader {
         );
 
         // Create channels
-        let (raw_tx, raw_rx) = mpsc::unbounded_channel::<decoder::RawData>();
+        let (raw_tx, raw_rx) = mpsc::channel::<decoder::RawData>(1000);
 
         // Shutdown flag for ReadLoop (it runs in spawn_blocking, can't use async channel)
         let read_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -842,8 +909,16 @@ impl Reader {
 
         // Wait for tasks to complete
         let _ = cmd_handle.await;
-        let _ = read_handle.await;
-        let _ = decode_handle.await;
+        match read_handle.await {
+            Ok(Ok(())) => info!("ReadLoop completed normally"),
+            Ok(Err(e)) => error!(error = %e, "ReadLoop exited with error"),
+            Err(e) => error!(error = %e, "ReadLoop task panicked"),
+        }
+        match decode_handle.await {
+            Ok(Ok(())) => info!("DecodeLoop completed normally"),
+            Ok(Err(e)) => error!(error = %e, "DecodeLoop exited with error"),
+            Err(e) => error!(error = %e, "DecodeLoop task panicked"),
+        }
 
         // Send EOS if we were running
         if *self.state_rx.borrow() == ComponentState::Running {
@@ -870,7 +945,7 @@ mod tests {
         let config = ReaderConfig::default();
         assert_eq!(config.source_id, 0);
         assert_eq!(config.firmware, FirmwareType::PSD2);
-        assert_eq!(config.buffer_size, 1024 * 1024);
+        assert_eq!(config.buffer_size, 64 * 1024 * 1024);
     }
 
     #[test]
@@ -886,7 +961,7 @@ mod tests {
             waveform: None,
         };
 
-        let minimal = Reader::convert_event(&event);
+        let minimal = Reader::convert_event(event);
         // CommonEventData is packed, so we need to copy values before comparing
         let module = minimal.module;
         let channel = minimal.channel;
@@ -991,7 +1066,7 @@ mod tests {
             waveform: Some(wf),
         };
 
-        let converted = Reader::convert_event(&event);
+        let converted = Reader::convert_event(event);
         assert!(converted.waveform.is_some(), "Waveform should be preserved");
         let cwf = converted.waveform.unwrap();
         assert_eq!(cwf.analog_probe1, vec![100, 200, -300]);

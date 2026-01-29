@@ -433,7 +433,10 @@ impl DataSink {
                                     Ok(Message::EndOfStream { source_id }) => {
                                         atomic_stats.record_eos();
                                         info!(source_id = source_id, "Received EOS from upstream");
-                                        let _ = tx.send(ProcessorMessage::Eos { source_id });
+                                        if tx.send(ProcessorMessage::Eos { source_id }).is_err() {
+                                            info!("Processor channel closed, exiting");
+                                            break;
+                                        }
                                     }
                                     Ok(Message::Heartbeat(hb)) => {
                                         debug!(source_id = hb.source_id, counter = hb.counter, "Received heartbeat");

@@ -236,16 +236,6 @@ impl Psd2Decoder {
             );
         }
 
-        // Diagnostic: compare decoded event count with CAEN-reported n_events
-        if raw.n_events > 0 && events.len() as u32 != raw.n_events {
-            eprintln!(
-                "[PSD2] EVENT COUNT MISMATCH: decoded={} vs CAEN n_events={} (out_of_range={})",
-                events.len(),
-                raw.n_events,
-                out_of_range_count
-            );
-        }
-
         if out_of_range_count > 0 {
             eprintln!(
                 "[PSD2] CHANNEL OUT-OF-RANGE: {} events with channel >= {} in this aggregate (total_size={}, decoded={})",

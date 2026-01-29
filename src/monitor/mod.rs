@@ -76,7 +76,7 @@ pub enum MonitorError {
 }
 
 /// Histogram configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HistogramConfig {
     /// Number of bins
     pub num_bins: u32,
@@ -204,8 +204,8 @@ impl MonitorState {
         }
     }
 
-    /// Process an event and update histograms
-    pub fn process_event(&mut self, event: &EventData) {
+    /// Process an event and update histograms (consumes event for zero-copy waveform move)
+    pub fn process_event(&mut self, event: EventData) {
         self.total_events += 1;
 
         let key = ChannelKey::new(event.module as u32, event.channel as u32);
@@ -214,15 +214,15 @@ impl MonitorState {
             Histogram1D::new(
                 event.module as u32,
                 event.channel as u32,
-                self.histogram_config.clone(),
+                self.histogram_config,
             )
         });
 
         // Fill with energy (long gate)
         histogram.fill(event.energy as f32);
 
-        // Store latest waveform if present
-        if let Some(ref wf) = event.waveform {
+        // Store latest waveform if present (move, not clone)
+        if let Some(wf) = event.waveform {
             self.latest_waveforms.insert(
                 key,
                 LatestWaveform {
@@ -230,15 +230,15 @@ impl MonitorState {
                     channel_id: event.channel as u32,
                     energy: event.energy,
                     timestamp_ns: event.timestamp_ns,
-                    waveform: wf.clone(),
+                    waveform: wf,
                 },
             );
         }
     }
 
-    /// Process a batch of events
-    pub fn process_batch(&mut self, batch: &EventDataBatch) {
-        for event in &batch.events {
+    /// Process a batch of events (consumes batch for zero-copy)
+    pub fn process_batch(&mut self, batch: EventDataBatch) {
+        for event in batch.events {
             self.process_event(event);
         }
     }
@@ -732,7 +732,7 @@ impl Monitor {
         });
 
         // Spawn histogram task
-        let histogram_config = self.config.histogram_config.clone();
+        let histogram_config = self.config.histogram_config;
         let atomic_stats_for_hist = self.atomic_stats.clone();
         let hist_handle = tokio::spawn(async move {
             Self::histogram_task(hist_rx, data_rx, histogram_config, atomic_stats_for_hist).await
@@ -905,7 +905,7 @@ impl Monitor {
                 batch = data_rx.recv() => {
                     match batch {
                         Some(batch) => {
-                            state.process_batch(&batch);
+                            state.process_batch(batch);
                             atomic_stats.record_processed();
                         }
                         None => {
@@ -1008,7 +1008,7 @@ mod tests {
             waveform: None,
         };
 
-        state.process_event(&event);
+        state.process_event(event);
 
         assert_eq!(state.total_events, 1);
         assert_eq!(state.histograms.len(), 1);

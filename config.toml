@@ -1,7 +1,7 @@
 # DELILA DAQ Configuration
 
 [operator]
-experiment_name = "TestExp"
+experiment_name = "Multi_Digitizer_Test"
 
 # =============================================================================
 # Network Topology
@@ -15,7 +15,7 @@ experiment_name = "TestExp"
 # PSD2 digitizer (VX2730 at 172.18.4.56, ch16 pulser 10kHz)
 [[network.sources]]
 id = 0
-name = "psd2-vx2730"
+name = "psd2-local"
 type = "psd2"
 bind = "tcp://*:5555"
 command = "tcp://*:5560"
@@ -23,9 +23,20 @@ digitizer_url = "dig2://172.18.4.56"
 config_file = "config/digitizers/psd2_test.json"
 pipeline_order = 1
 
-# Merger: receives from all sources, publishes merged stream
+# PHA1 digitizer on remote machine (172.18.4.147, DT5730B via USB)
+[[network.sources]]
+id = 1
+name = "pha1-remote"
+type = "pha1"
+bind = "tcp://*:5556"
+command = "tcp://172.18.4.147:5561"
+digitizer_url = "dig1://caen.internal/usb?link_num=0"
+config_file = "config/digitizers/pha1_test.json"
+pipeline_order = 1
+
+# Merger: receives from both local and remote sources
 [network.merger]
-subscribe = ["tcp://localhost:5555"]
+subscribe = ["tcp://localhost:5555", "tcp://172.18.4.147:5556"]
 publish = "tcp://*:5557"
 command = "tcp://*:5570"
 pipeline_order = 2

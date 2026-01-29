@@ -102,3 +102,7 @@ path = "src/bin/storage_bench.rs"
 [[bin]]
 name = "recover"
 path = "src/bin/recover.rs"
+
+[[bin]]
+name = "event_bridge"
+path = "src/bin/event_bridge.rs"

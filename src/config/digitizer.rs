@@ -103,8 +103,8 @@ pub enum FirmwareType {
     PSD1,
     /// DPP-PSD2 firmware (x274x series)
     PSD2,
-    /// DPP-PHA firmware (for spectroscopy)
-    PHA,
+    /// DPP-PHA1 firmware (for spectroscopy, x725/x730)
+    PHA1,
 }
 
 impl FirmwareType {
@@ -113,7 +113,7 @@ impl FirmwareType {
         match self {
             FirmwareType::PSD1 => "dig1://",
             FirmwareType::PSD2 => "dig2://",
-            FirmwareType::PHA => "dig2://", // PHA uses same scheme as PSD2
+            FirmwareType::PHA1 => "dig1://", // PHA1 uses dig1 (same as PSD1)
         }
     }
 
@@ -125,7 +125,7 @@ impl FirmwareType {
 
     /// Whether this firmware uses the DIG1 (legacy) protocol.
     pub fn is_dig1(&self) -> bool {
-        matches!(self, FirmwareType::PSD1 | FirmwareType::PHA)
+        matches!(self, FirmwareType::PSD1 | FirmwareType::PHA1)
     }
 }
 
@@ -285,7 +285,7 @@ impl DigitizerConfig {
     pub fn new(digitizer_id: u32, name: impl Into<String>, firmware: FirmwareType) -> Self {
         let num_channels = match firmware {
             FirmwareType::PSD1 => 8,
-            FirmwareType::PSD2 | FirmwareType::PHA => 32,
+            FirmwareType::PSD2 | FirmwareType::PHA1 => 32,
         };
 
         Self {
@@ -466,23 +466,34 @@ impl DigitizerConfig {
             });
         }
 
-        // PSD1-specific parameters
+        // Record length: PSD1 = board-level, PSD2 = per-channel
         if let Some(v) = board.record_length {
-            let param_name = match self.firmware {
-                FirmwareType::PSD1 => "/par/reclen",
-                _ => "/par/chrecordlengths",
-            };
-            params.push(CaenParameter {
-                path: param_name.to_string(),
-                value: v.to_string(),
-            });
+            match self.firmware {
+                FirmwareType::PSD1 => {
+                    params.push(CaenParameter {
+                        path: "/par/reclen".to_string(),
+                        value: v.to_string(),
+                    });
+                }
+                _ => {
+                    // PSD2: per-channel parameter
+                    params.push(CaenParameter {
+                        path: format!("/ch/0..{}/par/chrecordlengths", self.num_channels - 1),
+                        value: v.to_string(),
+                    });
+                }
+            }
         }
 
+        // Waveform enable: PSD1 only (PSD2 uses per-channel WaveTriggerSource)
         if let Some(v) = board.waveforms_enabled {
-            params.push(CaenParameter {
-                path: "/par/waveforms".to_string(),
-                value: v.to_string().to_lowercase(),
-            });
+            if matches!(self.firmware, FirmwareType::PSD1) {
+                params.push(CaenParameter {
+                    path: "/par/waveforms".to_string(),
+                    value: v.to_string().to_lowercase(),
+                });
+            }
+            // PSD2: waveform is controlled by channel-level wave_trigger_source
         }
 
         // Extra parameters
@@ -522,7 +533,7 @@ impl DigitizerConfig {
         // Parameter names differ between PSD1 and PSD2
         let (enable_name, offset_name, polarity_name, threshold_name) = match self.firmware {
             FirmwareType::PSD1 => ("ch_enabled", "ch_dcoffset", "ch_polarity", "ch_threshold"),
-            FirmwareType::PSD2 | FirmwareType::PHA => {
+            FirmwareType::PSD2 | FirmwareType::PHA1 => {
                 ("ChEnable", "DCOffset", "PulsePolarity", "TriggerThr")
             }
         };

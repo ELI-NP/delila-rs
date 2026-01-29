@@ -336,10 +336,11 @@ fn test_read_data_with_test_pulse() {
     // Try to read data
     let mut total_events = 0u32;
     let mut read_attempts = 0;
+    let mut read_buffer: Vec<u8> = vec![0u8; 64 * 1024 * 1024];
 
     for _ in 0..10 {
         read_attempts += 1;
-        match endpoint.read_data(100, 1024 * 1024) {
+        match endpoint.read_data(100, &mut read_buffer) {
             Ok(Some(raw)) => {
                 println!(
                     "Read {} bytes, {} events (attempt {})",
@@ -416,9 +417,10 @@ fn test_decode_test_pulse_events() {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     let mut decoded_events = 0;
+    let mut read_buffer: Vec<u8> = vec![0u8; 64 * 1024 * 1024];
 
     for _ in 0..10 {
-        match endpoint.read_data(100, 1024 * 1024) {
+        match endpoint.read_data(100, &mut read_buffer) {
             Ok(Some(raw)) => {
                 // Convert to decoder RawData format
                 let decoder_raw = RawData {
@@ -648,9 +650,10 @@ fn test_ch4_pulser_signal() {
 
     let mut ch4_events: Vec<delila_rs::reader::decoder::EventData> = Vec::new();
     let mut other_ch_count = 0u64;
+    let mut read_buffer: Vec<u8> = vec![0u8; 64 * 1024 * 1024];
 
     for _ in 0..30 {
-        match endpoint.read_data(100, 1024 * 1024) {
+        match endpoint.read_data(100, &mut read_buffer) {
             Ok(Some(raw)) => {
                 let decoder_raw = RawData {
                     data: raw.data,

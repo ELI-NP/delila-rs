@@ -1,0 +1,68 @@
+# gain_config.yaml — PMT Gain Matcher Configuration Example
+#
+# Usage:
+#   python3 gain_matcher.py status --config examples/gain_config.yaml
+#   python3 gain_matcher.py match  --config examples/gain_config.yaml --dry-run
+
+# --- HV Supply ---
+hv:
+  host: "172.18.5.215"
+  username: "admin"
+  password: "eli-np"
+  system_type: "SY5527"
+
+# --- DAQ ---
+daq:
+  operator_url: "http://localhost:8080"
+  monitor_url: "http://localhost:8081"
+
+# --- Gain Matching Parameters ---
+matching:
+  measure_time: 10          # Data accumulation time (seconds)
+  max_iterations: 10        # Maximum iteration count
+  tolerance_percent: 2.0    # Convergence: target ± %
+  pmt_alpha: 7.0            # PMT gain exponent (Gain ∝ V^α)
+  min_counts: 1000          # Minimum counts for fitting
+  hv_step_limit: 50.0       # Max HV change per iteration (V)
+
+# --- Default channel parameters ---
+defaults:
+  peak_region: [300, 500]     # Fit range (ADC ch)
+  target_position: 1000       # Target peak position (ADC ch)
+
+# --- Explicit channel mapping ---
+# Use this for channels with non-standard mapping
+channels:
+  - name: "LaBr3-01"
+    hv_slot: 0
+    hv_ch: 0
+    dig_module: 0
+    dig_ch: 0
+  - name: "LaBr3-02"
+    hv_slot: 0
+    hv_ch: 1
+    dig_module: 0
+    dig_ch: 1
+    peak_region: [400, 600]   # Override for this channel
+
+# --- Bulk channel mapping ---
+# Generates sequential channels: LaBr3-00 through LaBr3-23
+# channel_ranges:
+#   - name_prefix: "LaBr3"
+#     hv_slot: 0
+#     hv_ch_start: 0
+#     hv_ch_end: 23
+#     dig_module: 0
+#     dig_ch_start: 0
+#   - name_prefix: "NaI"
+#     hv_slot: 1
+#     hv_ch_start: 0
+#     hv_ch_end: 23
+#     dig_module: 1
+#     dig_ch_start: 0
+
+# --- Skip channels ---
+# These HV channels will be excluded from matching
+# skip_channels:
+#   - { hv_slot: 0, hv_ch: 15 }  # Not connected
+#   - { hv_slot: 1, hv_ch: 20 }

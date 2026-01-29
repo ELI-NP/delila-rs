@@ -291,7 +291,7 @@ fn test_data_readout(handle: &CaenHandle, decode_enabled: bool) {
     };
 
     // Step 5: Read data (with timeout)
-    const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
+    const BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB buffer - CAEN has no bounds check
     const TIMEOUT_MS: i32 = 1000; // 1 second timeout
     const MAX_READS: usize = 5; // Read up to 5 times
 
@@ -304,9 +304,10 @@ fn test_data_readout(handle: &CaenHandle, decode_enabled: bool) {
     let mut total_events = 0u32;
     let mut read_count = 0usize;
     let mut decoded_events_count = 0usize;
+    let mut read_buffer: Vec<u8> = vec![0u8; BUFFER_SIZE];
 
     for i in 0..MAX_READS {
-        match endpoint.read_data(TIMEOUT_MS, BUFFER_SIZE) {
+        match endpoint.read_data(TIMEOUT_MS, &mut read_buffer) {
             Ok(Some(raw_data)) => {
                 println!(
                     "  [READ {}] size: {} bytes, n_events: {}",

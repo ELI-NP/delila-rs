@@ -132,7 +132,6 @@ impl AtomicStats {
     }
 
     #[inline]
-    #[allow(dead_code)] // Reserved for future bounded channel debugging
     fn record_drop(&self) {
         self.dropped_batches.fetch_add(1, Ordering::Relaxed);
     }
@@ -497,7 +496,8 @@ impl Merger {
                     trace!("Sender forwarded message");
                 }
                 Err(e) => {
-                    warn!(error = %e, "Failed to send message");
+                    ext_state.atomic_stats.record_drop();
+                    warn!(error = %e, "Failed to send message (data dropped)");
                 }
             }
         }

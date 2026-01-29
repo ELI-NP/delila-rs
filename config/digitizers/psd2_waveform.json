@@ -1,15 +1,17 @@
 {
   "digitizer_id": 0,
-  "name": "PSD2 Ch16 Pulser Test",
+  "name": "PSD2 Waveform Test - ch16 Positive 22kHz",
   "firmware": "PSD2",
   "num_channels": 32,
   "board": {
-    "start_source": "SWcmd"
+    "start_source": "SWcmd",
+    "record_length": 4096,
+    "waveforms_enabled": true
   },
   "channel_defaults": {
     "enabled": "False",
     "dc_offset": 50.0,
-    "polarity": "Negative",
+    "polarity": "Positive",
     "trigger_threshold": 1000,
     "gate_long_ns": 400,
     "gate_short_ns": 100,
@@ -19,9 +21,13 @@
   "channel_overrides": {
     "16": {
       "enabled": "True",
-      "polarity": "Negative",
       "dc_offset": 20.0,
-      "event_trigger_source": "ChSelfTrigger"
+      "event_trigger_source": "ChSelfTrigger",
+      "wave_trigger_source": "ChSelfTrigger",
+      "extra": {
+        "WaveAnalogProbe0": "ADCInput",
+        "WaveAnalogProbe1": "CFDFilter"
+      }
     }
   }
 }

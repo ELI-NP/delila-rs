@@ -125,8 +125,11 @@ delila-rs/
 ### 必須ルール
 
 1. **Receiver Task**: ZMQソケットからの受信専用。処理をせずチャンネルに送るだけ。
-   - `try_send()` を使用し、チャンネルがfullでもブロックしない
-   - ブロック禁止（データ損失よりも受信継続を優先）
+   - **データ損失は絶対に許容しない**
+   - bounded channel を使用し、メモリ使用量に上限を設ける
+   - `try_send()` + retry loop (spawn_blocking 内) で backpressure 対応
+   - 注意: `blocking_send()` は macOS で TLS fatal error を起こすため使用禁止
+   - 処理が追いつかない場合は処理スレッドを増やす方針
 
 2. **Main Logic Task**: データ処理（ソート、集計等）
    - 重い処理はここで行う
@@ -159,13 +162,25 @@ for msg in receiver {
 ### 推奨パターン
 
 ```rust
-// ✅ 推奨: タスク分離 + チャンネル
+// ✅ 推奨: タスク分離 + bounded チャンネル (データ損失なし)
 let (tx, rx) = mpsc::channel(1000);
 
-// Receiver task
-tokio::spawn(async move {
-    while let Some(msg) = socket.next().await {
-        let _ = tx.try_send(msg);  // Non-blocking
+// Receiver task (spawn_blocking 内: try_send + retry でデータ損失なし)
+tokio::task::spawn_blocking(move || {
+    while let Some(msg) = source.read() {
+        // NOTE: blocking_send() は macOS で TLS fatal error を起こす。
+        // try_send() + retry loop を使用すること。
+        let mut pending = msg;
+        loop {
+            match tx.try_send(pending) {
+                Ok(()) => break,
+                Err(mpsc::error::TrySendError::Full(v)) => {
+                    pending = v;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => return,
+            }
+        }
     }
 });
 

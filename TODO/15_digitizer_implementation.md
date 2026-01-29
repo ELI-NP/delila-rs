@@ -1,7 +1,7 @@
 # Digitizer Implementation Plan
 
 **Created:** 2026-01-23
-**Status:** In Progress (Phase 1-4 Complete ✅, Phase 5 Master/Slave ✅)
+**Status:** Phase 1-6 Complete ✅, 波形モード実機検証済み (2026-01-28)
 **Spec:** `docs/digitizer_system_spec.md`
 
 ---
@@ -634,6 +634,27 @@ config/digitizer_0.json  # サンプル設定
 - **KISS:** 過度な抽象化を避ける。動くコードを優先。
 - **TDD:** 各Phaseでテストを先に書く。
 - **実機テスト:** `dig2://172.18.4.56` （VX2730, Serial: 52622, DPP_PSD, 32ch, 14-bit）
+
+### 波形モード実機検証結果 (2026-01-28)
+
+| モード | レート | 結果 |
+|--------|--------|------|
+| 波形なし | 98 kHz | 安定動作, queue=0, Reader-Recorder イベント数一致 |
+| 波形あり | 1 kHz | 安定動作, queue=0, Stop 正常 |
+| 波形あり | 10 kHz | 安定動作, ~9.8 kHz, 726k events, 21+ GB, Stop 正常 |
+| 波形あり | > 6 kHz | ~6.6 kHz 頭打ち (1 GbE 帯域飽和) |
+
+**帯域制限の技術的説明:**
+- 波形サイズ: 4096 samples × 4 bytes = 16.4 KB/event
+- 6.6 kHz × 16.4 KB = 108 MB/s ≈ 864 Mbps
+- TCP/IP オーバーヘッド込みで 1 Gbps 飽和
+- これはハードウェア制約であり、ソフトウェアの問題ではない
+
+**修正内容 (Phase E):**
+- E1: SIGBUS 修正 (64 MB バッファ事前確保)
+- E2: Stop ハング修正 (is_stopping フラグ + send_stop())
+- E3: DecodeLoop サイレントクラッシュ修正 (? → match + エラーログ)
+- E4: n_events=1 誤警告削除 (RAW format は aggregate block 報告)
 
 ## References
 

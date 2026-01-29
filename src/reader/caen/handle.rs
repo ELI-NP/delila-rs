@@ -595,27 +595,28 @@ impl EndpointHandle {
         }
     }
 
-    /// Read raw data from the endpoint
+    /// Read raw data from the endpoint using a pre-allocated reusable buffer.
+    ///
+    /// The buffer must be large enough for the maximum expected data.
+    /// CAEN FELib does NOT check buffer bounds — undersized buffers cause SIGBUS.
     ///
     /// # Arguments
     /// * `timeout_ms` - Timeout in milliseconds (-1 for infinite)
-    /// * `buffer_size` - Maximum buffer size for raw data
+    /// * `buffer` - Pre-allocated reusable buffer (capacity = max data size)
     ///
     /// # Returns
-    /// * `Ok(Some(RawData))` - Data was read successfully
+    /// * `Ok(Some(RawData))` - Data was read successfully (owns a copy of actual data)
     /// * `Ok(None)` - Timeout (no data available)
     /// * `Err(...)` - Error occurred
-    ///
-    /// # Safety
-    /// This function uses variadic C FFI internally. The format must match
-    /// what was configured in `configure_endpoint()`.
     pub fn read_data(
         &self,
         timeout_ms: i32,
-        buffer_size: usize,
+        buffer: &mut Vec<u8>,
     ) -> Result<Option<RawData>, CaenError> {
-        // Allocate buffer - must be pre-allocated like C++ version
-        let mut data = vec![0u8; buffer_size];
+        let buffer_capacity = buffer.capacity();
+        // Ensure buffer is usable at full capacity
+        buffer.resize(buffer_capacity, 0);
+
         let mut size: usize = 0;
         let mut n_events: u32 = 0;
 
@@ -624,15 +625,15 @@ impl EndpointHandle {
             caen_read_data_raw(
                 self.handle,
                 timeout_ms,
-                data.as_mut_ptr(),
+                buffer.as_mut_ptr(),
                 &mut size,
                 &mut n_events,
             )
         };
 
         if ret == 0 {
-            // Success - truncate data to actual size
-            data.truncate(size);
+            // Success - copy actual data to a right-sized Vec
+            let data = buffer[..size].to_vec();
             Ok(Some(RawData {
                 data,
                 size,
