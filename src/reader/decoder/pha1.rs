@@ -244,17 +244,28 @@ impl Pha1Decoder {
 
     /// Decode raw data into events
     pub fn decode(&mut self, raw: &RawData) -> Vec<EventData> {
+        let mut events = Vec::new();
+        self.decode_into(raw, &mut events);
+        events
+    }
+
+    /// Decode raw data into a reusable Vec (avoids allocation if Vec has capacity)
+    ///
+    /// This method clears the provided Vec and appends decoded events to it.
+    /// Use this in hot loops where Vec reuse improves performance.
+    pub fn decode_into(&mut self, raw: &RawData, all_events: &mut Vec<EventData>) {
+        all_events.clear();
+
         let data_type = self.classify(raw);
         if data_type != DataType::Event {
             if self.config.dump_enabled {
                 println!("[PHA1] Non-event data, size={}", raw.size);
             }
-            return vec![];
+            return;
         }
 
         let total_bytes = raw.size;
         let mut offset: usize = 0;
-        let mut all_events = Vec::new();
 
         // Process multiple board aggregate blocks
         while offset + constants::board_header::HEADER_SIZE_BYTES <= total_bytes {
@@ -279,8 +290,6 @@ impl Pha1Decoder {
         if self.config.dump_enabled {
             println!("[PHA1] Decoded {} events", all_events.len());
         }
-
-        all_events
     }
 
     // -----------------------------------------------------------------------
@@ -611,9 +620,14 @@ impl Pha1Decoder {
 // ---------------------------------------------------------------------------
 
 /// Read a u32 from data at given byte offset (Little-Endian)
+///
+/// Returns 0 if offset is out of bounds (data corruption).
 #[inline]
 fn read_u32(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+    data.get(offset..offset + 4)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u32::from_le_bytes)
+        .unwrap_or(0)
 }
 
 /// Decode extras word based on extra_option

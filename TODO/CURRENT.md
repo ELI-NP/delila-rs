@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-01-29 (PHA1 実装 + マルチデジタイザ統合テスト完了)
+**Updated:** 2026-01-29 (Gemini レビュー改善完了)
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -233,8 +233,9 @@ python3 gain_matcher.py status --config examples/gain_config.yaml
 |----------|------|--------|---------|
 | 1 | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **設計完了** | C++ Event Builder 仕様 + Event Bridge 実装済み |
 | 2 | [19_settings_ui.md](19_settings_ui.md) | **⚠️ ユーザー検証未実施** | Phase 6: デジタイザ設定 UI (実装済み・動作未確認) |
-| 3 | [17_pha1_pipeline_test.md](17_pha1_pipeline_test.md) | **✅ 完了** | PHA1 実装 + マルチデジタイザ統合テスト (PSD2+PHA1) |
-| 4 | [20_data_integrity_and_performance_audit.md](20_data_integrity_and_performance_audit.md) | **✅ 完了** | データ完全性 + パフォーマンス + 波形堅牢性 (Phase A+B+E) |
+| 3 | [21_gemini_review_improvements.md](21_gemini_review_improvements.md) | **✅ 完了** | Gemini レビュー改善 (堅牢性+設計+パフォーマンス) |
+| 4 | [17_pha1_pipeline_test.md](17_pha1_pipeline_test.md) | **✅ 完了** | PHA1 実装 + マルチデジタイザ統合テスト (PSD2+PHA1) |
+| 5 | [20_data_integrity_and_performance_audit.md](20_data_integrity_and_performance_audit.md) | **✅ 完了** | データ完全性 + パフォーマンス + 波形堅牢性 (Phase A+B+E) |
 | 5 | [15_digitizer_implementation.md](15_digitizer_implementation.md) | **✅ Phase 5 完了** | VX2730 (PSD2) + DT5730B (PSD1/PHA1) 実機動作確認済み |
 | 6 | [11_operator_web_ui.md](11_operator_web_ui.md) | **In Progress** | Operator Web UI (Angular + Material) |
 | - | [16_linux_migration_checklist.md](16_linux_migration_checklist.md) | Reference | Linux移行チェックリスト |
@@ -288,6 +289,7 @@ python3 gain_matcher.py status --config examples/gain_config.yaml
 - HV Gain Matcher Python ツール (SY5527 ctypes ラッパー, V0Set READ/WRITE 検証済み)
 - PHA1 デコーダ実装 (DIG1 プロトコル, START_MODE_SW 対応)
 - マルチデジタイザ統合テスト (PSD2 + PHA1, マルチマシン ZMQ 通信)
+- Gemini レビュー改善 (f64 unwrap 安全化, SystemState 優先順位修正, Vec 再利用, Monitor 軽量化)
 
 ---
 

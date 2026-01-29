@@ -69,11 +69,11 @@ impl DecoderKind {
         }
     }
 
-    fn decode(&mut self, raw: &decoder::RawData) -> Vec<decoder::EventData> {
+    fn decode_into(&mut self, raw: &decoder::RawData, events: &mut Vec<decoder::EventData>) {
         match self {
-            Self::Psd2(d) => d.decode(raw),
-            Self::Psd1(d) => d.decode(raw),
-            Self::Pha1(d) => d.decode(raw),
+            Self::Psd2(d) => d.decode_into(raw, events),
+            Self::Psd1(d) => d.decode_into(raw, events),
+            Self::Pha1(d) => d.decode_into(raw, events),
         }
     }
 }
@@ -679,6 +679,9 @@ impl Reader {
         let mut sequence_number: u64 = 0;
         let mut heartbeat_counter: u64 = 0;
 
+        // Reusable Vec for decoded events (avoids allocation per-batch)
+        let mut events_buffer: Vec<decoder::EventData> = Vec::with_capacity(1024);
+
         // Heartbeat ticker
         let use_heartbeat = config.heartbeat_interval_ms > 0;
         let mut heartbeat_ticker =
@@ -721,25 +724,25 @@ impl Reader {
                             let data_type = decoder.classify(&raw_data);
                             match data_type {
                                 DataType::Event => {
-                                    // Decode events
+                                    // Decode events into reusable buffer
                                     let raw_size = raw_data.size;
                                     let raw_n_events = raw_data.n_events;
-                                    let events = decoder.decode(&raw_data);
+                                    decoder.decode_into(&raw_data, &mut events_buffer);
 
-                                    if events.is_empty() {
+                                    if events_buffer.is_empty() {
                                         warn!(raw_size, raw_n_events, "Decoded 0 events from raw data");
                                         continue;
                                     }
 
-                                    // Convert to EventDataBatch (consuming events for zero-copy waveform move)
-                                    let n_events = events.len();
+                                    // Convert to EventDataBatch (draining events for zero-copy waveform move)
+                                    let n_events = events_buffer.len();
                                     let mut batch = EventDataBatch::with_capacity(
                                         config.source_id,
                                         sequence_number,
                                         n_events,
                                     );
 
-                                    for event in events {
+                                    for event in events_buffer.drain(..) {
                                         batch.push(Self::convert_event(event));
                                     }
 

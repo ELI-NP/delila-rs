@@ -267,15 +267,15 @@ impl FileWriter {
             return base_path;
         }
 
-        // File exists - append Unix timestamp to avoid overwriting
-        let timestamp = std::time::SystemTime::now()
+        // File exists - append Unix timestamp (nanoseconds) to avoid overwriting
+        let timestamp_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_nanos();
 
         let filename_with_ts = format!(
             "run{:04}_{:04}_{}_{}.delila",
-            run_config.run_number, self.file_sequence, exp_name, timestamp
+            run_config.run_number, self.file_sequence, exp_name, timestamp_ns
         );
 
         warn!(

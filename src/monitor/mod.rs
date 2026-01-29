@@ -272,6 +272,33 @@ impl MonitorState {
             histograms: self.histograms.clone(),
         }
     }
+
+    /// Create a lightweight summary for listing (no histogram bin data)
+    fn list_summary(&self) -> HistogramListSummary {
+        let elapsed_secs = self
+            .start_time
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
+        let event_rate = if elapsed_secs > 0.0 {
+            self.total_events as f64 / elapsed_secs
+        } else {
+            0.0
+        };
+
+        let channels: Vec<(u32, u32, u64)> = self
+            .histograms
+            .iter()
+            .map(|(key, hist)| (key.module_id, key.channel_id, hist.total_counts))
+            .collect();
+
+        HistogramListSummary {
+            total_events: self.total_events,
+            elapsed_secs,
+            event_rate,
+            channels,
+        }
+    }
 }
 
 /// Snapshot of monitor state for HTTP responses
@@ -330,12 +357,23 @@ impl AtomicStats {
     }
 }
 
+/// Summary data for histogram listing (lightweight, no bin data)
+struct HistogramListSummary {
+    total_events: u64,
+    elapsed_secs: f64,
+    event_rate: f64,
+    /// (module_id, channel_id, total_counts) tuples
+    channels: Vec<(u32, u32, u64)>,
+}
+
 /// Message type for histogram task (commands from HTTP handlers and control)
 enum HistogramMessage {
     /// Clear all histograms
     Clear,
-    /// Get current state snapshot
+    /// Get current state snapshot (expensive: clones all histogram bins)
     GetSnapshot(oneshot::Sender<MonitorStateSnapshot>),
+    /// Get lightweight summary for listing (no bin data)
+    GetListSummary(oneshot::Sender<HistogramListSummary>),
     /// Get specific histogram
     GetHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
     /// Get latest waveform for a channel
@@ -378,17 +416,20 @@ struct ChannelSummary {
 /// GET /api/histograms - List all histograms
 async fn list_histograms(State(state): State<AppState>) -> Json<HistogramListResponse> {
     let (tx, rx) = oneshot::channel();
-    let _ = state.histogram_tx.send(HistogramMessage::GetSnapshot(tx));
+    // Use lightweight summary instead of full snapshot (avoids cloning histogram bins)
+    let _ = state
+        .histogram_tx
+        .send(HistogramMessage::GetListSummary(tx));
 
     match rx.await {
-        Ok(snapshot) => {
-            let mut channels: Vec<ChannelSummary> = snapshot
-                .histograms
+        Ok(summary) => {
+            let mut channels: Vec<ChannelSummary> = summary
+                .channels
                 .iter()
-                .map(|(key, hist)| ChannelSummary {
-                    module_id: key.module_id,
-                    channel_id: key.channel_id,
-                    total_counts: hist.total_counts,
+                .map(|(module_id, channel_id, total_counts)| ChannelSummary {
+                    module_id: *module_id,
+                    channel_id: *channel_id,
+                    total_counts: *total_counts,
                 })
                 .collect();
 
@@ -400,9 +441,9 @@ async fn list_histograms(State(state): State<AppState>) -> Json<HistogramListRes
             });
 
             Json(HistogramListResponse {
-                total_events: snapshot.total_events,
-                elapsed_secs: snapshot.elapsed_secs,
-                event_rate: snapshot.event_rate,
+                total_events: summary.total_events,
+                elapsed_secs: summary.elapsed_secs,
+                event_rate: summary.event_rate,
                 channels,
             })
         }
@@ -880,6 +921,9 @@ impl Monitor {
                         }
                         Some(HistogramMessage::GetSnapshot(tx)) => {
                             let _ = tx.send(state.snapshot());
+                        }
+                        Some(HistogramMessage::GetListSummary(tx)) => {
+                            let _ = tx.send(state.list_summary());
                         }
                         Some(HistogramMessage::GetHistogram(key, tx)) => {
                             let _ = tx.send(state.histograms.get(&key).cloned());

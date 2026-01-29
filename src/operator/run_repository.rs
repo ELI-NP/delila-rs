@@ -236,8 +236,8 @@ impl RunRepository {
                     "$set": {
                         "end_time": mongodb::bson::DateTime::from_millis(now.timestamp_millis()),
                         "duration_secs": duration,
-                        "status": mongodb::bson::to_bson(&status).unwrap(),
-                        "stats": mongodb::bson::to_bson(&stats).unwrap(),
+                        "status": mongodb::bson::to_bson(&status).expect("RunStatus serializes to BSON"),
+                        "stats": mongodb::bson::to_bson(&stats).expect("RunStats serializes to BSON"),
                     }
                 },
             )
@@ -265,7 +265,7 @@ impl RunRepository {
                 doc! { "run_number": run_number, "status": "running" },
                 doc! {
                     "$set": {
-                        "stats": mongodb::bson::to_bson(stats).unwrap(),
+                        "stats": mongodb::bson::to_bson(stats).expect("RunStats serializes to BSON"),
                     }
                 },
             )
@@ -292,7 +292,7 @@ impl RunRepository {
                 doc! { "run_number": run_number },
                 doc! {
                     "$push": {
-                        "errors": mongodb::bson::to_bson(&entry).unwrap(),
+                        "errors": mongodb::bson::to_bson(&entry).expect("ErrorLogEntry serializes to BSON"),
                     }
                 },
             )

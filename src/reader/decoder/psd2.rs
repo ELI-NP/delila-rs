@@ -150,6 +150,18 @@ impl Psd2Decoder {
 
     /// Decode raw data into events
     pub fn decode(&mut self, raw: &RawData) -> Vec<EventData> {
+        let mut events = Vec::new();
+        self.decode_into(raw, &mut events);
+        events
+    }
+
+    /// Decode raw data into a reusable Vec (avoids allocation if Vec has capacity)
+    ///
+    /// This method clears the provided Vec and appends decoded events to it.
+    /// Use this in hot loops where Vec reuse improves performance.
+    pub fn decode_into(&mut self, raw: &RawData, events: &mut Vec<EventData>) {
+        events.clear();
+
         if self.config.dump_enabled {
             self.dump_raw_data(raw);
         }
@@ -161,19 +173,19 @@ impl Psd2Decoder {
                 if self.config.dump_enabled {
                     println!("[PSD2] Start signal detected");
                 }
-                return vec![];
+                return;
             }
             DataType::Stop => {
                 if self.config.dump_enabled {
                     println!("[PSD2] Stop signal detected");
                 }
-                return vec![];
+                return;
             }
             DataType::Unknown => {
                 if self.config.dump_enabled {
                     println!("[PSD2] Unknown data type, size={}", raw.size);
                 }
-                return vec![];
+                return;
             }
             DataType::Event => {}
         }
@@ -181,12 +193,12 @@ impl Psd2Decoder {
         // Read header
         let header = self.read_u64(&raw.data, 0);
         if !self.validate_header(header, raw.size) {
-            return vec![];
+            return;
         }
 
         let total_size = (header & constants::TOTAL_SIZE_MASK) as usize;
         let total_words = raw.data.len() / constants::WORD_SIZE;
-        let mut events = Vec::with_capacity(total_size / 2);
+        events.reserve(total_size / 2);
         let mut word_index = 1; // Skip header
         let mut out_of_range_count = 0u32;
 
@@ -243,14 +255,16 @@ impl Psd2Decoder {
             );
         }
 
-        // Sort by timestamp
-        events.sort_by(|a, b| a.timestamp_ns.partial_cmp(&b.timestamp_ns).unwrap());
+        // Sort by timestamp (use Equal for NaN to avoid panic)
+        events.sort_by(|a, b| {
+            a.timestamp_ns
+                .partial_cmp(&b.timestamp_ns)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         if self.config.dump_enabled {
             println!("[PSD2] Decoded {} events", events.len());
         }
-
-        events
     }
 
     /// Dump raw data for debugging

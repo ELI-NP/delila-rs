@@ -91,12 +91,12 @@ impl SystemState {
             return SystemState::Idle;
         }
 
-        // Check for offline or error first
-        if components.iter().any(|c| !c.online) {
-            return SystemState::Degraded;
-        }
+        // Check for error first (higher severity than offline)
         if components.iter().any(|c| c.state == ComponentState::Error) {
             return SystemState::Error;
+        }
+        if components.iter().any(|c| !c.online) {
+            return SystemState::Degraded;
         }
 
         // Check if all are in same state
@@ -354,10 +354,23 @@ mod tests {
     }
 
     #[test]
-    fn test_system_state_degraded_takes_priority_over_error() {
-        // If a component is offline, we report Degraded (can't know true state)
+    fn test_system_state_error_takes_priority_over_degraded() {
+        // Error is more severe than Degraded, so it takes priority
         let components = vec![
             make_status("A", ComponentState::Error, true),
+            make_status("B", ComponentState::Running, false), // offline
+        ];
+        assert_eq!(
+            SystemState::from_components(&components),
+            SystemState::Error
+        );
+    }
+
+    #[test]
+    fn test_system_state_degraded_when_only_offline() {
+        // If component is offline but no Error state, report Degraded
+        let components = vec![
+            make_status("A", ComponentState::Running, true),
             make_status("B", ComponentState::Running, false), // offline
         ];
         assert_eq!(
