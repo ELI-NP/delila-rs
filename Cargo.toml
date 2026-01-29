@@ -106,3 +106,7 @@ path = "src/bin/recover.rs"
 [[bin]]
 name = "event_bridge"
 path = "src/bin/event_bridge.rs"
+
+[[bin]]
+name = "reader"
+path = "src/bin/reader.rs"
