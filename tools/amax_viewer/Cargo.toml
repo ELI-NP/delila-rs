@@ -1,0 +1,24 @@
+[package]
+name = "amax_viewer"
+version = "0.1.0"
+edition = "2021"
+description = "AMax Firmware Development Tool - 2D Histogram Viewer"
+
+[dependencies]
+# GUI
+eframe = "0.31"
+egui_plot = "0.31"
+
+# CAEN access (using delila-rs as path dependency)
+delila-rs = { path = "../.." }
+
+# Async runtime for potential future use
+tokio = { version = "1", features = ["rt", "macros"] }
+
+# Error handling
+anyhow = "1"
+
+# Serialization for parameter persistence
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
