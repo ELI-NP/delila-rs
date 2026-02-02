@@ -278,6 +278,11 @@ Black → Blue → Cyan → Yellow → White
 - `Clear`: Clear the histogram
 - `Restart`: Quick restart after parameter changes
 
+**Zoom:**
+- **Ctrl + Mouse Wheel**: Zoom in/out on the histogram
+  - Scroll up → Zoom in
+  - Scroll down → Zoom out
+
 **⚠️ IMPORTANT: How to Change Numeric Values**
 
 When changing histogram bin counts (`Energy Bins`, `AMax Bins`) or range settings:
