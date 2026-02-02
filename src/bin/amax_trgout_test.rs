@@ -47,9 +47,8 @@ fn main() {
 
     println!("Reading current values:");
     for param in &trgout_params {
-        match handle.get_value(param) {
-            Ok(value) => println!("  {} = {}", param, value),
-            Err(_) => (), // Skip if not available
+        if let Ok(value) = handle.get_value(param) {
+            println!("  {} = {}", param, value);
         }
     }
 
@@ -77,15 +76,14 @@ fn main() {
         "GPIO",
         "AcceptTrg",
         "TrgClk",
-        "UserTrigger",   // Maybe this outputs the DPP trigger?
+        "UserTrigger", // Maybe this outputs the DPP trigger?
         "InternalTrigger",
         "SelfTrigger",
     ];
 
     for opt in &trgout_options {
-        match handle.set_value("/par/TrgOutMode", opt) {
-            Ok(()) => println!("  TrgOutMode = {} - ACCEPTED", opt),
-            Err(_) => (),
+        if handle.set_value("/par/TrgOutMode", opt).is_ok() {
+            println!("  TrgOutMode = {} - ACCEPTED", opt);
         }
     }
 
@@ -93,21 +91,12 @@ fn main() {
     println!("--- Testing GPIOMode Options ---");
 
     let gpio_options = [
-        "Disabled",
-        "TrgIn",
-        "TrgOut",
-        "Run",
-        "RefClk",
-        "SIN",
-        "LVDS",
-        "Busy",
-        "UserGPO",
+        "Disabled", "TrgIn", "TrgOut", "Run", "RefClk", "SIN", "LVDS", "Busy", "UserGPO",
     ];
 
     for opt in &gpio_options {
-        match handle.set_value("/par/GPIOMode", opt) {
-            Ok(()) => println!("  GPIOMode = {} - ACCEPTED", opt),
-            Err(_) => (),
+        if handle.set_value("/par/GPIOMode", opt).is_ok() {
+            println!("  GPIOMode = {} - ACCEPTED", opt);
         }
     }
 
@@ -128,9 +117,8 @@ fn main() {
 
     for (addr, name) in &debug_addrs {
         let byte_addr = addr * 4;
-        match handle.get_user_register(byte_addr) {
-            Ok(value) => println!("  {} (0x{:X}): {}", name, byte_addr, value),
-            Err(_) => (),
+        if let Ok(value) = handle.get_user_register(byte_addr) {
+            println!("  {} (0x{:X}): {}", name, byte_addr, value);
         }
     }
 

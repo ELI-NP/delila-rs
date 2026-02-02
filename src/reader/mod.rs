@@ -61,9 +61,11 @@ enum ReadLoopOutput {
     Raw(decoder::RawData),
     /// Already decoded event from OpenDPP (AMax)
     Decoded(decoder::EventData),
-    /// Start signal from digitizer
+    /// Start signal from digitizer (reserved for future use)
+    #[allow(dead_code)]
     Start,
-    /// Stop signal from digitizer
+    /// Stop signal from digitizer (reserved for future use)
+    #[allow(dead_code)]
     Stop,
 }
 
@@ -740,16 +742,14 @@ impl Reader {
                         if let Some(ref config_path) = config.config_file {
                             info!(path = %config_path, "Loading digitizer configuration");
                             match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                                Ok(dig_config) => {
-                                    match handle.apply_config(&dig_config) {
-                                        Ok(count) => {
-                                            info!(count, "Digitizer configuration applied");
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "Failed to apply digitizer configuration");
-                                        }
+                                Ok(dig_config) => match handle.apply_config(&dig_config) {
+                                    Ok(count) => {
+                                        info!(count, "Digitizer configuration applied");
                                     }
-                                }
+                                    Err(e) => {
+                                        error!(error = %e, "Failed to apply digitizer configuration");
+                                    }
+                                },
                                 Err(e) => {
                                     error!(error = %e, path = %config_path, "Failed to load digitizer configuration");
                                 }

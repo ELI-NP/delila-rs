@@ -574,7 +574,10 @@ impl CaenHandle {
     ///
     /// # Arguments
     /// * `include_waveform` - If true, include waveform data in the output
-    pub fn configure_opendpp_endpoint(&self, include_waveform: bool) -> Result<EndpointHandle, CaenError> {
+    pub fn configure_opendpp_endpoint(
+        &self,
+        include_waveform: bool,
+    ) -> Result<EndpointHandle, CaenError> {
         // Get endpoint handle
         let ep_handle = self.get_handle("/endpoint/opendpp")?;
 

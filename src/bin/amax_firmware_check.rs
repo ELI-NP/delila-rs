@@ -82,7 +82,7 @@ fn main() {
 
     // Try to identify by reading specific addresses that differ
     let trap_test = handle.get_user_register(0x14000 * 4); // WINDOW_MAXIM in Trap
-    let cfd_test = handle.get_user_register(0xE001C * 4);  // amax_window_maxim in CFD
+    let cfd_test = handle.get_user_register(0xE001C * 4); // amax_window_maxim in CFD
 
     println!("Analysis:");
     match (trap_test, cfd_test) {
@@ -121,9 +121,8 @@ fn main() {
 
     for (addr, name) in &debug_regs {
         let byte_addr = addr * 4;
-        match handle.get_user_register(byte_addr) {
-            Ok(value) => println!("  {:30} (0x{:06X}): {}", name, byte_addr, value),
-            Err(_) => (),
+        if let Ok(value) = handle.get_user_register(byte_addr) {
+            println!("  {:30} (0x{:06X}): {}", name, byte_addr, value);
         }
     }
 }

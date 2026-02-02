@@ -212,22 +212,23 @@ fn configure_selftrigger(handle: &CaenHandle) -> Result<(), Box<dyn std::error::
     let _ = handle.set_value("/par/StartSource", "SWcmd");
 
     // Disable test pulse
-    match handle.set_value("/par/TestPulsePeriod", "0") {
-        Ok(()) => println!("    TestPulsePeriod = 0 (disabled)"),
-        Err(_) => (),
+    if handle.set_value("/par/TestPulsePeriod", "0").is_ok() {
+        println!("    TestPulsePeriod = 0 (disabled)");
     }
-    match handle.set_value("/ch/0/par/WaveDataSource", "ADC_DATA") {
-        Ok(()) => println!("    WaveDataSource = ADC_DATA"),
-        Err(_) => (),
+    if handle
+        .set_value("/ch/0/par/WaveDataSource", "ADC_DATA")
+        .is_ok()
+    {
+        println!("    WaveDataSource = ADC_DATA");
     }
 
     // Set MCA HLS core registers with LOW threshold for easy triggering
     println!("  Setting MCA HLS registers (low threshold)...");
 
     let core_regs: [(u32, u32, &str); 13] = [
-        (0x0, 0, "POLARITY"),        // 0 = NEGATIVE
+        (0x0, 0, "POLARITY"), // 0 = NEGATIVE
         (0x1, 0, "OFFSET"),
-        (0x2, 50, "THRS"),           // Very low threshold
+        (0x2, 50, "THRS"), // Very low threshold
         (0x3, 10, "TRIG_K"),
         (0x4, 12, "TRIG_M"),
         (0x5, 500, "TRAP_K"),
@@ -278,7 +279,10 @@ fn configure_selftrigger(handle: &CaenHandle) -> Result<(), Box<dyn std::error::
     // en_trigger_and at 0xC00B with value 4409 (0x1139)
     let en_trigger_and_addr = 0xC00B * 4;
     match handle.set_user_register(en_trigger_and_addr, 4409) {
-        Ok(()) => println!("    en_trigger_and (0x{:X}) = 4409 (0x1139)", en_trigger_and_addr),
+        Ok(()) => println!(
+            "    en_trigger_and (0x{:X}) = 4409 (0x1139)",
+            en_trigger_and_addr
+        ),
         Err(e) => println!("    en_trigger_and ERROR: {}", e),
     }
 

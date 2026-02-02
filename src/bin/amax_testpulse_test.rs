@@ -54,7 +54,9 @@ fn main() {
     }
 
     // Set WaveDataSource to ADC_DATA
-    handle.set_value("/ch/0/par/WaveDataSource", "ADC_DATA").ok();
+    handle
+        .set_value("/ch/0/par/WaveDataSource", "ADC_DATA")
+        .ok();
     println!("  WaveDataSource = ADC_DATA");
 
     // Enable test pulse
@@ -72,9 +74,8 @@ fn main() {
     ];
 
     for param in &test_params {
-        match handle.get_value(param) {
-            Ok(v) => println!("  {} = {}", param, v),
-            Err(_) => (),
+        if let Ok(v) = handle.get_value(param) {
+            println!("  {} = {}", param, v);
         }
     }
 
@@ -89,17 +90,11 @@ fn main() {
     println!("--- Setting GlobalTriggerSource ---");
 
     // Try various GlobalTriggerSource options
-    let gts_options = [
-        "TestPulse",
-        "TstTrg",
-        "SwTrg",
-        "TestPulse | SwTrg",
-    ];
+    let gts_options = ["TestPulse", "TstTrg", "SwTrg", "TestPulse | SwTrg"];
 
     for opt in &gts_options {
-        match handle.set_value("/par/GlobalTriggerSource", opt) {
-            Ok(()) => println!("  GlobalTriggerSource = {} - ACCEPTED", opt),
-            Err(_) => (),
+        if handle.set_value("/par/GlobalTriggerSource", opt).is_ok() {
+            println!("  GlobalTriggerSource = {} - ACCEPTED", opt);
         }
     }
 
@@ -109,7 +104,9 @@ fn main() {
     }
 
     // Set AcqTriggerSource
-    handle.set_value("/par/AcqTriggerSource", "GlobalTriggerSource").ok();
+    handle
+        .set_value("/par/AcqTriggerSource", "GlobalTriggerSource")
+        .ok();
     if let Ok(v) = handle.get_value("/par/AcqTriggerSource") {
         println!("  AcqTriggerSource: {}", v);
     }
@@ -119,9 +116,9 @@ fn main() {
     println!("--- Setting MCA HLS Registers ---");
 
     let core_regs: [(u32, u32, &str); 13] = [
-        (0x0, 0, "POLARITY"),        // 0 = NEGATIVE
+        (0x0, 0, "POLARITY"), // 0 = NEGATIVE
         (0x1, 0, "OFFSET"),
-        (0x2, 100, "THRS"),          // Threshold
+        (0x2, 100, "THRS"), // Threshold
         (0x3, 10, "TRIG_K"),
         (0x4, 12, "TRIG_M"),
         (0x5, 500, "TRAP_K"),
@@ -224,18 +221,14 @@ fn main() {
     println!("Rate: {:.1} Hz", total_events as f64 / 3.0);
 }
 
-fn dump_events(data: &[u8], max_events: usize) {
-    let offset = 0;
-    let event_count = 0;
-
-    while offset + 16 <= data.len() && event_count < max_events {
+fn dump_events(data: &[u8], _max_events: usize) {
+    // Show first event only (simplified parser)
+    if data.len() >= 16 {
         let word0 = u64::from_be_bytes([
-            data[offset], data[offset+1], data[offset+2], data[offset+3],
-            data[offset+4], data[offset+5], data[offset+6], data[offset+7],
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
         ]);
         let word1 = u64::from_be_bytes([
-            data[offset+8], data[offset+9], data[offset+10], data[offset+11],
-            data[offset+12], data[offset+13], data[offset+14], data[offset+15],
+            data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
         ]);
 
         let channel = ((word0 >> 56) & 0x7F) as u8;
@@ -245,12 +238,8 @@ fn dump_events(data: &[u8], max_events: usize) {
         let has_waveform = ((word1 >> 62) & 0x1) != 0;
 
         println!(
-            "    Event {}: ch={}, ts={}, energy={}, fine_time={}, waveform={}",
-            event_count, channel, timestamp, energy, fine_time, has_waveform
+            "    Event 0: ch={}, ts={}, energy={}, fine_time={}, waveform={}",
+            channel, timestamp, energy, fine_time, has_waveform
         );
-
-        // Skip to next event (estimate based on event size)
-        // For now, just show first event per read
-        break;
     }
 }

@@ -6,12 +6,66 @@
 use delila_rs::reader::CaenHandle;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints};
+use oxyroot::{RootFile, WriterTree};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// Event data for ROOT file output
+#[derive(Default)]
+struct EventBuffer {
+    channel: Vec<i32>,
+    energy: Vec<i32>,
+    amax: Vec<i64>,
+    timestamp: Vec<i64>,
+}
+
+impl EventBuffer {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(&mut self, ch: u8, energy: u16, amax: u64, timestamp: u64) {
+        self.channel.push(ch as i32);
+        self.energy.push(energy as i32);
+        self.amax.push(amax as i64);
+        self.timestamp.push(timestamp as i64);
+    }
+
+    fn len(&self) -> usize {
+        self.energy.len()
+    }
+
+    fn clear(&mut self) {
+        self.channel.clear();
+        self.energy.clear();
+        self.amax.clear();
+        self.timestamp.clear();
+    }
+
+    /// Write events to ROOT file
+    fn write_root(&self, path: &str) -> Result<usize, Box<dyn std::error::Error>> {
+        if self.energy.is_empty() {
+            return Ok(0);
+        }
+
+        let mut file = RootFile::create(path)?;
+        let mut tree = WriterTree::new("events");
+
+        tree.new_branch("channel", self.channel.clone().into_iter());
+        tree.new_branch("energy", self.energy.clone().into_iter());
+        tree.new_branch("amax", self.amax.clone().into_iter());
+        tree.new_branch("timestamp", self.timestamp.clone().into_iter());
+
+        tree.write(&mut file)?;
+        file.close()?;
+
+        Ok(self.energy.len())
+    }
+}
 
 /// MCA HLS Register parameters (Core + AMax = 20 registers)
 #[derive(Clone, Serialize, Deserialize)]
@@ -230,6 +284,12 @@ struct SharedState {
     latest_waveform_energy: u16,
     /// True when histogram data changed and texture needs regeneration
     histogram_dirty: bool,
+    /// Event buffer for ROOT output
+    event_buffer: EventBuffer,
+    /// Whether recording is enabled
+    recording: bool,
+    /// Number of recorded events
+    recorded_count: usize,
 }
 
 struct AmaxViewerApp {
@@ -238,6 +298,8 @@ struct AmaxViewerApp {
     shutdown: Arc<AtomicBool>,
     acq_thread: Option<thread::JoinHandle<()>>,
     texture: Option<egui::TextureHandle>,
+    /// Output ROOT file path
+    output_path: String,
 }
 
 impl AmaxViewerApp {
@@ -256,6 +318,9 @@ impl AmaxViewerApp {
             waveform_len: 0,
             latest_waveform_energy: 0,
             histogram_dirty: true, // Force initial texture generation
+            event_buffer: EventBuffer::new(),
+            recording: false,
+            recorded_count: 0,
         }));
 
         Self {
@@ -264,6 +329,7 @@ impl AmaxViewerApp {
             shutdown: Arc::new(AtomicBool::new(false)),
             acq_thread: None,
             texture: None,
+            output_path: "amax_data.root".to_string(),
         }
     }
 
@@ -492,6 +558,34 @@ impl eframe::App for AmaxViewerApp {
             let amax_width = (state.histogram.amax_max - state.histogram.amax_min) / current_amax_bins as f64;
             ui.label(format!("Energy bin width: {:.1}", energy_width));
             ui.label(format!("AMax bin width: {:.1}", amax_width));
+
+            ui.separator();
+            ui.heading("ROOT Output");
+
+            ui.horizontal(|ui| {
+                ui.label("File:");
+                ui.text_edit_singleline(&mut self.output_path);
+            });
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.recording, "Record");
+                ui.label(format!("({} events)", state.recorded_count));
+            });
+
+            if !state.running && state.recorded_count > 0 {
+                if ui.button("Save ROOT File").clicked() {
+                    match state.event_buffer.write_root(&self.output_path) {
+                        Ok(n) => {
+                            state.status_message = format!("Saved {} events to {}", n, self.output_path);
+                            state.event_buffer.clear();
+                            state.recorded_count = 0;
+                        }
+                        Err(e) => {
+                            state.status_message = format!("Save failed: {}", e);
+                        }
+                    }
+                }
+            }
         });
 
         // Handle stop/start after releasing the lock
@@ -685,6 +779,17 @@ fn acquisition_thread(url: String, shared: Arc<Mutex<SharedState>>, shutdown: Ar
                     let mut state = shared.lock().unwrap();
                     state.histogram.fill(event.energy, amax);
                     state.histogram_dirty = true; // Mark for texture regeneration
+
+                    // Record event if recording is enabled
+                    if state.recording {
+                        state.event_buffer.push(
+                            event.channel,
+                            event.energy,
+                            amax,
+                            event.timestamp,
+                        );
+                        state.recorded_count = state.event_buffer.len();
+                    }
 
                     // Update waveform only every 100ms (zero-copy into pre-allocated buffer)
                     if should_update_waveform {

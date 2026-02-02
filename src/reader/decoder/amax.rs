@@ -168,7 +168,11 @@ impl AMaxDecoder {
         }
 
         if self.config.dump_enabled {
-            println!("[AMax] Decoded {} events from {} words", events.len(), total_words);
+            println!(
+                "[AMax] Decoded {} events from {} words",
+                events.len(),
+                total_words
+            );
         }
     }
 
@@ -194,7 +198,10 @@ impl AMaxDecoder {
         // Skip special events
         if special_event {
             if self.config.dump_enabled {
-                println!("[AMax] Special event skipped (ch={}, info=0x{:X})", channel, info);
+                println!(
+                    "[AMax] Special event skipped (ch={}, info=0x{:X})",
+                    channel, info
+                );
             }
             // Consume remaining words until last_word
             while *word_index < total_words {
@@ -221,7 +228,8 @@ impl AMaxDecoder {
 
         // Calculate timestamp
         let coarse_time_ns = (raw_timestamp as f64) * constants::TIME_STEP_NS;
-        let fine_time_ns = (fine_time as f64 / constants::FINE_TIME_SCALE) * constants::TIME_STEP_NS;
+        let fine_time_ns =
+            (fine_time as f64 / constants::FINE_TIME_SCALE) * constants::TIME_STEP_NS;
         let timestamp_ns = coarse_time_ns + fine_time_ns;
 
         // Combine flags
@@ -256,7 +264,10 @@ impl AMaxDecoder {
                     _ => {
                         // Additional user words - log if debug enabled
                         if self.config.dump_enabled {
-                            println!("[AMax] Extra user word {}: 0x{:016X}", user_word_index, user_data);
+                            println!(
+                                "[AMax] Extra user word {}: 0x{:016X}",
+                                user_word_index, user_data
+                            );
                         }
                     }
                 }
@@ -498,7 +509,8 @@ mod tests {
             // Word 0: 0x00000000000003E8 (timestamp=1000)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xE8,
             // Word 1: energy=5000, fine_time=100, psd=200
-            0x00, 0x00, 0x00, 0x32, 0x00, 0x64, 0x13, 0x88, // psd=200<<26, fine=100<<16, energy=5000
+            0x00, 0x00, 0x00, 0x32, 0x00, 0x64, 0x13,
+            0x88, // psd=200<<26, fine=100<<16, energy=5000
             // Word 2: user word (amax=1000)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xE8,
             // Word 3: last user word (baseline=500)

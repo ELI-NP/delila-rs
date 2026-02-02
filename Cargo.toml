@@ -56,6 +56,13 @@ mongodb = "3"
 bson = "2"
 chrono = { version = "0.4", features = ["serde"] }
 
+# ROOT file output (optional)
+oxyroot = { version = "0.1", optional = true }
+
+[features]
+default = []
+root = ["oxyroot"]
+
 [build-dependencies]
 bindgen = "0.70"
 cc = "1"

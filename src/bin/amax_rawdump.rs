@@ -34,19 +34,19 @@ fn main() {
 
     // Set MCA HLS registers
     let core_regs: [(u32, u32); 13] = [
-        (0x0, 0),      // POLARITY
-        (0x1, 0),      // OFFSET
-        (0x2, 100),    // THRS
-        (0x3, 10),     // TRIG_K
-        (0x4, 12),     // TRIG_M
-        (0x5, 500),    // TRAP_K
-        (0x6, 550),    // TRAP_M
-        (0x7, 3499000),// DECONV_M
-        (0x8, 2500),   // TRAP_GAIN
-        (0x9, 6),      // BL_LEN
-        (0xA, 1200),   // BL_INIB
-        (0xB, 510),    // SAMPLE_POS
-        (0xC, 1),      // RUN_CFG
+        (0x0, 0),       // POLARITY
+        (0x1, 0),       // OFFSET
+        (0x2, 100),     // THRS
+        (0x3, 10),      // TRIG_K
+        (0x4, 12),      // TRIG_M
+        (0x5, 500),     // TRAP_K
+        (0x6, 550),     // TRAP_M
+        (0x7, 3499000), // DECONV_M
+        (0x8, 2500),    // TRAP_GAIN
+        (0x9, 6),       // BL_LEN
+        (0xA, 1200),    // BL_INIB
+        (0xB, 510),     // SAMPLE_POS
+        (0xC, 1),       // RUN_CFG
     ];
     for (addr, value) in &core_regs {
         let _ = handle.set_user_register(addr * 4, *value);
@@ -98,10 +98,14 @@ fn main() {
                     for i in 0..num_words.min(32) {
                         let offset = i * 8;
                         let word = u64::from_be_bytes([
-                            raw.data[offset], raw.data[offset+1],
-                            raw.data[offset+2], raw.data[offset+3],
-                            raw.data[offset+4], raw.data[offset+5],
-                            raw.data[offset+6], raw.data[offset+7],
+                            raw.data[offset],
+                            raw.data[offset + 1],
+                            raw.data[offset + 2],
+                            raw.data[offset + 3],
+                            raw.data[offset + 4],
+                            raw.data[offset + 5],
+                            raw.data[offset + 6],
+                            raw.data[offset + 7],
                         ]);
 
                         // Parse fields

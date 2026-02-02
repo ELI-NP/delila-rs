@@ -220,19 +220,19 @@ fn configure_test_pulse(handle: &CaenHandle) -> Result<(), Box<dyn std::error::E
 
     // Try NEGATIVE polarity (same as PHA1) with LOW threshold
     let amax_regs = [
-        (0x0, 0, "POLARITY"),        // 0 = NEGATIVE (like PHA1 signal)
-        (0x1, 0, "OFFSET"),          // 0
-        (0x2, 20, "THRS"),           // VERY LOW threshold to ensure trigger
-        (0x3, 10, "TRIG_K"),         // fast trigger rise
-        (0x4, 12, "TRIG_M"),         // fast trigger decay
-        (0x5, 500, "TRAP_K"),        // trapezoid rise
-        (0x6, 550, "TRAP_M"),        // trapezoid decay
-        (0x7, 3499000, "DECONV_M"),  // deconvolution
-        (0x8, 2500, "TRAP_GAIN"),    // digital gain
-        (0x9, 6, "BL_LEN"),          // baseline length (2^6 = 64 samples)
-        (0xA, 1200, "BL_INIB"),      // baseline inhibit
-        (0xB, 510, "SAMPLE_POS"),    // sample position
-        (0xC, 1, "RUN_CFG"),         // run config
+        (0x0, 0, "POLARITY"),       // 0 = NEGATIVE (like PHA1 signal)
+        (0x1, 0, "OFFSET"),         // 0
+        (0x2, 20, "THRS"),          // VERY LOW threshold to ensure trigger
+        (0x3, 10, "TRIG_K"),        // fast trigger rise
+        (0x4, 12, "TRIG_M"),        // fast trigger decay
+        (0x5, 500, "TRAP_K"),       // trapezoid rise
+        (0x6, 550, "TRAP_M"),       // trapezoid decay
+        (0x7, 3499000, "DECONV_M"), // deconvolution
+        (0x8, 2500, "TRAP_GAIN"),   // digital gain
+        (0x9, 6, "BL_LEN"),         // baseline length (2^6 = 64 samples)
+        (0xA, 1200, "BL_INIB"),     // baseline inhibit
+        (0xB, 510, "SAMPLE_POS"),   // sample position
+        (0xC, 1, "RUN_CFG"),        // run config
     ];
 
     for (addr, value, name) in &amax_regs {
@@ -323,7 +323,10 @@ fn dump_raw_data(data: &[u8], n_events: u32) {
         println!("  Word 1: 0x{:016X}", word1);
         println!("    last={}, waveform={}", last_word, waveform_present);
         println!("    flags_b=0x{:03X}, flags_a=0x{:02X}", flags_b, flags_a);
-        println!("    PSD={}, fine_time={}, energy={}", psd, fine_time, energy);
+        println!(
+            "    PSD={}, fine_time={}, energy={}",
+            psd, fine_time, energy
+        );
 
         // Calculate full timestamp
         let fine_time_ns = (fine_time as f64 / 1024.0) * 8.0;
@@ -363,8 +366,7 @@ fn dump_raw_data(data: &[u8], n_events: u32) {
 
         // Handle waveform if present
         if waveform_present != 0 && word_idx < num_words {
-            let wave_header =
-                read_u64_be(&data[word_idx * word_size..(word_idx + 1) * word_size]);
+            let wave_header = read_u64_be(&data[word_idx * word_size..(word_idx + 1) * word_size]);
             let truncated = (wave_header >> 63) & 0x1;
             let wave_word_count = (wave_header & 0xFFF) as usize;
             println!(

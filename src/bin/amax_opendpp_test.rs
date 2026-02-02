@@ -95,13 +95,18 @@ fn main() {
                 if total_events <= 10 {
                     println!("\n  [Event #{}]", total_events);
                     println!("    Channel:   {}", event.channel);
-                    println!("    Timestamp: {} ({:.3} us)",
+                    println!(
+                        "    Timestamp: {} ({:.3} us)",
                         event.timestamp,
-                        event.timestamp as f64 * 8.0 / 1000.0);
+                        event.timestamp as f64 * 8.0 / 1000.0
+                    );
                     println!("    FineTS:    {}", event.fine_timestamp);
                     println!("    Energy:    {}", event.energy);
                     println!("    PSD:       {}", event.psd);
-                    println!("    Flags A/B: 0x{:02X} / 0x{:03X}", event.flags_a, event.flags_b);
+                    println!(
+                        "    Flags A/B: 0x{:02X} / 0x{:03X}",
+                        event.flags_a, event.flags_b
+                    );
                     println!("    UserInfo:  {} words", event.user_info.len());
                     for (i, &ui) in event.user_info.iter().enumerate() {
                         println!("      [{}]: 0x{:016X} ({})", i, ui, ui);
