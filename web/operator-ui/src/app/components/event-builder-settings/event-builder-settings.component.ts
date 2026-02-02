@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatCardModule } from '@angular/material/card';
@@ -18,7 +18,7 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatDialogModule, MatDialog } from '@angular/material/dialog';
 import { EventBuilderService } from '../../services/event-builder.service';
-import { EventBuilderConfig, ChSettings, L2Setting, TimeCalibration } from '../../models/types';
+import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
 
 @Component({
   selector: 'app-event-builder-settings',

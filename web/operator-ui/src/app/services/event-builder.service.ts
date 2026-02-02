@@ -1,4 +1,4 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { EventBuilderConfig, EventBuilderHistoryItem, ChSettings, TimeCalibration, L2Setting } from '../models/types';
@@ -7,6 +7,7 @@ import { EventBuilderConfig, EventBuilderHistoryItem, ChSettings, TimeCalibratio
   providedIn: 'root'
 })
 export class EventBuilderService {
+  private readonly http = inject(HttpClient);
   private readonly apiUrl = 'http://localhost:8080/api/event-builder';
 
   // Signals for reactive state
@@ -15,8 +16,6 @@ export class EventBuilderService {
   currentConfig = signal<EventBuilderConfig | null>(null);
   loading = signal(false);
   error = signal<string | null>(null);
-
-  constructor(private http: HttpClient) {}
 
   /** Load list of experiments */
   async loadExperiments(): Promise<void> {
