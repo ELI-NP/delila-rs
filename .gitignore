@@ -1,4 +1,5 @@
 /target
+tools/*/target/
 
 .serena
 .claude
@@ -18,3 +19,6 @@ legacy
 
 # Hardware dumps
 devtree.json
+
+# AMax
+TrapezoidalfilterMCA_dpp_tests

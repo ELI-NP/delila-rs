@@ -140,6 +140,9 @@ pub enum SourceType {
     /// CAEN DPP-ZLE firmware (future)
     #[serde(alias = "ZLE", alias = "zle")]
     Zle,
+    /// DELILA AMax firmware (Trapezoidal Filter MCA, custom DPP_OPEN)
+    #[serde(alias = "AMax", alias = "AMAX")]
+    AMax,
 }
 
 impl std::fmt::Display for SourceType {
@@ -150,6 +153,7 @@ impl std::fmt::Display for SourceType {
             SourceType::Psd2 => write!(f, "PSD2"),
             SourceType::Pha1 => write!(f, "PHA1"),
             SourceType::Zle => write!(f, "ZLE"),
+            SourceType::AMax => write!(f, "AMax"),
         }
     }
 }

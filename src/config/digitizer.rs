@@ -105,6 +105,8 @@ pub enum FirmwareType {
     PSD2,
     /// DPP-PHA1 firmware (for spectroscopy, x725/x730)
     PHA1,
+    /// DELILA AMax firmware (Trapezoidal Filter MCA, custom DPP_OPEN on VX2730)
+    AMax,
 }
 
 impl FirmwareType {
@@ -114,13 +116,14 @@ impl FirmwareType {
             FirmwareType::PSD1 => "dig1://",
             FirmwareType::PSD2 => "dig2://",
             FirmwareType::PHA1 => "dig1://", // PHA1 uses dig1 (same as PSD1)
+            FirmwareType::AMax => "dig2://", // AMax uses dig2 (VX2730 with DPP_OPEN)
         }
     }
 
     /// Whether the readout endpoint needs N_EVENTS configured.
-    /// DIG2 (PSD2) requires DATA + SIZE + N_EVENTS; DIG1 (PSD1/PHA) uses DATA + SIZE only.
+    /// DIG2 (PSD2, AMax) requires DATA + SIZE + N_EVENTS; DIG1 (PSD1/PHA) uses DATA + SIZE only.
     pub fn includes_n_events(&self) -> bool {
-        matches!(self, FirmwareType::PSD2)
+        matches!(self, FirmwareType::PSD2 | FirmwareType::AMax)
     }
 
     /// Whether this firmware uses the DIG1 (legacy) protocol.
@@ -285,7 +288,7 @@ impl DigitizerConfig {
     pub fn new(digitizer_id: u32, name: impl Into<String>, firmware: FirmwareType) -> Self {
         let num_channels = match firmware {
             FirmwareType::PSD1 => 8,
-            FirmwareType::PSD2 | FirmwareType::PHA1 => 32,
+            FirmwareType::PSD2 | FirmwareType::PHA1 | FirmwareType::AMax => 32,
         };
 
         Self {
@@ -530,10 +533,10 @@ impl DigitizerConfig {
         ch_path: &str,
         config: &ChannelConfig,
     ) {
-        // Parameter names differ between PSD1 and PSD2
+        // Parameter names differ between PSD1 and PSD2/PHA1/AMax
         let (enable_name, offset_name, polarity_name, threshold_name) = match self.firmware {
             FirmwareType::PSD1 => ("ch_enabled", "ch_dcoffset", "ch_polarity", "ch_threshold"),
-            FirmwareType::PSD2 | FirmwareType::PHA1 => {
+            FirmwareType::PSD2 | FirmwareType::PHA1 | FirmwareType::AMax => {
                 ("ChEnable", "DCOffset", "PulsePolarity", "TriggerThr")
             }
         };

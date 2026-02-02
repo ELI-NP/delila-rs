@@ -8,4 +8,4 @@ pub mod handle;
 
 // Re-exports for convenience
 pub use error::CaenError;
-pub use handle::{CaenHandle, DeviceInfo, EndpointHandle, ParamInfo, RawData};
+pub use handle::{CaenHandle, DeviceInfo, EndpointHandle, OpenDppEvent, ParamInfo, RawData};

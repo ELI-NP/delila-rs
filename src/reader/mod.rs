@@ -10,10 +10,10 @@ pub mod decoder;
 
 // Re-exports
 pub use crate::config::FirmwareType;
-pub use caen::{CaenError, CaenHandle, EndpointHandle};
+pub use caen::{CaenError, CaenHandle, EndpointHandle, OpenDppEvent};
 pub use decoder::{
-    DataType, DecodeResult, EventData, Pha1Config, Pha1Decoder, Psd1Config, Psd1Decoder,
-    Psd2Config, Psd2Decoder, Waveform,
+    AMaxConfig, AMaxDecoder, DataType, DecodeResult, EventData, Pha1Config, Pha1Decoder,
+    Psd1Config, Psd1Decoder, Psd2Config, Psd2Decoder, Waveform,
 };
 
 use crate::common::{
@@ -53,11 +53,55 @@ pub enum ReaderError {
     ChannelSend,
 }
 
-/// Enum-based decoder dispatch (KISS: only PSD1/PSD2/PHA1, no trait object needed)
+/// Internal message type from ReadLoop to DecodeLoop
+///
+/// Supports both RAW data (requiring decoding) and pre-decoded events (from OpenDPP).
+enum ReadLoopOutput {
+    /// Raw data that needs decoding (PSD1/PSD2/PHA1)
+    Raw(decoder::RawData),
+    /// Already decoded event from OpenDPP (AMax)
+    Decoded(decoder::EventData),
+    /// Start signal from digitizer
+    Start,
+    /// Stop signal from digitizer
+    Stop,
+}
+
+/// Convert OpenDppEvent to decoder::EventData
+///
+/// AMax firmware uses OpenDPP endpoint which returns pre-decoded event data.
+/// This converts the OpenDPP event structure to our common EventData format.
+fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventData {
+    // AMax timestamp: 1 LSB = 8 ns
+    // Fine timestamp adds sub-clock resolution (10-bit, scale by 1024)
+    const TIME_STEP_NS: f64 = 8.0;
+    const FINE_TIME_SCALE: f64 = 1024.0;
+
+    let coarse_time_ns = (event.timestamp as f64) * TIME_STEP_NS;
+    let fine_time_ns = (event.fine_timestamp as f64 / FINE_TIME_SCALE) * TIME_STEP_NS;
+    let timestamp_ns = coarse_time_ns + fine_time_ns;
+
+    // Combine flags (flags_a is 8 bits, flags_b is 12 bits)
+    let flags = ((event.flags_a as u32) << 12) | (event.flags_b as u32);
+
+    decoder::EventData {
+        timestamp_ns,
+        module: module_id,
+        channel: event.channel,
+        energy: event.energy,
+        energy_short: event.psd, // PSD value stored in energy_short
+        fine_time: event.fine_timestamp,
+        flags,
+        waveform: None, // AMax OpenDPP without waveform for now
+    }
+}
+
+/// Enum-based decoder dispatch (KISS: PSD1/PSD2/PHA1/AMax, no trait object needed)
 enum DecoderKind {
     Psd2(Psd2Decoder),
     Psd1(Psd1Decoder),
     Pha1(Pha1Decoder),
+    AMax(AMaxDecoder),
 }
 
 impl DecoderKind {
@@ -66,6 +110,7 @@ impl DecoderKind {
             Self::Psd2(d) => d.classify(raw),
             Self::Psd1(d) => d.classify(raw),
             Self::Pha1(d) => d.classify(raw),
+            Self::AMax(d) => d.classify(raw),
         }
     }
 
@@ -74,6 +119,12 @@ impl DecoderKind {
             Self::Psd2(d) => d.decode_into(raw, events),
             Self::Psd1(d) => d.decode_into(raw, events),
             Self::Pha1(d) => d.decode_into(raw, events),
+            Self::AMax(d) => {
+                // AMax decoder returns AMaxEventData, extract base EventData
+                let mut amax_events = Vec::new();
+                d.decode_into(raw, &mut amax_events);
+                events.extend(amax_events.into_iter().map(|e| e.base));
+            }
         }
     }
 }
@@ -135,6 +186,7 @@ impl ReaderConfig {
             crate::config::SourceType::Psd2 => FirmwareType::PSD2,
             crate::config::SourceType::Psd1 => FirmwareType::PSD1,
             crate::config::SourceType::Pha1 => FirmwareType::PHA1,
+            crate::config::SourceType::AMax => FirmwareType::AMax,
             // Emulator/Zle sources shouldn't create a Reader — caller should handle
             _ => return None,
         };
@@ -435,18 +487,18 @@ impl Reader {
         self.publish_message(&eos).await
     }
 
-    /// ReadLoop task - runs in spawn_blocking to avoid blocking tokio runtime
+    /// ReadLoop task for RAW endpoint (PSD1/PSD2/PHA1) - runs in spawn_blocking
     ///
     /// Reads raw data from CAEN digitizer and sends to decode channel.
     /// Respects state machine: only arms/starts digitizer when state transitions occur.
-    fn read_loop(
+    fn read_loop_raw(
         config: ReaderConfig,
-        tx: mpsc::Sender<decoder::RawData>,
+        tx: mpsc::Sender<ReadLoopOutput>,
         state_rx: watch::Receiver<ComponentState>,
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(), ReaderError> {
-        info!(url = %config.url, "ReadLoop starting, connecting to digitizer");
+        info!(url = %config.url, "ReadLoop (RAW) starting, connecting to digitizer");
 
         // Open connection to digitizer
         let handle = CaenHandle::open(&config.url)?;
@@ -576,8 +628,9 @@ impl Reader {
                         .bytes_read
                         .fetch_add(raw.size as u64, Ordering::Relaxed);
 
-                    // Convert to decoder RawData and send
+                    // Convert to decoder RawData and wrap in ReadLoopOutput
                     let decoder_raw = decoder::RawData::from(raw);
+                    let output = ReadLoopOutput::Raw(decoder_raw);
 
                     // Update queue length metric (approximate)
                     metrics.queue_length.fetch_add(1, Ordering::Relaxed);
@@ -586,7 +639,7 @@ impl Reader {
                     // NOTE: blocking_send() causes TLS fatal error on macOS,
                     // so we use try_send() + retry loop instead.
                     // Check shutdown/state on each retry to avoid hanging on Stop.
-                    let mut pending = decoder_raw;
+                    let mut pending = output;
                     let mut channel_closed = false;
                     loop {
                         match tx.try_send(pending) {
@@ -632,14 +685,199 @@ impl Reader {
         if hw_armed || hw_running {
             let _ = handle.send_command("/cmd/disarmacquisition");
         }
-        info!("ReadLoop stopped");
+        info!("ReadLoop (RAW) stopped");
+        Ok(())
+    }
+
+    /// ReadLoop task for OpenDPP endpoint (AMax) - runs in spawn_blocking
+    ///
+    /// Reads pre-decoded event data from CAEN digitizer via OpenDPP endpoint.
+    /// Each event is already decoded by the hardware, so no software decoding is needed.
+    /// Used for AMax/DPP_OPEN firmware.
+    fn read_loop_opendpp(
+        config: ReaderConfig,
+        tx: mpsc::Sender<ReadLoopOutput>,
+        state_rx: watch::Receiver<ComponentState>,
+        metrics: Arc<ReaderMetrics>,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), ReaderError> {
+        info!(url = %config.url, "ReadLoop (OpenDPP) starting, connecting to digitizer");
+
+        // Open connection to digitizer
+        let handle = CaenHandle::open(&config.url)?;
+        info!("Connected to digitizer");
+
+        // Configure OpenDPP endpoint (no waveform for now)
+        let endpoint = handle.configure_opendpp_endpoint(false)?;
+        info!("OpenDPP endpoint configured");
+
+        // Track digitizer hardware state
+        let mut hw_armed = false;
+        let mut hw_running = false;
+        let mut prev_state = ComponentState::Idle;
+
+        // Buffer for user info words
+        let mut user_info_buffer = [0u64; 16];
+
+        loop {
+            // Check shutdown flag
+            if shutdown.load(Ordering::Relaxed) {
+                info!("ReadLoop (OpenDPP) received shutdown signal");
+                break;
+            }
+
+            // Get current state
+            let current_state = *state_rx.borrow();
+
+            // Handle state transitions (same logic as read_loop_raw)
+            if current_state != prev_state {
+                info!(from = %prev_state, to = %current_state, "State transition");
+
+                match (prev_state, current_state) {
+                    // Configure digitizer when entering Configured state from Idle
+                    (ComponentState::Idle, ComponentState::Configured) => {
+                        // Apply configuration from JSON file if specified
+                        if let Some(ref config_path) = config.config_file {
+                            info!(path = %config_path, "Loading digitizer configuration");
+                            match crate::config::digitizer::DigitizerConfig::load(config_path) {
+                                Ok(dig_config) => {
+                                    match handle.apply_config(&dig_config) {
+                                        Ok(count) => {
+                                            info!(count, "Digitizer configuration applied");
+                                        }
+                                        Err(e) => {
+                                            error!(error = %e, "Failed to apply digitizer configuration");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = %e, path = %config_path, "Failed to load digitizer configuration");
+                                }
+                            }
+                        } else {
+                            info!("No config_file specified, using current digitizer settings");
+                        }
+                    }
+
+                    // Arm digitizer when entering Armed state
+                    (_, ComponentState::Armed) => {
+                        if !hw_armed {
+                            send_arm_command(&handle, config.firmware)?;
+                            hw_armed = true;
+                        }
+                    }
+
+                    // Start acquisition when entering Running state
+                    (_, ComponentState::Running) => {
+                        if !hw_running {
+                            if !hw_armed {
+                                send_arm_command(&handle, config.firmware)?;
+                                hw_armed = true;
+                            }
+                            send_start_command(&handle, config.firmware)?;
+                            hw_running = true;
+                        }
+                    }
+
+                    // Stop acquisition when leaving Running state
+                    (ComponentState::Running, ComponentState::Configured) => {
+                        if hw_running {
+                            info!("Stopping digitizer acquisition");
+                            let _ = handle.send_command("/cmd/disarmacquisition");
+                            hw_armed = false;
+                            hw_running = false;
+                        }
+                    }
+
+                    // Reset: disarm if armed
+                    (_, ComponentState::Idle) => {
+                        if hw_armed || hw_running {
+                            info!("Resetting digitizer");
+                            let _ = handle.send_command("/cmd/disarmacquisition");
+                            hw_armed = false;
+                            hw_running = false;
+                        }
+                    }
+
+                    _ => {}
+                }
+
+                prev_state = current_state;
+            }
+
+            // Only read data when Running
+            if current_state != ComponentState::Running {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            // Read event from OpenDPP endpoint
+            match endpoint.read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer) {
+                Ok(Some(event)) => {
+                    metrics
+                        .bytes_read
+                        .fetch_add(event.event_size as u64, Ordering::Relaxed);
+
+                    // Convert OpenDPP event to EventData
+                    let event_data = opendpp_to_event_data(&event, config.module_id);
+                    let output = ReadLoopOutput::Decoded(event_data);
+
+                    // Update queue length metric
+                    metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+
+                    // Send to decode channel with back-pressure retry
+                    let mut pending = output;
+                    let mut channel_closed = false;
+                    loop {
+                        match tx.try_send(pending) {
+                            Ok(()) => break,
+                            Err(mpsc::error::TrySendError::Full(returned)) => {
+                                if shutdown.load(Ordering::Relaxed)
+                                    || *state_rx.borrow() != ComponentState::Running
+                                {
+                                    warn!("Dropping pending event during shutdown/stop");
+                                    break;
+                                }
+                                pending = returned;
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                warn!("Decode channel closed, stopping read loop");
+                                channel_closed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if channel_closed {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    // Timeout - no data available, continue polling
+                }
+                Err(e) => {
+                    // Check if it's a stop signal
+                    if e.code == caen::error::codes::STOP {
+                        info!("Received STOP signal from digitizer");
+                        break;
+                    }
+                    error!(error = %e, code = e.code, "Read error (OpenDPP)");
+                }
+            }
+        }
+
+        // Cleanup: stop acquisition if still running
+        if hw_armed || hw_running {
+            let _ = handle.send_command("/cmd/disarmacquisition");
+        }
+        info!("ReadLoop (OpenDPP) stopped");
         Ok(())
     }
 
     /// DecodeLoop task - decodes raw data and publishes via ZMQ
     async fn decode_loop(
         config: ReaderConfig,
-        mut rx: mpsc::Receiver<decoder::RawData>,
+        mut rx: mpsc::Receiver<ReadLoopOutput>,
         mut data_socket: publish::Publish,
         metrics: Arc<ReaderMetrics>,
         state_rx: watch::Receiver<ComponentState>,
@@ -673,6 +911,14 @@ impl Reader {
                     dump_enabled: false,
                 };
                 DecoderKind::Pha1(Pha1Decoder::new(pha1_config))
+            }
+            FirmwareType::AMax => {
+                let amax_config = AMaxConfig {
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 1, // AMax typically uses only ch0
+                };
+                DecoderKind::AMax(AMaxDecoder::new(amax_config))
             }
         };
 
@@ -713,10 +959,10 @@ impl Reader {
                     }
                 }
 
-                // Receive raw data from ReadLoop
-                raw = rx.recv() => {
-                    match raw {
-                        Some(raw_data) => {
+                // Receive data from ReadLoop
+                output = rx.recv() => {
+                    match output {
+                        Some(ReadLoopOutput::Raw(raw_data)) => {
                             // Update queue length metric
                             metrics.queue_length.fetch_sub(1, Ordering::Relaxed);
 
@@ -769,14 +1015,12 @@ impl Reader {
                                 }
                                 DataType::Start => {
                                     info!("Received START signal from digitizer");
-                                    // Reset sequence number on Start
                                     sequence_number = 0;
                                     heartbeat_counter = 0;
                                     info!("Sequence number reset to 0 on Start");
                                 }
                                 DataType::Stop => {
                                     info!("Received STOP signal from digitizer");
-                                    // Send EOS
                                     let eos = Message::eos(config.source_id);
                                     match eos.to_msgpack() {
                                         Ok(bytes) => {
@@ -795,8 +1039,66 @@ impl Reader {
                                 }
                             }
                         }
+
+                        Some(ReadLoopOutput::Decoded(event_data)) => {
+                            // Pre-decoded event from OpenDPP (AMax)
+                            metrics.queue_length.fetch_sub(1, Ordering::Relaxed);
+
+                            // Create single-event batch
+                            let mut batch = EventDataBatch::with_capacity(
+                                config.source_id,
+                                sequence_number,
+                                1,
+                            );
+                            batch.push(Self::convert_event(event_data));
+
+                            // Update metrics
+                            metrics.events_decoded.fetch_add(1, Ordering::Relaxed);
+
+                            // Publish
+                            let msg = Message::data(batch);
+                            match msg.to_msgpack() {
+                                Ok(bytes) => {
+                                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
+                                    if let Err(e) = data_socket.send(zmq_msg).await {
+                                        error!(error = %e, "Failed to send event via ZMQ");
+                                    } else {
+                                        sequence_number += 1;
+                                        metrics.batches_published.fetch_add(1, Ordering::Relaxed);
+                                        debug!(seq = sequence_number - 1, "Published OpenDPP event");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to serialize event");
+                                }
+                            }
+                        }
+
+                        Some(ReadLoopOutput::Start) => {
+                            info!("Received START signal from ReadLoop");
+                            sequence_number = 0;
+                            heartbeat_counter = 0;
+                            info!("Sequence number reset to 0 on Start");
+                        }
+
+                        Some(ReadLoopOutput::Stop) => {
+                            info!("Received STOP signal from ReadLoop");
+                            let eos = Message::eos(config.source_id);
+                            match eos.to_msgpack() {
+                                Ok(bytes) => {
+                                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
+                                    if let Err(e) = data_socket.send(zmq_msg).await {
+                                        error!(error = %e, "Failed to send EOS via ZMQ");
+                                    } else {
+                                        info!(source_id = config.source_id, "Published EOS");
+                                    }
+                                }
+                                Err(e) => error!(error = %e, "Failed to serialize EOS"),
+                            }
+                        }
+
                         None => {
-                            info!("Raw data channel closed, stopping decode loop");
+                            info!("Data channel closed, stopping decode loop");
                             break;
                         }
                     }
@@ -828,8 +1130,8 @@ impl Reader {
             "Reader ready, waiting for commands"
         );
 
-        // Create channels
-        let (raw_tx, raw_rx) = mpsc::channel::<decoder::RawData>(1000);
+        // Create channels (using ReadLoopOutput to support both RAW and OpenDPP paths)
+        let (data_tx, data_rx) = mpsc::channel::<ReadLoopOutput>(1000);
 
         // Shutdown flag for ReadLoop (it runs in spawn_blocking, can't use async channel)
         let read_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -864,18 +1166,34 @@ impl Reader {
         });
 
         // Spawn ReadLoop task (blocking)
+        // Select read loop based on firmware type:
+        // - AMax uses OpenDPP endpoint (pre-decoded events)
+        // - Others use RAW endpoint (requires software decoding)
         let read_config = self.config.clone();
         let read_state_rx = self.state_rx.clone();
         let read_metrics = self.metrics.clone();
+        let use_opendpp = self.config.firmware == FirmwareType::AMax;
 
         let read_handle = tokio::task::spawn_blocking(move || {
-            Self::read_loop(
-                read_config,
-                raw_tx,
-                read_state_rx,
-                read_metrics,
-                read_shutdown_clone,
-            )
+            if use_opendpp {
+                info!("Using OpenDPP endpoint for AMax firmware");
+                Self::read_loop_opendpp(
+                    read_config,
+                    data_tx,
+                    read_state_rx,
+                    read_metrics,
+                    read_shutdown_clone,
+                )
+            } else {
+                info!("Using RAW endpoint for firmware {:?}", read_config.firmware);
+                Self::read_loop_raw(
+                    read_config,
+                    data_tx,
+                    read_state_rx,
+                    read_metrics,
+                    read_shutdown_clone,
+                )
+            }
         });
 
         // Take ownership of data_socket for decode loop
@@ -894,7 +1212,7 @@ impl Reader {
         let decode_handle = tokio::spawn(async move {
             Self::decode_loop(
                 decode_config,
-                raw_rx,
+                data_rx,
                 data_socket,
                 decode_metrics,
                 decode_state_rx,

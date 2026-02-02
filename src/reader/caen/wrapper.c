@@ -25,3 +25,56 @@ int caen_read_data_raw(
 ) {
     return CAEN_FELib_ReadData(handle, timeout, data, size, n_events);
 }
+
+/**
+ * Wrapper for CAEN_FELib_ReadData with OpenDPP format (no waveform):
+ * Format: CHANNEL, TIMESTAMP, FINE_TIMESTAMP, ENERGY, FLAGS_B, FLAGS_A, PSD,
+ *         USER_INFO (array), USER_INFO_SIZE, EVENT_SIZE
+ */
+int caen_read_data_opendpp(
+    uint64_t handle,
+    int timeout,
+    uint8_t* channel,
+    uint64_t* timestamp,
+    uint16_t* fine_timestamp,
+    uint16_t* energy,
+    uint16_t* flags_b,
+    uint16_t* flags_a,
+    uint16_t* psd,
+    uint64_t* user_info,
+    size_t* user_info_size,
+    size_t* event_size
+) {
+    return CAEN_FELib_ReadData(handle, timeout,
+        channel, timestamp, fine_timestamp, energy,
+        flags_b, flags_a, psd,
+        user_info, user_info_size, event_size);
+}
+
+/**
+ * Wrapper for CAEN_FELib_ReadData with OpenDPP format (with waveform):
+ * Format: CHANNEL, TIMESTAMP, FINE_TIMESTAMP, ENERGY, FLAGS_B, FLAGS_A, PSD,
+ *         USER_INFO (array), USER_INFO_SIZE, WAVEFORM (array), WAVEFORM_SIZE, EVENT_SIZE
+ */
+int caen_read_data_opendpp_waveform(
+    uint64_t handle,
+    int timeout,
+    uint8_t* channel,
+    uint64_t* timestamp,
+    uint16_t* fine_timestamp,
+    uint16_t* energy,
+    uint16_t* flags_b,
+    uint16_t* flags_a,
+    uint16_t* psd,
+    uint64_t* user_info,
+    size_t* user_info_size,
+    uint16_t* waveform,
+    size_t* waveform_size,
+    size_t* event_size
+) {
+    return CAEN_FELib_ReadData(handle, timeout,
+        channel, timestamp, fine_timestamp, energy,
+        flags_b, flags_a, psd,
+        user_info, user_info_size,
+        waveform, waveform_size, event_size);
+}

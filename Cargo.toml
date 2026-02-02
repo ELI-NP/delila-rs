@@ -110,3 +110,27 @@ path = "src/bin/event_bridge.rs"
 [[bin]]
 name = "reader"
 path = "src/bin/reader.rs"
+
+[[bin]]
+name = "amax_register_test"
+path = "src/bin/amax_register_test.rs"
+
+[[bin]]
+name = "amax_data_test"
+path = "src/bin/amax_data_test.rs"
+
+[[bin]]
+name = "amax_selftrigger_test"
+path = "src/bin/amax_selftrigger_test.rs"
+
+[[bin]]
+name = "amax_testpulse_test"
+path = "src/bin/amax_testpulse_test.rs"
+
+[[bin]]
+name = "amax_rawdump"
+path = "src/bin/amax_rawdump.rs"
+
+[[bin]]
+name = "amax_opendpp_test"
+path = "src/bin/amax_opendpp_test.rs"

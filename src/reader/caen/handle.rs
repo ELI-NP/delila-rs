@@ -19,6 +19,42 @@ extern "C" {
         size: *mut usize,
         n_events: *mut u32,
     ) -> std::os::raw::c_int;
+
+    /// C wrapper for CAEN_FELib_ReadData with OpenDPP format (no waveform)
+    /// Defined in wrapper.c, compiled by build.rs
+    fn caen_read_data_opendpp(
+        handle: u64,
+        timeout: std::os::raw::c_int,
+        channel: *mut u8,
+        timestamp: *mut u64,
+        fine_timestamp: *mut u16,
+        energy: *mut u16,
+        flags_b: *mut u16,
+        flags_a: *mut u16,
+        psd: *mut u16,
+        user_info: *mut u64,
+        user_info_size: *mut usize,
+        event_size: *mut usize,
+    ) -> std::os::raw::c_int;
+
+    /// C wrapper for CAEN_FELib_ReadData with OpenDPP format (with waveform)
+    /// Defined in wrapper.c, compiled by build.rs
+    fn caen_read_data_opendpp_waveform(
+        handle: u64,
+        timeout: std::os::raw::c_int,
+        channel: *mut u8,
+        timestamp: *mut u64,
+        fine_timestamp: *mut u16,
+        energy: *mut u16,
+        flags_b: *mut u16,
+        flags_a: *mut u16,
+        psd: *mut u16,
+        user_info: *mut u64,
+        user_info_size: *mut usize,
+        waveform: *mut u16,
+        waveform_size: *mut usize,
+        event_size: *mut usize,
+    ) -> std::os::raw::c_int;
 }
 
 /// Safe wrapper for CAEN device handle
@@ -46,6 +82,31 @@ pub struct RawData {
     pub size: usize,
     /// Number of events in this data block
     pub n_events: u32,
+}
+
+/// OpenDPP decoded event data (single event)
+#[derive(Debug, Clone)]
+pub struct OpenDppEvent {
+    /// Channel number
+    pub channel: u8,
+    /// Timestamp (in clock ticks, 1 LSB = 8 ns for VX2730)
+    pub timestamp: u64,
+    /// Fine timestamp (sub-clock resolution)
+    pub fine_timestamp: u16,
+    /// Energy value
+    pub energy: u16,
+    /// Flags B (12 bits)
+    pub flags_b: u16,
+    /// Flags A (8 bits)
+    pub flags_a: u16,
+    /// PSD value
+    pub psd: u16,
+    /// User info words
+    pub user_info: Vec<u64>,
+    /// Waveform samples (optional, only if configured with include_waveform=true)
+    pub waveform: Option<Vec<u16>>,
+    /// Total event size in bytes
+    pub event_size: usize,
 }
 
 /// Device information retrieved from digitizer
@@ -505,6 +566,72 @@ impl CaenHandle {
         })
     }
 
+    /// Configure endpoint for OpenDPP decoded data reading
+    ///
+    /// This sets up the OpenDPP endpoint and returns an EndpointHandle for data reading.
+    /// The OpenDPP endpoint provides decoded event data (channel, timestamp, energy, etc.)
+    /// instead of raw binary data.
+    ///
+    /// # Arguments
+    /// * `include_waveform` - If true, include waveform data in the output
+    pub fn configure_opendpp_endpoint(&self, include_waveform: bool) -> Result<EndpointHandle, CaenError> {
+        // Get endpoint handle
+        let ep_handle = self.get_handle("/endpoint/opendpp")?;
+
+        // Get parent (endpoint folder) handle
+        let ep_folder_handle = self.get_parent_handle(ep_handle)?;
+
+        // Set active endpoint to OpenDPP
+        self.set_value_with_handle(ep_folder_handle, "/par/activeendpoint", "OpenDPP")?;
+
+        // Get fresh handle for read operations
+        let read_data_handle = self.get_handle("/endpoint/opendpp")?;
+
+        // Set data format for OpenDPP
+        let format_json = if include_waveform {
+            r#"[
+            {"name": "CHANNEL", "type": "U8"},
+            {"name": "TIMESTAMP", "type": "U64"},
+            {"name": "FINE_TIMESTAMP", "type": "U16"},
+            {"name": "ENERGY", "type": "U16"},
+            {"name": "FLAGS_B", "type": "U16"},
+            {"name": "FLAGS_A", "type": "U16"},
+            {"name": "PSD", "type": "U16"},
+            {"name": "USER_INFO", "type": "U64", "dim": 1},
+            {"name": "USER_INFO_SIZE", "type": "SIZE_T"},
+            {"name": "WAVEFORM", "type": "U16", "dim": 1},
+            {"name": "WAVEFORM_SIZE", "type": "SIZE_T"},
+            {"name": "EVENT_SIZE", "type": "SIZE_T"}
+        ]"#
+        } else {
+            r#"[
+            {"name": "CHANNEL", "type": "U8"},
+            {"name": "TIMESTAMP", "type": "U64"},
+            {"name": "FINE_TIMESTAMP", "type": "U16"},
+            {"name": "ENERGY", "type": "U16"},
+            {"name": "FLAGS_B", "type": "U16"},
+            {"name": "FLAGS_A", "type": "U16"},
+            {"name": "PSD", "type": "U16"},
+            {"name": "USER_INFO", "type": "U64", "dim": 1},
+            {"name": "USER_INFO_SIZE", "type": "SIZE_T"},
+            {"name": "EVENT_SIZE", "type": "SIZE_T"}
+        ]"#
+        };
+
+        let c_format = CString::new(format_json).map_err(|_| CaenError {
+            code: -2,
+            name: "InvalidParam".to_string(),
+            description: "Format JSON contains null byte".to_string(),
+        })?;
+
+        let ret = unsafe { ffi::CAEN_FELib_SetReadDataFormat(read_data_handle, c_format.as_ptr()) };
+        CaenError::check(ret)?;
+
+        Ok(EndpointHandle {
+            handle: read_data_handle,
+        })
+    }
+
     /// Apply digitizer configuration
     ///
     /// Applies all parameters from DigitizerConfig to the device.
@@ -654,6 +781,174 @@ impl EndpointHandle {
                 code: ret,
                 name: "Unknown".to_string(),
                 description: "Unknown error in ReadData".to_string(),
+            }))
+        }
+    }
+
+    /// Read a single decoded event from the OpenDPP endpoint.
+    ///
+    /// This reads one event at a time with decoded fields.
+    /// Use with configure_opendpp_endpoint().
+    ///
+    /// # Arguments
+    /// * `timeout_ms` - Timeout in milliseconds (-1 for infinite)
+    /// * `user_info_buffer` - Pre-allocated buffer for user info words
+    ///
+    /// # Returns
+    /// * `Ok(Some(OpenDppEvent))` - Event was read successfully
+    /// * `Ok(None)` - Timeout (no data available)
+    /// * `Err(...)` - Error occurred
+    pub fn read_opendpp_event(
+        &self,
+        timeout_ms: i32,
+        user_info_buffer: &mut [u64],
+    ) -> Result<Option<OpenDppEvent>, CaenError> {
+        let mut channel: u8 = 0;
+        let mut timestamp: u64 = 0;
+        let mut fine_timestamp: u16 = 0;
+        let mut energy: u16 = 0;
+        let mut flags_b: u16 = 0;
+        let mut flags_a: u16 = 0;
+        let mut psd: u16 = 0;
+        let mut user_info_size: usize = 0;
+        let mut event_size: usize = 0;
+
+        let ret = unsafe {
+            caen_read_data_opendpp(
+                self.handle,
+                timeout_ms,
+                &mut channel,
+                &mut timestamp,
+                &mut fine_timestamp,
+                &mut energy,
+                &mut flags_b,
+                &mut flags_a,
+                &mut psd,
+                user_info_buffer.as_mut_ptr(),
+                &mut user_info_size,
+                &mut event_size,
+            )
+        };
+
+        if ret == 0 {
+            // Success
+            let user_info = user_info_buffer[..user_info_size].to_vec();
+            Ok(Some(OpenDppEvent {
+                channel,
+                timestamp,
+                fine_timestamp,
+                energy,
+                flags_b,
+                flags_a,
+                psd,
+                user_info,
+                waveform: None,
+                event_size,
+            }))
+        } else if ret == -11 {
+            // Timeout
+            Ok(None)
+        } else if ret == -12 {
+            // Stop signal
+            Err(CaenError::from_code(ret).unwrap_or(CaenError {
+                code: ret,
+                name: "Stop".to_string(),
+                description: "Acquisition stopped".to_string(),
+            }))
+        } else {
+            Err(CaenError::from_code(ret).unwrap_or(CaenError {
+                code: ret,
+                name: "Unknown".to_string(),
+                description: "Unknown error in ReadData (OpenDPP)".to_string(),
+            }))
+        }
+    }
+
+    /// Read a single decoded event with waveform from the OpenDPP endpoint.
+    ///
+    /// This reads one event at a time with decoded fields and waveform data.
+    /// Use with configure_opendpp_endpoint(true).
+    ///
+    /// # Arguments
+    /// * `timeout_ms` - Timeout in milliseconds (-1 for infinite)
+    /// * `user_info_buffer` - Pre-allocated buffer for user info words
+    /// * `waveform_buffer` - Pre-allocated buffer for waveform samples
+    ///
+    /// # Returns
+    /// * `Ok(Some(OpenDppEvent))` - Event was read successfully
+    /// * `Ok(None)` - Timeout (no data available)
+    /// * `Err(...)` - Error occurred
+    pub fn read_opendpp_event_with_waveform(
+        &self,
+        timeout_ms: i32,
+        user_info_buffer: &mut [u64],
+        waveform_buffer: &mut [u16],
+    ) -> Result<Option<OpenDppEvent>, CaenError> {
+        let mut channel: u8 = 0;
+        let mut timestamp: u64 = 0;
+        let mut fine_timestamp: u16 = 0;
+        let mut energy: u16 = 0;
+        let mut flags_b: u16 = 0;
+        let mut flags_a: u16 = 0;
+        let mut psd: u16 = 0;
+        let mut user_info_size: usize = 0;
+        let mut waveform_size: usize = 0;
+        let mut event_size: usize = 0;
+
+        let ret = unsafe {
+            caen_read_data_opendpp_waveform(
+                self.handle,
+                timeout_ms,
+                &mut channel,
+                &mut timestamp,
+                &mut fine_timestamp,
+                &mut energy,
+                &mut flags_b,
+                &mut flags_a,
+                &mut psd,
+                user_info_buffer.as_mut_ptr(),
+                &mut user_info_size,
+                waveform_buffer.as_mut_ptr(),
+                &mut waveform_size,
+                &mut event_size,
+            )
+        };
+
+        if ret == 0 {
+            // Success
+            let user_info = user_info_buffer[..user_info_size].to_vec();
+            let waveform = if waveform_size > 0 {
+                Some(waveform_buffer[..waveform_size].to_vec())
+            } else {
+                None
+            };
+            Ok(Some(OpenDppEvent {
+                channel,
+                timestamp,
+                fine_timestamp,
+                energy,
+                flags_b,
+                flags_a,
+                psd,
+                user_info,
+                waveform,
+                event_size,
+            }))
+        } else if ret == -11 {
+            // Timeout
+            Ok(None)
+        } else if ret == -12 {
+            // Stop signal
+            Err(CaenError::from_code(ret).unwrap_or(CaenError {
+                code: ret,
+                name: "Stop".to_string(),
+                description: "Acquisition stopped".to_string(),
+            }))
+        } else {
+            Err(CaenError::from_code(ret).unwrap_or(CaenError {
+                code: ret,
+                name: "Unknown".to_string(),
+                description: "Unknown error in ReadData (OpenDPP with waveform)".to_string(),
             }))
         }
     }
