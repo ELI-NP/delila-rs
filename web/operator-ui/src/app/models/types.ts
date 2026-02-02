@@ -185,6 +185,71 @@ export interface EmulatorConfig {
   channels_per_module: number;
 }
 
+// ============================================================================
+// Event Builder Configuration Types
+// ============================================================================
+
+// Channel settings for Event Builder (ELIFANT-Event compatible)
+export interface ChSettings {
+  ID: number;
+  Module: number;
+  Channel: number;
+  IsEventTrigger: boolean;
+  ThresholdADC: number;
+  HasAC: boolean;
+  ACModule: number;
+  ACChannel: number;
+  DetectorType: string;
+  Tags: string[];
+  P0: number;
+  P1: number;
+  P2: number;
+  P3: number;
+}
+
+// L2 Operators
+export type L2Operator = '>' | '>=' | '<' | '<=' | '==' | '!=';
+export type L2LogicalOperator = 'AND' | 'OR';
+
+// L2 Setting types (Counter, Flag, Accept)
+export type L2Setting =
+  | { Type: 'Counter'; Name: string; Tags: string[] }
+  | { Type: 'Flag'; Name: string; Monitor: string; Operator: L2Operator; Value: number }
+  | { Type: 'Accept'; Name: string; Monitor: string[]; Operator: L2LogicalOperator };
+
+// Time calibration settings
+export interface TimeCalibration {
+  ref_module: number;
+  ref_channel: number;
+  offsets: Record<string, number>;
+}
+
+// Event Builder configuration document
+export interface EventBuilderConfig {
+  id?: string;
+  name: string;
+  exp_name: string;
+  version: number;
+  created_at: string;
+  created_by: string;
+  description?: string;
+  is_current: boolean;
+  ch_settings: ChSettings[][];
+  time_settings?: TimeCalibration;
+  l2_settings?: L2Setting[];
+  coincidence_window_ns: number;
+  slice_duration_ns: number;
+}
+
+// Config history item
+export interface EventBuilderHistoryItem {
+  version: number;
+  created_at: string;
+  created_by: string;
+  description?: string;
+  is_current: boolean;
+}
+
 // Get button states based on system state
 export function getButtonStates(state: SystemState): ButtonStates {
   switch (state) {

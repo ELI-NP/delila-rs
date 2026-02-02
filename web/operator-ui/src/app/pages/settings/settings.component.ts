@@ -3,11 +3,12 @@ import { CommonModule } from '@angular/common';
 import { MatTabsModule } from '@angular/material/tabs';
 import { DigitizerSettingsComponent } from '../../components/digitizer-settings/digitizer-settings.component';
 import { EmulatorSettingsComponent } from '../../components/emulator-settings/emulator-settings.component';
+import { EventBuilderSettingsComponent } from '../../components/event-builder-settings/event-builder-settings.component';
 
 @Component({
   selector: 'app-settings-page',
   standalone: true,
-  imports: [CommonModule, MatTabsModule, DigitizerSettingsComponent, EmulatorSettingsComponent],
+  imports: [CommonModule, MatTabsModule, DigitizerSettingsComponent, EmulatorSettingsComponent, EventBuilderSettingsComponent],
   template: `
     <div class="settings-container">
       <mat-tab-group>
@@ -16,6 +17,9 @@ import { EmulatorSettingsComponent } from '../../components/emulator-settings/em
         </mat-tab>
         <mat-tab label="Emulator">
           <app-emulator-settings />
+        </mat-tab>
+        <mat-tab label="Event Builder">
+          <app-event-builder-settings />
         </mat-tab>
       </mat-tab-group>
     </div>

@@ -1,8 +1,11 @@
 # Event Builder 仕様書
 
-**Version:** 0.3.0
-**Date:** 2026-01-27
-**Status:** Draft
+**Version:** 0.4.0
+**Date:** 2026-02-02
+**Status:** Implementation Phase 7 (Time Slice)
+
+> **Note:** Phase 1-6 では Moving Time Window 方式で実装されたが、
+> Phase 7 で本仕様書の Time Slice 方式に移行中。
 
 ---
 
@@ -99,20 +102,21 @@ energy_short      2 bytes   20
 - **デフォルトアドレス:** `tcp://localhost:5600`
 - **到着順序:** Merger がタイムソート済み (バッチ内は時間順保証)
 
-#### オフライン: ROOTファイル (将来拡張)
+#### オフライン: ROOTファイル (✅ 実装済み)
 
 - **TTree構造:**
   - Branch: `Mod` (UChar_t)
   - Branch: `Ch` (UChar_t)
-  - Branch: `FineTS` (Double_t) - 単位: ns
+  - Branch: `FineTS` (Double_t) - 単位: **ns** (delila-rs) / **ps** (ELIFANT レガシー)
   - Branch: `ChargeLong` (UShort_t)
   - Branch: `ChargeShort` (UShort_t)
 
-- **典型的なファイル:** 数十秒分のデータ、約1000万ヒット/ファイル
+- **典型的なファイル:** 数十秒分のデータ、約4100万ヒット/ファイル
 
-- **タイムスタンプ単位:** ns
-  - 確認方法: 1ファイル（数十秒）のタイムスタンプ範囲から判断
-  - 範囲が数十×10^9 なら ns、数十×10^12 なら ps
+- **タイムスタンプ単位:**
+  - **delila-rs 出力:** ns (ナノ秒) — 新規実装の標準
+  - **ELIFANT レガシー:** ps (ピコ秒) — 旧システムのデータ
+  - 実装では `--timestamp-unit` オプションで指定可能にする予定
 
 ### 2.3 システム構成
 
@@ -598,3 +602,4 @@ Hit構造体サイズ: 24バイト（アライメント込み）
 | 2025-01-27 | 0.1.0 | 初版作成 |
 | 2025-01-27 | 0.2.0 | energy_short追加、ROOT/ヒストグラム方式決定、設計判断記録追加 |
 | 2026-01-27 | 0.3.0 | アーキテクチャ決定: Event Bridge (Rust) 経由の固定バイナリ方式採用。オンラインモード優先。C++ Event Builder は全て C++ 実装 (別リポジトリ)。ワイヤフォーマット仕様を `docs/event_bridge_wire_format.md` に分離 |
+| 2026-02-02 | 0.4.0 | **Rust 実装 Phase 7**: Time Slice 方式への移行開始。Phase 1-6 では Moving Time Window で実装完了済み |

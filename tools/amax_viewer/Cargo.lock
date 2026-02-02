@@ -1228,6 +1228,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.5",
  "rand_distr",
+ "rayon",
  "rmp-serde",
  "serde",
  "serde_json",

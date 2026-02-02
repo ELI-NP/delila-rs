@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-01-29 (Gemini レビュー改善完了)
+**Updated:** 2026-02-02 (Event Builder 実装完了)
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -143,44 +143,75 @@ Phase 3 で修正した主な課題:
 5. digitizer-settings 3タブ化 (Board / Frequent / Advanced)
 6. config expand/compress ロジック (defaults+overrides ↔ flat per-channel)
 
-## Event Builder (C++ 別リポジトリ) — 設計完了 / 実装待ち
+## Event Builder (Rust) — ✅ L1 完了, L2 実装中 (2026-02-02)
 
-**仕様書:** `TODO/event-builder/SPECIFICATION.md` (v0.3.0)
-**ワイヤフォーマット:** `docs/event_bridge_wire_format.md`
-**Bridge 実装計画:** `TODO/event-builder/IMPLEMENTATION.md`
+**設計:** `docs/event_builder_design.md`
+**L1 実装計画:** `TODO/23_event_builder_implementation.md`
+**L2 実装計画:** `TODO/24_l2_filter_implementation.md`
+**参照:** ELIFANT-Event (C++) `legacy/ELIFANT-Event/`
 
 ### 概要
 
-核物理実験のコインシデンスイベント構築を C++ で実装する。
-delila-rs パイプラインとは Event Bridge (Rust) 経由で接続。
+核物理実験のコインシデンスイベント構築を Rust で実装した。
+ELIFANT-Event (C++ オフライン) を参考に、オフラインモード完成。
 
+### L1 Event Building (2026-02-02 完了)
+
+- **入力:** ROOT TTree (ELIFANT-Event 互換, FineTS in picoseconds)
+- **出力:** ROOT TTree (oxyroot), Time calibration JSON
+- **設定:** ELIFANT-Event 互換 JSON (ChSettings, TimeCalibration)
+- **CLI:** `event_builder time-calib` / `event_builder build`
+- **アルゴリズム:** Time Slice 方式 (SliceBuilder) + Moving Time Window 方式 (L1Builder)
+
+### L2 Filter (計画中)
+
+ELIFANT-Event 互換の L2 フィルタリング機能。
+- **Counter:** タグ/ディテクタタイプでヒット数カウント
+- **Flag:** カウンタに対する条件式 (>, <, ==, etc.)
+- **Accept:** 複数フラグの論理演算 (AND, OR, NOT)
+- **CLI:** `--l2-config l2Settings.json`, `--num-threads N`
+
+### アーキテクチャ決定 (2026-02-02)
+
+- **Time Slice 方式を標準採用** — オフライン・オンライン両方で使用
+- **L1Builder (Moving Time Window) は deprecated** — シングルスレッドでスケールしない
+- **rayon スレッド数:** デフォルトは CPU コア数自動検出、`RAYON_NUM_THREADS` または `--num-threads` で指定可能
+
+### 実装フェーズ
+
+| Phase | 内容 | 状態 |
+|-------|------|------|
+| 1 | コア構造体 (Hit, BuiltEvent, Config) | ✅ Complete |
+| 2 | TimeSortBuffer | ✅ Complete |
+| 3 | L1 Coincidence Detection | ✅ Complete |
+| 4 | Time Calibration | ✅ Complete |
+| 5 | Input/Output (DELILA + ROOT) | ✅ Complete |
+| 6 | CLI + 統合テスト | ✅ Complete |
+| 7 | Time Slice 方式 (SliceBuilder) | ✅ Complete |
+| 8 | L2 Filter | 📋 計画中 |
+
+### 検証結果 (L1)
+
+- **67 unit tests** all passing
+- **Time calibration:** 206M hits in ~5 seconds (parallel processing with rayon)
+- **Offsets:** 129 valid channels (Module 9 reference)
+
+### 実行例
+
+```bash
+# Time calibration
+./target/release/event_builder time-calib \
+  -i /path/to/run0113_*.root \
+  -o time_calib.json \
+  --ref-module 9 --ref-channel 2
+
+# Event building
+./target/release/event_builder build \
+  -i /path/to/run0113_*.root \
+  -o events.root \
+  -T time_calib.json \
+  --trigger 9:2
 ```
-Merger ──PUB (MsgPack)──▶ Event Bridge (Rust) ──PUB (固定バイナリ)──▶ Event Builder (C++)
-                          src/bin/event_bridge.rs                     別リポジトリ (CMake + ROOT)
-```
-
-### 決定事項
-
-- **言語:** C++ (ROOT/THttpServer との親和性、物理解析コミュニティの共通言語)
-- **リポジトリ:** 別リポ (ビルドシステムが完全に異なる: CMake + ROOT vs Cargo)
-- **通信:** ZeroMQ PUB/SUB, 固定バイナリ 14 bytes/hit (パディングなし)
-- **Event Bridge:** Rust 側の変換ブリッジ — 実装済み (`src/bin/event_bridge.rs`)
-
-### C++ Event Builder の責務
-
-1. Event Bridge の PUB を SUB (tcp://localhost:5600)
-2. ヒットデータの時間ソート + バッファリング
-3. コインシデンスウィンドウ (±500 ns) によるイベント構築
-4. ROOT ファイル出力 (TTree)
-5. THttpServer によるヒストグラム Web 公開
-
-### 次のステップ
-
-- [ ] C++ リポジトリ作成 (CMakeLists.txt + cppzmq + ROOT)
-- [ ] Hit 受信 + デシリアライズ実装
-- [ ] タイムスライス + コインシデンスアルゴリズム実装
-- [ ] ROOT TTree 出力
-- [ ] THttpServer ヒストグラム
 
 ---
 
@@ -220,10 +251,13 @@ python3 gain_matcher.py status --config examples/gain_config.yaml
 ## 次のセッション
 
 - ~~**A:** Multi-digitizer 統合テスト (PSD1 + PSD2)~~ → ✅ PSD2 + PHA1 で完了 (2026-01-29)
-- **B:** C++ Event Builder リポジトリ作成 + 基本受信テスト
+- ~~**B:** C++ Event Builder リポジトリ作成~~ → **Rust 実装に変更** (2026-02-02)
+- ~~**B':** Rust Event Builder 実装~~ → ✅ **完了** (2026-02-02) — 67 tests
+- **B'':** L2 Filter 実装 (Counter/Flag/Accept) → `TODO/24_l2_filter_implementation.md` (L1Builder deprecated, Time Slice のみ使用)
 - **C:** HV Gain Matcher DAQ 連携テスト (結線完了後)
 - **D:** Phase 10: Angular UI の rust-embed 統合
 - **E:** PHA1 パラメータマッピング改善 (現在一部パラメータエラーあり)
+- **F:** Event Builder の実データ検証 (C++ ELIFANT-Event との出力比較)
 
 ---
 
@@ -231,13 +265,15 @@ python3 gain_matcher.py status --config examples/gain_config.yaml
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| 1 | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **設計完了** | C++ Event Builder 仕様 + Event Bridge 実装済み |
+| **1** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **計画中** | L2 Filter (Counter/Flag/Accept) — Time Slice 方式で統一 |
+| ✅ | [23_event_builder_implementation.md](23_event_builder_implementation.md) | **完了** | Rust Event Builder (Time Calibration + L1 Building + Time Slice) — 67 tests |
 | 2 | [19_settings_ui.md](19_settings_ui.md) | **⚠️ ユーザー検証未実施** | Phase 6: デジタイザ設定 UI (実装済み・動作未確認) |
-| 3 | [21_gemini_review_improvements.md](21_gemini_review_improvements.md) | **✅ 完了** | Gemini レビュー改善 (堅牢性+設計+パフォーマンス) |
-| 4 | [17_pha1_pipeline_test.md](17_pha1_pipeline_test.md) | **✅ 完了** | PHA1 実装 + マルチデジタイザ統合テスト (PSD2+PHA1) |
-| 5 | [20_data_integrity_and_performance_audit.md](20_data_integrity_and_performance_audit.md) | **✅ 完了** | データ完全性 + パフォーマンス + 波形堅牢性 (Phase A+B+E) |
-| 5 | [15_digitizer_implementation.md](15_digitizer_implementation.md) | **✅ Phase 5 完了** | VX2730 (PSD2) + DT5730B (PSD1/PHA1) 実機動作確認済み |
-| 6 | [11_operator_web_ui.md](11_operator_web_ui.md) | **In Progress** | Operator Web UI (Angular + Material) |
+| - | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **設計更新** | Event Builder 仕様 (Rust 実装完了) |
+| ✅ | [21_gemini_review_improvements.md](21_gemini_review_improvements.md) | **完了** | Gemini レビュー改善 (堅牢性+設計+パフォーマンス) |
+| ✅ | [17_pha1_pipeline_test.md](17_pha1_pipeline_test.md) | **完了** | PHA1 実装 + マルチデジタイザ統合テスト (PSD2+PHA1) |
+| ✅ | [20_data_integrity_and_performance_audit.md](20_data_integrity_and_performance_audit.md) | **完了** | データ完全性 + パフォーマンス + 波形堅牢性 (Phase A+B+E) |
+| ✅ | [15_digitizer_implementation.md](15_digitizer_implementation.md) | **Phase 5 完了** | VX2730 (PSD2) + DT5730B (PSD1/PHA1) 実機動作確認済み |
+| - | [11_operator_web_ui.md](11_operator_web_ui.md) | **In Progress** | Operator Web UI (Angular + Material) |
 | - | [16_linux_migration_checklist.md](16_linux_migration_checklist.md) | Reference | Linux移行チェックリスト |
 
 ---
@@ -290,6 +326,7 @@ python3 gain_matcher.py status --config examples/gain_config.yaml
 - PHA1 デコーダ実装 (DIG1 プロトコル, START_MODE_SW 対応)
 - マルチデジタイザ統合テスト (PSD2 + PHA1, マルチマシン ZMQ 通信)
 - Gemini レビュー改善 (f64 unwrap 安全化, SystemState 優先順位修正, Vec 再利用, Monitor 軽量化)
+- Rust Event Builder (oxyroot ROOT I/O, O(n) sliding window time calibration, parallel file processing with rayon)
 
 ---
 
@@ -309,7 +346,7 @@ python3 gain_matcher.py status --config examples/gain_config.yaml
 ## Notes
 
 - **MVP目標:** 2026年3月中旬
-- **現在のフェーズ:** Phase 6 実装完了 / Event Builder 設計完了 (C++ 実装待ち) / PSD2 + PHA1 マルチデジタイザ統合テスト完了 / HV Gain Matcher Phase 1 完了
+- **現在のフェーズ:** Phase 6 実装完了 / Event Builder Rust 実装完了 (48 tests, 206M hits in ~5s) / PSD2 + PHA1 マルチデジタイザ統合テスト完了 / HV Gain Matcher Phase 1 完了
 - **実機確認済み:**
   - VX2730 (Serial: 52622, DPP_PSD2, 32ch, Ethernet)
   - DT5730B (Serial: 990, DPP_PSD1/PHA1, 8ch, USB)

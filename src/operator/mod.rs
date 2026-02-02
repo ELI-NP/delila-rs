@@ -5,12 +5,16 @@
 
 mod client;
 mod digitizer_repository;
+mod event_builder_repository;
 mod routes;
 mod run_repository;
 
 pub use client::ComponentClient;
 pub use digitizer_repository::{
     DigitizerConfigDocument, DigitizerConfigRepository, DigitizerRepoError, RunConfigSnapshot,
+};
+pub use event_builder_repository::{
+    EventBuilderConfigDocument, EventBuilderRepoError, EventBuilderRepository,
 };
 pub use routes::{EmulatorSettings, RouterBuilder};
 pub use run_repository::{

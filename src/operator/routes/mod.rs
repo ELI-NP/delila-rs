@@ -2,6 +2,7 @@
 
 mod digitizer;
 mod emulator;
+mod event_builder;
 mod run;
 mod status;
 
@@ -24,13 +25,18 @@ use crate::config::{DigitizerConfig, Settings as ConfigSettings};
 
 use super::{
     ApiResponse, CommandResult, ComponentClient, ComponentConfig, ComponentStatus,
-    ConfigureRequest, CurrentRunInfo, DigitizerConfigRepository, LastRunInfo, OperatorConfig,
-    RunNote, RunRepository, RunStats, RunStatus, StartRequest, SystemState, SystemStatus,
+    ConfigureRequest, CurrentRunInfo, DigitizerConfigRepository, EventBuilderRepository,
+    LastRunInfo, OperatorConfig, RunNote, RunRepository, RunStats, RunStatus, StartRequest,
+    SystemState, SystemStatus,
 };
 
 // Re-export public types from sub-modules (used in OpenAPI schemas)
 pub use digitizer::{
     DetectResponse, DetectedDigitizer, DigitizerConfigHistoryItem, RestoreVersionRequest,
+};
+pub use event_builder::{
+    ConfigHistoryItem as EventBuilderHistoryItem, CreateConfigRequest, UpdateChSettingsRequest,
+    UpdateL2SettingsRequest, UpdateTimeSettingsRequest,
 };
 pub use run::{AddNoteRequest, NextRunNumberResponse};
 
@@ -41,6 +47,13 @@ use digitizer::{
     save_digitizer_to_mongodb, update_digitizer,
 };
 use emulator::{get_emulator_settings, update_emulator_settings};
+use event_builder::{
+    create_config as eb_create_config, delete_config as eb_delete_config,
+    get_config as eb_get_config, get_config_history as eb_get_history,
+    list_configs as eb_list_configs, list_experiments as eb_list_experiments,
+    restore_version as eb_restore_version, update_ch_settings as eb_update_ch_settings,
+    update_l2_settings as eb_update_l2_settings, update_time_settings as eb_update_time_settings,
+};
 use run::{add_run_note, get_next_run_number, get_run, get_run_config_snapshot, get_run_history};
 use status::{arm, configure, get_status, reset, run_start, start, stop};
 
@@ -57,6 +70,8 @@ pub struct AppState {
     pub run_repo: Option<RunRepository>,
     /// Digitizer config repository for MongoDB (optional)
     pub digitizer_repo: Option<DigitizerConfigRepository>,
+    /// Event Builder config repository for MongoDB (optional)
+    pub event_builder_repo: Option<EventBuilderRepository>,
     /// Current run info (cached in memory for fast access)
     pub current_run: RwLock<Option<CurrentRunInfo>>,
     /// Emulator settings (runtime-configurable)
@@ -141,6 +156,16 @@ impl From<&ConfigSettings> for EmulatorSettings {
         run::add_run_note,
         emulator::get_emulator_settings,
         emulator::update_emulator_settings,
+        event_builder::list_experiments,
+        event_builder::list_configs,
+        event_builder::get_config,
+        event_builder::create_config,
+        event_builder::update_ch_settings,
+        event_builder::update_time_settings,
+        event_builder::update_l2_settings,
+        event_builder::get_config_history,
+        event_builder::restore_version,
+        event_builder::delete_config,
     ),
     components(schemas(
         SystemStatus,
@@ -165,12 +190,18 @@ impl From<&ConfigSettings> for EmulatorSettings {
         EmulatorSettings,
         DigitizerConfigHistoryItem,
         RestoreVersionRequest,
+        EventBuilderHistoryItem,
+        CreateConfigRequest,
+        UpdateChSettingsRequest,
+        UpdateTimeSettingsRequest,
+        UpdateL2SettingsRequest,
     )),
     tags(
         (name = "DAQ Control", description = "DAQ system control endpoints"),
         (name = "Digitizer Config", description = "Digitizer configuration endpoints"),
         (name = "Run History", description = "Run history and statistics"),
-        (name = "Emulator Settings", description = "Emulator runtime configuration")
+        (name = "Emulator Settings", description = "Emulator runtime configuration"),
+        (name = "Event Builder", description = "Event Builder configuration (chSettings, timeSettings, L2Settings)")
     ),
     info(
         title = "DELILA DAQ Operator API",
@@ -196,6 +227,7 @@ pub struct RouterBuilder {
     config_dir: PathBuf,
     run_repo: Option<RunRepository>,
     digitizer_repo: Option<DigitizerConfigRepository>,
+    event_builder_repo: Option<EventBuilderRepository>,
     emulator_settings: EmulatorSettings,
 }
 
@@ -207,6 +239,7 @@ impl RouterBuilder {
             config_dir: PathBuf::from("./config/digitizers"),
             run_repo: None,
             digitizer_repo: None,
+            event_builder_repo: None,
             emulator_settings: EmulatorSettings::default(),
         }
     }
@@ -231,6 +264,11 @@ impl RouterBuilder {
         self
     }
 
+    pub fn event_builder_repo(mut self, repo: Option<EventBuilderRepository>) -> Self {
+        self.event_builder_repo = repo;
+        self
+    }
+
     pub fn emulator_settings(mut self, settings: EmulatorSettings) -> Self {
         self.emulator_settings = settings;
         self
@@ -247,6 +285,7 @@ impl RouterBuilder {
             config_dir: self.config_dir,
             run_repo: self.run_repo,
             digitizer_repo: self.digitizer_repo,
+            event_builder_repo: self.event_builder_repo,
             current_run: RwLock::new(None),
             emulator_settings: RwLock::new(self.emulator_settings),
         });
@@ -296,6 +335,38 @@ impl RouterBuilder {
             // Emulator settings routes
             .route("/api/emulator", get(get_emulator_settings))
             .route("/api/emulator", put(update_emulator_settings))
+            // Event Builder configuration routes
+            .route("/api/event-builder/experiments", get(eb_list_experiments))
+            .route("/api/event-builder/configs", get(eb_list_configs))
+            .route("/api/event-builder/configs", post(eb_create_config))
+            .route(
+                "/api/event-builder/configs/:exp_name/:name",
+                get(eb_get_config),
+            )
+            .route(
+                "/api/event-builder/configs/:exp_name/:name",
+                axum::routing::delete(eb_delete_config),
+            )
+            .route(
+                "/api/event-builder/configs/:exp_name/:name/ch-settings",
+                put(eb_update_ch_settings),
+            )
+            .route(
+                "/api/event-builder/configs/:exp_name/:name/time-settings",
+                put(eb_update_time_settings),
+            )
+            .route(
+                "/api/event-builder/configs/:exp_name/:name/l2-settings",
+                put(eb_update_l2_settings),
+            )
+            .route(
+                "/api/event-builder/configs/:exp_name/:name/history",
+                get(eb_get_history),
+            )
+            .route(
+                "/api/event-builder/configs/:exp_name/:name/restore",
+                post(eb_restore_version),
+            )
             // Swagger UI
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .layer(cors)

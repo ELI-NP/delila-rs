@@ -6,6 +6,7 @@ pub mod common;
 pub mod config;
 pub mod data_sink;
 pub mod data_source_emulator;
+pub mod event_builder;
 pub mod merger;
 pub mod monitor;
 pub mod operator;

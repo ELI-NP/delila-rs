@@ -59,6 +59,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # ROOT file output (optional)
 oxyroot = { version = "0.1", optional = true }
 
+# Parallel processing
+rayon = "1.10"
+
 [features]
 default = []
 root = ["oxyroot"]
@@ -69,6 +72,7 @@ cc = "1"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3"
 
 [[bin]]
 name = "emulator"
@@ -141,3 +145,12 @@ path = "src/bin/amax_rawdump.rs"
 [[bin]]
 name = "amax_opendpp_test"
 path = "src/bin/amax_opendpp_test.rs"
+
+[[bin]]
+name = "event_builder"
+path = "src/bin/event_builder.rs"
+required-features = ["root"]
+
+[[example]]
+name = "test_oxyroot"
+required-features = ["root"]
