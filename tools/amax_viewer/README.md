@@ -346,7 +346,7 @@ Parameters are automatically saved and loaded.
 **Load timing:**
 - On application startup
 
-**Note:** This file is automatically created on first launch. No manual creation is required.
+**Note:** This file is created when the application exits normally (closing the window). It will not be created if the application is force-quit or crashes.
 
 ---
 
