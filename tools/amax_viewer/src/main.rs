@@ -123,36 +123,56 @@ impl Default for McaParams {
     }
 }
 
-impl McaParams {
-    /// Get the config file path for parameter persistence
+/// Application settings (persisted to disk)
+#[derive(Clone, Serialize, Deserialize)]
+struct AppSettings {
+    #[serde(default = "AppSettings::default_url")]
+    url: String,
+    #[serde(default = "AppSettings::default_output_path")]
+    output_path: String,
+    #[serde(default)]
+    params: McaParams,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            url: Self::default_url(),
+            output_path: Self::default_output_path(),
+            params: McaParams::default(),
+        }
+    }
+}
+
+impl AppSettings {
+    fn default_url() -> String {
+        "dig2://172.18.4.56".to_string()
+    }
+
+    fn default_output_path() -> String {
+        "amax_data.root".to_string()
+    }
+
     fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|mut p| {
             p.push("amax_viewer");
-            p.push("params.json");
+            p.push("settings.json");
             p
         })
     }
 
-    /// Load parameters from config file, or return defaults if not found
     fn load() -> Self {
         Self::config_path()
-            .and_then(|path| {
-                std::fs::read_to_string(&path).ok()
-            })
-            .and_then(|content| {
-                serde_json::from_str(&content).ok()
-            })
+            .and_then(|path| std::fs::read_to_string(&path).ok())
+            .and_then(|content| serde_json::from_str(&content).ok())
             .unwrap_or_default()
     }
 
-    /// Save parameters to config file
     fn save(&self) {
         if let Some(path) = Self::config_path() {
-            // Create parent directory if needed
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            // Save as pretty JSON for readability
             if let Ok(json) = serde_json::to_string_pretty(self) {
                 let _ = std::fs::write(&path, json);
             }
@@ -304,12 +324,11 @@ struct AmaxViewerApp {
 
 impl AmaxViewerApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Load saved parameters or use defaults
-        let params = McaParams::load();
+        let settings = AppSettings::load();
 
         let shared = Arc::new(Mutex::new(SharedState {
             histogram: Histogram2D::new(512, 512),
-            params,
+            params: settings.params,
             running: false,
             event_rate: 0.0,
             connected: false,
@@ -324,12 +343,12 @@ impl AmaxViewerApp {
         }));
 
         Self {
-            url: "dig2://172.18.4.56".to_string(),
+            url: settings.url,
             shared,
             shutdown: Arc::new(AtomicBool::new(false)),
             acq_thread: None,
             texture: None,
-            output_path: "amax_data.root".to_string(),
+            output_path: settings.output_path,
         }
     }
 
@@ -684,10 +703,15 @@ impl eframe::App for AmaxViewerApp {
     }
 
     fn on_exit(&mut self) {
-        // Save parameters before exit
+        // Save all settings before exit
         {
             let state = self.shared.lock().unwrap();
-            state.params.save();
+            let settings = AppSettings {
+                url: self.url.clone(),
+                output_path: self.output_path.clone(),
+                params: state.params.clone(),
+            };
+            settings.save();
         }
         self.stop_acquisition();
     }
