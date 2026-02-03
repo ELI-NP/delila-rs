@@ -1,7 +1,7 @@
 # デジタイザ設定 UI (Phase 6)
 
 **Created:** 2026-01-26
-**Status:** IMPLEMENTED (2026-01-27)
+**Status:** VERIFICATION IN PROGRESS (2026-02-03)
 **Priority:** High — MVP Post-MVP 機能
 
 ---
@@ -385,3 +385,50 @@ UI ではすべてのチャンネルの値をフラットに表示する。
 8. **Reader 経由の通信** — Operator はデジタイザに直接接続しない。全ての通信は Reader プロセス経由（ZMQ CMD/REP）。
 9. **Detect は独立ステップ** — Settings UI の "Detect" ボタンで Reader がハードウェアに一時接続して DeviceInfo を取得し、切断する。Configure とは独立。
 10. **Emulator は Settings UI に非表示** — デジタイザ設定UIは実機専用。Emulator ソースはリストに表示しない。
+
+---
+
+## 実機検証ログ (2026-02-03)
+
+**ハードウェア:** VX2730 (Serial: 52621, DPP_PSD, 32ch, 14bit, 500Msps)
+**アドレス:** dig2://172.18.4.57
+**設定ファイル:** `config/config_psd2_test.toml` + `config/digitizers/psd2_test.json`
+
+### 発見・修正した問題
+
+#### 1. Config 読み込み ID 衝突
+- **症状:** `GET /api/digitizers` で PSD1 設定が返る (PSD2 が表示されない)
+- **原因:** `load_digitizer_configs()` が `config/digitizers/` 内の全 JSON を読み込み、psd1_test.json と psd2_test.json が同じ `digitizer_id: 0` で衝突
+- **修正:** TOML source の `config_file` フィールドで指定されたファイルのみロードするよう変更
+- **ファイル:** `src/operator/routes/mod.rs` (load_digitizer_configs_from_files), `src/bin/operator.rs` (config_files 抽出)
+
+#### 2. Detect 後に config が UI ドロップダウンに反映されない
+- **症状:** Detect 成功 (hardware 検出) しても設定 UI に何も表示されない
+- **原因:** Detect は MongoDB のみ検索、in-memory config を更新しない。`config_found: false` で config が null 返却
+- **修正:** Detect 後に (a) 既存 in-memory config を hardware info で更新、(b) 未設定時はファームウェアに基づくデフォルト自動生成、(c) `state.digitizer_configs` に挿入
+- **ファイル:** `src/operator/routes/digitizer.rs` (detect_digitizers + firmware_from_device_info + default_board_config + default_channel_config)
+
+#### 3. Detect 後の手動選択が不便
+- **症状:** Detect でデジタイザ検出後、ドロップダウンから手動選択が必要
+- **修正:** 検出された最初のデジタイザを自動選択
+- **ファイル:** `web/operator-ui/src/app/components/digitizer-settings/digitizer-settings.component.ts`
+
+#### 4. デフォルト config.toml の IP アドレス
+- **症状:** `start_daq.sh` が `config.toml` (172.18.4.56, Multi_Digitizer_Test) をデフォルトで使用
+- **対処:** `./scripts/start_daq.sh config/config_psd2_test.toml` で明示指定
+
+### API 動作確認結果
+
+| API | 結果 |
+|-----|------|
+| `GET /api/status` | ✅ PSD2_Test, 全コンポーネント Idle |
+| `GET /api/digitizers` | ✅ PSD2 config のみ (ID衝突なし) |
+| `POST /api/digitizers/detect` | ✅ VX2730 検出, serial_number/model 反映済み |
+| `GET /api/digitizers` (detect 後) | ✅ serial_number: "52621", model: "VX2730" 追加 |
+
+### 残タスク
+
+- [ ] Angular UI タブ表示確認 (Board / Frequent / Advanced)
+- [ ] Apply → PUT /api/digitizers/:id → Configure 動作確認
+- [ ] Save → JSON ファイル書き出し確認
+- [ ] Configure → Arm → Start でデータ取得確認

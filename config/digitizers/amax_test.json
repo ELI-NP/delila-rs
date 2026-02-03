@@ -1,0 +1,58 @@
+{
+  "digitizer_id": 3,
+  "name": "AMax Trapezoidal Filter MCA",
+  "firmware": "AMax",
+  "url": "dig2://172.18.4.56",
+  "num_channels": 1,
+  "board": {
+    "start_source": "SWcmd",
+    "acq_trigger_source": "SwTrg",
+    "clock_source": "Internal",
+    "en_clock_out_fp": true,
+    "en_data_reduction": false
+  },
+  "channel_defaults": {
+    "enabled": "False",
+    "dc_offset": 50.0,
+    "signal_offset": 0,
+    "ch_gain": 0,
+    "wave_data_source": "ADC_DATA",
+    "itl_connect": "Disabled"
+  },
+  "channel_overrides": {
+    "0": {
+      "enabled": "True"
+    }
+  },
+  "amax_registers": {
+    "comment": "AMax firmware specific registers (address in hex, multiply by 4 for byte address)",
+    "core": {
+      "POLARITY": { "address": "0x0", "value": 1, "description": "1=positive, 0=negative" },
+      "OFFSET": { "address": "0x1", "value": 0, "description": "DC offset" },
+      "THRS": { "address": "0x2", "value": 100, "description": "Trigger threshold" },
+      "TRIG_K": { "address": "0x3", "value": 10, "description": "Fast trigger rise time" },
+      "TRIG_M": { "address": "0x4", "value": 12, "description": "Fast trigger decay time" },
+      "TRAP_K": { "address": "0x5", "value": 500, "description": "Trapezoid rise time (samples)" },
+      "TRAP_M": { "address": "0x6", "value": 550, "description": "Trapezoid decay time (samples)" },
+      "DECONV_M": { "address": "0x7", "value": 3499000, "description": "Deconvolution coefficient" },
+      "TRAP_GAIN": { "address": "0x8", "value": 2500, "description": "Digital gain" },
+      "BL_LEN": { "address": "0x9", "value": 6, "description": "Baseline average length (2^N samples)" },
+      "BL_INIB": { "address": "0xA", "value": 1200, "description": "Baseline inhibit time" },
+      "SAMPLE_POS": { "address": "0xB", "value": 510, "description": "Sample position" },
+      "RUN_CFG": { "address": "0xC", "value": 1, "description": "Run configuration" }
+    },
+    "amax": {
+      "WINDOW_MAXIM": { "address": "0x14000", "value": 200, "description": "Maximum search window" },
+      "baseline_delay": { "address": "0x160000", "value": 200, "description": "Baseline calculation delay" },
+      "baseline_len": { "address": "0x160001", "value": 6, "description": "Baseline length" },
+      "baseline_offset": { "address": "0x160002", "value": 1000, "description": "Baseline offset" },
+      "AMAX_window": { "address": "0x160003", "value": 1000, "description": "AMax measurement window" },
+      "AMAX_delay": { "address": "0x160004", "value": 4, "description": "AMax delay alignment" },
+      "AMAX_len": { "address": "0x160005", "value": 2, "description": "AMax measurement length" }
+    },
+    "trigger_and": {
+      "amax_trigger_and": { "address": "0xC00A", "value": 1, "description": "AMax trigger AND (write-only)" },
+      "en_trigger_and": { "address": "0xC00B", "value": 4409, "description": "Enable trigger AND (write-only)" }
+    }
+  }
+}

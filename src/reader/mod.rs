@@ -270,12 +270,27 @@ impl RateTracker {
     }
 }
 
+/// Request from command handler to read_loop.
+/// Delegates hardware operations to the read_loop's existing CaenHandle
+/// to avoid opening multiple FELib connections.
+enum ReadLoopRequest {
+    /// Detect: read device info from hardware
+    Detect {
+        response_tx: std::sync::mpsc::SyncSender<Result<serde_json::Value, String>>,
+    },
+    /// Apply digitizer configuration to hardware
+    ApplyConfig {
+        config: Box<crate::config::digitizer::DigitizerConfig>,
+        response_tx: std::sync::mpsc::SyncSender<Result<usize, String>>,
+    },
+}
+
 /// Command handler extension for Reader
 struct ReaderCommandExt {
     metrics: Arc<ReaderMetrics>,
     rate_tracker: Arc<RateTracker>,
-    /// Digitizer URL for Detect command (e.g., "dig2://172.18.4.56")
-    url: String,
+    /// Channel to delegate hardware requests to the read_loop's existing CaenHandle
+    request_tx: std::sync::mpsc::Sender<ReadLoopRequest>,
 }
 
 impl CommandHandlerExt for ReaderCommandExt {
@@ -314,16 +329,33 @@ impl CommandHandlerExt for ReaderCommandExt {
     }
 
     fn on_detect(&mut self) -> Result<serde_json::Value, String> {
-        // Temporarily connect to digitizer, read DeviceInfo, and disconnect.
-        // This blocks briefly (< 1s) but is acceptable for an infrequent
-        // user-initiated action from Idle state.
-        let handle = caen::handle::CaenHandle::open(&self.url)
-            .map_err(|e| format!("Failed to connect to {}: {}", self.url, e))?;
-        let info = handle
-            .get_device_info()
-            .map_err(|e| format!("Failed to read device info: {}", e))?;
-        // handle dropped here → connection closed
-        serde_json::to_value(&info).map_err(|e| format!("Failed to serialize DeviceInfo: {}", e))
+        // Delegate to read_loop which owns the CaenHandle.
+        // This avoids opening a second FELib connection that would
+        // interfere with the existing one.
+        let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel(1);
+        self.request_tx
+            .send(ReadLoopRequest::Detect { response_tx: resp_tx })
+            .map_err(|_| "ReadLoop not running".to_string())?;
+        resp_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| "Detect timeout: ReadLoop did not respond".to_string())?
+    }
+
+    fn on_apply_digitizer_config(
+        &mut self,
+        config: &crate::config::digitizer::DigitizerConfig,
+    ) -> Result<usize, String> {
+        let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel(1);
+        self.request_tx
+            .send(ReadLoopRequest::ApplyConfig {
+                config: Box::new(config.clone()),
+                response_tx: resp_tx,
+            })
+            .map_err(|_| "ReadLoop not running".to_string())?;
+        // 10s timeout: USB digitizers (DT5730B) can be slow
+        resp_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| "ApplyConfig timeout: ReadLoop did not respond within 10s".to_string())?
     }
 }
 
@@ -499,6 +531,7 @@ impl Reader {
         state_rx: watch::Receiver<ComponentState>,
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
+        request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
     ) -> Result<(), ReaderError> {
         info!(url = %config.url, "ReadLoop (RAW) starting, connecting to digitizer");
 
@@ -616,6 +649,25 @@ impl Reader {
                 prev_state = current_state;
             }
 
+            // Handle requests from command handler (Detect / ApplyConfig)
+            if let Ok(req) = request_rx.try_recv() {
+                match req {
+                    ReadLoopRequest::Detect { response_tx } => {
+                        let result = handle
+                            .get_device_info()
+                            .map(|info| serde_json::to_value(&info).unwrap_or_default())
+                            .map_err(|e| format!("Failed to read device info: {}", e));
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfig { config: dig_config, response_tx } => {
+                        let result = handle
+                            .apply_config(&dig_config)
+                            .map_err(|e| format!("Failed to apply config: {}", e));
+                        let _ = response_tx.send(result);
+                    }
+                }
+            }
+
             // Only read data when Running
             if current_state != ComponentState::Running {
                 // Not running, sleep briefly and check again
@@ -702,6 +754,7 @@ impl Reader {
         state_rx: watch::Receiver<ComponentState>,
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
+        request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
     ) -> Result<(), ReaderError> {
         info!(url = %config.url, "ReadLoop (OpenDPP) starting, connecting to digitizer");
 
@@ -803,6 +856,25 @@ impl Reader {
                 }
 
                 prev_state = current_state;
+            }
+
+            // Handle requests from command handler (Detect / ApplyConfig)
+            if let Ok(req) = request_rx.try_recv() {
+                match req {
+                    ReadLoopRequest::Detect { response_tx } => {
+                        let result = handle
+                            .get_device_info()
+                            .map(|info| serde_json::to_value(&info).unwrap_or_default())
+                            .map_err(|e| format!("Failed to read device info: {}", e));
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfig { config: dig_config, response_tx } => {
+                        let result = handle
+                            .apply_config(&dig_config)
+                            .map_err(|e| format!("Failed to apply config: {}", e));
+                        let _ = response_tx.send(result);
+                    }
+                }
             }
 
             // Only read data when Running
@@ -1137,6 +1209,9 @@ impl Reader {
         let read_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let read_shutdown_clone = read_shutdown.clone();
 
+        // Channel for delegating hardware requests (Detect/ApplyConfig) to the read_loop
+        let (request_tx, request_rx) = std::sync::mpsc::channel::<ReadLoopRequest>();
+
         // Spawn command handler task using common infrastructure
         let command_address = self.config.command_address.clone();
         let shared_state = self.shared_state.clone();
@@ -1144,7 +1219,6 @@ impl Reader {
         let shutdown_for_cmd = shutdown.resubscribe();
         let metrics_for_cmd = self.metrics.clone();
         let rate_tracker_for_cmd = self.rate_tracker.clone();
-        let url_for_cmd = self.config.url.clone();
 
         let cmd_handle = tokio::spawn(async move {
             run_command_task(
@@ -1156,7 +1230,7 @@ impl Reader {
                     let mut ext = ReaderCommandExt {
                         metrics: metrics_for_cmd.clone(),
                         rate_tracker: rate_tracker_for_cmd.clone(),
-                        url: url_for_cmd.clone(),
+                        request_tx: request_tx.clone(),
                     };
                     handle_command(state, tx, cmd, Some(&mut ext))
                 },
@@ -1183,6 +1257,7 @@ impl Reader {
                     read_state_rx,
                     read_metrics,
                     read_shutdown_clone,
+                    request_rx,
                 )
             } else {
                 info!("Using RAW endpoint for firmware {:?}", read_config.firmware);
@@ -1192,6 +1267,7 @@ impl Reader {
                     read_state_rx,
                     read_metrics,
                     read_shutdown_clone,
+                    request_rx,
                 )
             }
         });

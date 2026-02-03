@@ -6,6 +6,7 @@ tools/*/target/
 
 # Data output files
 /data/
+docker/data/
 legacy
 
 # Logs

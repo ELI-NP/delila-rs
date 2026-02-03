@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::common::Command;
-use crate::config::DigitizerConfig;
+use crate::config::{BoardConfig, ChannelConfig, DigitizerConfig, FirmwareType};
 
 use super::super::{ApiResponse, DigitizerConfigDocument};
 use super::AppState;
@@ -136,34 +136,87 @@ pub(super) async fn detect_digitizers(
         {
             Ok(resp) if resp.success => {
                 if let Some(data) = resp.data {
+                    let source_id = comp.source_id.unwrap_or(0);
+
                     // Try to look up config by serial number in MongoDB
                     let serial = data
                         .get("serial_number")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    let (config_found, config) = if let (Some(ref repo), Some(ref serial)) =
-                        (&state.digitizer_repo, &serial)
-                    {
-                        match repo.get_config_by_serial(serial).await {
-                            Ok(Some(doc)) => (true, Some(doc.config)),
-                            Ok(None) => (false, None),
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to lookup config by serial {}: {}",
-                                    serial,
-                                    e
-                                );
-                                (false, None)
+                    let (config_found, mut config) =
+                        if let (Some(ref repo), Some(ref serial)) =
+                            (&state.digitizer_repo, &serial)
+                        {
+                            match repo.get_config_by_serial(serial).await {
+                                Ok(Some(doc)) => (true, Some(doc.config)),
+                                Ok(None) => (false, None),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to lookup config by serial {}: {}",
+                                        serial,
+                                        e
+                                    );
+                                    (false, None)
+                                }
                             }
+                        } else {
+                            (false, None)
+                        };
+
+                    // If no config from MongoDB, check in-memory configs or create default
+                    if config.is_none() {
+                        let configs = state.digitizer_configs.read().await;
+                        if let Some(existing) = configs.get(&source_id) {
+                            // Use existing config from JSON file, update hardware info
+                            let mut c = existing.clone();
+                            c.serial_number = serial.clone();
+                            c.model = data
+                                .get("model")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            if let Some(n) = data
+                                .get("num_channels")
+                                .and_then(|v| v.as_u64())
+                            {
+                                c.num_channels = n as u8;
+                            }
+                            config = Some(c);
+                        } else {
+                            // Create a default config from detected hardware info
+                            let firmware = firmware_from_device_info(&data);
+                            let num_ch = data
+                                .get("num_channels")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(32) as u8;
+                            let model_name = data
+                                .get("model")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown");
+
+                            let mut c = DigitizerConfig::new(
+                                source_id,
+                                format!("{} ({})", model_name, comp.name),
+                                firmware,
+                            );
+                            c.serial_number = serial.clone();
+                            c.model = Some(model_name.to_string());
+                            c.num_channels = num_ch;
+                            c.board = default_board_config(firmware);
+                            c.channel_defaults = default_channel_config(firmware);
+                            config = Some(c);
                         }
-                    } else {
-                        (false, None)
-                    };
+                    }
+
+                    // Update in-memory config with detected hardware info
+                    if let Some(ref cfg) = config {
+                        let mut configs = state.digitizer_configs.write().await;
+                        configs.insert(source_id, cfg.clone());
+                    }
 
                     detected.push(DetectedDigitizer {
                         component_name: comp.name.clone(),
-                        source_id: comp.source_id.unwrap_or(0),
+                        source_id,
                         device_info: data,
                         config_found,
                         config,
@@ -198,6 +251,81 @@ pub(super) async fn detect_digitizers(
             digitizers: detected,
         }),
     )
+}
+
+/// Map firmware_type string from device_info to FirmwareType enum
+fn firmware_from_device_info(device_info: &serde_json::Value) -> FirmwareType {
+    let fw = device_info
+        .get("firmware_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match fw {
+        "DPP_PSD" => FirmwareType::PSD2, // VX2730 uses PSD2
+        "DPP_PHA" => FirmwareType::PHA1,
+        "DPP_OPEN" => FirmwareType::AMax,
+        _ => FirmwareType::PSD2, // Default to PSD2 for unknown
+    }
+}
+
+/// Create default board config for a firmware type
+fn default_board_config(firmware: FirmwareType) -> BoardConfig {
+    match firmware {
+        FirmwareType::PSD2 => BoardConfig {
+            start_source: Some("SWcmd".to_string()),
+            ..BoardConfig::default()
+        },
+        FirmwareType::PSD1 => BoardConfig {
+            record_length: Some(1024),
+            ..BoardConfig::default()
+        },
+        FirmwareType::PHA1 => BoardConfig {
+            start_source: Some("SWcmd".to_string()),
+            ..BoardConfig::default()
+        },
+        FirmwareType::AMax => BoardConfig {
+            start_source: Some("SWcmd".to_string()),
+            ..BoardConfig::default()
+        },
+    }
+}
+
+/// Create default channel config for a firmware type
+fn default_channel_config(firmware: FirmwareType) -> ChannelConfig {
+    match firmware {
+        FirmwareType::PSD2 => ChannelConfig {
+            enabled: Some("False".to_string()),
+            dc_offset: Some(50.0),
+            polarity: Some("Negative".to_string()),
+            trigger_threshold: Some(1000),
+            gate_long_ns: Some(400),
+            gate_short_ns: Some(100),
+            event_trigger_source: Some("Disabled".to_string()),
+            wave_trigger_source: Some("Disabled".to_string()),
+            ..ChannelConfig::default()
+        },
+        FirmwareType::PSD1 => ChannelConfig {
+            enabled: Some("false".to_string()),
+            dc_offset: Some(50.0),
+            polarity: Some("Negative".to_string()),
+            trigger_threshold: Some(500),
+            gate_long_ns: Some(200),
+            gate_short_ns: Some(50),
+            gate_pre_ns: Some(30),
+            ..ChannelConfig::default()
+        },
+        FirmwareType::PHA1 => ChannelConfig {
+            enabled: Some("false".to_string()),
+            dc_offset: Some(50.0),
+            polarity: Some("Negative".to_string()),
+            trigger_threshold: Some(500),
+            ..ChannelConfig::default()
+        },
+        FirmwareType::AMax => ChannelConfig {
+            enabled: Some("False".to_string()),
+            dc_offset: Some(50.0),
+            ..ChannelConfig::default()
+        },
+    }
 }
 
 /// Get a digitizer configuration by hardware serial number
@@ -322,6 +450,128 @@ pub(super) async fn update_digitizer(
     )
 }
 
+/// Apply digitizer configuration to hardware
+///
+/// Updates the in-memory config, saves to disk (best-effort), and sends
+/// the configuration to the Reader via ZMQ for hardware application.
+/// Only available when the system is in Idle or Configured state.
+#[utoipa::path(
+    post,
+    path = "/api/digitizers/{id}/apply",
+    tag = "Digitizer Config",
+    params(
+        ("id" = u32, Path, description = "Digitizer ID")
+    ),
+    request_body = DigitizerConfig,
+    responses(
+        (status = 200, description = "Configuration applied to hardware", body = ApiResponse),
+        (status = 400, description = "Invalid configuration", body = ApiResponse),
+        (status = 404, description = "No Reader found for digitizer", body = ApiResponse),
+        (status = 500, description = "Failed to apply", body = ApiResponse)
+    )
+)]
+pub(super) async fn apply_digitizer_config(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<u32>,
+    Json(config): Json<DigitizerConfig>,
+) -> (StatusCode, Json<ApiResponse>) {
+    // Validate path ID matches config
+    if config.digitizer_id != id {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::error(format!(
+                "Path ID {} does not match config digitizer_id {}",
+                id, config.digitizer_id
+            ))),
+        );
+    }
+
+    // 1. Find the Reader component for this digitizer (is_digitizer && source_id matches)
+    let reader_comp = state
+        .components
+        .iter()
+        .find(|c| c.is_digitizer && c.source_id == Some(id));
+
+    let reader_comp = match reader_comp {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::error(format!(
+                    "No Reader component found for digitizer {}",
+                    id
+                ))),
+            );
+        }
+    };
+
+    // 2. Update in-memory config
+    {
+        let mut configs = state.digitizer_configs.write().await;
+        configs.insert(id, config.clone());
+    }
+
+    // 3. Save to disk (best-effort)
+    // Use config_file path from TOML if available (same file Reader loads on Configure),
+    // otherwise fall back to digitizer_{id}.json in config_dir.
+    let file_path = reader_comp
+        .config_file
+        .clone()
+        .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)));
+    if let Some(parent) = file_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_json::to_string_pretty(&config) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&file_path, json) {
+                tracing::warn!("Failed to save config to disk: {}", e);
+            } else {
+                tracing::info!("Config saved to {}", file_path.display());
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to serialize config for disk save: {}", e);
+        }
+    }
+
+    // 4. Send ApplyDigitizerConfig command via ZMQ
+    match state
+        .client
+        .send_command(&reader_comp.address, &Command::ApplyDigitizerConfig(Box::new(config)))
+        .await
+    {
+        Ok(resp) if resp.success => {
+            let params_applied = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get("params_applied"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            (
+                StatusCode::OK,
+                Json(ApiResponse::success(format!(
+                    "Applied {} parameters to hardware",
+                    params_applied
+                ))),
+            )
+        }
+        Ok(resp) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::error(format!(
+                "Reader rejected config: {}",
+                resp.message
+            ))),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::error(format!(
+                "Failed to send command to Reader: {}",
+                e
+            ))),
+        ),
+    }
+}
+
 /// Save a digitizer configuration to disk
 #[utoipa::path(
     post,
@@ -353,19 +603,24 @@ pub(super) async fn save_digitizer(
     };
     drop(configs); // Release read lock
 
-    // Ensure config directory exists
-    if let Err(e) = std::fs::create_dir_all(&state.config_dir) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error(format!(
-                "Failed to create config directory: {}",
-                e
-            ))),
-        );
+    // Determine save path: use config_file from component if available
+    let file_path = state
+        .components
+        .iter()
+        .find(|c| c.is_digitizer && c.source_id == Some(id))
+        .and_then(|c| c.config_file.clone())
+        .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)));
+    if let Some(parent) = file_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to create config directory: {}",
+                    e
+                ))),
+            );
+        }
     }
-
-    // Save to file
-    let file_path = state.config_dir.join(format!("digitizer_{}.json", id));
     let json = match serde_json::to_string_pretty(&config) {
         Ok(j) => j,
         Err(e) => {

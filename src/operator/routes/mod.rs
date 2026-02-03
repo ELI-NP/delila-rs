@@ -42,9 +42,9 @@ pub use run::{AddNoteRequest, NextRunNumberResponse};
 
 // Import handler functions from sub-modules (used in router and ApiDoc)
 use digitizer::{
-    detect_digitizers, get_digitizer, get_digitizer_by_serial, get_digitizer_history,
-    list_digitizers, restore_digitizer_version, save_all_digitizers, save_digitizer,
-    save_digitizer_to_mongodb, update_digitizer,
+    apply_digitizer_config, detect_digitizers, get_digitizer, get_digitizer_by_serial,
+    get_digitizer_history, list_digitizers, restore_digitizer_version, save_all_digitizers,
+    save_digitizer, save_digitizer_to_mongodb, update_digitizer,
 };
 use emulator::{get_emulator_settings, update_emulator_settings};
 use event_builder::{
@@ -144,6 +144,7 @@ impl From<&ConfigSettings> for EmulatorSettings {
         digitizer::get_digitizer_by_serial,
         digitizer::get_digitizer,
         digitizer::update_digitizer,
+        digitizer::apply_digitizer_config,
         digitizer::save_digitizer,
         digitizer::save_all_digitizers,
         digitizer::save_digitizer_to_mongodb,
@@ -225,6 +226,9 @@ pub struct RouterBuilder {
     components: Vec<ComponentConfig>,
     config: OperatorConfig,
     config_dir: PathBuf,
+    /// Specific config files to load (from TOML source configs).
+    /// If empty, falls back to loading all JSON files in config_dir.
+    config_files: Vec<PathBuf>,
     run_repo: Option<RunRepository>,
     digitizer_repo: Option<DigitizerConfigRepository>,
     event_builder_repo: Option<EventBuilderRepository>,
@@ -237,6 +241,7 @@ impl RouterBuilder {
             components,
             config: OperatorConfig::default(),
             config_dir: PathBuf::from("./config/digitizers"),
+            config_files: Vec::new(),
             run_repo: None,
             digitizer_repo: None,
             event_builder_repo: None,
@@ -269,13 +274,24 @@ impl RouterBuilder {
         self
     }
 
+    /// Set specific config files to load (from TOML source config_file fields).
+    /// If not set, falls back to loading all JSON files in config_dir.
+    pub fn config_files(mut self, files: Vec<PathBuf>) -> Self {
+        self.config_files = files;
+        self
+    }
+
     pub fn emulator_settings(mut self, settings: EmulatorSettings) -> Self {
         self.emulator_settings = settings;
         self
     }
 
     pub fn build(self) -> Router {
-        let digitizer_configs = load_digitizer_configs(&self.config_dir).unwrap_or_default();
+        let digitizer_configs = if self.config_files.is_empty() {
+            load_digitizer_configs_from_dir(&self.config_dir).unwrap_or_default()
+        } else {
+            load_digitizer_configs_from_files(&self.config_files)
+        };
 
         let state = Arc::new(AppState {
             client: ComponentClient::new(),
@@ -320,6 +336,7 @@ impl RouterBuilder {
             )
             .route("/api/digitizers/:id", get(get_digitizer))
             .route("/api/digitizers/:id", put(update_digitizer))
+            .route("/api/digitizers/:id/apply", post(apply_digitizer_config))
             .route("/api/digitizers/:id/save", post(save_digitizer))
             .route(
                 "/api/digitizers/:id/save-to-db",
@@ -374,8 +391,38 @@ impl RouterBuilder {
     }
 }
 
-/// Load digitizer configurations from JSON files in the config directory
-fn load_digitizer_configs(config_dir: &PathBuf) -> std::io::Result<HashMap<u32, DigitizerConfig>> {
+/// Load digitizer configurations from specific JSON files (referenced by TOML sources)
+fn load_digitizer_configs_from_files(files: &[PathBuf]) -> HashMap<u32, DigitizerConfig> {
+    let mut configs = HashMap::new();
+
+    for path in files {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            match serde_json::from_str::<DigitizerConfig>(&content) {
+                Ok(config) => {
+                    tracing::info!(
+                        "Loaded digitizer config '{}' (id={}) from {}",
+                        config.name,
+                        config.digitizer_id,
+                        path.display()
+                    );
+                    configs.insert(config.digitizer_id, config);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse {}: {}", path.display(), e);
+                }
+            }
+        } else {
+            tracing::warn!("Failed to read config file: {}", path.display());
+        }
+    }
+
+    configs
+}
+
+/// Load all digitizer configurations from JSON files in the config directory (fallback)
+fn load_digitizer_configs_from_dir(
+    config_dir: &PathBuf,
+) -> std::io::Result<HashMap<u32, DigitizerConfig>> {
     let mut configs = HashMap::new();
 
     if !config_dir.exists() {

@@ -103,8 +103,8 @@ export interface ChannelValueChange {
                   @case ('enum') {
                     <select
                       class="cell-select"
-                      [value]="getDefault(param.key) ?? ''"
-                      (change)="onDefaultSelect(param.key, $event)"
+                      [ngModel]="getDefault(param.key)"
+                      (ngModelChange)="defaultChange.emit({ key: param.key, value: $event })"
                     >
                       @for (opt of param.options ?? []; track opt) {
                         <option [value]="opt">{{ opt }}</option>
@@ -114,8 +114,8 @@ export interface ChannelValueChange {
                   @case ('boolean') {
                     <select
                       class="cell-select"
-                      [value]="getDefault(param.key) ?? 'True'"
-                      (change)="onDefaultSelect(param.key, $event)"
+                      [ngModel]="getDefault(param.key) ?? 'True'"
+                      (ngModelChange)="defaultChange.emit({ key: param.key, value: $event })"
                     >
                       <option value="True">ON</option>
                       <option value="False">OFF</option>
@@ -142,8 +142,8 @@ export interface ChannelValueChange {
                     @case ('enum') {
                       <select
                         class="cell-select"
-                        [value]="getChannel(ch, param.key) ?? ''"
-                        (change)="onChannelSelect(ch, param.key, $event)"
+                        [ngModel]="getChannel(ch, param.key)"
+                        (ngModelChange)="channelChange.emit({ channel: ch, key: param.key, value: $event })"
                       >
                         @for (opt of param.options ?? []; track opt) {
                           <option [value]="opt">{{ opt }}</option>
@@ -153,8 +153,8 @@ export interface ChannelValueChange {
                     @case ('boolean') {
                       <select
                         class="cell-select"
-                        [value]="getChannel(ch, param.key) ?? 'True'"
-                        (change)="onChannelSelect(ch, param.key, $event)"
+                        [ngModel]="getChannel(ch, param.key) ?? 'True'"
+                        (ngModelChange)="channelChange.emit({ channel: ch, key: param.key, value: $event })"
                       >
                         <option value="True">ON</option>
                         <option value="False">OFF</option>
@@ -224,6 +224,7 @@ export interface ChannelValueChange {
       min-width: 80px;
       border-right: 2px solid #1976d2;
       background: #e3f2fd;
+      box-shadow: 4px 0 6px rgba(0, 0, 0, 0.08);
     }
 
     thead .all-header {
@@ -243,6 +244,11 @@ export interface ChannelValueChange {
 
     /* Highlight overridden cells */
     .ch-cell.override {
+      background-color: #fff3e0;
+    }
+
+    .ch-cell.override .cell-input,
+    .ch-cell.override .cell-select {
       background-color: #fff3e0;
     }
 
@@ -283,16 +289,16 @@ export interface ChannelValueChange {
       border-color: #1976d2;
     }
 
-    /* Zebra striping */
-    tbody tr:nth-child(even) td {
-      background-color: inherit;
+    /* Zebra striping — exclude sticky columns to keep opaque backgrounds */
+    tbody tr:nth-child(even) td.ch-cell:not(.override) {
+      background-color: #fafafa;
     }
 
-    tbody tr:hover td {
+    tbody tr:hover td.ch-cell {
       background-color: #f5f5f5;
     }
 
-    tbody tr:hover td.sticky-col {
+    tbody tr:hover td.param-cell {
       background-color: #f5f5f5;
     }
 
@@ -300,7 +306,7 @@ export interface ChannelValueChange {
       background-color: #e3f2fd;
     }
 
-    tbody tr:hover td.override {
+    tbody tr:hover td.ch-cell.override {
       background-color: #ffe0b2;
     }
   `,

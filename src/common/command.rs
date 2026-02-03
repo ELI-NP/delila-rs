@@ -74,8 +74,8 @@ impl ComponentState {
     pub fn valid_commands(&self) -> &'static [&'static str] {
         use ComponentState::*;
         match self {
-            Idle => &["Configure", "Detect", "GetStatus"],
-            Configured => &["Arm", "Reset", "GetStatus"],
+            Idle => &["Configure", "Detect", "ApplyDigitizerConfig", "GetStatus"],
+            Configured => &["Arm", "Reset", "ApplyDigitizerConfig", "GetStatus"],
             Armed => &["Start", "Reset", "GetStatus"],
             Running => &["Stop", "GetStatus"],
             Error => &["Reset", "GetStatus"],
@@ -149,6 +149,9 @@ pub enum Command {
     /// Temporarily connects to digitizer, reads DeviceInfo, and disconnects.
     /// Does not change state.
     Detect,
+    /// Apply digitizer configuration to hardware (Reader-only, Idle/Configured state)
+    /// Writes parameters to the digitizer via FELib. Does not change state.
+    ApplyDigitizerConfig(Box<crate::config::digitizer::DigitizerConfig>),
 }
 
 impl std::fmt::Display for Command {
@@ -164,6 +167,9 @@ impl std::fmt::Display for Command {
                 write!(f, "UpdateEmulatorConfig(events={})", cfg.events_per_batch)
             }
             Command::Detect => write!(f, "Detect"),
+            Command::ApplyDigitizerConfig(ref cfg) => {
+                write!(f, "ApplyDigitizerConfig(id={})", cfg.digitizer_id)
+            }
         }
     }
 }

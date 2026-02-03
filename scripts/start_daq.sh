@@ -39,6 +39,18 @@ NC='\033[0m' # No Color
 echo -e "${GREEN}=== DELILA DAQ Startup ===${NC}"
 echo "Config: $CONFIG_FILE"
 
+# Kill any leftover DAQ processes from previous sessions
+KILLED=false
+for proc in operator monitor recorder merger reader emulator data_sink; do
+    if pkill -f "target/release/$proc" 2>/dev/null; then
+        KILLED=true
+    fi
+done
+if [ "$KILLED" = true ]; then
+    echo -e "${YELLOW}Killed leftover DAQ processes from previous session${NC}"
+    sleep 1
+fi
+
 # MongoDB configuration
 MONGODB_URI="mongodb://delila:delila_pass@localhost:27017"
 MONGODB_DATABASE="delila"

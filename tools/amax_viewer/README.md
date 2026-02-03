@@ -92,7 +92,7 @@ ls /usr/local/lib/libCAEN_FELib*
 #### 4. Clone Repository and Build
 
 ```bash
-git clone https://github.com/your-repo/delila-rs.git
+git clone https://github.com/aogaki/delila-rs.git
 cd delila-rs/tools/amax_viewer
 cargo build --release
 ```
@@ -137,7 +137,7 @@ source $HOME/.cargo/env
 #### 3. Clone Repository and Build
 
 ```bash
-git clone https://github.com/your-repo/delila-rs.git
+git clone https://github.com/aogaki/delila-rs.git
 cd delila-rs/tools/amax_viewer
 cargo build --release
 ```

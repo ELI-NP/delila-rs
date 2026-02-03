@@ -48,8 +48,15 @@ struct Args {
     mongodb_database: String,
 }
 
-/// Load component configuration, operator config, and emulator settings from config file
-fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, EmulatorSettings) {
+/// Load component configuration, operator config, emulator settings, and config file paths
+fn load_config(
+    config_file: &str,
+) -> (
+    Vec<ComponentConfig>,
+    OperatorConfig,
+    EmulatorSettings,
+    Vec<PathBuf>,
+) {
     // Try to load from config file
     if let Ok(config) = Config::load(config_file) {
         info!("Loaded configuration from {}", config_file);
@@ -64,7 +71,15 @@ fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, Emul
         } else {
             EmulatorSettings::default()
         };
-        return (components, operator_config, emulator_settings);
+        // Extract config_file paths from digitizer sources
+        let config_files: Vec<PathBuf> = config
+            .network
+            .sources
+            .iter()
+            .filter(|s| s.is_digitizer())
+            .filter_map(|s| s.config_file.as_ref().map(PathBuf::from))
+            .collect();
+        return (components, operator_config, emulator_settings, config_files);
     }
 
     warn!(
@@ -82,6 +97,7 @@ fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, Emul
             is_master: false,
             source_id: Some(0),
             is_digitizer: false,
+            config_file: None,
         },
         ComponentConfig {
             name: "Emulator 1".to_string(),
@@ -90,6 +106,7 @@ fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, Emul
             is_master: false,
             source_id: Some(1),
             is_digitizer: false,
+            config_file: None,
         },
         ComponentConfig {
             name: "Merger".to_string(),
@@ -98,6 +115,7 @@ fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, Emul
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         },
         ComponentConfig {
             name: "Recorder".to_string(),
@@ -106,6 +124,7 @@ fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, Emul
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         },
         ComponentConfig {
             name: "Monitor".to_string(),
@@ -114,12 +133,14 @@ fn load_config(config_file: &str) -> (Vec<ComponentConfig>, OperatorConfig, Emul
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         },
     ];
     (
         components,
         OperatorConfig::default(),
         EmulatorSettings::default(),
+        Vec::new(),
     )
 }
 
@@ -145,6 +166,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             is_master: source.is_master_digitizer(),
             source_id: Some(source.id),
             is_digitizer: source.is_digitizer(),
+            config_file: source.config_file.as_ref().map(PathBuf::from),
         });
     }
 
@@ -162,6 +184,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         });
     }
 
@@ -179,6 +202,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         });
     }
 
@@ -196,6 +220,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         });
     }
 
@@ -213,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // Load component, operator, and emulator configuration
-    let (components, operator_config, emulator_settings) =
+    let (components, operator_config, emulator_settings, config_files) =
         load_config(&args.operator.common.config_file);
     info!("Loaded {} component(s)", components.len());
     for comp in &components {
@@ -269,6 +294,7 @@ async fn main() -> anyhow::Result<()> {
     let app = RouterBuilder::new(components)
         .config(operator_config)
         .config_dir(PathBuf::from("./config/digitizers"))
+        .config_files(config_files)
         .run_repo(run_repo)
         .digitizer_repo(digitizer_repo)
         .emulator_settings(emulator_settings)

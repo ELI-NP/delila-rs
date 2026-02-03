@@ -24,6 +24,7 @@
       "event_trigger_source": "ChSelfTrigger"
     },
     "16": {
+      "enabled": "True",
       "dc_offset": 20.0,
       "event_trigger_source": "ChSelfTrigger"
     }

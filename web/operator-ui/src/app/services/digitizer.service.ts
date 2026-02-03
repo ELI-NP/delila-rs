@@ -115,6 +115,23 @@ export class DigitizerService {
   }
 
   /**
+   * Apply a digitizer configuration to hardware via Reader.
+   * Updates in-memory config, saves to disk, and writes parameters to the digitizer.
+   */
+  async applyToHardware(config: DigitizerConfig): Promise<ApiResponse> {
+    if (this.useMock) {
+      return { success: true, message: 'Mock: Would apply to hardware' };
+    }
+
+    return await firstValueFrom(
+      this.http.post<ApiResponse>(
+        `${this.apiUrl}/${config.digitizer_id}/apply`,
+        config
+      )
+    );
+  }
+
+  /**
    * Detect connected digitizer hardware via Reader.
    * Returns detected digitizers with their device info and any saved configs.
    */

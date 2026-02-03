@@ -22,6 +22,8 @@ pub use run_repository::{
     RunRepository, RunStats, RunStatus,
 };
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -224,6 +226,9 @@ pub struct ComponentConfig {
     pub source_id: Option<u32>,
     /// Whether this source is a physical digitizer (PSD1/PSD2/PHA, not emulator)
     pub is_digitizer: bool,
+    /// Path to the digitizer config JSON file (from TOML `config_file` field).
+    /// Used by Apply to save config to the correct location that Reader loads on Configure.
+    pub config_file: Option<PathBuf>,
 }
 
 /// Operator configuration with timeouts
@@ -472,6 +477,7 @@ mod tests {
             is_master: false,
             source_id: None,
             is_digitizer: false,
+            config_file: None,
         };
         assert_eq!(config.name, "Merger");
         assert!(config.address.contains("5570"));
@@ -488,6 +494,7 @@ mod tests {
             is_master: true,
             source_id: Some(0),
             is_digitizer: true,
+            config_file: None,
         };
         assert_eq!(config.name, "PSD2-Master");
         assert!(config.is_master);

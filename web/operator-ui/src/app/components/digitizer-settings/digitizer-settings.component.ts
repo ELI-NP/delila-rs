@@ -580,8 +580,13 @@ export class DigitizerSettingsComponent {
       const result = await this.digitizerService.detectDigitizers();
       if (result.success && result.digitizers.length > 0) {
         this.snackBar.open(result.message, 'OK', { duration: 5000 });
-        // Reload digitizers to pick up any newly created configs
+        // Reload digitizers to pick up any newly created/updated configs
         await this.digitizerService.loadDigitizers();
+        // Auto-select the first detected digitizer
+        const firstDetected = result.digitizers[0];
+        if (firstDetected) {
+          this.selectedId.set(firstDetected.source_id);
+        }
       } else {
         this.snackBar.open(result.message || 'No digitizers detected', 'OK', {
           duration: 5000,
@@ -614,12 +619,13 @@ export class DigitizerSettingsComponent {
     };
 
     try {
-      await this.digitizerService.updateDigitizer(updatedConfig);
-      this.snackBar.open('Configuration applied (in memory)', 'OK', {
-        duration: 3000,
+      const result = await this.digitizerService.applyToHardware(updatedConfig);
+      this.snackBar.open(result.message || 'Configuration applied to hardware', 'OK', {
+        duration: 5000,
       });
-    } catch {
-      this.snackBar.open('Failed to apply configuration', 'Close', {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to apply configuration';
+      this.snackBar.open(message, 'Close', {
         duration: 5000,
       });
     }
