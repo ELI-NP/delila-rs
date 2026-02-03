@@ -934,6 +934,20 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
             .with_title("AMax Viewer - Firmware Development Tool"),
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
+                eframe::egui_wgpu::WgpuSetupCreateNew {
+                    instance_descriptor: eframe::wgpu::InstanceDescriptor {
+                        // Vulkan + Metal only: DX12 causes Device Lost on WSL2
+                        backends: eframe::wgpu::Backends::VULKAN
+                            | eframe::wgpu::Backends::METAL,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
