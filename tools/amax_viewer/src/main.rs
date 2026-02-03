@@ -683,7 +683,7 @@ impl eframe::App for AmaxViewerApp {
         });
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self) {
         // Save parameters before exit
         {
             let state = self.shared.lock().unwrap();

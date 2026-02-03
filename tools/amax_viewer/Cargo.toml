@@ -6,7 +6,7 @@ description = "AMax Firmware Development Tool - 2D Histogram Viewer"
 
 [dependencies]
 # GUI
-eframe = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["wgpu"] }
 egui_plot = "0.31"
 
 # CAEN access (using delila-rs as path dependency)
