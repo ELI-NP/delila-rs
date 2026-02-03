@@ -1,7 +1,7 @@
 # デジタイザ設定 UI (Phase 6)
 
 **Created:** 2026-01-26
-**Status:** VERIFICATION IN PROGRESS (2026-02-03)
+**Status: COMPLETED** (2026-02-03)
 **Priority:** High — MVP Post-MVP 機能
 
 ---
@@ -435,8 +435,8 @@ UI ではすべてのチャンネルの値をフラットに表示する。
 
 ### 残タスク
 
-- [ ] Angular UI タブ表示確認 (Board / Frequent / Advanced)
-- [ ] Apply → PUT /api/digitizers/:id → Configure 動作確認
-- [ ] Save → JSON ファイル書き出し確認
-- [ ] Configure → Arm → Start でデータ取得確認
+- [x] Angular UI タブ表示確認 (Board / Frequent / Advanced)
+- [x] Apply → PUT /api/digitizers/:id → Configure 動作確認
+- [x] Save → JSON ファイル書き出し確認
+- [x] Configure → Arm → Start でデータ取得確認
 - [x] デジタイザ名編集フィールドの追加 (上記 §5)
