@@ -149,6 +149,11 @@ function getAdvancedParams(fw: FirmwareType): ChannelParamDef[] {
         </mat-form-field>
 
         @if (selectedConfig(); as config) {
+          <mat-form-field appearance="outline" class="name-input">
+            <mat-label>Name</mat-label>
+            <input matInput [(ngModel)]="config.name" />
+          </mat-form-field>
+
           <span class="firmware-badge" [class]="config.firmware.toLowerCase()">
             {{ config.firmware }}
           </span>
@@ -364,6 +369,10 @@ function getAdvancedParams(fw: FirmwareType): ChannelParamDef[] {
 
     .digitizer-select {
       width: 280px;
+    }
+
+    .name-input {
+      width: 200px;
     }
 
     .firmware-badge {

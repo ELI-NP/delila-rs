@@ -1,7 +1,9 @@
 {
   "digitizer_id": 0,
-  "name": "E9 PSD2",
+  "name": "E9 Gamma",
   "firmware": "PSD2",
+  "serial_number": "52621",
+  "model": "VX2730",
   "num_channels": 32,
   "is_master": false,
   "board": {
@@ -16,6 +18,5 @@
     "gate_short_ns": 100,
     "event_trigger_source": "ChSelfTrigger",
     "wave_trigger_source": "Disabled"
-  },
-  "channel_overrides": {}
+  }
 }
