@@ -426,9 +426,19 @@ UI ではすべてのチャンネルの値をフラットに表示する。
 | `POST /api/digitizers/detect` | ✅ VX2730 検出, serial_number/model 反映済み |
 | `GET /api/digitizers` (detect 後) | ✅ serial_number: "52621", model: "VX2730" 追加 |
 
+#### 5. デジタイザ表示名の編集機能
+
+- **背景:** JSON ファイルの `name` フィールドがデジタイザ選択ドロップダウンの表示名になる。現状では名前を変えるには JSON ファイルを直接編集して再起動が必要。
+- **要件:** UI 上でデジタイザ名を編集し、Apply/Save で永続化できるようにする。将来 MongoDB に設定を格納する際にも UI 経由で変更できることが重要。
+- **実装案:**
+  - Settings UI の Digitizer ドロップダウン横（または Board タブ内）に名前編集フィールドを追加
+  - `PUT /api/digitizers/:id` で `name` フィールドを更新可能にする
+  - Save 時に JSON ファイル（将来は MongoDB）に反映
+
 ### 残タスク
 
 - [ ] Angular UI タブ表示確認 (Board / Frequent / Advanced)
 - [ ] Apply → PUT /api/digitizers/:id → Configure 動作確認
 - [ ] Save → JSON ファイル書き出し確認
 - [ ] Configure → Arm → Start でデータ取得確認
+- [ ] デジタイザ名編集フィールドの追加 (上記 §5)

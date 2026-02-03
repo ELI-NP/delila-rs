@@ -1,0 +1,21 @@
+{
+  "digitizer_id": 0,
+  "name": "E9 PSD2",
+  "firmware": "PSD2",
+  "num_channels": 32,
+  "is_master": false,
+  "board": {
+    "start_source": "SWcmd"
+  },
+  "channel_defaults": {
+    "enabled": "True",
+    "dc_offset": 50.0,
+    "polarity": "Negative",
+    "trigger_threshold": 1000,
+    "gate_long_ns": 400,
+    "gate_short_ns": 100,
+    "event_trigger_source": "ChSelfTrigger",
+    "wave_trigger_source": "Disabled"
+  },
+  "channel_overrides": {}
+}
