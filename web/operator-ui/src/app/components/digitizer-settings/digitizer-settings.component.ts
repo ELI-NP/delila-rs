@@ -669,7 +669,6 @@ function getAllChannelParams(fw: FirmwareType): ChannelParamDef[] {
     }
 
     .config-card {
-      max-width: 800px;
     }
 
     .form-grid {

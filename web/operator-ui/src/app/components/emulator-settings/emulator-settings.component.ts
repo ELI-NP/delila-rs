@@ -183,7 +183,6 @@ import { EmulatorConfig } from '../../models/types';
   styles: `
     .emulator-settings {
       padding: 16px;
-      max-width: 800px;
     }
 
     .info-card {
@@ -209,7 +208,7 @@ import { EmulatorConfig } from '../../models/types';
 
     .form-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: 16px;
       padding-top: 8px;
     }

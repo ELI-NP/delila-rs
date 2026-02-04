@@ -59,16 +59,19 @@ export class OperatorService {
 
     interval(this.pollingInterval)
       .pipe(
-        switchMap(() => this.getStatus()),
-        tap((status) => {
-          this.status.set(status);
-          this.error.set(null);
-        }),
-        catchError(() => {
-          this.error.set('Failed to connect to Operator');
-          this.status.set(null);
-          return of(null);
-        })
+        switchMap(() =>
+          this.getStatus().pipe(
+            tap((status) => {
+              this.status.set(status);
+              this.error.set(null);
+            }),
+            catchError(() => {
+              this.error.set('Failed to connect to Operator');
+              this.status.set(null);
+              return of(null);
+            })
+          )
+        )
       )
       .subscribe();
 
