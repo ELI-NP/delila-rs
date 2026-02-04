@@ -303,9 +303,9 @@ pub struct ChannelConfig {
     /// Trapezoid pole-zero in samples (PHA1)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trap_pole_zero: Option<u32>,
-    /// Peaking time as percentage (PHA1)
+    /// Peaking time as percentage (PHA1, 0.0-100.0%)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub peaking_time: Option<u32>,
+    pub peaking_time: Option<f64>,
     /// N samples for peak mean (PHA1: "PEAK_NSMEAN_1",...)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_nsmean: Option<String>,
@@ -770,14 +770,14 @@ impl DigitizerConfig {
         // Record length: PSD1 = board-level, PSD2 = per-channel
         if let Some(v) = board.record_length {
             match self.firmware {
-                FirmwareType::PSD1 => {
+                FirmwareType::PSD1 | FirmwareType::PHA1 => {
                     params.push(CaenParameter {
                         path: "/par/reclen".to_string(),
                         value: v.to_string(),
                     });
                 }
                 _ => {
-                    // PSD2: per-channel parameter
+                    // PSD2/AMax: per-channel parameter
                     params.push(CaenParameter {
                         path: format!("/ch/0..{}/par/chrecordlengths", self.num_channels - 1),
                         value: v.to_string(),
@@ -788,7 +788,7 @@ impl DigitizerConfig {
 
         // Waveform enable: PSD1 only (PSD2 uses per-channel WaveTriggerSource)
         if let Some(v) = board.waveforms_enabled {
-            if matches!(self.firmware, FirmwareType::PSD1) {
+            if matches!(self.firmware, FirmwareType::PSD1 | FirmwareType::PHA1) {
                 params.push(CaenParameter {
                     path: "/par/waveforms".to_string(),
                     value: v.to_string().to_lowercase(),
