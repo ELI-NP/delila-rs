@@ -21,10 +21,10 @@ pub struct RunHistoryItem {
     pub run_number: i32,
     pub exp_name: String,
     pub comment: String,
-    #[schema(value_type = String, format = "date-time")]
-    pub start_time: chrono::DateTime<chrono::Utc>,
-    #[schema(value_type = Option<String>, format = "date-time")]
-    pub end_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// UNIX timestamp in milliseconds
+    pub start_time: i64,
+    /// UNIX timestamp in milliseconds
+    pub end_time: Option<i64>,
     pub duration_secs: Option<i32>,
     pub status: RunStatus,
     pub stats: RunStats,

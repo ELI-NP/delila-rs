@@ -65,7 +65,7 @@ export interface CurrentRunInfo {
   run_number: number;
   exp_name: string;
   comment: string;
-  start_time: string; // ISO date string
+  start_time: number; // UNIX timestamp (ms)
   elapsed_secs: number;
   status: RunStatus;
   stats: RunStats;

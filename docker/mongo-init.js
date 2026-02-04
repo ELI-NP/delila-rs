@@ -22,12 +22,12 @@ db.createCollection('runs', {
           description: 'Optional comment'
         },
         start_time: {
-          bsonType: 'date',
-          description: 'Run start time - required'
+          bsonType: 'long',
+          description: 'Run start time (UNIX ms) - required'
         },
         end_time: {
-          bsonType: ['date', 'null'],
-          description: 'Run end time - null if still running'
+          bsonType: ['long', 'null'],
+          description: 'Run end time (UNIX ms) - null if still running'
         },
         duration_secs: {
           bsonType: ['int', 'null'],
@@ -54,7 +54,7 @@ db.createCollection('runs', {
           items: {
             bsonType: 'object',
             properties: {
-              time: { bsonType: 'date' },
+              time: { bsonType: 'long' },
               component: { bsonType: 'string' },
               message: { bsonType: 'string' }
             }

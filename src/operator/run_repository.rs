@@ -2,7 +2,7 @@
 //!
 //! Stores run information, statistics, config snapshots, and error logs.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use mongodb::{
     bson::{doc, oid::ObjectId},
     options::ClientOptions,
@@ -34,7 +34,8 @@ pub struct RunStats {
 /// Error log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorLogEntry {
-    pub time: DateTime<Utc>,
+    /// UNIX timestamp in milliseconds
+    pub time: i64,
     pub component: String,
     pub message: String,
 }
@@ -64,9 +65,11 @@ pub struct RunDocument {
     pub exp_name: String,
     #[serde(default)]
     pub comment: String,
-    pub start_time: DateTime<Utc>,
+    /// UNIX timestamp in milliseconds
+    pub start_time: i64,
+    /// UNIX timestamp in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_time: Option<DateTime<Utc>>,
+    pub end_time: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<i32>,
     pub status: RunStatus,
@@ -87,8 +90,8 @@ pub struct CurrentRunInfo {
     pub run_number: i32,
     pub exp_name: String,
     pub comment: String,
-    #[schema(value_type = String, format = "date-time")]
-    pub start_time: DateTime<Utc>,
+    /// UNIX timestamp in milliseconds
+    pub start_time: i64,
     pub elapsed_secs: i64,
     pub status: RunStatus,
     pub stats: RunStats,
@@ -100,9 +103,8 @@ pub struct CurrentRunInfo {
 impl CurrentRunInfo {
     /// Create from a running RunDocument
     pub fn from_document(doc: &RunDocument) -> Self {
-        let elapsed = Utc::now()
-            .signed_duration_since(doc.start_time)
-            .num_seconds();
+        let now_ms = Utc::now().timestamp_millis();
+        let elapsed = (now_ms - doc.start_time) / 1000;
         Self {
             run_number: doc.run_number,
             exp_name: doc.exp_name.clone(),
@@ -179,7 +181,7 @@ impl RunRepository {
             run_number,
             exp_name: exp_name.to_string(),
             comment: comment.to_string(),
-            start_time: Utc::now(),
+            start_time: Utc::now().timestamp_millis(),
             end_time: None,
             duration_secs: None,
             status: RunStatus::Running,
@@ -204,37 +206,23 @@ impl RunRepository {
         status: RunStatus,
         stats: RunStats,
     ) -> Result<(), RepositoryError> {
-        let now = Utc::now();
+        let now_ms = Utc::now().timestamp_millis();
 
-        // Get start time to calculate duration (filter by exp_name + run_number)
-        // Use raw Document to handle both BSON Date and string formats
-        use mongodb::bson::Document;
-        let raw_collection = self.collection.clone_with_type::<Document>();
-        let raw_doc = raw_collection
+        // Get start time to calculate duration
+        let run_doc = self
+            .collection
             .find_one(doc! { "run_number": run_number, "exp_name": exp_name })
             .await?
             .ok_or(RepositoryError::NotFound(run_number))?;
 
-        // Extract start_time - handle both BSON DateTime and string formats
-        let start_time = if let Ok(bson_dt) = raw_doc.get_datetime("start_time") {
-            DateTime::<Utc>::from_timestamp_millis(bson_dt.timestamp_millis())
-                .unwrap_or_else(Utc::now)
-        } else if let Ok(s) = raw_doc.get_str("start_time") {
-            DateTime::parse_from_rfc3339(s)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now())
-        } else {
-            Utc::now()
-        };
-
-        let duration = now.signed_duration_since(start_time).num_seconds() as i32;
+        let duration = ((now_ms - run_doc.start_time) / 1000) as i32;
 
         self.collection
             .update_one(
                 doc! { "run_number": run_number, "exp_name": exp_name },
                 doc! {
                     "$set": {
-                        "end_time": mongodb::bson::DateTime::from_millis(now.timestamp_millis()),
+                        "end_time": now_ms,
                         "duration_secs": duration,
                         "status": mongodb::bson::to_bson(&status).expect("RunStatus serializes to BSON"),
                         "stats": mongodb::bson::to_bson(&stats).expect("RunStats serializes to BSON"),
@@ -282,7 +270,7 @@ impl RunRepository {
         message: &str,
     ) -> Result<(), RepositoryError> {
         let entry = ErrorLogEntry {
-            time: Utc::now(),
+            time: Utc::now().timestamp_millis(),
             component: component.to_string(),
             message: message.to_string(),
         };
@@ -520,12 +508,13 @@ mod tests {
 
     #[test]
     fn test_current_run_info_elapsed() {
+        let start_ms = Utc::now().timestamp_millis() - 60_000;
         let doc = RunDocument {
             id: None,
             run_number: 1,
             exp_name: "test".to_string(),
             comment: String::new(),
-            start_time: Utc::now() - chrono::Duration::seconds(60),
+            start_time: start_ms,
             end_time: None,
             duration_secs: None,
             status: RunStatus::Running,

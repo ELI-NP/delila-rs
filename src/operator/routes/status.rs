@@ -31,9 +31,8 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         if let Some(mut info) = cached {
             if info.status == RunStatus::Running {
                 // Update elapsed time
-                info.elapsed_secs = chrono::Utc::now()
-                    .signed_duration_since(info.start_time)
-                    .num_seconds();
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                info.elapsed_secs = (now_ms - info.start_time) / 1000;
 
                 // Update stats from Recorder metrics (authoritative source for recorded data)
                 let recorder_metrics = components
@@ -241,7 +240,7 @@ pub(super) async fn start(
                         run_number: run_number as i32,
                         exp_name: exp_name.clone(),
                         comment: comment.clone(),
-                        start_time: chrono::Utc::now(),
+                        start_time: chrono::Utc::now().timestamp_millis(),
                         elapsed_secs: 0,
                         status: RunStatus::Running,
                         stats: RunStats::default(),
@@ -274,7 +273,7 @@ pub(super) async fn start(
                 run_number: run_number as i32,
                 exp_name: exp_name.clone(),
                 comment,
-                start_time: chrono::Utc::now(),
+                start_time: chrono::Utc::now().timestamp_millis(),
                 elapsed_secs: 0,
                 status: RunStatus::Running,
                 stats: RunStats::default(),

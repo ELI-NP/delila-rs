@@ -13,7 +13,7 @@
     "enabled": "True",
     "dc_offset": 50.0,
     "polarity": "Negative",
-    "trigger_threshold": 1000,
+    "trigger_threshold": 100,
     "gate_long_ns": 400,
     "gate_short_ns": 100,
     "event_trigger_source": "ChSelfTrigger",
