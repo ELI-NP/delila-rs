@@ -626,8 +626,6 @@ impl DigitizerConfig {
                 "smoothingfactor",
                 "chargesmoothing",
                 "timefiltersmoothing",
-                "longchargeintegratorpedestal",
-                "shortchargeintegratorpedestal",
                 "channelvetosource",
                 "adcvetowidth",
                 "channelstriggermask",
