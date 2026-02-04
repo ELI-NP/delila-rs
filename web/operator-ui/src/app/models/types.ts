@@ -130,16 +130,71 @@ export interface BoardConfig {
 
 // Channel configuration
 export interface ChannelConfig {
+  // --- Input ---
   enabled?: string;
-  dc_offset?: number;
   polarity?: string;
+  dc_offset?: number;
+  vga_gain?: number;
+  baseline_avg?: string;
+  fixed_baseline?: number;
+  record_length_ns?: number;
+  pre_trigger_ns?: number;
+  pre_trigger?: number;
+  wave_downsampling?: string;
+  input_dynamic?: string;
+  coarse_gain?: string;
+  // --- Trigger ---
+  discriminator_mode?: string;
   trigger_threshold?: number;
+  cfd_delay_ns?: number;
+  cfd_fraction?: string;
+  trigger_holdoff_ns?: number;
+  trigger_holdoff?: number;
+  smoothing_factor?: string;
+  time_filter_smoothing?: string;
+  input_smoothing?: string;
+  fast_discr_smoothing?: string;
+  input_rise_time?: number;
+  event_trigger_source?: string;
+  wave_trigger_source?: string;
+  self_trigger?: string;
+  global_trigger_gen?: string;
+  trigger_out_propagate?: string;
+  // --- Energy ---
+  energy_coarse_gain?: string;
   gate_long_ns?: number;
   gate_short_ns?: number;
   gate_pre_ns?: number;
-  event_trigger_source?: string;
-  wave_trigger_source?: string;
-  cfd_delay_ns?: number;
+  charge_pedestal?: number;
+  short_charge_pedestal?: number;
+  charge_smoothing?: string;
+  charge_pedestal_en?: string;
+  trap_rise_time?: number;
+  trap_flat_top?: number;
+  trap_pole_zero?: number;
+  peaking_time?: number;
+  peak_nsmean?: string;
+  peak_holdoff?: number;
+  energy_fine_gain?: number;
+  // --- Coincidence ---
+  ch_trigger_mask?: string;
+  coincidence_mask?: string;
+  anti_coincidence_mask?: string;
+  coincidence_window_ns?: number;
+  coincidence_mode?: string;
+  ch_veto_source?: string;
+  ch_veto_width_ns?: number;
+  event_selector?: string;
+  pileup_rejection?: string;
+  // --- Waveform ---
+  wave_saving?: string;
+  analog_probe_0?: string;
+  analog_probe_1?: string;
+  digital_probe_0?: string;
+  digital_probe_1?: string;
+  digital_probe_2?: string;
+  digital_probe_3?: string;
+  // --- FW-specific overflow ---
   extra?: Record<string, unknown>;
 }
 

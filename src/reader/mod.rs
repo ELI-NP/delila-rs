@@ -283,6 +283,11 @@ enum ReadLoopRequest {
         config: Box<crate::config::digitizer::DigitizerConfig>,
         response_tx: std::sync::mpsc::SyncSender<Result<usize, String>>,
     },
+    /// Apply only SetInRun parameters while running
+    ApplyConfigRunning {
+        config: Box<crate::config::digitizer::DigitizerConfig>,
+        response_tx: std::sync::mpsc::SyncSender<Result<usize, String>>,
+    },
 }
 
 /// Command handler extension for Reader
@@ -334,7 +339,9 @@ impl CommandHandlerExt for ReaderCommandExt {
         // interfere with the existing one.
         let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel(1);
         self.request_tx
-            .send(ReadLoopRequest::Detect { response_tx: resp_tx })
+            .send(ReadLoopRequest::Detect {
+                response_tx: resp_tx,
+            })
             .map_err(|_| "ReadLoop not running".to_string())?;
         resp_rx
             .recv_timeout(std::time::Duration::from_secs(5))
@@ -356,6 +363,24 @@ impl CommandHandlerExt for ReaderCommandExt {
         resp_rx
             .recv_timeout(std::time::Duration::from_secs(10))
             .map_err(|_| "ApplyConfig timeout: ReadLoop did not respond within 10s".to_string())?
+    }
+
+    fn on_apply_digitizer_config_running(
+        &mut self,
+        config: &crate::config::digitizer::DigitizerConfig,
+    ) -> Result<usize, String> {
+        let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel(1);
+        self.request_tx
+            .send(ReadLoopRequest::ApplyConfigRunning {
+                config: Box::new(config.clone()),
+                response_tx: resp_tx,
+            })
+            .map_err(|_| "ReadLoop not running".to_string())?;
+        resp_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| {
+                "ApplyConfigRunning timeout: ReadLoop did not respond within 10s".to_string()
+            })?
     }
 }
 
@@ -659,10 +684,22 @@ impl Reader {
                             .map_err(|e| format!("Failed to read device info: {}", e));
                         let _ = response_tx.send(result);
                     }
-                    ReadLoopRequest::ApplyConfig { config: dig_config, response_tx } => {
+                    ReadLoopRequest::ApplyConfig {
+                        config: dig_config,
+                        response_tx,
+                    } => {
                         let result = handle
                             .apply_config(&dig_config)
                             .map_err(|e| format!("Failed to apply config: {}", e));
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfigRunning {
+                        config: dig_config,
+                        response_tx,
+                    } => {
+                        let result = handle
+                            .apply_config_running(&dig_config)
+                            .map_err(|e| format!("Failed to apply SetInRun config: {}", e));
                         let _ = response_tx.send(result);
                     }
                 }
@@ -868,10 +905,22 @@ impl Reader {
                             .map_err(|e| format!("Failed to read device info: {}", e));
                         let _ = response_tx.send(result);
                     }
-                    ReadLoopRequest::ApplyConfig { config: dig_config, response_tx } => {
+                    ReadLoopRequest::ApplyConfig {
+                        config: dig_config,
+                        response_tx,
+                    } => {
                         let result = handle
                             .apply_config(&dig_config)
                             .map_err(|e| format!("Failed to apply config: {}", e));
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfigRunning {
+                        config: dig_config,
+                        response_tx,
+                    } => {
+                        let result = handle
+                            .apply_config_running(&dig_config)
+                            .map_err(|e| format!("Failed to apply SetInRun config: {}", e));
                         let _ = response_tx.send(result);
                     }
                 }

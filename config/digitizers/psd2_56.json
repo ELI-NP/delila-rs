@@ -1,6 +1,6 @@
 {
   "digitizer_id": 0,
-  "name": "PSD2 Ch16 Pulser Test",
+  "name": "PSD2 Test",
   "firmware": "PSD2",
   "serial_number": "52622",
   "model": "VX2730",
@@ -11,20 +11,17 @@
   },
   "channel_defaults": {
     "enabled": "True",
-    "dc_offset": 50.0,
     "polarity": "Negative",
-    "trigger_threshold": 1000,
-    "gate_long_ns": 400,
-    "gate_short_ns": 100,
+    "dc_offset": 50.0,
+    "trigger_threshold": 600,
     "event_trigger_source": "ChSelfTrigger",
-    "wave_trigger_source": "Disabled"
+    "wave_trigger_source": "Disabled",
+    "gate_long_ns": 400,
+    "gate_short_ns": 100
   },
   "channel_overrides": {
-    "8": {
-      "dc_offset": 20.0
-    },
     "16": {
-      "dc_offset": 20.0
+      "trigger_threshold": 300
     }
   }
 }

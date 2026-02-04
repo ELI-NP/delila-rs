@@ -176,49 +176,199 @@ pub struct BoardConfig {
 /// All fields are optional to support sparse overrides.
 /// `None` means "use default" or "unchanged".
 /// String values match CAEN FELib parameter format exactly.
+///
+/// Fields match the frontend ChannelConfig interface in types.ts.
+/// `add_channel_params` maps these field names to firmware-specific DevTree parameter names.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct ChannelConfig {
+    // ---- Input ----
     /// Channel enable (e.g., "True", "False", "TRUE", "FALSE")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<String>,
-
-    /// DC offset as percentage (0-100%)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dc_offset: Option<f32>,
-
     /// Pulse polarity (e.g., "Positive", "Negative", "POLARITY_POSITIVE")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub polarity: Option<String>,
+    /// DC offset as percentage (0-100%)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dc_offset: Option<f32>,
+    /// VGA Gain in dB (PSD2, 0-29)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vga_gain: Option<u32>,
+    /// Baseline averaging mode (e.g., "Fixed", "Low", "BLINE_NSMEAN_1024")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_avg: Option<String>,
+    /// Fixed baseline value in ADC counts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_baseline: Option<u32>,
+    /// Record length in ns (PSD2 per-channel)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_length_ns: Option<u32>,
+    /// Pre-trigger in ns (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_trigger_ns: Option<u32>,
+    /// Pre-trigger in samples (PSD1/PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_trigger: Option<u32>,
+    /// Waveform downsampling factor (PSD2: "1","2","4","8")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wave_downsampling: Option<String>,
+    /// Input dynamic range (PSD1: "INDYN_2_0_VPP", "INDYN_0_5_VPP")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_dynamic: Option<String>,
+    /// Coarse gain (PHA1: "COARSE_GAIN_X1", "COARSE_GAIN_X4")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coarse_gain: Option<String>,
 
+    // ---- Trigger ----
+    /// Discriminator mode (PSD2: "LeadingEdge"/"CFD", PSD1: "DISCR_MODE_LED"/"DISCR_MODE_CFD")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discriminator_mode: Option<String>,
     /// Trigger threshold in ADC counts
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_threshold: Option<u32>,
-
-    /// Long gate length in nanoseconds (PSD)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gate_long_ns: Option<u32>,
-
-    /// Short gate length in nanoseconds (PSD)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gate_short_ns: Option<u32>,
-
-    /// Pre-gate length in nanoseconds (PSD1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gate_pre_ns: Option<u32>,
-
-    /// Event trigger source (e.g., "GlobalTriggerSource", "ChSelfTrigger")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_trigger_source: Option<String>,
-
-    /// Wave trigger source (e.g., "Disabled", "ChSelfTrigger")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wave_trigger_source: Option<String>,
-
-    /// CFD delay in nanoseconds
+    /// CFD delay in ns (PSD2)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cfd_delay_ns: Option<u32>,
+    /// CFD fraction (PSD2: "25","50","75","100")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cfd_fraction: Option<String>,
+    /// Trigger holdoff in ns (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_holdoff_ns: Option<u32>,
+    /// Trigger holdoff in samples (PSD1/PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_holdoff: Option<u32>,
+    /// Smoothing factor (PSD2: "1","2","4","8","16")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smoothing_factor: Option<String>,
+    /// Time filter smoothing (PSD2: "Enabled","Disabled")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_filter_smoothing: Option<String>,
+    /// Input smoothing (PSD1: "CFD_SMOOTH_EXP_*")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_smoothing: Option<String>,
+    /// Fast discriminator smoothing (PHA1: "RCCR2_SMTH_*")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast_discr_smoothing: Option<String>,
+    /// Input rise time in samples (PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_rise_time: Option<u32>,
+    /// Event trigger source (PSD2: "GlobalTriggerSource", "ChSelfTrigger", ...)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_trigger_source: Option<String>,
+    /// Wave trigger source (PSD2: "Disabled", "ChSelfTrigger", ...)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wave_trigger_source: Option<String>,
+    /// Self trigger enable (PSD1/PHA1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_trigger: Option<String>,
+    /// Global trigger generation (PSD1/PHA1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_trigger_gen: Option<String>,
+    /// Trigger output propagation (PSD1/PHA1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_out_propagate: Option<String>,
 
-    /// Additional channel parameters
+    // ---- Energy ----
+    /// Energy coarse gain (PSD2: "x1","x4",..., PSD1: "CHARGESENS_*")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_coarse_gain: Option<String>,
+    /// Long gate length in ns/samples (PSD)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate_long_ns: Option<u32>,
+    /// Short gate length in ns/samples (PSD)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate_short_ns: Option<u32>,
+    /// Pre-gate length in ns/samples (PSD)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate_pre_ns: Option<u32>,
+    /// Charge pedestal value (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_pedestal: Option<u32>,
+    /// Short charge pedestal value (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_charge_pedestal: Option<u32>,
+    /// Charge smoothing (PSD2: "Enabled","Disabled")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_smoothing: Option<String>,
+    /// Charge pedestal enable (PSD1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_pedestal_en: Option<String>,
+    /// Trapezoid rise time in samples (PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trap_rise_time: Option<u32>,
+    /// Trapezoid flat top in samples (PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trap_flat_top: Option<u32>,
+    /// Trapezoid pole-zero in samples (PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trap_pole_zero: Option<u32>,
+    /// Peaking time as percentage (PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peaking_time: Option<u32>,
+    /// N samples for peak mean (PHA1: "PEAK_NSMEAN_1",...)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_nsmean: Option<String>,
+    /// Peak holdoff in samples (PHA1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_holdoff: Option<u32>,
+    /// Energy fine gain (PHA1, 1.0-10.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_fine_gain: Option<f32>,
+
+    // ---- Coincidence ----
+    /// Channel trigger mask (PSD2, hex string)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ch_trigger_mask: Option<String>,
+    /// Coincidence mask (PSD2: "Disabled","Ch64Trigger",...)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coincidence_mask: Option<String>,
+    /// Anti-coincidence mask (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anti_coincidence_mask: Option<String>,
+    /// Coincidence window in ns (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coincidence_window_ns: Option<u32>,
+    /// Coincidence mode (PSD1/PHA1: "TRIGGER_MODE_NORMAL",...)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coincidence_mode: Option<String>,
+    /// Channel veto source (PSD2: "Disabled","BoardVeto",...)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ch_veto_source: Option<String>,
+    /// Channel veto width in ns (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ch_veto_width_ns: Option<u32>,
+    /// Event selector (PSD2: "All","PileUp","EnergySkim")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_selector: Option<String>,
+    /// Pileup rejection enable (PSD1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pileup_rejection: Option<String>,
+
+    // ---- Waveform ----
+    /// Wave saving mode (PSD2: "Always","OnRequest")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wave_saving: Option<String>,
+    /// Analog probe 0 (PSD2: "ADCInput","ADCInputBaseline","CFDFilter")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analog_probe_0: Option<String>,
+    /// Analog probe 1 (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analog_probe_1: Option<String>,
+    /// Digital probe 0 (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digital_probe_0: Option<String>,
+    /// Digital probe 1 (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digital_probe_1: Option<String>,
+    /// Digital probe 2 (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digital_probe_2: Option<String>,
+    /// Digital probe 3 (PSD2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digital_probe_3: Option<String>,
+
+    /// Additional channel parameters (for future extensibility)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -334,40 +484,81 @@ impl DigitizerConfig {
     pub fn get_channel_config(&self, channel: u8) -> ChannelConfig {
         let mut config = self.channel_defaults.clone();
 
-        if let Some(override_config) = self.channel_overrides.get(&channel) {
-            // Merge override into defaults
-            if override_config.enabled.is_some() {
-                config.enabled = override_config.enabled.clone();
+        if let Some(ov) = self.channel_overrides.get(&channel) {
+            // Merge override into defaults: override field wins if Some
+            macro_rules! merge_field {
+                ($field:ident) => {
+                    if ov.$field.is_some() {
+                        config.$field = ov.$field.clone();
+                    }
+                };
             }
-            if override_config.dc_offset.is_some() {
-                config.dc_offset = override_config.dc_offset;
-            }
-            if override_config.polarity.is_some() {
-                config.polarity = override_config.polarity.clone();
-            }
-            if override_config.trigger_threshold.is_some() {
-                config.trigger_threshold = override_config.trigger_threshold;
-            }
-            if override_config.gate_long_ns.is_some() {
-                config.gate_long_ns = override_config.gate_long_ns;
-            }
-            if override_config.gate_short_ns.is_some() {
-                config.gate_short_ns = override_config.gate_short_ns;
-            }
-            if override_config.gate_pre_ns.is_some() {
-                config.gate_pre_ns = override_config.gate_pre_ns;
-            }
-            if override_config.event_trigger_source.is_some() {
-                config.event_trigger_source = override_config.event_trigger_source.clone();
-            }
-            if override_config.wave_trigger_source.is_some() {
-                config.wave_trigger_source = override_config.wave_trigger_source.clone();
-            }
-            if override_config.cfd_delay_ns.is_some() {
-                config.cfd_delay_ns = override_config.cfd_delay_ns;
-            }
-            // Merge extra parameters
-            for (k, v) in &override_config.extra {
+            // Input
+            merge_field!(enabled);
+            merge_field!(polarity);
+            merge_field!(dc_offset);
+            merge_field!(vga_gain);
+            merge_field!(baseline_avg);
+            merge_field!(fixed_baseline);
+            merge_field!(record_length_ns);
+            merge_field!(pre_trigger_ns);
+            merge_field!(pre_trigger);
+            merge_field!(wave_downsampling);
+            merge_field!(input_dynamic);
+            merge_field!(coarse_gain);
+            // Trigger
+            merge_field!(discriminator_mode);
+            merge_field!(trigger_threshold);
+            merge_field!(cfd_delay_ns);
+            merge_field!(cfd_fraction);
+            merge_field!(trigger_holdoff_ns);
+            merge_field!(trigger_holdoff);
+            merge_field!(smoothing_factor);
+            merge_field!(time_filter_smoothing);
+            merge_field!(input_smoothing);
+            merge_field!(fast_discr_smoothing);
+            merge_field!(input_rise_time);
+            merge_field!(event_trigger_source);
+            merge_field!(wave_trigger_source);
+            merge_field!(self_trigger);
+            merge_field!(global_trigger_gen);
+            merge_field!(trigger_out_propagate);
+            // Energy
+            merge_field!(energy_coarse_gain);
+            merge_field!(gate_long_ns);
+            merge_field!(gate_short_ns);
+            merge_field!(gate_pre_ns);
+            merge_field!(charge_pedestal);
+            merge_field!(short_charge_pedestal);
+            merge_field!(charge_smoothing);
+            merge_field!(charge_pedestal_en);
+            merge_field!(trap_rise_time);
+            merge_field!(trap_flat_top);
+            merge_field!(trap_pole_zero);
+            merge_field!(peaking_time);
+            merge_field!(peak_nsmean);
+            merge_field!(peak_holdoff);
+            merge_field!(energy_fine_gain);
+            // Coincidence
+            merge_field!(ch_trigger_mask);
+            merge_field!(coincidence_mask);
+            merge_field!(anti_coincidence_mask);
+            merge_field!(coincidence_window_ns);
+            merge_field!(coincidence_mode);
+            merge_field!(ch_veto_source);
+            merge_field!(ch_veto_width_ns);
+            merge_field!(event_selector);
+            merge_field!(pileup_rejection);
+            // Waveform
+            merge_field!(wave_saving);
+            merge_field!(analog_probe_0);
+            merge_field!(analog_probe_1);
+            merge_field!(digital_probe_0);
+            merge_field!(digital_probe_1);
+            merge_field!(digital_probe_2);
+            merge_field!(digital_probe_3);
+            // Extra
+            for (k, v) in &ov.extra {
                 config.extra.insert(k.clone(), v.clone());
             }
         }
@@ -394,6 +585,113 @@ impl DigitizerConfig {
         self.add_channel_overrides(&mut params);
 
         params
+    }
+
+    /// Generate only SetInRun CAEN parameters (safe to apply while Running)
+    ///
+    /// Filters the full parameter list to only include parameters that
+    /// the hardware supports changing during acquisition.
+    pub fn to_caen_parameters_set_in_run(&self) -> Vec<CaenParameter> {
+        let all_params = self.to_caen_parameters();
+        let set_in_run = self.set_in_run_param_names();
+        all_params
+            .into_iter()
+            .filter(|p| {
+                // Extract the parameter name from the path (last segment after '/')
+                let param_name = p.path.rsplit('/').next().unwrap_or("");
+                set_in_run.contains(&param_name.to_lowercase().as_str())
+            })
+            .collect()
+    }
+
+    /// Get the set of DevTree parameter names (lowercase) that support SetInRun
+    fn set_in_run_param_names(&self) -> std::collections::HashSet<&'static str> {
+        use std::collections::HashSet;
+        match self.firmware {
+            FirmwareType::PSD2 | FirmwareType::AMax => HashSet::from([
+                // Board
+                "testpulseperiod",
+                "testpulsewidth",
+                "syncoutmode",
+                "boardvetosource",
+                "boardvetopolarity",
+                "boardvetowidth",
+                // Channel
+                "chenable",
+                "chpretriggert",
+                "absolutebaseline",
+                "dcoffset",
+                "chgain",
+                "triggerthr",
+                "smoothingfactor",
+                "chargesmoothing",
+                "timefiltersmoothing",
+                "longchargeintegratorpedestal",
+                "shortchargeintegratorpedestal",
+                "channelvetosource",
+                "adcvetowidth",
+                "channelstriggermask",
+                "coincidencemask",
+                "anticoincidencemask",
+                "coincidencelengtht",
+                "eventselector",
+                "eventtriggersource",
+                "wavetriggersource",
+                "wavesaving",
+                "waveanalogprobe0",
+                "waveanalogprobe1",
+                "wavedigitalprobe0",
+                "wavedigitalprobe1",
+                "wavedigitalprobe2",
+                "wavedigitalprobe3",
+            ]),
+            FirmwareType::PSD1 => HashSet::from([
+                // Board
+                "dt_ext_clock",
+                "start_delay",
+                "coinc_trgout",
+                "iolevel",
+                // Channel
+                "ch_enabled",
+                "ch_polarity",
+                "ch_dcoffset",
+                "ch_indyn",
+                "ch_bline_fixed",
+                "ch_discr_mode",
+                "ch_threshold",
+                "ch_cfd_delay",
+                "ch_cfd_fraction",
+                "ch_trg_holdoff",
+                "ch_self_trg_enable",
+                "ch_trg_global_gen",
+                "ch_out_propagate",
+                "ch_energy_cgain",
+                "ch_gate",
+                "ch_gateshort",
+                "ch_veto_src",
+                "ch_pur_en",
+            ]),
+            FirmwareType::PHA1 => HashSet::from([
+                // Board
+                "dt_ext_clock",
+                "start_delay",
+                "coinc_trgout",
+                "iolevel",
+                // Channel
+                "ch_enabled",
+                "ch_polarity",
+                "ch_dcoffset",
+                "ch_cgain",
+                "ch_threshold",
+                "ch_trg_holdoff",
+                "ch_self_trg_enable",
+                "ch_trg_global_gen",
+                "ch_out_propagate",
+                "ch_trap_ftd",
+                "ch_fgain",
+                "ch_veto_src",
+            ]),
+        }
     }
 
     fn add_board_parameters(&self, params: &mut Vec<CaenParameter>) {
@@ -533,105 +831,313 @@ impl DigitizerConfig {
         ch_path: &str,
         config: &ChannelConfig,
     ) {
-        // Parameter names differ between PSD1 and PSD2/PHA1/AMax
-        let (enable_name, offset_name, polarity_name, threshold_name) = match self.firmware {
-            FirmwareType::PSD1 => ("ch_enabled", "ch_dcoffset", "ch_polarity", "ch_threshold"),
-            FirmwareType::PSD2 | FirmwareType::PHA1 | FirmwareType::AMax => {
-                ("ChEnable", "DCOffset", "PulsePolarity", "TriggerThr")
+        // Helpers: push string/numeric parameters with DevTree name
+        macro_rules! push_str {
+            ($devtree:expr, $value:expr) => {
+                params.push(CaenParameter {
+                    path: format!("{}/{}", ch_path, $devtree),
+                    value: $value.to_string(),
+                });
+            };
+        }
+        macro_rules! push_num {
+            ($devtree:expr, $value:expr) => {
+                params.push(CaenParameter {
+                    path: format!("{}/{}", ch_path, $devtree),
+                    value: $value.to_string(),
+                });
+            };
+        }
+
+        match self.firmware {
+            FirmwareType::PSD2 | FirmwareType::AMax => {
+                // ---- Input ----
+                if let Some(ref v) = config.enabled {
+                    push_str!("ChEnable", v);
+                }
+                if let Some(ref v) = config.polarity {
+                    push_str!("PulsePolarity", v);
+                }
+                if let Some(v) = config.dc_offset {
+                    push_num!("DCOffset", v);
+                }
+                if let Some(v) = config.vga_gain {
+                    push_num!("ChGain", v);
+                }
+                if let Some(ref v) = config.baseline_avg {
+                    push_str!("ADCInputBaselineAvg", v);
+                }
+                if let Some(v) = config.fixed_baseline {
+                    push_num!("AbsoluteBaseline", v);
+                }
+                if let Some(v) = config.record_length_ns {
+                    push_num!("ChRecordLengthT", v);
+                }
+                if let Some(v) = config.pre_trigger_ns {
+                    push_num!("ChPreTriggerT", v);
+                }
+                if let Some(ref v) = config.wave_downsampling {
+                    push_str!("WaveDownSamplingFactor", v);
+                }
+                // ---- Trigger ----
+                if let Some(ref v) = config.discriminator_mode {
+                    push_str!("TriggerFilterSelection", v);
+                }
+                if let Some(v) = config.trigger_threshold {
+                    push_num!("TriggerThr", v);
+                }
+                if let Some(v) = config.cfd_delay_ns {
+                    push_num!("CFDDelayT", v);
+                }
+                if let Some(ref v) = config.cfd_fraction {
+                    push_str!("CFDFraction", v);
+                }
+                if let Some(v) = config.trigger_holdoff_ns {
+                    push_num!("TimeFilterRetriggerGuardT", v);
+                }
+                if let Some(ref v) = config.smoothing_factor {
+                    push_str!("SmoothingFactor", v);
+                }
+                if let Some(ref v) = config.time_filter_smoothing {
+                    push_str!("TimeFilterSmoothing", v);
+                }
+                if let Some(ref v) = config.event_trigger_source {
+                    push_str!("EventTriggerSource", v);
+                }
+                if let Some(ref v) = config.wave_trigger_source {
+                    push_str!("WaveTriggerSource", v);
+                }
+                // ---- Energy ----
+                if let Some(ref v) = config.energy_coarse_gain {
+                    push_str!("EnergyGain", v);
+                }
+                if let Some(v) = config.gate_long_ns {
+                    push_num!("GateLongLengthT", v);
+                }
+                if let Some(v) = config.gate_short_ns {
+                    push_num!("GateShortLengthT", v);
+                }
+                if let Some(v) = config.gate_pre_ns {
+                    push_num!("GateOffsetT", v);
+                }
+                if let Some(v) = config.charge_pedestal {
+                    push_num!("LongChargeIntegratorPedestal", v);
+                }
+                if let Some(v) = config.short_charge_pedestal {
+                    push_num!("ShortChargeIntegratorPedestal", v);
+                }
+                if let Some(ref v) = config.charge_smoothing {
+                    push_str!("ChargeSmoothing", v);
+                }
+                // ---- Coincidence ----
+                if let Some(ref v) = config.ch_trigger_mask {
+                    push_str!("ChannelsTriggerMask", v);
+                }
+                if let Some(ref v) = config.coincidence_mask {
+                    push_str!("CoincidenceMask", v);
+                }
+                if let Some(ref v) = config.anti_coincidence_mask {
+                    push_str!("AntiCoincidenceMask", v);
+                }
+                if let Some(v) = config.coincidence_window_ns {
+                    push_num!("CoincidenceLengthT", v);
+                }
+                if let Some(ref v) = config.ch_veto_source {
+                    push_str!("ChannelVetoSource", v);
+                }
+                if let Some(v) = config.ch_veto_width_ns {
+                    push_num!("ADCVetoWidth", v);
+                }
+                if let Some(ref v) = config.event_selector {
+                    push_str!("EventSelector", v);
+                }
+                // ---- Waveform ----
+                if let Some(ref v) = config.wave_saving {
+                    push_str!("WaveSaving", v);
+                }
+                if let Some(ref v) = config.analog_probe_0 {
+                    push_str!("WaveAnalogProbe0", v);
+                }
+                if let Some(ref v) = config.analog_probe_1 {
+                    push_str!("WaveAnalogProbe1", v);
+                }
+                if let Some(ref v) = config.digital_probe_0 {
+                    push_str!("WaveDigitalProbe0", v);
+                }
+                if let Some(ref v) = config.digital_probe_1 {
+                    push_str!("WaveDigitalProbe1", v);
+                }
+                if let Some(ref v) = config.digital_probe_2 {
+                    push_str!("WaveDigitalProbe2", v);
+                }
+                if let Some(ref v) = config.digital_probe_3 {
+                    push_str!("WaveDigitalProbe3", v);
+                }
             }
-        };
-
-        if let Some(ref v) = config.enabled {
-            params.push(CaenParameter {
-                path: format!("{}/{}", ch_path, enable_name),
-                value: v.clone(),
-            });
+            FirmwareType::PSD1 => {
+                // ---- Input ----
+                if let Some(ref v) = config.enabled {
+                    push_str!("ch_enabled", v);
+                }
+                if let Some(ref v) = config.polarity {
+                    // PSD1 uses register-style enums
+                    let mapped = match v.to_lowercase().as_str() {
+                        "negative" => "POLARITY_NEGATIVE",
+                        "positive" => "POLARITY_POSITIVE",
+                        _ => v.as_str(),
+                    };
+                    push_str!("ch_polarity", mapped);
+                }
+                if let Some(v) = config.dc_offset {
+                    push_num!("ch_dcoffset", v);
+                }
+                if let Some(ref v) = config.input_dynamic {
+                    push_str!("ch_indyn", v);
+                }
+                if let Some(ref v) = config.baseline_avg {
+                    push_str!("ch_bline_nsmean", v);
+                }
+                if let Some(v) = config.fixed_baseline {
+                    push_num!("ch_bline_fixed", v);
+                }
+                if let Some(v) = config.pre_trigger {
+                    push_num!("ch_pretrg", v);
+                }
+                // ---- Trigger ----
+                if let Some(ref v) = config.discriminator_mode {
+                    push_str!("ch_discr_mode", v);
+                }
+                if let Some(v) = config.trigger_threshold {
+                    push_num!("ch_threshold", v);
+                }
+                if let Some(v) = config.cfd_delay_ns {
+                    push_num!("ch_cfd_delay", v);
+                }
+                if let Some(ref v) = config.cfd_fraction {
+                    push_str!("ch_cfd_fraction", v);
+                }
+                if let Some(ref v) = config.input_smoothing {
+                    push_str!("ch_cfd_smoothexp", v);
+                }
+                if let Some(v) = config.trigger_holdoff {
+                    push_num!("ch_trg_holdoff", v);
+                }
+                if let Some(ref v) = config.self_trigger {
+                    push_str!("ch_self_trg_enable", v);
+                }
+                if let Some(ref v) = config.global_trigger_gen {
+                    push_str!("ch_trg_global_gen", v);
+                }
+                if let Some(ref v) = config.trigger_out_propagate {
+                    push_str!("ch_out_propagate", v);
+                }
+                // ---- Energy ----
+                if let Some(ref v) = config.energy_coarse_gain {
+                    push_str!("ch_energy_cgain", v);
+                }
+                if let Some(v) = config.gate_long_ns {
+                    push_num!("ch_gate", v);
+                }
+                if let Some(v) = config.gate_short_ns {
+                    push_num!("ch_gateshort", v);
+                }
+                if let Some(v) = config.gate_pre_ns {
+                    push_num!("ch_gatepre", v);
+                }
+                if let Some(ref v) = config.charge_pedestal_en {
+                    push_str!("ch_pedestal_en", v);
+                }
+                // ---- Coincidence ----
+                if let Some(ref v) = config.coincidence_mode {
+                    push_str!("ch_trg_mode", v);
+                }
+                if let Some(ref v) = config.ch_veto_source {
+                    push_str!("ch_veto_src", v);
+                }
+                if let Some(ref v) = config.pileup_rejection {
+                    push_str!("ch_pur_en", v);
+                }
+            }
+            FirmwareType::PHA1 => {
+                // ---- Input ----
+                if let Some(ref v) = config.enabled {
+                    push_str!("ch_enabled", v);
+                }
+                if let Some(ref v) = config.polarity {
+                    let mapped = match v.to_lowercase().as_str() {
+                        "negative" => "POLARITY_NEGATIVE",
+                        "positive" => "POLARITY_POSITIVE",
+                        _ => v.as_str(),
+                    };
+                    push_str!("ch_polarity", mapped);
+                }
+                if let Some(v) = config.dc_offset {
+                    push_num!("ch_dcoffset", v);
+                }
+                if let Some(ref v) = config.coarse_gain {
+                    push_str!("ch_cgain", v);
+                }
+                if let Some(ref v) = config.baseline_avg {
+                    push_str!("ch_bline_nsmean", v);
+                }
+                if let Some(v) = config.pre_trigger {
+                    push_num!("ch_pretrg", v);
+                }
+                // ---- Trigger ----
+                if let Some(v) = config.trigger_threshold {
+                    push_num!("ch_threshold", v);
+                }
+                if let Some(v) = config.trigger_holdoff {
+                    push_num!("ch_trg_holdoff", v);
+                }
+                if let Some(ref v) = config.fast_discr_smoothing {
+                    push_str!("ch_rccr2_smooth", v);
+                }
+                if let Some(v) = config.input_rise_time {
+                    push_num!("ch_rccr2_rise", v);
+                }
+                if let Some(ref v) = config.self_trigger {
+                    push_str!("ch_self_trg_enable", v);
+                }
+                if let Some(ref v) = config.global_trigger_gen {
+                    push_str!("ch_trg_global_gen", v);
+                }
+                if let Some(ref v) = config.trigger_out_propagate {
+                    push_str!("ch_out_propagate", v);
+                }
+                // ---- Energy ----
+                if let Some(v) = config.trap_rise_time {
+                    push_num!("ch_trap_trise", v);
+                }
+                if let Some(v) = config.trap_flat_top {
+                    push_num!("ch_trap_tflat", v);
+                }
+                if let Some(v) = config.trap_pole_zero {
+                    push_num!("ch_tdecay", v);
+                }
+                if let Some(v) = config.peaking_time {
+                    push_num!("ch_trap_ftd", v);
+                }
+                if let Some(ref v) = config.peak_nsmean {
+                    push_str!("ch_peak_nsmean", v);
+                }
+                if let Some(v) = config.peak_holdoff {
+                    push_num!("ch_peak_holdoff", v);
+                }
+                if let Some(v) = config.energy_fine_gain {
+                    push_num!("ch_fgain", v);
+                }
+                // ---- Coincidence ----
+                if let Some(ref v) = config.coincidence_mode {
+                    push_str!("ch_trg_mode", v);
+                }
+                if let Some(ref v) = config.ch_veto_source {
+                    push_str!("ch_veto_src", v);
+                }
+            }
         }
 
-        if let Some(v) = config.dc_offset {
-            params.push(CaenParameter {
-                path: format!("{}/{}", ch_path, offset_name),
-                value: v.to_string(),
-            });
-        }
-
-        if let Some(ref v) = config.polarity {
-            // PSD1 uses register-style enum: POLARITY_NEGATIVE / POLARITY_POSITIVE
-            // PSD2 uses human-friendly: Negative / Positive
-            let polarity_value = match self.firmware {
-                FirmwareType::PSD1 => match v.to_lowercase().as_str() {
-                    "negative" => "POLARITY_NEGATIVE".to_string(),
-                    "positive" => "POLARITY_POSITIVE".to_string(),
-                    _ => v.clone(), // pass through if already register-style
-                },
-                _ => v.clone(),
-            };
-            params.push(CaenParameter {
-                path: format!("{}/{}", ch_path, polarity_name),
-                value: polarity_value,
-            });
-        }
-
-        if let Some(v) = config.trigger_threshold {
-            params.push(CaenParameter {
-                path: format!("{}/{}", ch_path, threshold_name),
-                value: v.to_string(),
-            });
-        }
-
-        // Gate parameters (PSD-specific)
-        if let Some(v) = config.gate_long_ns {
-            let param_name = match self.firmware {
-                FirmwareType::PSD1 => "ch_gate",
-                _ => "GateLongLengthT",
-            };
-            params.push(CaenParameter {
-                path: format!("{}/{}", ch_path, param_name),
-                value: v.to_string(),
-            });
-        }
-
-        if let Some(v) = config.gate_short_ns {
-            let param_name = match self.firmware {
-                FirmwareType::PSD1 => "ch_gateshort",
-                _ => "GateShortLengthT",
-            };
-            params.push(CaenParameter {
-                path: format!("{}/{}", ch_path, param_name),
-                value: v.to_string(),
-            });
-        }
-
-        if let Some(v) = config.gate_pre_ns {
-            params.push(CaenParameter {
-                path: format!("{}/ch_gatepre", ch_path),
-                value: v.to_string(),
-            });
-        }
-
-        // Trigger sources
-        if let Some(ref v) = config.event_trigger_source {
-            params.push(CaenParameter {
-                path: format!("{}/EventTriggerSource", ch_path),
-                value: v.clone(),
-            });
-        }
-
-        if let Some(ref v) = config.wave_trigger_source {
-            params.push(CaenParameter {
-                path: format!("{}/WaveTriggerSource", ch_path),
-                value: v.clone(),
-            });
-        }
-
-        if let Some(v) = config.cfd_delay_ns {
-            params.push(CaenParameter {
-                path: format!("{}/ch_cfd_delay", ch_path),
-                value: v.to_string(),
-            });
-        }
-
-        // Extra parameters
+        // Extra parameters (for any remaining/future params)
         for (key, value) in &config.extra {
             let path = if key.starts_with('/') {
                 key.clone()

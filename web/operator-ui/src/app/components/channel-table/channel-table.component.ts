@@ -25,6 +25,8 @@ export interface ChannelParamDef {
   min?: number;
   /** Max value for number type */
   max?: number;
+  /** If true, parameter can be changed while DAQ is Running */
+  setInRun?: boolean;
 }
 
 /**
@@ -81,7 +83,7 @@ export interface ChannelValueChange {
         </thead>
         <tbody>
           @for (param of params(); track param.key) {
-            <tr>
+            <tr [class.disabled-row]="isDisabled(param.key)">
               <td class="sticky-col param-cell">
                 {{ param.label }}
                 @if (param.unit) {
@@ -97,6 +99,7 @@ export interface ChannelValueChange {
                       [value]="getDefault(param.key)"
                       [min]="param.min"
                       [max]="param.max"
+                      [disabled]="isDisabled(param.key)"
                       (change)="onDefaultInput(param.key, $event)"
                     />
                   }
@@ -104,6 +107,7 @@ export interface ChannelValueChange {
                     <select
                       class="cell-select"
                       [ngModel]="getDefault(param.key)"
+                      [disabled]="isDisabled(param.key)"
                       (ngModelChange)="defaultChange.emit({ key: param.key, value: $event })"
                     >
                       @for (opt of param.options ?? []; track opt) {
@@ -115,6 +119,7 @@ export interface ChannelValueChange {
                     <select
                       class="cell-select"
                       [ngModel]="getDefault(param.key) ?? 'True'"
+                      [disabled]="isDisabled(param.key)"
                       (ngModelChange)="defaultChange.emit({ key: param.key, value: $event })"
                     >
                       <option value="True">ON</option>
@@ -136,6 +141,7 @@ export interface ChannelValueChange {
                         [value]="getChannel(ch, param.key)"
                         [min]="param.min"
                         [max]="param.max"
+                        [disabled]="isDisabled(param.key)"
                         (change)="onChannelInput(ch, param.key, $event)"
                       />
                     }
@@ -143,6 +149,7 @@ export interface ChannelValueChange {
                       <select
                         class="cell-select"
                         [ngModel]="getChannel(ch, param.key)"
+                        [disabled]="isDisabled(param.key)"
                         (ngModelChange)="channelChange.emit({ channel: ch, key: param.key, value: $event })"
                       >
                         @for (opt of param.options ?? []; track opt) {
@@ -154,6 +161,7 @@ export interface ChannelValueChange {
                       <select
                         class="cell-select"
                         [ngModel]="getChannel(ch, param.key) ?? 'True'"
+                        [disabled]="isDisabled(param.key)"
                         (ngModelChange)="channelChange.emit({ channel: ch, key: param.key, value: $event })"
                       >
                         <option value="True">ON</option>
@@ -309,6 +317,16 @@ export interface ChannelValueChange {
     tbody tr:hover td.ch-cell.override {
       background-color: #ffe0b2;
     }
+
+    /* Disabled row (non-SetInRun params during Running) */
+    tr.disabled-row td {
+      opacity: 0.45;
+    }
+
+    tr.disabled-row .cell-input,
+    tr.disabled-row .cell-select {
+      cursor: not-allowed;
+    }
   `,
 })
 export class ChannelTableComponent {
@@ -320,6 +338,8 @@ export class ChannelTableComponent {
   readonly defaultValues = input.required<Record<string, unknown>>();
   /** Per-channel values — array of length numChannels, each keyed by param.key */
   readonly channelValues = input.required<Record<string, unknown>[]>();
+  /** Keys of parameters that should be disabled (e.g., non-SetInRun params during Running) */
+  readonly disabledKeys = input<string[]>([]);
 
   /** Emitted when a value in the "All" column changes */
   readonly defaultChange = output<DefaultValueChange>();
@@ -340,6 +360,11 @@ export class ChannelTableComponent {
   getChannel(ch: number, key: string): unknown {
     const values = this.channelValues();
     return values[ch]?.[key];
+  }
+
+  /** Check if a parameter is disabled */
+  isDisabled(key: string): boolean {
+    return this.disabledKeys().includes(key);
   }
 
   /** Check if a channel value differs from the All column */

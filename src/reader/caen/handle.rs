@@ -690,6 +690,59 @@ impl CaenHandle {
 
         Ok(applied)
     }
+
+    /// Apply only SetInRun parameters (safe to call while Running)
+    ///
+    /// Filters parameters to only those the hardware supports changing
+    /// during data acquisition. Non-SetInRun parameters are silently skipped.
+    pub fn apply_config_running(
+        &self,
+        config: &crate::config::digitizer::DigitizerConfig,
+    ) -> Result<usize, CaenError> {
+        use tracing::{debug, info, warn};
+
+        let params = config.to_caen_parameters_set_in_run();
+        info!(
+            "Applying {} SetInRun parameters to digitizer (running)",
+            params.len()
+        );
+
+        let mut applied = 0;
+        let mut errors = Vec::new();
+
+        for param in &params {
+            match self.set_value(&param.path, &param.value) {
+                Ok(()) => {
+                    debug!(path = %param.path, value = %param.value, "SetInRun parameter set");
+                    applied += 1;
+                }
+                Err(e) => {
+                    warn!(
+                        path = %param.path,
+                        value = %param.value,
+                        error = %e,
+                        "Failed to set SetInRun parameter"
+                    );
+                    errors.push((param.path.clone(), e));
+                }
+            }
+        }
+
+        info!(
+            applied,
+            errors = errors.len(),
+            "SetInRun configuration applied"
+        );
+
+        if !errors.is_empty() {
+            warn!(
+                "Some SetInRun parameters failed: {:?}",
+                errors.iter().map(|(p, _)| p).collect::<Vec<_>>()
+            );
+        }
+
+        Ok(applied)
+    }
 }
 
 impl EndpointHandle {

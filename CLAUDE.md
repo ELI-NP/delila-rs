@@ -50,6 +50,10 @@ Web UIs: Swagger http://localhost:8080/swagger-ui/ | Monitor http://localhost:80
 - `docs/component_architecture.md` - コンポーネントアーキテクチャ詳細
 - `docs/architecture/config_and_deployment.md` - 設定管理とデプロイメント
 - `docs/control_system_design.md` - コントロールシステム設計
+- `docs/digitizer_system_spec.md` - デジタイザシステム仕様（DevTree, パラメーター等）
+- `docs/compass_devtree_mapping.md` - CoMPASS↔DevTreeパラメーター対応表（全FW確定済）
+- `docs/devtree_examples/` - 実機から取得したDevTree JSON（パラメーター名の正確なリファレンス）
+- `legacy/CoMPASS/` - CoMPASS設定画面スクリーンショット（UI設計のリファレンス）
 
 ## Benchmark Documentation
 ベンチマーク結果は関連TODOファイルまたは設計ドキュメントに、測定日・条件・結果テーブル・結論を記録する。

@@ -77,7 +77,7 @@ impl ComponentState {
             Idle => &["Configure", "Detect", "ApplyDigitizerConfig", "GetStatus"],
             Configured => &["Arm", "Reset", "ApplyDigitizerConfig", "GetStatus"],
             Armed => &["Start", "Reset", "GetStatus"],
-            Running => &["Stop", "GetStatus"],
+            Running => &["Stop", "GetStatus", "ApplyDigitizerConfig"],
             Error => &["Reset", "GetStatus"],
         }
     }
@@ -149,8 +149,9 @@ pub enum Command {
     /// Temporarily connects to digitizer, reads DeviceInfo, and disconnects.
     /// Does not change state.
     Detect,
-    /// Apply digitizer configuration to hardware (Reader-only, Idle/Configured state)
-    /// Writes parameters to the digitizer via FELib. Does not change state.
+    /// Apply digitizer configuration to hardware (Reader-only)
+    /// Valid from Idle, Configured, or Running state. Does not change state.
+    /// In Running state, only SetInRun parameters are applied.
     ApplyDigitizerConfig(Box<crate::config::digitizer::DigitizerConfig>),
 }
 
@@ -432,6 +433,7 @@ mod tests {
         assert!(!Armed.valid_commands().contains(&"Configure"));
 
         assert!(Running.valid_commands().contains(&"Stop"));
+        assert!(Running.valid_commands().contains(&"ApplyDigitizerConfig"));
         assert!(!Running.valid_commands().contains(&"Start"));
 
         assert!(Error.valid_commands().contains(&"Reset"));

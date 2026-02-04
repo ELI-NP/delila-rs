@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-03
+**Updated:** 2026-02-04
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -11,7 +11,8 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **1** | [19_settings_ui.md](19_settings_ui.md) | **🔄 実機検証中** | Phase 6: デジタイザ設定 UI |
+| **1** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2: カテゴリ再編 + SetInRun (Phase 1-4) |
+| - | [19_settings_ui.md](19_settings_ui.md) | **✅ 完了** | Phase 6: デジタイザ設定 UI |
 | **2** | [22_amax_decoder_implementation.md](22_amax_decoder_implementation.md) | **🔄 実装中** | AMax カスタムファームウェア デコーダ |
 | **3** | [25_apply_digitizer_via_zmq.md](25_apply_digitizer_via_zmq.md) | **📋 計画中** | Apply Digitizer Config via ZMQ |
 | **4** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter (Counter/Flag/Accept) |
@@ -19,16 +20,11 @@ Claudeセッション開始時に必ず読み込まれます。
 
 ---
 
-## Phase 6 — デジタイザ設定 UI — 🔄 実機検証中
+## Settings UI v2: カテゴリ再編 + SetInRun — ✅ 完了
 
-→ `TODO/19_settings_ui.md`
+→ `TODO/27_settings_ui_v2.md`
 
-**状態:** 実機 VX2730 (172.18.4.57) で検証中。バックエンド修正完了、UI 動作確認中。
-
-**残タスク:**
-- [ ] Angular UI でのタブ表示確認 (Board / Frequent / Advanced)
-- [ ] Apply → Configure E2E テスト (UI → API → Reader → FELib)
-- [ ] Save → JSON ファイル書き出し確認
+Phase 1-4 完了。6カテゴリUI再編、全パラメーターDevTreeマッピング、SetInRun対応 (状態マシン + Reader + UI disabled制御) 実装済み。Phase 5 (実機結合テスト) は次回セッションで実施。
 
 ---
 

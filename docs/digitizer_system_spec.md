@@ -689,9 +689,21 @@ Path: `/cmd/<CommandName>`
 
 ---
 
-## Appendix E: DevTree Example (VX2730 PSD2)
+## Appendix E: DevTree Reference Files
 
-保存場所: `docs/devtree_examples/vx2730_psd2_v1.0.57.json`
+実機から取得したDevTree JSONを保存。パラメーター名・型・範囲・選択肢の正確なリファレンスとして使用。
+
+| File | Model | Firmware | Serial | 取得日 |
+|------|-------|----------|--------|--------|
+| `docs/devtree_examples/vx2730_psd2_sn52622.json` | VX2730 | DPP_PSD (1.0.57) | 52622 | 2026-02-04 |
+| `docs/devtree_examples/dt5730b_psd1_sn990.json` | DT5730B | DPP_PSD (136.22) | 990 | 2026-01 |
+| `docs/devtree_examples/dt5730b_pha1_sn990.json` | DT5730B | DPP_PHA (139.10) | 990 | 2026-01 |
+
+**取得方法:**
+```bash
+cargo run --bin caen_info -- dig2://172.18.4.56 --devtree   # PSD2
+# PSD1/PHA1: dig1:// スキーム + USB接続
+```
 
 ## Appendix B: Master/Slave Wiring Diagram
 

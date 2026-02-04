@@ -109,6 +109,16 @@ pub trait CommandHandlerExt {
     ) -> Result<usize, String> {
         Err("ApplyDigitizerConfig not supported by this component".to_string())
     }
+
+    /// Called when ApplyDigitizerConfig command is received while Running.
+    /// Only SetInRun parameters are applied to hardware.
+    /// Returns the number of parameters successfully applied.
+    fn on_apply_digitizer_config_running(
+        &mut self,
+        _config: &crate::config::digitizer::DigitizerConfig,
+    ) -> Result<usize, String> {
+        Err("ApplyDigitizerConfig (running) not supported by this component".to_string())
+    }
 }
 
 /// Handle a command using the 5-state machine logic
@@ -323,35 +333,64 @@ pub fn handle_command<E: CommandHandlerExt>(
         }
 
         Command::ApplyDigitizerConfig(ref config) => {
-            // Only valid from Idle or Configured state (not Running/Armed)
-            if current != ComponentState::Idle && current != ComponentState::Configured {
-                return CommandResponse::error(
-                    current,
-                    format!(
-                        "ApplyDigitizerConfig only available from Idle/Configured state, currently {}",
-                        current
-                    ),
-                );
-            }
-
-            if let Some(ref mut e) = ext {
-                match e.on_apply_digitizer_config(config) {
-                    Ok(count) => {
-                        info!(
-                            component = component_name,
-                            params_applied = count,
-                            "Digitizer config applied to hardware"
-                        );
-                        CommandResponse::success(current, "Digitizer config applied to hardware")
-                            .with_data(serde_json::json!({"params_applied": count}))
+            match current {
+                ComponentState::Idle | ComponentState::Configured => {
+                    // Full parameter apply
+                    if let Some(ref mut e) = ext {
+                        match e.on_apply_digitizer_config(config) {
+                            Ok(count) => {
+                                info!(
+                                    component = component_name,
+                                    params_applied = count,
+                                    "Digitizer config applied to hardware"
+                                );
+                                CommandResponse::success(
+                                    current,
+                                    "Digitizer config applied to hardware",
+                                )
+                                .with_data(serde_json::json!({"params_applied": count}))
+                            }
+                            Err(msg) => CommandResponse::error(current, msg),
+                        }
+                    } else {
+                        CommandResponse::error(
+                            current,
+                            "ApplyDigitizerConfig not supported by this component",
+                        )
                     }
-                    Err(msg) => CommandResponse::error(current, msg),
                 }
-            } else {
-                CommandResponse::error(
+                ComponentState::Running => {
+                    // SetInRun parameters only
+                    if let Some(ref mut e) = ext {
+                        match e.on_apply_digitizer_config_running(config) {
+                            Ok(count) => {
+                                info!(
+                                    component = component_name,
+                                    params_applied = count,
+                                    "SetInRun params applied while running"
+                                );
+                                CommandResponse::success(
+                                    current,
+                                    format!(
+                                        "SetInRun parameters applied ({} params)",
+                                        count
+                                    ),
+                                )
+                                .with_data(serde_json::json!({"params_applied": count, "set_in_run": true}))
+                            }
+                            Err(msg) => CommandResponse::error(current, msg),
+                        }
+                    } else {
+                        CommandResponse::error(
+                            current,
+                            "ApplyDigitizerConfig not supported by this component",
+                        )
+                    }
+                }
+                _ => CommandResponse::error(
                     current,
-                    "ApplyDigitizerConfig not supported by this component",
-                )
+                    format!("ApplyDigitizerConfig not available from {} state", current),
+                ),
             }
         }
     }

@@ -144,25 +144,24 @@ pub(super) async fn detect_digitizers(
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    let (config_found, mut config) =
-                        if let (Some(ref repo), Some(ref serial)) =
-                            (&state.digitizer_repo, &serial)
-                        {
-                            match repo.get_config_by_serial(serial).await {
-                                Ok(Some(doc)) => (true, Some(doc.config)),
-                                Ok(None) => (false, None),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to lookup config by serial {}: {}",
-                                        serial,
-                                        e
-                                    );
-                                    (false, None)
-                                }
+                    let (config_found, mut config) = if let (Some(ref repo), Some(ref serial)) =
+                        (&state.digitizer_repo, &serial)
+                    {
+                        match repo.get_config_by_serial(serial).await {
+                            Ok(Some(doc)) => (true, Some(doc.config)),
+                            Ok(None) => (false, None),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to lookup config by serial {}: {}",
+                                    serial,
+                                    e
+                                );
+                                (false, None)
                             }
-                        } else {
-                            (false, None)
-                        };
+                        }
+                    } else {
+                        (false, None)
+                    };
 
                     // If no config from MongoDB, check in-memory configs or create default
                     if config.is_none() {
@@ -175,10 +174,7 @@ pub(super) async fn detect_digitizers(
                                 .get("model")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
-                            if let Some(n) = data
-                                .get("num_channels")
-                                .and_then(|v| v.as_u64())
-                            {
+                            if let Some(n) = data.get("num_channels").and_then(|v| v.as_u64()) {
                                 c.num_channels = n as u8;
                             }
                             config = Some(c);
@@ -537,7 +533,10 @@ pub(super) async fn apply_digitizer_config(
     // 4. Send ApplyDigitizerConfig command via ZMQ
     match state
         .client
-        .send_command(&reader_comp.address, &Command::ApplyDigitizerConfig(Box::new(config)))
+        .send_command(
+            &reader_comp.address,
+            &Command::ApplyDigitizerConfig(Box::new(config)),
+        )
         .await
     {
         Ok(resp) if resp.success => {
