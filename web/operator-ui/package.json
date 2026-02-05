@@ -41,7 +41,8 @@
   },
   "overrides": {
     "lodash": "^4.17.22",
-    "tar": "^7.5.4"
+    "tar": "^7.5.4",
+    "@modelcontextprotocol/sdk": "^1.26.0"
   },
   "devDependencies": {
     "@angular/build": "^20.2.0",

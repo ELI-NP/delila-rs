@@ -179,10 +179,7 @@ impl AppState {
     }
 
     /// Send RegisterChannels command to Monitor (best-effort, logs on failure).
-    pub(super) async fn send_register_channels(
-        &self,
-        registrations: Vec<ChannelRegistration>,
-    ) {
+    pub(super) async fn send_register_channels(&self, registrations: Vec<ChannelRegistration>) {
         if registrations.is_empty() {
             return;
         }

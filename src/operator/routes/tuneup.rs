@@ -170,11 +170,9 @@ pub(super) async fn tuneup_start(
         .await
     {
         Ok(results) => {
-            let response = ApiResponse::success(format!(
-                "Tune Up started for digitizer {}",
-                digitizer_id
-            ))
-            .with_results(results);
+            let response =
+                ApiResponse::success(format!("Tune Up started for digitizer {}", digitizer_id))
+                    .with_results(results);
             (StatusCode::OK, Json(response))
         }
         Err(e) => {

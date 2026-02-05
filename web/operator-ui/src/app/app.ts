@@ -33,7 +33,7 @@ import { HistogramService } from './services/histogram.service';
       @if (operator.isTuneUp()) {
         <span class="tuneup-indicator">
           TUNE UP
-          @if (operator.tuneupDigitizerId() != null) {
+          @if (operator.tuneupDigitizerId() !== null) {
             <span class="tuneup-id">#{{ operator.tuneupDigitizerId() }}</span>
           }
         </span>

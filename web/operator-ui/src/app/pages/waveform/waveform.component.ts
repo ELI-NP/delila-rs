@@ -317,7 +317,7 @@ interface ChannelChart {
               mat-flat-button
               color="accent"
               (click)="onStartTuneUp()"
-              [disabled]="tuneUpTargetId() == null || tuneUpLoading()"
+              [disabled]="tuneUpTargetId() === null || tuneUpLoading()"
             >
               @if (tuneUpLoading()) {
                 <mat-spinner diameter="18"></mat-spinner>

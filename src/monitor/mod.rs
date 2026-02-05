@@ -824,9 +824,9 @@ impl Monitor {
                     // Intercept RegisterChannels — forward to histogram task
                     if let Command::RegisterChannels(channels) = cmd {
                         let count = channels.len();
-                        let _ = hist_tx_for_cmd.clone().send(
-                            HistogramMessage::RegisterChannels(channels),
-                        );
+                        let _ = hist_tx_for_cmd
+                            .clone()
+                            .send(HistogramMessage::RegisterChannels(channels));
                         return CommandResponse::success(
                             state.state,
                             format!("Registered {} channels", count),
