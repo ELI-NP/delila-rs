@@ -85,6 +85,15 @@ export class DigitizerService {
   // Signal holding the list of digitizer configurations
   readonly digitizers = signal<DigitizerConfig[]>([]);
 
+  // Selected digitizer ID — survives navigation between pages
+  readonly selectedDigitizerId = signal<number | null>(null);
+
+  // Selected tab index — survives navigation between pages
+  readonly selectedTabIndex = signal(0);
+
+  // Selected waveform channels — survives navigation between pages
+  readonly selectedWaveformChannels = signal<string[]>([]);
+
   // Flag to use mock data when API is unavailable
   private useMock = false;
 

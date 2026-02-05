@@ -2,6 +2,21 @@
 
 **Created:** 2026-02-03
 **Status:** 計画中（叩き台）
+**Updated:** 2026-02-05
+
+## 実装状況 (2026-02-05 精査済み)
+
+| 項目 | 状態 | 備考 |
+|------|------|------|
+| **A1** ステータス並列化 | **未着手** | `get_all_status()`, `execute_on_all()`, `reset_all()` が逐次 for ループ。ただし `configure_all()`, `arm_all()` は `execute_on_pipeline_groups()` で pipeline_order 単位の並列化済み |
+| **A2** Detect 並列化 | **未着手** | `detect_digitizers()` が逐次ループ |
+| **A3** 設定テンプレート | **未着手** | `gen_config.sh` なし、10台用テンプレートなし |
+| **B3** キュー深度メトリクス | **一部** | stats は取得済みだが `queue_size` はハードコード 0 (Merger/Recorder 両方) |
+| **C1** start_daq.sh 改善 | **一部** | sleep 0.3 残存、ヘルスチェックなし、サマリーテーブルなし |
+| **C2** ComponentStatus 拡張 | **未着手** | `source_id`, `component_type` フィールドなし |
+| **C3** タイムアウト設定化 | **一部** | `OperatorConfig` にフィールドはあるが TOML から読めない（デフォルト 5000ms 固定） |
+
+---
 
 ---
 

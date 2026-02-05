@@ -307,6 +307,10 @@ Phase 5 (結合テスト) ← 全フェーズ完了後
 4. **SetInRun=false のパラメーターは静かにスキップ:** Running 中に全設定を Apply しても、SetInRun=false はエラーではなくスキップ。適用数をレスポンスで返す。
 5. **パラメーターリストは静的定義:** `compass_devtree_mapping.md` の情報をTypeScript/Rustに転記。DevTree動的UIは将来。
 
+### 既知の制限 (Phase 1-4)
+
+- **Board タブの SetInRun disabled 制御が未実装:** Channel タブは `disabledKeys` で Running 中の非 SetInRun パラメーターをグレーアウトするが、Board タブのフォームフィールド (`start_source`, `global_trigger_source`, `clock_source` 等) には `[disabled]` バインディングがない。Backend 側は正しくフィルタリングするため実害はないが、UI の一貫性として改善の余地あり。
+
 ---
 
 ## Phase 6: PSD1/PHA1 時間単位変換 (ns ↔ samples)

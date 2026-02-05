@@ -1,0 +1,34 @@
+# PSD2 All Parameters Test
+# Hardware: VX2730 (Serial: 52622, DPP_PSD2, 32ch, Ethernet, 172.18.4.56)
+
+[operator]
+experiment_name = "PSD2_AllParams_Test"
+
+[network]
+[[network.sources]]
+id = 0
+name = "psd2-real"
+type = "psd2"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig2://172.18.4.56"
+config_file = "config/digitizers/psd2_all_params_test.json"
+pipeline_order = 1
+
+[network.merger]
+subscribe = ["tcp://localhost:5555"]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

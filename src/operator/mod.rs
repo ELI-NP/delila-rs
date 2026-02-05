@@ -69,6 +69,12 @@ pub struct SystemStatus {
     /// Last run info for pre-filling comment (comment + notes from previous run)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_info: Option<LastRunInfo>,
+    /// Whether Tune Up mode is active
+    #[serde(default)]
+    pub tuneup_mode: bool,
+    /// Digitizer ID being tuned (when tuneup_mode is true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tuneup_digitizer_id: Option<u32>,
 }
 
 /// Aggregated system state
@@ -521,6 +527,8 @@ mod tests {
             experiment_name: "TestExp".to_string(),
             next_run_number: Some(1),
             last_run_info: None,
+            tuneup_mode: false,
+            tuneup_digitizer_id: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"system_state\":\"Idle\""));

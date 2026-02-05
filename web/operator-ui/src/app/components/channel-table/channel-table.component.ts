@@ -340,16 +340,22 @@ export class ChannelTableComponent {
   readonly channelValues = input.required<Record<string, unknown>[]>();
   /** Keys of parameters that should be disabled (e.g., non-SetInRun params during Running) */
   readonly disabledKeys = input<string[]>([]);
+  /** Optional filter: only show these channel indices. null = show all channels. */
+  readonly visibleChannels = input<number[] | null>(null);
 
   /** Emitted when a value in the "All" column changes */
   readonly defaultChange = output<DefaultValueChange>();
   /** Emitted when a specific channel value changes */
   readonly channelChange = output<ChannelValueChange>();
 
-  /** Array [0, 1, 2, ..., numChannels-1] for iteration */
-  readonly channelIndices = computed(() =>
-    Array.from({ length: this.numChannels() }, (_, i) => i)
-  );
+  /** Array of channel indices to display (filtered by visibleChannels if set) */
+  readonly channelIndices = computed(() => {
+    const visible = this.visibleChannels();
+    if (visible != null) {
+      return visible;
+    }
+    return Array.from({ length: this.numChannels() }, (_, i) => i);
+  });
 
   /** Get the default (All column) value for a parameter */
   getDefault(key: string): unknown {

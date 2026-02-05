@@ -1,0 +1,57 @@
+{
+  "digitizer_id": 0,
+  "name": "PSD2 SetInRun Test",
+  "firmware": "PSD2",
+  "serial_number": "52622",
+  "model": "VX2730",
+  "num_channels": 32,
+  "is_master": false,
+  "board": {
+    "start_source": "SWcmd"
+  },
+  "channel_defaults": {
+    "enabled": "False",
+    "polarity": "Positive",
+    "dc_offset": 30.0,
+    "baseline_avg": "Low",
+    "fixed_baseline": 500,
+    "record_length_ns": 1600,
+    "pre_trigger_ns": 128,
+    "wave_downsampling": "2",
+    "discriminator_mode": "CFD",
+    "trigger_threshold": 100,
+    "cfd_delay_ns": 16,
+    "cfd_fraction": "50",
+    "trigger_holdoff_ns": 16,
+    "smoothing_factor": "4",
+    "time_filter_smoothing": "Enabled",
+    "event_trigger_source": "GlobalTriggerSource",
+    "wave_trigger_source": "ChSelfTrigger",
+    "energy_coarse_gain": "x4",
+    "gate_long_ns": 600,
+    "gate_short_ns": 150,
+    "gate_pre_ns": 80,
+    "charge_pedestal": 10,
+    "short_charge_pedestal": 5,
+    "charge_smoothing": "Enabled",
+    "ch_trigger_mask": "0",
+    "coincidence_mask": "Disabled",
+    "anti_coincidence_mask": "Disabled",
+    "coincidence_window_ns": 100,
+    "ch_veto_source": "Disabled",
+    "ch_veto_width_ns": 0,
+    "event_selector": "All",
+    "wave_saving": "Always",
+    "analog_probe_0": "ADCInputBaseline",
+    "analog_probe_1": "ADCInput",
+    "digital_probe_0": "Trigger",
+    "digital_probe_1": "ShortGate",
+    "digital_probe_2": "LongGate",
+    "digital_probe_3": "ChargeReady"
+  },
+  "channel_overrides": {
+    "16": {
+      "trigger_threshold": 200
+    }
+  }
+}

@@ -126,6 +126,17 @@ pub struct EmulatorRuntimeConfig {
     pub waveform_samples: u32,
 }
 
+/// Channel registration info sent to Monitor for pre-creating histograms
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelRegistration {
+    /// Module/source ID (= digitizer_id)
+    pub module_id: u32,
+    /// Channel index within the module
+    pub channel_id: u32,
+    /// Display name (e.g. "LaBr3-A" or "LaBr3 Array/Ch0")
+    pub name: String,
+}
+
 /// Commands sent from controller to components
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
@@ -153,6 +164,9 @@ pub enum Command {
     /// Valid from Idle, Configured, or Running state. Does not change state.
     /// In Running state, only SetInRun parameters are applied.
     ApplyDigitizerConfig(Box<crate::config::digitizer::DigitizerConfig>),
+    /// Register channels with Monitor for pre-creating empty histograms.
+    /// Sent by Operator after Configure or Tune Up start. Does not change state.
+    RegisterChannels(Vec<ChannelRegistration>),
 }
 
 impl std::fmt::Display for Command {
@@ -170,6 +184,9 @@ impl std::fmt::Display for Command {
             Command::Detect => write!(f, "Detect"),
             Command::ApplyDigitizerConfig(ref cfg) => {
                 write!(f, "ApplyDigitizerConfig(id={})", cfg.digitizer_id)
+            }
+            Command::RegisterChannels(ref channels) => {
+                write!(f, "RegisterChannels(count={})", channels.len())
             }
         }
     }
@@ -389,6 +406,33 @@ mod tests {
         assert_eq!(format!("{}", Command::Stop), "Stop");
         assert_eq!(format!("{}", Command::Reset), "Reset");
         assert_eq!(format!("{}", Command::GetStatus), "GetStatus");
+    }
+
+    #[test]
+    fn register_channels_roundtrip() {
+        let cmd = Command::RegisterChannels(vec![
+            ChannelRegistration {
+                module_id: 0,
+                channel_id: 0,
+                name: "LaBr3-A".to_string(),
+            },
+            ChannelRegistration {
+                module_id: 0,
+                channel_id: 1,
+                name: "LaBr3-B".to_string(),
+            },
+        ]);
+        let bytes = cmd.to_json().unwrap();
+        let decoded = Command::from_json(&bytes).unwrap();
+        if let Command::RegisterChannels(channels) = decoded {
+            assert_eq!(channels.len(), 2);
+            assert_eq!(channels[0].module_id, 0);
+            assert_eq!(channels[0].channel_id, 0);
+            assert_eq!(channels[0].name, "LaBr3-A");
+            assert_eq!(channels[1].channel_id, 1);
+        } else {
+            panic!("Expected RegisterChannels command");
+        }
     }
 
     #[test]

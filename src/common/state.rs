@@ -393,6 +393,15 @@ pub fn handle_command<E: CommandHandlerExt>(
                 ),
             }
         }
+
+        Command::RegisterChannels(_) => {
+            // RegisterChannels is handled directly by Monitor's command loop,
+            // not through the generic handler. Other components ignore it.
+            CommandResponse::error(
+                current,
+                "RegisterChannels not supported by this component",
+            )
+        }
     }
 }
 

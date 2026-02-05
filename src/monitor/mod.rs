@@ -31,8 +31,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 
 use crate::common::{
-    handle_command, run_command_task, CommandHandlerExt, ComponentSharedState, ComponentState,
-    EventData, EventDataBatch, Message, Waveform,
+    handle_command, run_command_task, ChannelRegistration, Command, CommandHandlerExt,
+    CommandResponse, ComponentSharedState, ComponentState, EventData, EventDataBatch, Message,
+    Waveform,
 };
 
 /// Monitor configuration
@@ -191,6 +192,10 @@ pub struct MonitorState {
     pub total_events: u64,
     pub start_time: Option<Instant>,
     pub histogram_config: HistogramConfig,
+    /// Pre-registered channels from Operator (preserved across Clear, cleared on Reset)
+    pub registered_channels: Vec<ChannelRegistration>,
+    /// Channel display names lookup (built from registered_channels)
+    pub channel_names: HashMap<ChannelKey, String>,
 }
 
 impl MonitorState {
@@ -201,6 +206,8 @@ impl MonitorState {
             total_events: 0,
             start_time: None,
             histogram_config: config,
+            registered_channels: Vec::new(),
+            channel_names: HashMap::new(),
         }
     }
 
@@ -243,13 +250,46 @@ impl MonitorState {
         }
     }
 
-    /// Clear all histograms and waveforms
+    /// Clear histogram data and waveforms, preserving registered channels.
+    /// Re-creates empty histograms for registered channels.
     pub fn clear(&mut self) {
-        for histogram in self.histograms.values_mut() {
-            histogram.clear();
-        }
+        self.histograms.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
+        // Re-create empty histograms for registered channels
+        self.ensure_registered_histograms();
+    }
+
+    /// Full reset: clear everything including registered channels.
+    pub fn reset(&mut self) {
+        self.histograms.clear();
+        self.latest_waveforms.clear();
+        self.total_events = 0;
+        self.registered_channels.clear();
+        self.channel_names.clear();
+    }
+
+    /// Register channels and pre-create empty histograms.
+    pub fn register_channels(&mut self, channels: Vec<ChannelRegistration>) {
+        // Build channel_names lookup
+        self.channel_names.clear();
+        for ch in &channels {
+            let key = ChannelKey::new(ch.module_id, ch.channel_id);
+            self.channel_names.insert(key, ch.name.clone());
+        }
+        self.registered_channels = channels;
+        // Pre-create empty histograms
+        self.ensure_registered_histograms();
+    }
+
+    /// Ensure all registered channels have a histogram entry.
+    fn ensure_registered_histograms(&mut self) {
+        for ch in &self.registered_channels {
+            let key = ChannelKey::new(ch.module_id, ch.channel_id);
+            self.histograms.entry(key).or_insert_with(|| {
+                Histogram1D::new(ch.module_id, ch.channel_id, self.histogram_config)
+            });
+        }
     }
 
     /// Create a snapshot for HTTP responses
@@ -286,10 +326,15 @@ impl MonitorState {
             0.0
         };
 
-        let channels: Vec<(u32, u32, u64)> = self
+        let channels: Vec<ChannelSummaryData> = self
             .histograms
             .iter()
-            .map(|(key, hist)| (key.module_id, key.channel_id, hist.total_counts))
+            .map(|(key, hist)| ChannelSummaryData {
+                module_id: key.module_id,
+                channel_id: key.channel_id,
+                total_counts: hist.total_counts,
+                name: self.channel_names.get(key).cloned(),
+            })
             .collect();
 
         HistogramListSummary {
@@ -357,13 +402,31 @@ impl AtomicStats {
     }
 }
 
+/// Internal channel summary data (used between histogram_task and HTTP handler)
+struct ChannelSummaryData {
+    module_id: u32,
+    channel_id: u32,
+    total_counts: u64,
+    name: Option<String>,
+}
+
 /// Summary data for histogram listing (lightweight, no bin data)
 struct HistogramListSummary {
     total_events: u64,
     elapsed_secs: f64,
     event_rate: f64,
-    /// (module_id, channel_id, total_counts) tuples
-    channels: Vec<(u32, u32, u64)>,
+    channels: Vec<ChannelSummaryData>,
+}
+
+/// Data returned from ListWaveforms query
+struct WaveformListData {
+    channels: Vec<WaveformChannelData>,
+}
+
+struct WaveformChannelData {
+    module_id: u32,
+    channel_id: u32,
+    name: Option<String>,
 }
 
 /// Message type for histogram task (commands from HTTP handlers and control)
@@ -378,10 +441,14 @@ enum HistogramMessage {
     GetHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
     /// Get latest waveform for a channel
     GetWaveform(ChannelKey, oneshot::Sender<Option<LatestWaveform>>),
-    /// List all available waveforms
-    ListWaveforms(oneshot::Sender<Vec<ChannelKey>>),
+    /// List all available waveforms (union of actual waveforms + registered channels)
+    ListWaveforms(oneshot::Sender<WaveformListData>),
     /// Set start time
     SetStartTime,
+    /// Register channels (pre-create empty histograms, store names)
+    RegisterChannels(Vec<ChannelRegistration>),
+    /// Full reset (clear everything including registered channels)
+    Reset,
 }
 
 /// Shared state for HTTP handlers
@@ -411,6 +478,8 @@ struct ChannelSummary {
     module_id: u32,
     channel_id: u32,
     total_counts: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 /// GET /api/histograms - List all histograms
@@ -425,11 +494,12 @@ async fn list_histograms(State(state): State<AppState>) -> Json<HistogramListRes
         Ok(summary) => {
             let mut channels: Vec<ChannelSummary> = summary
                 .channels
-                .iter()
-                .map(|(module_id, channel_id, total_counts)| ChannelSummary {
-                    module_id: *module_id,
-                    channel_id: *channel_id,
-                    total_counts: *total_counts,
+                .into_iter()
+                .map(|ch| ChannelSummary {
+                    module_id: ch.module_id,
+                    channel_id: ch.channel_id,
+                    total_counts: ch.total_counts,
+                    name: ch.name,
                 })
                 .collect();
 
@@ -495,6 +565,8 @@ struct WaveformListResponse {
 struct WaveformChannelInfo {
     module_id: u32,
     channel_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 /// GET /api/waveforms - List all available waveforms
@@ -503,12 +575,14 @@ async fn list_waveforms(State(state): State<AppState>) -> Json<WaveformListRespo
     let _ = state.histogram_tx.send(HistogramMessage::ListWaveforms(tx));
 
     match rx.await {
-        Ok(keys) => {
-            let mut channels: Vec<WaveformChannelInfo> = keys
+        Ok(data) => {
+            let mut channels: Vec<WaveformChannelInfo> = data
+                .channels
                 .into_iter()
-                .map(|k| WaveformChannelInfo {
-                    module_id: k.module_id,
-                    channel_id: k.channel_id,
+                .map(|ch| WaveformChannelInfo {
+                    module_id: ch.module_id,
+                    channel_id: ch.channel_id,
+                    name: ch.name,
                 })
                 .collect();
             // Sort by module_id, then channel_id
@@ -630,7 +704,8 @@ impl CommandHandlerExt for MonitorCommandExt {
     }
 
     fn on_reset(&mut self) -> Result<(), String> {
-        let _ = self.histogram_tx.send(HistogramMessage::Clear);
+        // Full reset: clear everything including registered channels
+        let _ = self.histogram_tx.send(HistogramMessage::Reset);
         Ok(())
     }
 
@@ -746,6 +821,17 @@ impl Monitor {
                 state_tx,
                 shutdown_for_cmd,
                 move |state, tx, cmd| {
+                    // Intercept RegisterChannels — forward to histogram task
+                    if let Command::RegisterChannels(channels) = cmd {
+                        let count = channels.len();
+                        let _ = hist_tx_for_cmd.clone().send(
+                            HistogramMessage::RegisterChannels(channels),
+                        );
+                        return CommandResponse::success(
+                            state.state,
+                            format!("Registered {} channels", count),
+                        );
+                    }
                     let mut ext = MonitorCommandExt {
                         histogram_tx: hist_tx_for_cmd.clone(),
                         atomic_stats: atomic_stats_for_cmd.clone(),
@@ -932,11 +1018,52 @@ impl Monitor {
                             let _ = tx.send(state.latest_waveforms.get(&key).cloned());
                         }
                         Some(HistogramMessage::ListWaveforms(tx)) => {
-                            let keys: Vec<ChannelKey> = state.latest_waveforms.keys().copied().collect();
-                            let _ = tx.send(keys);
+                            // Union of actual waveform keys + registered channel keys
+                            let mut seen = std::collections::HashSet::new();
+                            let mut channels = Vec::new();
+                            // Actual waveforms first
+                            for key in state.latest_waveforms.keys() {
+                                seen.insert(*key);
+                                channels.push(WaveformChannelData {
+                                    module_id: key.module_id,
+                                    channel_id: key.channel_id,
+                                    name: state.channel_names.get(key).cloned(),
+                                });
+                            }
+                            // Then registered channels not already present
+                            for ch in &state.registered_channels {
+                                let key = ChannelKey::new(ch.module_id, ch.channel_id);
+                                if seen.insert(key) {
+                                    channels.push(WaveformChannelData {
+                                        module_id: ch.module_id,
+                                        channel_id: ch.channel_id,
+                                        name: Some(ch.name.clone()),
+                                    });
+                                }
+                            }
+                            let _ = tx.send(WaveformListData { channels });
                         }
                         Some(HistogramMessage::SetStartTime) => {
                             state.start_time = Some(Instant::now());
+                        }
+                        Some(HistogramMessage::RegisterChannels(channels)) => {
+                            let count = channels.len();
+                            state.register_channels(channels);
+                            info!(count, "Channels registered, empty histograms pre-created");
+                        }
+                        Some(HistogramMessage::Reset) => {
+                            // Drain stale data
+                            let mut drained = 0u64;
+                            while data_rx.try_recv().is_ok() {
+                                drained += 1;
+                            }
+                            if drained > 0 {
+                                info!(drained, "Drained stale batches on reset");
+                            }
+                            state.reset();
+                            state.start_time = None;
+                            atomic_stats.reset();
+                            info!("Full reset: histograms, waveforms, and registered channels cleared");
                         }
                         None => {
                             info!("Command channel closed");

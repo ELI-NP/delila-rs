@@ -163,6 +163,16 @@ authorityは `/eth_v4718` 以外すべて `caen.internal`。
     "15": { enabled: "False" }
   },
 
+  // Optional: Per-channel display names
+  // Key = channel index, Value = name string
+  // Channels without entries default to "{digitizer_name}/Ch{n}"
+  // Used by Monitor UI for channel identification
+  channel_names: {
+    "0": "LaBr3-A",
+    "1": "LaBr3-B",
+    "2": "LaBr3-C"
+  },
+
   // Metadata
   updated_at: ISODate,
   is_template: false

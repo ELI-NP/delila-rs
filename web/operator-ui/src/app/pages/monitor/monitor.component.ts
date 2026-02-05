@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatDialog } from '@angular/material/dialog';
 import { SetupTabComponent } from '../../components/setup-tab/setup-tab.component';
 import { ViewTabComponent } from '../../components/view-tab/view-tab.component';
@@ -26,6 +27,7 @@ const STORAGE_KEY = 'delila-monitor-state';
   imports: [
     MatButtonModule,
     MatIconModule,
+    MatSnackBarModule,
     SetupTabComponent,
     ViewTabComponent,
   ],
@@ -64,6 +66,15 @@ const STORAGE_KEY = 'delila-monitor-state';
             </button>
           }
         </div>
+        <button
+          mat-stroked-button
+          class="clear-button"
+          (click)="onClearHistograms()"
+          title="Clear all histogram data on the server"
+        >
+          <mat-icon>delete_sweep</mat-icon>
+          Clear
+        </button>
       </div>
 
       <!-- Tab content -->
@@ -163,6 +174,11 @@ const STORAGE_KEY = 'delila-monitor-state';
       background-color: rgba(0, 0, 0, 0.1);
     }
 
+    .clear-button {
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+
     .tab-content {
       flex: 1;
       min-height: 0;
@@ -172,6 +188,7 @@ const STORAGE_KEY = 'delila-monitor-state';
 })
 export class MonitorPageComponent implements OnInit, OnDestroy {
   private readonly dialog = inject(MatDialog);
+  private readonly snackBar = inject(MatSnackBar);
   readonly histogramService = inject(HistogramService);
 
   readonly setupConfig = signal<SetupConfig>(createDefaultSetupConfig());
@@ -263,6 +280,16 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
   onViewTabChange(tab: ViewTab): void {
     this.viewTabs.update((tabs) => tabs.map((t) => (t.id === tab.id ? tab : t)));
     this.saveState();
+  }
+
+  onClearHistograms(): void {
+    this.histogramService.clearHistograms().subscribe({
+      next: () => this.snackBar.open('Histograms cleared', 'OK', { duration: 3000 }),
+      error: (err) =>
+        this.snackBar.open('Clear failed: ' + (err.error?.message ?? err.message), 'OK', {
+          duration: 5000,
+        }),
+    });
   }
 
   onCellExpand(cellIndex: number): void {

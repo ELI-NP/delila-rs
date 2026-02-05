@@ -12,11 +12,22 @@ import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { ECharts } from 'echarts/core';
 import { Histogram1D, XAxisLabel, ViewCellFitResult } from '../../models/histogram.types';
+import { evaluatePiecewiseBg, BG_RANGE } from '../../services/fitting.service';
 
 export interface RangeChangeEvent {
   xRange: { min: number; max: number };
   yRange: { min: number; max: number } | 'auto';
 }
+
+// Series index for histogram (used in tooltip filter)
+const SERIES_HISTOGRAM = 0;
+
+// Fit curve colors
+const COLOR_TOTAL = '#e53935';     // Red — total fit
+const COLOR_GAUSSIAN = '#43a047';  // Green — Gaussian component
+const COLOR_BG = '#fb8c00';        // Orange — background (connecting line)
+const COLOR_LEFT = '#8e24aa';      // Purple — left BG line
+const COLOR_RIGHT = '#00897b';     // Teal — right BG line
 
 @Component({
   selector: 'app-histogram-chart',
@@ -207,26 +218,17 @@ export class HistogramChartComponent implements OnChanges {
           return Math.floor(value).toString();
         };
 
-    // Generate fit curve data if fitResult exists
-    const fitCurveData = this.generateFitCurve(xMin, xMax);
+    // Generate fit curve data for all components
+    const curves = this.generateFitCurves(xMin, xMax);
 
     const mergeOpts: EChartsCoreOption = {
       series: [
-        {
-          data: displayData,
-        },
-        // Fit curve series (empty if no fit)
-        {
-          type: 'line',
-          data: fitCurveData,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: {
-            color: '#e53935',
-            width: 2,
-          },
-          z: 10,
-        },
+        { data: displayData },
+        { data: curves.total },
+        { data: curves.gaussian },
+        { data: curves.bg },
+        { data: curves.left },
+        { data: curves.right },
       ],
       // Always set axis to full range - dataZoom controls the visible range
       xAxis: {
@@ -352,34 +354,70 @@ export class HistogramChartComponent implements OnChanges {
     return result;
   }
 
-  /** Generate fit curve data points (Gaussian + linear background) */
-  private generateFitCurve(xMin: number, xMax: number): number[][] {
+  /** Generate data points for all fit curve components */
+  private generateFitCurves(xMin: number, xMax: number): {
+    total: number[][];
+    gaussian: number[][];
+    bg: number[][];
+    left: number[][];
+    right: number[][];
+  } {
+    const empty = { total: [], gaussian: [], bg: [], left: [], right: [] };
     if (!this.fitResult) {
-      return [];
+      return empty;
     }
 
     const fit = this.fitResult;
-    const { amplitude, center, sigma, bgLine } = fit;
-    const { slope, intercept } = bgLine;
+    const { amplitude, center, sigma, leftLine, rightLine } = fit;
 
-    // Generate points for smooth curve
     const numPoints = 200;
     const step = (xMax - xMin) / numPoints;
-    const curveData: number[][] = [];
+
+    const total: number[][] = [];
+    const gaussian: number[][] = [];
+    const bg: number[][] = [];
+    const left: number[][] = [];
+    const right: number[][] = [];
+
+    // Piecewise BG boundaries
+    const limitLow = center - BG_RANGE * sigma;
+    const limitHigh = center + BG_RANGE * sigma;
 
     for (let i = 0; i <= numPoints; i++) {
       const x = xMin + i * step;
-      // Gaussian + linear background
-      const gaussian = amplitude * Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
-      const background = slope * x + intercept;
-      const y = gaussian + background;
-      curveData.push([x, y]);
+      const g = amplitude * Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
+      const bgY = evaluatePiecewiseBg(x, center, sigma, leftLine, rightLine);
+
+      total.push([x, g + bgY]);
+      gaussian.push([x, g]);
+      bg.push([x, bgY]);
+
+      // Left/right lines: only in their respective regions
+      if (x <= limitLow) {
+        left.push([x, leftLine.slope * x + leftLine.intercept]);
+      }
+      if (x >= limitHigh) {
+        right.push([x, rightLine.slope * x + rightLine.intercept]);
+      }
     }
 
-    return curveData;
+    return { total, gaussian, bg, left, right };
   }
 
   private buildChartOptions(): EChartsCoreOption {
+    const fitLineSeries = (color: string, width: number, dash?: number[]) => ({
+      type: 'line' as const,
+      data: [] as number[][],
+      smooth: true,
+      symbol: 'none',
+      lineStyle: {
+        color,
+        width,
+        ...(dash ? { type: dash } : {}),
+      },
+      z: 10,
+    });
+
     return {
       animation: false,
       grid: {
@@ -394,9 +432,11 @@ export class HistogramChartComponent implements OnChanges {
           type: 'shadow',
         },
         formatter: (params: unknown) => {
-          const data = params as { data: number[] }[];
-          if (data && data[0]) {
-            const [x, y] = data[0].data;
+          const data = params as { data: number[]; seriesIndex: number }[];
+          // Only show tooltip for histogram (series 0)
+          const histSeries = data?.find(d => d.seriesIndex === SERIES_HISTOGRAM);
+          if (histSeries) {
+            const [x, y] = histSeries.data;
             return `Channel: ${x.toFixed(0)}<br/>Counts: ${y}`;
           }
           return '';
@@ -425,6 +465,7 @@ export class HistogramChartComponent implements OnChanges {
         },
       },
       series: [
+        // [0] Histogram bars
         {
           type: 'bar',
           data: [],
@@ -435,17 +476,16 @@ export class HistogramChartComponent implements OnChanges {
           large: true,
           largeThreshold: 2000,
         },
-        {
-          type: 'line',
-          data: [],
-          smooth: true,
-          symbol: 'none',
-          lineStyle: {
-            color: '#e53935',
-            width: 2,
-          },
-          z: 10,
-        },
+        // [1] Total fit (Gaussian + BG)
+        fitLineSeries(COLOR_TOTAL, 2),
+        // [2] Gaussian component only
+        fitLineSeries(COLOR_GAUSSIAN, 2),
+        // [3] Background connecting line
+        fitLineSeries(COLOR_BG, 1.5),
+        // [4] Left BG line
+        fitLineSeries(COLOR_LEFT, 1.5, [6, 4]),
+        // [5] Right BG line
+        fitLineSeries(COLOR_RIGHT, 1.5, [6, 4]),
       ],
       toolbox: {
         show: false,

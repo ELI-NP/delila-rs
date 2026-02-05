@@ -1,4 +1,13 @@
-import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  OnDestroy,
+  inject,
+  signal,
+  computed,
+  effect,
+  untracked,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatCardModule } from '@angular/material/card';
@@ -7,15 +16,41 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
-import { Subject, interval, takeUntil, switchMap, forkJoin, of } from 'rxjs';
+import { Subject, Subscription, interval, takeUntil, switchMap, forkJoin, of } from 'rxjs';
 import { HistogramService } from '../../services/histogram.service';
-import { WaveformChannelInfo, LatestWaveform } from '../../models/histogram.types';
+import { OperatorService } from '../../services/operator.service';
+import { DigitizerService } from '../../services/digitizer.service';
+import { WaveformChannelInfo, LatestWaveform, Histogram1D } from '../../models/histogram.types';
+import { DigitizerConfig } from '../../models/types';
+import {
+  ChannelTableComponent,
+  DefaultValueChange,
+  ChannelValueChange,
+} from '../../components/channel-table/channel-table.component';
+import { getCategoryParams, getAllChannelParams, ChannelCategory } from '../../models/channel-params';
+import { HistogramChartComponent, RangeChangeEvent } from '../../components/histogram-chart/histogram-chart.component';
 
 interface ProbeConfig {
   analog1: boolean;
   analog2: boolean;
+  digital1: boolean;
+  digital2: boolean;
+  digital3: boolean;
+  digital4: boolean;
+}
+
+interface ChannelChart {
+  label: string;
+  moduleId: number;
+  channelId: number;
+  energy: number;
+  samples: number;
+  options: EChartsCoreOption;
 }
 
 @Component({
@@ -30,89 +65,304 @@ interface ProbeConfig {
     MatButtonModule,
     MatIconModule,
     MatCheckboxModule,
+    MatButtonToggleModule,
+    MatProgressSpinnerModule,
+    MatSnackBarModule,
     NgxEchartsDirective,
+    ChannelTableComponent,
+    HistogramChartComponent,
   ],
   template: `
     <div class="waveform-page">
-      <!-- Toolbar -->
-      <div class="toolbar">
-        <mat-form-field appearance="outline" class="channel-select">
-          <mat-label>Select Channels</mat-label>
-          <mat-select
-            [value]="selectedChannels()"
-            (selectionChange)="onChannelSelectionChange($event.value)"
-            multiple
-          >
-            @for (ch of availableChannels(); track ch.module_id + ':' + ch.channel_id) {
-              <mat-option [value]="ch.module_id + ':' + ch.channel_id">
-                Src{{ ch.module_id }}/Ch{{ ch.channel_id }}
-              </mat-option>
-            }
-          </mat-select>
-        </mat-form-field>
+      @if (isTuneUp()) {
+        <!-- ==================== Tune Up Mode ==================== -->
+        <div class="tuneup-toolbar">
+          <span class="tuneup-badge">TUNE UP</span>
+          <span class="tuneup-digitizer">{{ tuneUpConfig()?.name ?? ('Digitizer ' + tuneUpDigitizerId()) }}</span>
 
-        <div class="probe-toggles">
-          <mat-checkbox
-            [checked]="probeConfig().analog1"
-            (change)="toggleProbe('analog1')"
-            color="primary"
-          >
-            Analog 1
-          </mat-checkbox>
-          <mat-checkbox
-            [checked]="probeConfig().analog2"
-            (change)="toggleProbe('analog2')"
-            color="accent"
-          >
-            Analog 2
-          </mat-checkbox>
+          <mat-form-field appearance="outline" class="channel-select">
+            <mat-label>Channel</mat-label>
+            <mat-select
+              [value]="selectedChannels().length > 0 ? selectedChannels()[0] : ''"
+              (selectionChange)="onTuneUpChannelSelect($event.value)"
+            >
+              @for (ch of tuneUpChannels(); track ch.module_id + ':' + ch.channel_id) {
+                <mat-option [value]="ch.module_id + ':' + ch.channel_id">
+                  {{ ch.name ?? ('Src' + ch.module_id + '/Ch' + ch.channel_id) }}
+                </mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+
+          <div class="probe-toggles">
+            <mat-checkbox [checked]="probeConfig().analog1" (change)="toggleProbe('analog1')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">A1</span>
+            </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().analog2" (change)="toggleProbe('analog2')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">A2</span>
+            </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().digital1" (change)="toggleProbe('digital1')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">D1</span>
+            </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().digital2" (change)="toggleProbe('digital2')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">D2</span>
+            </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().digital3" (change)="toggleProbe('digital3')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">D3</span>
+            </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().digital4" (change)="toggleProbe('digital4')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">D4</span>
+            </mat-checkbox>
+          </div>
+
+          <span class="spacer"></span>
+
+          <button mat-stroked-button color="warn" (click)="onStopTuneUp()" [disabled]="tuneUpLoading()">
+            <mat-icon>stop</mat-icon>
+            Stop
+          </button>
         </div>
 
-        <button mat-stroked-button (click)="onRefresh()" [disabled]="isLoading()">
-          <mat-icon>refresh</mat-icon>
-          Refresh
-        </button>
+        <div class="tuneup-content">
+          <!-- Top row: Waveform (left) + Histogram (right) -->
+          <div class="tuneup-top-row">
+            <div class="tuneup-waveform-panel">
+              @if (channelCharts()[0]; as chart) {
+                <div class="channel-header">
+                  <span class="channel-label">{{ chart.label }}</span>
+                  <span class="channel-info">E: {{ chart.energy }} | S: {{ chart.samples }}</span>
+                </div>
+                <div class="tuneup-chart-fill">
+                  <div echarts [options]="chart.options" class="waveform-chart"></div>
+                </div>
+              } @else {
+                <div class="no-data compact">
+                  <mat-icon>show_chart</mat-icon>
+                  <p>No waveform data</p>
+                </div>
+              }
+            </div>
 
-        <span class="spacer"></span>
-
-        <span class="status-text">
-          @if (waveforms().length > 0) {
-            {{ waveforms().length }} waveform(s) loaded
-          } @else {
-            No waveforms available
-          }
-        </span>
-      </div>
-
-      <!-- Chart -->
-      <div class="chart-container">
-        @if (waveforms().length > 0) {
-          <div
-            echarts
-            [options]="chartOptions()"
-            [merge]="mergeOptions()"
-            class="waveform-chart"
-          ></div>
-        } @else {
-          <div class="no-data">
-            <mat-icon>show_chart</mat-icon>
-            <p>No waveform data available</p>
-            <p class="hint">
-              Make sure the DAQ is running with waveform enabled
-              and select channels from the dropdown above.
-            </p>
+            <div class="tuneup-histogram-panel">
+              <div class="panel-header">
+                ChargeLong
+                @if (tuneUpHistogram(); as hist) {
+                  <span class="hist-counts">{{ hist.total_counts | number }} counts</span>
+                }
+                <span class="spacer"></span>
+                <mat-checkbox
+                  [checked]="histLogScale()"
+                  (change)="histLogScale.set($event.checked)"
+                  color="primary"
+                >Log</mat-checkbox>
+              </div>
+              <app-histogram-chart
+                [histogram]="tuneUpHistogram()"
+                [logScale]="histLogScale()"
+                [xRange]="histXRange()"
+                (rangeChange)="onHistRangeChange($event)"
+              />
+            </div>
           </div>
-        }
-      </div>
 
-      <!-- Info Panel -->
-      @if (waveforms().length > 0) {
-        <div class="info-panel">
-          @for (wf of waveforms(); track wf.module_id + ':' + wf.channel_id) {
-            <div class="waveform-info">
-              <span class="channel-label">Src{{ wf.module_id }}/Ch{{ wf.channel_id }}</span>
-              <span class="energy">Energy: {{ wf.energy }}</span>
-              <span class="samples">Samples: {{ wf.waveform.analog_probe1.length || wf.waveform.analog_probe2.length }}</span>
+          <!-- Bottom row: Parameter Table -->
+          <div class="tuneup-bottom-row">
+            <div class="param-controls">
+              <mat-button-toggle-group
+                [value]="selectedCategory()"
+                (change)="onCategoryChange($event.value)"
+              >
+                <mat-button-toggle value="all">All</mat-button-toggle>
+                <mat-button-toggle value="input">Input</mat-button-toggle>
+                <mat-button-toggle value="trigger">Trigger</mat-button-toggle>
+                <mat-button-toggle value="energy">Energy</mat-button-toggle>
+                <mat-button-toggle value="coincidence">Coincidence</mat-button-toggle>
+                <mat-button-toggle value="waveform">Waveform</mat-button-toggle>
+              </mat-button-toggle-group>
+              <span class="spacer"></span>
+              <button mat-flat-button color="primary" (click)="onApplyTuneUp()" [disabled]="applyLoading()">
+                @if (applyLoading()) {
+                  <mat-spinner diameter="18"></mat-spinner>
+                } @else {
+                  <mat-icon>send</mat-icon>
+                }
+                Apply
+              </button>
+            </div>
+            <div class="param-table-wrapper">
+              @if (tuneUpConfig(); as config) {
+                @if (selectedCategory() === 'all') {
+                  <div class="param-grid">
+                    @for (cat of categoryGrid(); track cat.key) {
+                      <div class="param-grid-cell">
+                        <div class="param-grid-header">{{ cat.label }}</div>
+                        <app-channel-table
+                          [params]="cat.params"
+                          [numChannels]="config.num_channels"
+                          [defaultValues]="defaultValues()"
+                          [channelValues]="channelValues()"
+                          [visibleChannels]="visibleChannelIndices()"
+                          (defaultChange)="onTuneUpDefaultChange($event)"
+                          (channelChange)="onTuneUpChannelChange($event)"
+                        />
+                      </div>
+                    }
+                  </div>
+                } @else {
+                  <app-channel-table
+                    [params]="categoryParams()"
+                    [numChannels]="config.num_channels"
+                    [defaultValues]="defaultValues()"
+                    [channelValues]="channelValues()"
+                    [visibleChannels]="visibleChannelIndices()"
+                    (defaultChange)="onTuneUpDefaultChange($event)"
+                    (channelChange)="onTuneUpChannelChange($event)"
+                  />
+                }
+              }
+            </div>
+          </div>
+        </div>
+
+      } @else {
+        <!-- ==================== Normal Mode ==================== -->
+        <div class="toolbar">
+          <mat-form-field appearance="outline" class="channel-select">
+            <mat-label>Select Channels</mat-label>
+            <mat-select
+              [value]="selectedChannels()"
+              (selectionChange)="onChannelSelectionChange($event.value)"
+              multiple
+            >
+              @for (ch of availableChannels(); track ch.module_id + ':' + ch.channel_id) {
+                <mat-option [value]="ch.module_id + ':' + ch.channel_id">
+                  {{ ch.name ?? ('Src' + ch.module_id + '/Ch' + ch.channel_id) }}
+                </mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+
+          <div class="probe-toggles">
+            <mat-checkbox
+              [checked]="probeConfig().analog1"
+              (change)="toggleProbe('analog1')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">Analog 1</span>
+            </mat-checkbox>
+            <mat-checkbox
+              [checked]="probeConfig().analog2"
+              (change)="toggleProbe('analog2')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">Analog 2</span>
+            </mat-checkbox>
+            <mat-checkbox
+              [checked]="probeConfig().digital1"
+              (change)="toggleProbe('digital1')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">Digital 1</span>
+            </mat-checkbox>
+            <mat-checkbox
+              [checked]="probeConfig().digital2"
+              (change)="toggleProbe('digital2')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">Digital 2</span>
+            </mat-checkbox>
+            <mat-checkbox
+              [checked]="probeConfig().digital3"
+              (change)="toggleProbe('digital3')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">Digital 3</span>
+            </mat-checkbox>
+            <mat-checkbox
+              [checked]="probeConfig().digital4"
+              (change)="toggleProbe('digital4')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">Digital 4</span>
+            </mat-checkbox>
+          </div>
+
+          <mat-button-toggle-group
+            [value]="yAxisMode()"
+            (change)="onYAxisModeChange($event.value)"
+            class="y-axis-toggle"
+          >
+            <mat-button-toggle value="auto">Auto Y</mat-button-toggle>
+            <mat-button-toggle value="fixed">Fixed Y</mat-button-toggle>
+          </mat-button-toggle-group>
+
+          <button mat-stroked-button (click)="onRefresh()" [disabled]="isLoading()">
+            <mat-icon>refresh</mat-icon>
+            Refresh
+          </button>
+
+          <span class="spacer"></span>
+
+          <!-- Tune Up Start Controls -->
+          @if (systemState() === 'Idle' && digitizers().length > 0) {
+            <mat-form-field appearance="outline" class="digitizer-select">
+              <mat-label>Digitizer</mat-label>
+              <mat-select [value]="tuneUpTargetId()" (selectionChange)="tuneUpTargetId.set($event.value)">
+                @for (d of digitizers(); track d.digitizer_id) {
+                  <mat-option [value]="d.digitizer_id">{{ d.name }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+            <button
+              mat-flat-button
+              color="accent"
+              (click)="onStartTuneUp()"
+              [disabled]="tuneUpTargetId() == null || tuneUpLoading()"
+            >
+              @if (tuneUpLoading()) {
+                <mat-spinner diameter="18"></mat-spinner>
+              } @else {
+                <mat-icon>tune</mat-icon>
+              }
+              Tune Up
+            </button>
+          }
+
+          <span class="status-text">
+            @if (waveforms().length > 0) {
+              {{ waveforms().length }} waveform(s) loaded
+            } @else {
+              No waveforms available
+            }
+          </span>
+        </div>
+
+        <!-- Per-channel Charts -->
+        <div class="charts-scroll">
+          @if (channelCharts().length > 0) {
+            @for (chart of channelCharts(); track chart.moduleId + ':' + chart.channelId) {
+              <div class="channel-card">
+                <div class="channel-header">
+                  <span class="channel-label">{{ chart.label }}</span>
+                  <span class="channel-info">Energy: {{ chart.energy }} | Samples: {{ chart.samples }}</span>
+                </div>
+                <div class="chart-container">
+                  <div
+                    echarts
+                    [options]="chart.options"
+                    class="waveform-chart"
+                  ></div>
+                </div>
+              </div>
+            }
+          } @else {
+            <div class="no-data">
+              <mat-icon>show_chart</mat-icon>
+              <p>No waveform data available</p>
+              <p class="hint">
+                Make sure the DAQ is running with waveform enabled
+                and select channels from the dropdown above.
+              </p>
             </div>
           }
         </div>
@@ -130,10 +380,13 @@ interface ProbeConfig {
       flex-direction: column;
       height: 100%;
       padding: 16px;
-      gap: 16px;
+      gap: 12px;
     }
 
-    .toolbar {
+    /* ================ Shared ================ */
+
+    .toolbar,
+    .tuneup-toolbar {
       display: flex;
       align-items: center;
       gap: 16px;
@@ -141,12 +394,26 @@ interface ProbeConfig {
     }
 
     .channel-select {
-      min-width: 250px;
+      min-width: 200px;
+    }
+
+    .digitizer-select {
+      min-width: 160px;
     }
 
     .probe-toggles {
       display: flex;
-      gap: 16px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .probe-label {
+      border-bottom: 3px solid;
+      padding-bottom: 1px;
+    }
+
+    .y-axis-toggle {
+      height: 36px;
     }
 
     .spacer {
@@ -158,13 +425,43 @@ interface ProbeConfig {
       font-size: 14px;
     }
 
-    .chart-container {
+    /* ================ Normal Mode ================ */
+
+    .charts-scroll {
       flex: 1;
-      min-height: 300px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .channel-card {
       background: white;
       border: 1px solid #e0e0e0;
       border-radius: 4px;
       overflow: hidden;
+    }
+
+    .channel-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 16px;
+      background: #fafafa;
+      border-bottom: 1px solid #e0e0e0;
+      font-size: 13px;
+    }
+
+    .channel-label {
+      font-weight: 600;
+    }
+
+    .channel-info {
+      color: #666;
+    }
+
+    .chart-container {
+      height: 350px;
     }
 
     .waveform-chart {
@@ -197,87 +494,301 @@ interface ProbeConfig {
       }
     }
 
-    .info-panel {
-      display: flex;
-      gap: 24px;
-      flex-wrap: wrap;
-      padding: 8px 0;
+    /* ================ Tune Up Mode ================ */
+
+    .tuneup-badge {
+      background: #ff6f00;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 1px;
     }
 
-    .waveform-info {
+    .tuneup-digitizer {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .tuneup-content {
+      flex: 1;
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    .tuneup-top-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    .tuneup-waveform-panel,
+    .tuneup-histogram-panel {
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      overflow: hidden;
       display: flex;
-      gap: 16px;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .tuneup-chart-fill {
+      flex: 1;
+      min-height: 0;
+    }
+
+    .panel-header {
+      display: flex;
       align-items: center;
+      gap: 12px;
+      padding: 6px 12px;
+      background: #fafafa;
+      border-bottom: 1px solid #e0e0e0;
+      font-weight: 600;
       font-size: 13px;
     }
 
-    .channel-label {
-      font-weight: 500;
+    .hist-counts {
+      font-weight: 400;
+      color: #666;
+      font-size: 12px;
     }
 
-    .energy,
-    .samples {
-      color: #666;
+    .no-data.compact {
+      padding: 24px;
+      mat-icon {
+        font-size: 40px;
+        width: 40px;
+        height: 40px;
+        margin-bottom: 8px;
+      }
+    }
+
+    .tuneup-bottom-row {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .param-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 12px;
+      background: #fafafa;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .param-table-wrapper {
+      flex: 1;
+      overflow: auto;
+    }
+
+    .param-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 4px;
+      padding: 4px;
+    }
+
+    .param-grid-cell {
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .param-grid-header {
+      padding: 4px 8px;
+      background: #e3f2fd;
+      font-weight: 600;
+      font-size: 12px;
+      border-bottom: 1px solid #e0e0e0;
     }
   `,
 })
 export class WaveformPageComponent implements OnInit, OnDestroy {
+  // ===========================================================================
+  // Service Injections
+  // ===========================================================================
   private readonly histogramService = inject(HistogramService);
-  private readonly destroy$ = new Subject<void>();
-  private readonly refreshInterval = 500; // 500ms for waveform
+  private readonly operatorService = inject(OperatorService);
+  private readonly digitizerService = inject(DigitizerService);
+  private readonly snackBar = inject(MatSnackBar);
 
-  // State
+  private readonly destroy$ = new Subject<void>();
+  private readonly refreshInterval = 500;
+  private histPolling$ = new Subscription();
+
+  // ===========================================================================
+  // Shared State (used in both modes)
+  // ===========================================================================
   readonly availableChannels = signal<WaveformChannelInfo[]>([]);
-  readonly selectedChannels = signal<string[]>([]);
+  readonly selectedChannels = this.digitizerService.selectedWaveformChannels;
   readonly waveforms = signal<LatestWaveform[]>([]);
   readonly isLoading = signal(false);
-  readonly probeConfig = signal<ProbeConfig>({ analog1: true, analog2: true });
+  readonly probeConfig = signal<ProbeConfig>({
+    analog1: true,
+    analog2: true,
+    digital1: false,
+    digital2: false,
+    digital3: false,
+    digital4: false,
+  });
+  readonly yAxisMode = signal<'auto' | 'fixed'>('auto');
 
-  // Chart options
-  readonly chartOptions = computed<EChartsCoreOption>(() => this.buildChartOptions());
-  readonly mergeOptions = signal<EChartsCoreOption>({});
+  readonly probeColors = {
+    analog1: '#1565c0',
+    analog2: '#e65100',
+    digital1: '#2e7d32',
+    digital2: '#c62828',
+    digital3: '#6a1b9a',
+    digital4: '#00838f',
+  };
 
-  // Colors for different channels
-  private readonly colors = [
-    '#1976d2', // Blue
-    '#d32f2f', // Red
-    '#388e3c', // Green
-    '#7b1fa2', // Purple
-    '#f57c00', // Orange
-    '#0097a7', // Cyan
-    '#c2185b', // Pink
-    '#5d4037', // Brown
+  readonly channelCharts = computed<ChannelChart[]>(() => this.buildChannelCharts());
+
+  // ===========================================================================
+  // Normal Mode State
+  // ===========================================================================
+  readonly digitizers = computed(() => this.digitizerService.digitizers());
+  readonly systemState = computed(() => this.operatorService.systemState());
+  readonly tuneUpTargetId = signal<number | null>(null);
+
+  // ===========================================================================
+  // Tune Up State
+  // ===========================================================================
+  readonly isTuneUp = computed(() => this.operatorService.isTuneUp());
+  readonly tuneUpDigitizerId = computed(() => this.operatorService.tuneupDigitizerId());
+  readonly tuneUpLoading = signal(false);
+  readonly applyLoading = signal(false);
+  readonly tuneUpConfig = signal<DigitizerConfig | null>(null);
+  readonly defaultValues = signal<Record<string, unknown>>({});
+  readonly channelValues = signal<Record<string, unknown>[]>([]);
+  readonly selectedCategory = signal<ChannelCategory | 'all'>('all');
+  readonly tuneUpHistogram = signal<Histogram1D | null>(null);
+
+  /** In Tune Up mode, only show channels belonging to the target digitizer */
+  readonly tuneUpChannels = computed(() => {
+    const digitizerId = this.tuneUpDigitizerId();
+    if (digitizerId == null) return this.availableChannels();
+    return this.availableChannels().filter(ch => ch.module_id === digitizerId);
+  });
+
+  readonly categoryParams = computed(() => {
+    const config = this.tuneUpConfig();
+    if (!config) return [];
+    const cat = this.selectedCategory();
+    if (cat === 'all') return getAllChannelParams(config.firmware);
+    return getCategoryParams(config.firmware, cat);
+  });
+
+  /** All categories with their params (for grid layout) */
+  private readonly allCategories: { key: ChannelCategory; label: string }[] = [
+    { key: 'input', label: 'Input' },
+    { key: 'trigger', label: 'Trigger' },
+    { key: 'energy', label: 'Energy' },
+    { key: 'coincidence', label: 'Coincidence' },
+    { key: 'waveform', label: 'Waveform' },
   ];
 
-  ngOnInit(): void {
-    // Start polling for available channels
-    this.fetchChannelList();
+  readonly categoryGrid = computed(() => {
+    const config = this.tuneUpConfig();
+    if (!config) return [];
+    return this.allCategories
+      .map(c => ({ ...c, params: getCategoryParams(config.firmware, c.key) }))
+      .filter(c => c.params.length > 0);
+  });
 
+  readonly histLogScale = signal(false);
+  readonly histXRange = signal<{ min: number; max: number } | 'auto'>('auto');
+
+  /** Channel index from "moduleId:channelId" selection string */
+  readonly visibleChannelIndices = computed<number[] | null>(() => {
+    const selected = this.selectedChannels();
+    if (selected.length === 0) return null;
+    const channelId = Number(selected[0].split(':')[1]);
+    return [channelId];
+  });
+
+  // React to Tune Up mode changes
+  private readonly tuneUpEffect = effect(() => {
+    const active = this.isTuneUp();
+    const digitizerId = this.tuneUpDigitizerId();
+
+    untracked(() => {
+      if (active && digitizerId != null) {
+        this.loadTuneUpConfig(digitizerId);
+        this.fetchChannelList();
+        this.startHistogramPolling();
+      } else {
+        this.tuneUpConfig.set(null);
+        this.defaultValues.set({});
+        this.channelValues.set([]);
+        this.tuneUpHistogram.set(null);
+        this.stopHistogramPolling();
+      }
+    });
+  });
+
+  // ===========================================================================
+  // Lifecycle
+  // ===========================================================================
+
+  ngOnInit(): void {
+    this.fetchChannelList();
+    this.digitizerService.loadDigitizers();
+
+    // Waveform polling (500ms)
     interval(this.refreshInterval)
       .pipe(
         takeUntil(this.destroy$),
         switchMap(() => this.fetchWaveforms())
       )
       .subscribe();
+
+    // Channel list polling (5s) — picks up newly registered channels
+    interval(5000)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.fetchChannelList());
   }
 
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+    this.stopHistogramPolling();
   }
+
+  // ===========================================================================
+  // Shared Actions
+  // ===========================================================================
 
   onChannelSelectionChange(selected: string[]): void {
     this.selectedChannels.set(selected);
     this.fetchWaveforms().subscribe();
   }
 
-  toggleProbe(probe: 'analog1' | 'analog2'): void {
+  onTuneUpChannelSelect(value: string): void {
+    this.selectedChannels.set([value]);
+    this.fetchWaveforms().subscribe();
+  }
+
+  toggleProbe(probe: keyof ProbeConfig): void {
     const config = this.probeConfig();
     this.probeConfig.set({
       ...config,
       [probe]: !config[probe],
     });
-    this.updateChart();
+  }
+
+  onYAxisModeChange(mode: 'auto' | 'fixed'): void {
+    this.yAxisMode.set(mode);
   }
 
   onRefresh(): void {
@@ -285,12 +796,161 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.fetchWaveforms().subscribe();
   }
 
+  // ===========================================================================
+  // Tune Up Actions
+  // ===========================================================================
+
+  onStartTuneUp(): void {
+    const targetId = this.tuneUpTargetId();
+    if (targetId == null) return;
+
+    this.tuneUpLoading.set(true);
+    this.operatorService.tuneupStart(targetId).subscribe({
+      next: (resp) => {
+        this.tuneUpLoading.set(false);
+        if (!resp.success) {
+          this.snackBar.open('Start failed: ' + resp.message, 'OK', { duration: 5000 });
+        }
+      },
+      error: (err) => {
+        this.tuneUpLoading.set(false);
+        this.snackBar.open('Start error: ' + (err.error?.message ?? err.message), 'OK', {
+          duration: 5000,
+        });
+      },
+    });
+  }
+
+  onStopTuneUp(): void {
+    this.tuneUpLoading.set(true);
+    this.operatorService.tuneupStop().subscribe({
+      next: () => {
+        this.tuneUpLoading.set(false);
+        this.snackBar.open('Tune Up stopped', 'OK', { duration: 3000 });
+      },
+      error: (err) => {
+        this.tuneUpLoading.set(false);
+        this.snackBar.open('Stop error: ' + (err.error?.message ?? err.message), 'OK', {
+          duration: 5000,
+        });
+      },
+    });
+  }
+
+  onApplyTuneUp(): void {
+    const config = this.tuneUpConfig();
+    if (!config) return;
+
+    this.applyLoading.set(true);
+
+    const { channel_defaults, channel_overrides } = this.digitizerService.compressConfig(
+      this.defaultValues(),
+      this.channelValues()
+    );
+
+    const updatedConfig: DigitizerConfig = {
+      ...config,
+      channel_defaults,
+      channel_overrides,
+    };
+
+    this.operatorService.tuneupApply(config.digitizer_id, updatedConfig).subscribe({
+      next: (resp) => {
+        this.applyLoading.set(false);
+        if (resp.success) {
+          this.snackBar.open('Configuration applied', 'OK', { duration: 3000 });
+          this.tuneUpConfig.set(updatedConfig);
+          // Clear histogram for fresh data after apply
+          this.histogramService.clearHistograms().subscribe();
+          this.tuneUpHistogram.set(null);
+          this.histXRange.set('auto');
+        } else {
+          this.snackBar.open('Apply failed: ' + resp.message, 'OK', { duration: 5000 });
+        }
+      },
+      error: (err) => {
+        this.applyLoading.set(false);
+        this.snackBar.open('Apply error: ' + (err.error?.message ?? err.message), 'OK', {
+          duration: 5000,
+        });
+      },
+    });
+  }
+
+  onCategoryChange(category: ChannelCategory | 'all'): void {
+    this.selectedCategory.set(category);
+  }
+
+  onTuneUpDefaultChange(event: DefaultValueChange): void {
+    const defaults = { ...this.defaultValues() };
+    defaults[event.key] = event.value;
+    this.defaultValues.set(defaults);
+
+    // Propagate to all channels
+    const channels = this.channelValues().map((ch) => ({
+      ...ch,
+      [event.key]: event.value,
+    }));
+    this.channelValues.set(channels);
+  }
+
+  onTuneUpChannelChange(event: ChannelValueChange): void {
+    const channels = [...this.channelValues()];
+    channels[event.channel] = {
+      ...channels[event.channel],
+      [event.key]: event.value,
+    };
+    this.channelValues.set(channels);
+  }
+
+  onHistRangeChange(event: RangeChangeEvent): void {
+    this.histXRange.set(event.xRange);
+  }
+
+  // ===========================================================================
+  // Tune Up Helpers
+  // ===========================================================================
+
+  private async loadTuneUpConfig(digitizerId: number): Promise<void> {
+    const config = await this.digitizerService.getDigitizer(digitizerId);
+    if (!config) return;
+
+    this.tuneUpConfig.set(config);
+    this.defaultValues.set(this.digitizerService.extractDefaults(config));
+    this.channelValues.set(this.digitizerService.expandConfig(config));
+  }
+
+  private startHistogramPolling(): void {
+    this.histPolling$.unsubscribe();
+    this.histPolling$ = interval(1000)
+      .pipe(
+        takeUntil(this.destroy$),
+        switchMap(() => {
+          const selected = this.selectedChannels();
+          if (selected.length === 0) return of(null);
+          const [moduleId, channelId] = selected[0].split(':').map(Number);
+          return this.histogramService.fetchHistogram(moduleId, channelId);
+        })
+      )
+      .subscribe((hist) => {
+        if (hist) this.tuneUpHistogram.set(hist);
+      });
+  }
+
+  private stopHistogramPolling(): void {
+    this.histPolling$.unsubscribe();
+    this.histPolling$ = new Subscription();
+  }
+
+  // ===========================================================================
+  // Waveform Data
+  // ===========================================================================
+
   private fetchChannelList(): void {
     this.histogramService.fetchWaveformList().subscribe((response) => {
       if (response) {
         this.availableChannels.set(response.channels);
 
-        // Auto-select first channel if none selected
         if (this.selectedChannels().length === 0 && response.channels.length > 0) {
           const first = response.channels[0];
           this.selectedChannels.set([`${first.module_id}:${first.channel_id}`]);
@@ -317,90 +977,85 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       switchMap((results) => {
         const waveforms = results.filter((wf): wf is LatestWaveform => wf !== null);
         this.waveforms.set(waveforms);
-        this.updateChart();
         this.isLoading.set(false);
         return of(null);
       })
     );
   }
 
-  private updateChart(): void {
+  // ===========================================================================
+  // Chart Building
+  // ===========================================================================
+
+  private buildChannelCharts(): ChannelChart[] {
     const waveforms = this.waveforms();
     const config = this.probeConfig();
 
-    if (waveforms.length === 0) {
-      this.mergeOptions.set({});
-      return;
-    }
+    return waveforms.map((wf) => {
+      const channelInfo = this.availableChannels().find(
+        (ch) => ch.module_id === wf.module_id && ch.channel_id === wf.channel_id
+      );
+      const label = channelInfo?.name ?? `Src${wf.module_id}/Ch${wf.channel_id}`;
+      const series: unknown[] = [];
 
-    const series: unknown[] = [];
-    let colorIndex = 0;
-
-    for (const wf of waveforms) {
-      const baseColor = this.colors[colorIndex % this.colors.length];
-      const label = `Src${wf.module_id}/Ch${wf.channel_id}`;
-
-      // Analog Probe 1
       if (config.analog1 && wf.waveform.analog_probe1.length > 0) {
         series.push({
-          name: `${label} - Analog1`,
+          name: 'Analog 1',
           type: 'line',
           data: wf.waveform.analog_probe1.map((v, i) => [i, v]),
           symbol: 'none',
-          lineStyle: {
-            width: 1,
-            color: baseColor,
-          },
-          itemStyle: {
-            color: baseColor,
-          },
+          lineStyle: { width: 1.5, color: this.probeColors.analog1 },
+          itemStyle: { color: this.probeColors.analog1 },
         });
       }
 
-      // Analog Probe 2
       if (config.analog2 && wf.waveform.analog_probe2.length > 0) {
-        // Use a lighter/different shade for probe 2
-        const probe2Color = this.lightenColor(baseColor, 0.3);
         series.push({
-          name: `${label} - Analog2`,
+          name: 'Analog 2',
           type: 'line',
           data: wf.waveform.analog_probe2.map((v, i) => [i, v]),
           symbol: 'none',
-          lineStyle: {
-            width: 1,
-            color: probe2Color,
-            type: 'dashed',
-          },
-          itemStyle: {
-            color: probe2Color,
-          },
+          lineStyle: { width: 1.5, color: this.probeColors.analog2 },
+          itemStyle: { color: this.probeColors.analog2 },
         });
       }
 
-      colorIndex++;
-    }
+      const digitalProbes: { key: keyof ProbeConfig; data: number[]; index: number }[] = [
+        { key: 'digital1', data: wf.waveform.digital_probe1, index: 0 },
+        { key: 'digital2', data: wf.waveform.digital_probe2, index: 1 },
+        { key: 'digital3', data: wf.waveform.digital_probe3, index: 2 },
+        { key: 'digital4', data: wf.waveform.digital_probe4, index: 3 },
+      ];
 
-    this.mergeOptions.set({
-      series,
-      legend: {
-        data: series.map((s) => (s as { name: string }).name),
-      },
+      for (const dp of digitalProbes) {
+        if (config[dp.key] && dp.data.length > 0) {
+          const colorKey = dp.key as keyof typeof this.probeColors;
+          series.push({
+            name: `Digital ${dp.index + 1}`,
+            type: 'line',
+            data: dp.data.map((v, i) => [i, v * 10000 + dp.index * 1000]),
+            symbol: 'none',
+            step: 'end',
+            lineStyle: { width: 1, color: this.probeColors[colorKey] },
+            itemStyle: { color: this.probeColors[colorKey] },
+          });
+        }
+      }
+
+      const samples = wf.waveform.analog_probe1.length || wf.waveform.analog_probe2.length;
+
+      return {
+        label,
+        moduleId: wf.module_id,
+        channelId: wf.channel_id,
+        energy: wf.energy,
+        samples,
+        options: this.buildSingleChartOptions(series, this.yAxisMode()),
+      };
     });
   }
 
-  private lightenColor(hex: string, factor: number): string {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-
-    const newR = Math.min(255, Math.round(r + (255 - r) * factor));
-    const newG = Math.min(255, Math.round(g + (255 - g) * factor));
-    const newB = Math.min(255, Math.round(b + (255 - b) * factor));
-
-    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
-  }
-
-  private buildChartOptions(): EChartsCoreOption {
+  private buildSingleChartOptions(series: unknown[], yMode: 'auto' | 'fixed'): EChartsCoreOption {
     return {
       animation: false,
       grid: {
@@ -411,7 +1066,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       },
       legend: {
         show: true,
-        top: 10,
+        top: 5,
         type: 'scroll',
       },
       tooltip: {
@@ -430,8 +1085,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       yAxis: {
         type: 'value',
         name: 'ADC',
-        min: -20000,
-        max: 20000,
+        ...(yMode === 'fixed' ? { min: -20000, max: 20000 } : {}),
         axisLabel: {
           formatter: (value: number) => {
             if (Math.abs(value) >= 1000) {
@@ -442,7 +1096,6 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         },
       },
       dataZoom: [
-        // X-axis inside zoom (mouse wheel with shift)
         {
           type: 'inside',
           xAxisIndex: 0,
@@ -450,7 +1103,6 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           zoomOnMouseWheel: 'shift',
           moveOnMouseMove: true,
         },
-        // Y-axis inside zoom (mouse wheel with ctrl)
         {
           type: 'inside',
           xAxisIndex: [],
@@ -458,14 +1110,12 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           zoomOnMouseWheel: 'ctrl',
           moveOnMouseMove: false,
         },
-        // X-axis slider (bottom)
         {
           type: 'slider',
           xAxisIndex: 0,
           height: 20,
           bottom: 5,
         },
-        // Y-axis slider (right)
         {
           type: 'slider',
           yAxisIndex: 0,
@@ -473,7 +1123,8 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           right: 5,
         },
       ],
-      series: [],
+      series,
     };
   }
+
 }

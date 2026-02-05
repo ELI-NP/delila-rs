@@ -15,7 +15,9 @@ pub use cli::{
 
 // Re-export command types
 pub mod command;
-pub use command::{Command, CommandResponse, ComponentState, EmulatorRuntimeConfig, RunConfig};
+pub use command::{
+    ChannelRegistration, Command, CommandResponse, ComponentState, EmulatorRuntimeConfig, RunConfig,
+};
 
 // Shared state and command handling infrastructure
 pub mod state;

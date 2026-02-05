@@ -35,6 +35,10 @@ export class OperatorService {
   readonly nextRunNumber = computed(() => this.status()?.next_run_number ?? null);
   /** Last run info for pre-filling comment (from MongoDB) */
   readonly lastRunInfo = computed<LastRunInfo | null>(() => this.status()?.last_run_info ?? null);
+  /** Whether Tune Up mode is active */
+  readonly isTuneUp = computed(() => this.status()?.tuneup_mode ?? false);
+  /** Digitizer ID being tuned */
+  readonly tuneupDigitizerId = computed(() => this.status()?.tuneup_digitizer_id ?? null);
 
   // Metrics from Recorder (authoritative source for recorded data)
   readonly recorderMetrics = computed(() => {
@@ -123,5 +127,18 @@ export class OperatorService {
   // Add a note to the current running run
   addNote(text: string): Observable<RunNote> {
     return this.http.post<RunNote>(`${this.baseUrl}/runs/current/note`, { text });
+  }
+
+  // Tune Up mode
+  tuneupStart(digitizerId: number): Observable<ApiResponse> {
+    return this.http.post<ApiResponse>(`${this.baseUrl}/tuneup/start`, { digitizer_id: digitizerId });
+  }
+
+  tuneupStop(): Observable<ApiResponse> {
+    return this.http.post<ApiResponse>(`${this.baseUrl}/tuneup/stop`, {});
+  }
+
+  tuneupApply(digitizerId: number, config: unknown): Observable<ApiResponse> {
+    return this.http.post<ApiResponse>(`${this.baseUrl}/tuneup/apply/${digitizerId}`, config);
   }
 }

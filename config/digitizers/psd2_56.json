@@ -7,20 +7,62 @@
   "num_channels": 32,
   "is_master": false,
   "board": {
-    "start_source": "SWcmd"
+    "start_source": "SWcmd",
+    "gpio_mode": "Run",
+    "global_trigger_source": "UserTrg",
+    "waveforms_enabled": true,
+    "extra": {
+      "boardvetopolarity": "ActiveHigh",
+      "enclockoutfp": "True",
+      "syncoutmode": "SyncIn",
+      "clocksource": "Internal",
+      "iolevel": "NIM",
+      "trgoutmode": "GPIO",
+      "boardvetosource": "Disabled"
+    }
   },
   "channel_defaults": {
-    "enabled": "True",
+    "enabled": "False",
     "polarity": "Negative",
     "dc_offset": 50.0,
+    "vga_gain": 0,
+    "baseline_avg": "Low",
+    "fixed_baseline": 8000,
+    "record_length_ns": 512,
+    "pre_trigger_ns": 128,
+    "wave_downsampling": "1",
+    "discriminator_mode": "CFD",
     "trigger_threshold": 600,
+    "cfd_delay_ns": 7,
+    "cfd_fraction": "50",
+    "trigger_holdoff_ns": 75,
+    "smoothing_factor": "1",
+    "time_filter_smoothing": "Disabled",
     "event_trigger_source": "ChSelfTrigger",
-    "wave_trigger_source": "Disabled",
+    "wave_trigger_source": "ChSelfTrigger",
+    "energy_coarse_gain": "x256",
     "gate_long_ns": 400,
-    "gate_short_ns": 100
+    "gate_short_ns": 100,
+    "gate_pre_ns": 96,
+    "charge_pedestal": 0,
+    "short_charge_pedestal": 0,
+    "charge_smoothing": "Disabled",
+    "wave_saving": "Always",
+    "analog_probe_0": "ADCInput",
+    "analog_probe_1": "CFDFilter",
+    "digital_probe_0": "LongGate",
+    "digital_probe_1": "ShortGate",
+    "digital_probe_2": "ReTriggerGuard",
+    "digital_probe_3": "CFDFilterArmed"
   },
   "channel_overrides": {
+    "8": {
+      "enabled": "True",
+      "dc_offset": 20.0,
+      "energy_coarse_gain": "x64"
+    },
     "16": {
+      "enabled": "True",
       "trigger_threshold": 300
     }
   }

@@ -21,6 +21,7 @@ export interface ChannelSummary {
   module_id: number;
   channel_id: number;
   total_counts: number;
+  name?: string;
 }
 
 // Response from GET /api/histograms
@@ -116,7 +117,9 @@ export interface ViewCellFitResult {
   netAreaError: number;
   chi2: number;
   ndf: number;
-  // Background line for drawing
+  // Background lines for drawing
+  leftLine: { slope: number; intercept: number };
+  rightLine: { slope: number; intercept: number };
   bgLine: { slope: number; intercept: number };
   // Gaussian parameters for drawing
   amplitude: number;
@@ -248,6 +251,7 @@ export interface WaveformListResponse {
 export interface WaveformChannelInfo {
   module_id: number;
   channel_id: number;
+  name?: string;
 }
 
 // Legacy helpers (for backward compatibility)

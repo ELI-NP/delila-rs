@@ -1,7 +1,7 @@
 # Apply Digitizer Config via ZMQ (Phase 6 拡張)
 
 **Created:** 2026-02-03
-**Status:** IMPLEMENTATION PLANNED
+**Status: COMPLETED** (2026-02-04)
 **Priority:** High — Settings UI E2E の最終ピース
 **Parent:** `TODO/19_settings_ui.md`
 
@@ -183,6 +183,8 @@ async applyToHardware(config: DigitizerConfig): Promise<ApiResponse> {
 
 ## 将来拡張
 
-- Running 中の `setinrun=true` パラメータのみ部分適用（Phase 7 以降）
+- ~~Running 中の `setinrun=true` パラメータのみ部分適用~~ → **TODO/27 Phase 3 で実装済み** (2026-02-04)
+  - `on_apply_digitizer_config_running()` + `to_caen_parameters_set_in_run()` でフィルタリング
+  - Running 状態の valid_commands に `ApplyDigitizerConfig` 追加済み
 - MongoDB 保存 (バージョニング) との統合
 - Apply 結果の詳細レポート（パラメータ毎の成功/失敗）

@@ -1,6 +1,9 @@
 import { Injectable } from '@angular/core';
 import { levenbergMarquardt } from 'ml-levenberg-marquardt';
 
+/** Boundary for piecewise BG: left/right BG applies outside μ ± BG_RANGE*σ */
+export const BG_RANGE = 2.5;
+
 export interface FitInput {
   bins: number[];
   binWidth: number;
@@ -23,7 +26,7 @@ export interface GaussianFitResult {
   // Background lines
   leftLine: LinearFit;
   rightLine: LinearFit;
-  bgLine: LinearFit;
+  bgLine: LinearFit; // connecting line in peak region (derived)
 
   // Derived values
   fwhm: number;
@@ -40,13 +43,49 @@ export interface GaussianFitResult {
   ndf: number;
 }
 
+/**
+ * Evaluate piecewise background at x.
+ * - x < μ - BG_RANGE*σ  → left linear BG
+ * - x > μ + BG_RANGE*σ  → right linear BG
+ * - otherwise            → linear interpolation connecting the two
+ */
+export function evaluatePiecewiseBg(
+  x: number,
+  center: number,
+  sigma: number,
+  leftLine: LinearFit,
+  rightLine: LinearFit,
+): number {
+  const limitLow = center - BG_RANGE * sigma;
+  const limitHigh = center + BG_RANGE * sigma;
+
+  let bg: number;
+  if (x < limitLow) {
+    bg = leftLine.intercept + leftLine.slope * x;
+  } else if (x > limitHigh) {
+    bg = rightLine.intercept + rightLine.slope * x;
+  } else {
+    const yLow = leftLine.intercept + leftLine.slope * limitLow;
+    const yHigh = rightLine.intercept + rightLine.slope * limitHigh;
+    const slope = (yHigh - yLow) / (limitHigh - limitLow);
+    bg = yLow + slope * (x - limitLow);
+  }
+
+  return Math.max(0, bg);
+}
+
 @Injectable({
   providedIn: 'root',
 })
 export class FittingService {
   /**
-   * Fit a Gaussian peak with linear background
-   * Model: y = A * exp(-0.5 * ((x - μ) / σ)²) + m*x + b
+   * Fit a Gaussian peak with piecewise linear background.
+   * 7-parameter simultaneous fit: [A, μ, σ, b_L, m_L, b_R, m_R]
+   *
+   * Background model:
+   *   x < μ - 2.5σ  → b_L + m_L * x    (left region)
+   *   x > μ + 2.5σ  → b_R + m_R * x    (right region)
+   *   otherwise      → linear interpolation connecting boundary values
    */
   fitGaussian(input: FitInput): GaussianFitResult | null {
     const { bins, binWidth, minValue, fitRangeMin, fitRangeMax } = input;
@@ -64,25 +103,31 @@ export class FittingService {
       return null;
     }
 
-    // Initial parameter estimates
+    // Estimate initial parameters [A, μ, σ, b_L, m_L, b_R, m_R]
     const initialParams = this.estimateInitialParams(xData, yData);
     if (!initialParams) {
       return null;
     }
 
-    // Gaussian + linear background model
-    // params: [amplitude, center, sigma, bgSlope, bgIntercept]
-    const gaussianWithBg = (params: number[]) => (x: number) => {
-      const [A, mu, sigma, m, b] = params;
+    // 7-parameter piecewise model
+    const piecewiseModel = (params: number[]) => (x: number) => {
+      const [A, mu, sigma, bL, mL, bR, mR] = params;
+      const absSigma = Math.abs(sigma);
+
       const gaussian = A * Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2));
-      const background = m * x + b;
-      return gaussian + background;
+      const bg = evaluatePiecewiseBg(
+        x, mu, absSigma,
+        { intercept: bL, slope: mL },
+        { intercept: bR, slope: mR },
+      );
+
+      return gaussian + bg;
     };
 
     try {
       const result = levenbergMarquardt(
         { x: xData, y: yData },
-        gaussianWithBg,
+        piecewiseModel,
         {
           damping: 1.5,
           initialValues: initialParams,
@@ -92,45 +137,49 @@ export class FittingService {
         }
       );
 
-      const [amplitude, center, sigma, bgSlope, bgIntercept] = result.parameterValues;
+      const [amplitude, center, sigma, bL, mL, bR, mR] = result.parameterValues;
 
       // Validate results
       if (sigma <= 0 || amplitude <= 0) {
         return null;
       }
 
-      // Calculate chi-squared
-      const { chi2, ndf } = this.calculateChi2(xData, yData, result.parameterValues, gaussianWithBg);
+      // Calculate chi-squared (7 parameters)
+      const { chi2, ndf } = this.calculateChi2(xData, yData, result.parameterValues, piecewiseModel);
 
-      // Calculate FWHM
-      const fwhm = 2.355 * Math.abs(sigma);
+      const absSigma = Math.abs(sigma);
+      const fwhm = 2.355 * absSigma;
+      const netArea = amplitude * absSigma * Math.sqrt(2 * Math.PI);
 
-      // Calculate net area (Gaussian integral)
-      const netArea = amplitude * Math.abs(sigma) * Math.sqrt(2 * Math.PI);
-
-      // Estimate errors from parameter error (simplified)
+      // Parameter errors
       const paramErrors = Array.isArray(result.parameterError)
         ? result.parameterError
-        : [0, 0, 0, 0, 0];
+        : [0, 0, 0, 0, 0, 0, 0];
+      const amplitudeError = paramErrors[0] ?? 0;
       const centerError = paramErrors[1] ?? 0;
       const sigmaError = paramErrors[2] ?? 0;
-      const amplitudeError = paramErrors[0] ?? 0;
 
-      // Net area error (propagated)
       const netAreaError = netArea * Math.sqrt(
         Math.pow(amplitudeError / amplitude, 2) +
-        Math.pow(sigmaError / sigma, 2)
+        Math.pow(sigmaError / absSigma, 2)
       );
 
-      // Background lines
-      const leftLine: LinearFit = { slope: bgSlope, intercept: bgIntercept };
-      const rightLine: LinearFit = { slope: bgSlope, intercept: bgIntercept };
+      const leftLine: LinearFit = { slope: mL, intercept: bL };
+      const rightLine: LinearFit = { slope: mR, intercept: bR };
+
+      // Compute connecting line in peak region for convenience
+      const limitLow = center - BG_RANGE * absSigma;
+      const limitHigh = center + BG_RANGE * absSigma;
+      const yLow = bL + mL * limitLow;
+      const yHigh = bR + mR * limitHigh;
+      const bgSlope = (yHigh - yLow) / (limitHigh - limitLow);
+      const bgIntercept = yLow - bgSlope * limitLow;
       const bgLine: LinearFit = { slope: bgSlope, intercept: bgIntercept };
 
       return {
         amplitude,
         center,
-        sigma: Math.abs(sigma),
+        sigma: absSigma,
         leftLine,
         rightLine,
         bgLine,
@@ -160,12 +209,35 @@ export class FittingService {
     rangeMax: number
   ): LinearFit | null {
     const { xData, yData } = this.extractRange(bins, binWidth, minValue, rangeMin, rangeMax);
+    return this.fitLinearToData(xData, yData);
+  }
 
+  /**
+   * Calculate background line connecting left and right edges
+   */
+  calculateBackgroundLine(
+    leftLine: LinearFit,
+    rightLine: LinearFit,
+    fitRangeMin: number,
+    fitRangeMax: number
+  ): LinearFit {
+    const yLeft = leftLine.slope * fitRangeMin + leftLine.intercept;
+    const yRight = rightLine.slope * fitRangeMax + rightLine.intercept;
+
+    const slope = (yRight - yLeft) / (fitRangeMax - fitRangeMin);
+    const intercept = yLeft - slope * fitRangeMin;
+
+    return { slope, intercept };
+  }
+
+  /**
+   * Fit linear regression to x,y data arrays
+   */
+  private fitLinearToData(xData: number[], yData: number[]): LinearFit | null {
     if (xData.length < 3) {
       return null;
     }
 
-    // Simple linear regression
     const n = xData.length;
     let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
 
@@ -183,27 +255,6 @@ export class FittingService {
 
     const slope = (n * sumXY - sumX * sumY) / denominator;
     const intercept = (sumY - slope * sumX) / n;
-
-    return { slope, intercept };
-  }
-
-  /**
-   * Calculate background line connecting left and right edges
-   */
-  calculateBackgroundLine(
-    leftLine: LinearFit,
-    rightLine: LinearFit,
-    fitRangeMin: number,
-    fitRangeMax: number
-  ): LinearFit {
-    // Value at left edge using left line
-    const yLeft = leftLine.slope * fitRangeMin + leftLine.intercept;
-    // Value at right edge using right line
-    const yRight = rightLine.slope * fitRangeMax + rightLine.intercept;
-
-    // Line connecting these two points
-    const slope = (yRight - yLeft) / (fitRangeMax - fitRangeMin);
-    const intercept = yLeft - slope * fitRangeMin;
 
     return { slope, intercept };
   }
@@ -233,68 +284,66 @@ export class FittingService {
   }
 
   /**
-   * Estimate initial parameters for Gaussian fit
+   * Estimate initial parameters for 7-param piecewise model.
+   * Returns [A, μ, σ, b_L, m_L, b_R, m_R]
    */
   private estimateInitialParams(xData: number[], yData: number[]): number[] | null {
     if (xData.length === 0) return null;
 
-    // Find max for amplitude and center estimate
+    // Find peak
     let maxY = -Infinity;
     let maxIdx = 0;
-
     for (let i = 0; i < yData.length; i++) {
       if (yData[i] > maxY) {
         maxY = yData[i];
         maxIdx = i;
       }
     }
-
     if (maxY <= 0) return null;
 
     const center = xData[maxIdx];
 
-    // Estimate background from edges
-    const nEdge = Math.min(5, Math.floor(xData.length / 10));
-    let leftBg = 0, rightBg = 0;
-    for (let i = 0; i < nEdge; i++) {
-      leftBg += yData[i];
-      rightBg += yData[yData.length - 1 - i];
-    }
-    leftBg /= nEdge;
-    rightBg /= nEdge;
-    const avgBg = (leftBg + rightBg) / 2;
+    // Estimate BG from edges (15% each side, min 3 bins)
+    const edgeBins = Math.max(3, Math.floor(xData.length * 0.15));
 
-    // Background slope
-    const bgSlope = (rightBg - leftBg) / (xData[xData.length - 1] - xData[0]);
-    const bgIntercept = avgBg - bgSlope * center;
+    const leftFit = this.fitLinearToData(
+      xData.slice(0, edgeBins),
+      yData.slice(0, edgeBins),
+    );
+    const rightFit = this.fitLinearToData(
+      xData.slice(-edgeBins),
+      yData.slice(-edgeBins),
+    );
 
-    // Amplitude (above background)
-    const amplitude = maxY - avgBg;
+    if (!leftFit || !rightFit) return null;
+
+    // Background at center (average of left/right extrapolations)
+    const bgAtCenter = (
+      leftFit.slope * center + leftFit.intercept +
+      rightFit.slope * center + rightFit.intercept
+    ) / 2;
+
+    const amplitude = maxY - bgAtCenter;
     if (amplitude <= 0) return null;
 
     // Estimate sigma from FWHM
-    // Find half maximum points
-    const halfMax = avgBg + amplitude / 2;
+    const halfMax = bgAtCenter + amplitude / 2;
     let leftHalf = center, rightHalf = center;
-
     for (let i = maxIdx; i >= 0; i--) {
-      if (yData[i] < halfMax) {
-        leftHalf = xData[i];
-        break;
-      }
+      if (yData[i] < halfMax) { leftHalf = xData[i]; break; }
     }
-
     for (let i = maxIdx; i < yData.length; i++) {
-      if (yData[i] < halfMax) {
-        rightHalf = xData[i];
-        break;
-      }
+      if (yData[i] < halfMax) { rightHalf = xData[i]; break; }
     }
-
     const fwhmEstimate = rightHalf - leftHalf;
     const sigma = fwhmEstimate / 2.355 || (xData[xData.length - 1] - xData[0]) / 10;
 
-    return [amplitude, center, sigma, bgSlope, bgIntercept];
+    // [A, μ, σ, b_L, m_L, b_R, m_R]
+    return [
+      amplitude, center, sigma,
+      leftFit.intercept, leftFit.slope,
+      rightFit.intercept, rightFit.slope,
+    ];
   }
 
   /**
@@ -304,7 +353,8 @@ export class FittingService {
     xData: number[],
     yData: number[],
     params: number[],
-    model: (params: number[]) => (x: number) => number
+    model: (params: number[]) => (x: number) => number,
+    nParams?: number
   ): { chi2: number; ndf: number } {
     const f = model(params);
     let chi2 = 0;
@@ -312,13 +362,12 @@ export class FittingService {
     for (let i = 0; i < xData.length; i++) {
       const observed = yData[i];
       const expected = f(xData[i]);
-      // Use Poisson error estimate: σ² = max(observed, 1)
+      // Poisson error estimate: σ² = max(observed, 1)
       const variance = Math.max(observed, 1);
       chi2 += Math.pow(observed - expected, 2) / variance;
     }
 
-    // ndf = number of data points - number of parameters
-    const ndf = xData.length - params.length;
+    const ndf = xData.length - (nParams ?? params.length);
 
     return { chi2, ndf: Math.max(ndf, 1) };
   }

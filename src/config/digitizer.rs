@@ -68,6 +68,11 @@ pub struct DigitizerConfig {
     /// Per-channel overrides (sparse - only channels that differ from defaults)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub channel_overrides: HashMap<u8, ChannelConfig>,
+
+    /// Optional per-channel display names (key = channel index, value = name).
+    /// Channels without entries default to "{digitizer_name}/Ch{n}".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_names: Option<HashMap<u32, String>>,
 }
 
 /// Synchronization configuration for Master/Slave setups
@@ -453,6 +458,7 @@ impl DigitizerConfig {
             board: BoardConfig::default(),
             channel_defaults: ChannelConfig::default(),
             channel_overrides: HashMap::new(),
+            channel_names: None,
         }
     }
 

@@ -30,6 +30,14 @@ import { HistogramService } from './services/histogram.service';
         <span class="stat-item">{{ formatRate(operator.totalRate()) }}</span>
       </span>
       <span class="spacer"></span>
+      @if (operator.isTuneUp()) {
+        <span class="tuneup-indicator">
+          TUNE UP
+          @if (operator.tuneupDigitizerId() != null) {
+            <span class="tuneup-id">#{{ operator.tuneupDigitizerId() }}</span>
+          }
+        </span>
+      }
       @if (currentRunNumber()) {
         <span class="run-info">Run: {{ currentRunNumber() }}</span>
       }
@@ -125,6 +133,28 @@ import { HistogramService } from './services/histogram.service';
 
     .spacer {
       flex: 1 1 auto;
+    }
+
+    .tuneup-indicator {
+      margin-right: 16px;
+      padding: 4px 14px;
+      background-color: #ff6f00;
+      color: white;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      animation: tuneup-pulse 2s ease-in-out infinite;
+    }
+
+    .tuneup-id {
+      font-weight: 400;
+      margin-left: 4px;
+    }
+
+    @keyframes tuneup-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
     }
 
     .run-info {

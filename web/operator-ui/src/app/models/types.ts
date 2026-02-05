@@ -90,6 +90,10 @@ export interface SystemStatus {
   next_run_number?: number;
   /** Last run info for pre-filling comment (comment + notes from previous run) */
   last_run_info?: LastRunInfo;
+  /** Whether Tune Up mode is active */
+  tuneup_mode?: boolean;
+  /** Digitizer ID being tuned (when tuneup_mode is true) */
+  tuneup_digitizer_id?: number;
 }
 
 // Configure request
@@ -211,6 +215,7 @@ export interface DigitizerConfig {
   board: BoardConfig;
   channel_defaults: ChannelConfig;
   channel_overrides?: Record<number, ChannelConfig>;
+  channel_names?: Record<number, string>;
 }
 
 // Detected digitizer from hardware probe

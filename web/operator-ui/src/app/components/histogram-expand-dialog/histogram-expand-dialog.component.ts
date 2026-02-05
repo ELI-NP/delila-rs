@@ -304,6 +304,8 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
         netAreaError: result.netAreaError,
         chi2: result.chi2,
         ndf: result.ndf,
+        leftLine: result.leftLine,
+        rightLine: result.rightLine,
         bgLine: result.bgLine,
         amplitude: result.amplitude,
       };

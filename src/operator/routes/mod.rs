@@ -5,6 +5,7 @@ mod emulator;
 mod event_builder;
 mod run;
 mod status;
+mod tuneup;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -56,6 +57,7 @@ use event_builder::{
 };
 use run::{add_run_note, get_next_run_number, get_run, get_run_config_snapshot, get_run_history};
 use status::{arm, configure, get_status, reset, run_start, start, stop};
+use tuneup::{tuneup_apply, tuneup_start, tuneup_stop};
 
 /// Application state shared across handlers
 pub struct AppState {
@@ -76,6 +78,10 @@ pub struct AppState {
     pub current_run: RwLock<Option<CurrentRunInfo>>,
     /// Emulator settings (runtime-configurable)
     pub emulator_settings: RwLock<EmulatorSettings>,
+    /// Whether Tune Up mode is active
+    pub tuneup_mode: RwLock<bool>,
+    /// Digitizer ID being tuned (when tuneup_mode is true)
+    pub tuneup_digitizer_id: RwLock<Option<u32>>,
 }
 
 /// Emulator runtime settings (API model)
@@ -128,6 +134,77 @@ impl From<&ConfigSettings> for EmulatorSettings {
     }
 }
 
+// =============================================================================
+// Channel Registration helpers
+// =============================================================================
+
+use crate::common::{ChannelRegistration, Command};
+
+impl AppState {
+    /// Build channel registrations from loaded digitizer configs.
+    /// If `filter_id` is Some, only include channels for that digitizer.
+    pub(super) fn build_channel_registrations_from(
+        configs: &HashMap<u32, DigitizerConfig>,
+        filter_id: Option<u32>,
+    ) -> Vec<ChannelRegistration> {
+        let mut registrations = Vec::new();
+        for (id, config) in configs {
+            if let Some(filter) = filter_id {
+                if *id != filter {
+                    continue;
+                }
+            }
+            for ch in 0..config.num_channels as u32 {
+                let name = config
+                    .channel_names
+                    .as_ref()
+                    .and_then(|names| names.get(&ch).cloned())
+                    .unwrap_or_else(|| format!("{}/Ch{}", config.name, ch));
+                registrations.push(ChannelRegistration {
+                    module_id: config.digitizer_id,
+                    channel_id: ch,
+                    name,
+                });
+            }
+        }
+        registrations
+    }
+
+    /// Find the Monitor component address from the component list.
+    pub(super) fn find_monitor_address(&self) -> Option<String> {
+        self.components
+            .iter()
+            .find(|c| !c.is_digitizer && c.source_id.is_none() && c.name.contains("Monitor"))
+            .map(|c| c.address.clone())
+    }
+
+    /// Send RegisterChannels command to Monitor (best-effort, logs on failure).
+    pub(super) async fn send_register_channels(
+        &self,
+        registrations: Vec<ChannelRegistration>,
+    ) {
+        if registrations.is_empty() {
+            return;
+        }
+        if let Some(monitor_addr) = self.find_monitor_address() {
+            let cmd = Command::RegisterChannels(registrations);
+            match self.client.send_command(&monitor_addr, &cmd).await {
+                Ok(resp) if resp.success => {
+                    tracing::info!("RegisterChannels sent to Monitor: {}", resp.message);
+                }
+                Ok(resp) => {
+                    tracing::warn!("Monitor rejected RegisterChannels: {}", resp.message);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to send RegisterChannels to Monitor: {}", e);
+                }
+            }
+        } else {
+            tracing::warn!("No Monitor component found for RegisterChannels");
+        }
+    }
+}
+
 /// OpenAPI documentation
 #[derive(OpenApi)]
 #[openapi(
@@ -167,6 +244,9 @@ impl From<&ConfigSettings> for EmulatorSettings {
         event_builder::get_config_history,
         event_builder::restore_version,
         event_builder::delete_config,
+        tuneup::tuneup_start,
+        tuneup::tuneup_stop,
+        tuneup::tuneup_apply,
     ),
     components(schemas(
         SystemStatus,
@@ -196,6 +276,7 @@ impl From<&ConfigSettings> for EmulatorSettings {
         UpdateChSettingsRequest,
         UpdateTimeSettingsRequest,
         UpdateL2SettingsRequest,
+        tuneup::TuneUpStartRequest,
     )),
     tags(
         (name = "DAQ Control", description = "DAQ system control endpoints"),
@@ -304,6 +385,8 @@ impl RouterBuilder {
             event_builder_repo: self.event_builder_repo,
             current_run: RwLock::new(None),
             emulator_settings: RwLock::new(self.emulator_settings),
+            tuneup_mode: RwLock::new(false),
+            tuneup_digitizer_id: RwLock::new(None),
         });
 
         let cors = CorsLayer::new()
@@ -321,6 +404,10 @@ impl RouterBuilder {
             .route("/api/reset", post(reset))
             // Two-phase synchronized run control
             .route("/api/run/start", post(run_start))
+            // Tune Up mode
+            .route("/api/tuneup/start", post(tuneup_start))
+            .route("/api/tuneup/stop", post(tuneup_stop))
+            .route("/api/tuneup/apply/:id", post(tuneup_apply))
             // Run history routes
             .route("/api/runs", get(get_run_history))
             .route("/api/runs/next", get(get_next_run_number))

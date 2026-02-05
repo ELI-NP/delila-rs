@@ -81,6 +81,9 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         (None, None)
     };
 
+    let tuneup_mode = *state.tuneup_mode.read().await;
+    let tuneup_digitizer_id = *state.tuneup_digitizer_id.read().await;
+
     Json(SystemStatus {
         components,
         system_state,
@@ -88,6 +91,8 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         experiment_name: state.config.experiment_name.clone(),
         next_run_number,
         last_run_info,
+        tuneup_mode,
+        tuneup_digitizer_id,
     })
 }
 
@@ -168,6 +173,16 @@ pub(super) async fn start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<StartRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Guard: reject if Tune Up mode is active
+    if *state.tuneup_mode.read().await {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "Cannot start a run while Tune Up mode is active. Stop Tune Up first.",
+            )),
+        );
+    }
+
     let run_number = request.run_number;
     let comment = request.comment;
 
@@ -403,6 +418,16 @@ pub(super) async fn run_start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfigureRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Guard: reject if Tune Up mode is active
+    if *state.tuneup_mode.read().await {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "Cannot start a run while Tune Up mode is active. Stop Tune Up first.",
+            )),
+        );
+    }
+
     let run_config: RunConfig = request.into();
     let run_number = run_config.run_number;
 
@@ -430,6 +455,13 @@ pub(super) async fn run_start(
             );
         }
         Ok(_) => {}
+    }
+
+    // Register channels with Monitor (best-effort, after configure success)
+    {
+        let configs = state.digitizer_configs.read().await;
+        let registrations = AppState::build_channel_registrations_from(&configs, None);
+        state.send_register_channels(registrations).await;
     }
 
     // Phase 2: Arm (sync point)

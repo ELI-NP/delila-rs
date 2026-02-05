@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { FittingService, FitInput } from './fitting.service';
+import { FittingService, FitInput, evaluatePiecewiseBg, BG_RANGE } from './fitting.service';
 
 describe('FittingService', () => {
   let service: FittingService;
@@ -13,10 +13,8 @@ describe('FittingService', () => {
     expect(service).toBeTruthy();
   });
 
-  describe('fitGaussian', () => {
+  describe('fitGaussian (7-param piecewise BG)', () => {
     it('should fit a simple Gaussian peak', () => {
-      // Generate synthetic Gaussian data
-      // Center = 500, Sigma = 20, Amplitude = 1000
       const center = 500;
       const sigma = 20;
       const amplitude = 1000;
@@ -35,11 +33,10 @@ describe('FittingService', () => {
       expect(result).not.toBeNull();
       expect(result!.center).toBeCloseTo(center, 0);
       expect(result!.sigma).toBeCloseTo(sigma, 0);
-      expect(result!.amplitude).toBeCloseTo(amplitude, -1); // within 10%
+      expect(result!.amplitude).toBeCloseTo(amplitude, -1);
     });
 
-    it('should fit Gaussian with linear background', () => {
-      // Gaussian + sloped background
+    it('should fit Gaussian with uniform linear background', () => {
       const center = 500;
       const sigma = 30;
       const amplitude = 800;
@@ -47,14 +44,8 @@ describe('FittingService', () => {
       const bgIntercept = 100;
 
       const bins = generateGaussianWithBackground(
-        center,
-        sigma,
-        amplitude,
-        bgSlope,
-        bgIntercept,
-        0,
-        1000,
-        1000
+        center, sigma, amplitude, bgSlope, bgIntercept,
+        0, 1000, 1000
       );
 
       const input: FitInput = {
@@ -70,6 +61,41 @@ describe('FittingService', () => {
       expect(result).not.toBeNull();
       expect(result!.center).toBeCloseTo(center, 0);
       expect(result!.sigma).toBeCloseTo(sigma, 0);
+    });
+
+    it('should fit Gaussian with asymmetric (piecewise) background', () => {
+      const center = 500;
+      const sigma = 20;
+      const amplitude = 1000;
+      // Left BG: steeper slope (Compton scattering effect)
+      const leftSlope = 2.0;
+      const leftIntercept = 50;
+      // Right BG: flatter
+      const rightSlope = 0.3;
+      const rightIntercept = 300;
+
+      const bins = generateGaussianWithPiecewiseBg(
+        center, sigma, amplitude,
+        leftSlope, leftIntercept,
+        rightSlope, rightIntercept,
+        0, 1000, 1000
+      );
+
+      const input: FitInput = {
+        bins,
+        binWidth: 1,
+        minValue: 0,
+        fitRangeMin: 350,
+        fitRangeMax: 650,
+      };
+
+      const result = service.fitGaussian(input);
+
+      expect(result).not.toBeNull();
+      expect(result!.center).toBeCloseTo(center, 0);
+      expect(result!.sigma).toBeCloseTo(sigma, 0);
+      // Left and right BG lines should have different slopes
+      expect(Math.abs(result!.leftLine.slope - result!.rightLine.slope)).toBeGreaterThan(0.5);
     });
 
     it('should return null for empty range', () => {
@@ -101,12 +127,11 @@ describe('FittingService', () => {
       const result = service.fitGaussian(input);
 
       expect(result).not.toBeNull();
-      // FWHM = 2.355 * sigma
       const expectedFwhm = 2.355 * sigma;
       expect(result!.fwhm).toBeCloseTo(expectedFwhm, 0);
     });
 
-    it('should calculate net area (Gaussian area minus background)', () => {
+    it('should calculate net area correctly', () => {
       const center = 500;
       const sigma = 20;
       const amplitude = 1000;
@@ -123,18 +148,80 @@ describe('FittingService', () => {
       const result = service.fitGaussian(input);
 
       expect(result).not.toBeNull();
-      // Gaussian area = amplitude * sigma * sqrt(2*pi) ≈ amplitude * sigma * 2.507
       const expectedArea = amplitude * sigma * Math.sqrt(2 * Math.PI);
-      expect(result!.netArea).toBeCloseTo(expectedArea, -2); // within 1%
+      expect(result!.netArea).toBeCloseTo(expectedArea, -2);
+    });
+
+    it('should calculate chi2 and ndf', () => {
+      const bins = generateGaussian(500, 20, 1000, 0, 1000, 1000);
+
+      const input: FitInput = {
+        bins,
+        binWidth: 1,
+        minValue: 0,
+        fitRangeMin: 400,
+        fitRangeMax: 600,
+      };
+
+      const result = service.fitGaussian(input);
+
+      expect(result).not.toBeNull();
+      expect(result!.chi2).toBeGreaterThanOrEqual(0);
+      expect(result!.ndf).toBeGreaterThan(0);
+      expect(result!.chi2 / result!.ndf).toBeLessThan(5);
+    });
+  });
+
+  describe('evaluatePiecewiseBg', () => {
+    it('should return left line value below limitLow', () => {
+      const leftLine = { slope: 2, intercept: 100 };
+      const rightLine = { slope: -1, intercept: 800 };
+      const center = 500;
+      const sigma = 20;
+      const x = 400; // well below 500 - 2.5*20 = 450
+
+      const result = evaluatePiecewiseBg(x, center, sigma, leftLine, rightLine);
+      const expected = leftLine.slope * x + leftLine.intercept;
+      expect(result).toBeCloseTo(expected, 5);
+    });
+
+    it('should return right line value above limitHigh', () => {
+      const leftLine = { slope: 2, intercept: 100 };
+      const rightLine = { slope: -1, intercept: 800 };
+      const center = 500;
+      const sigma = 20;
+      const x = 600; // well above 500 + 2.5*20 = 550
+
+      const result = evaluatePiecewiseBg(x, center, sigma, leftLine, rightLine);
+      const expected = rightLine.slope * x + rightLine.intercept;
+      expect(result).toBeCloseTo(expected, 5);
+    });
+
+    it('should interpolate in peak region', () => {
+      const leftLine = { slope: 0, intercept: 100 };
+      const rightLine = { slope: 0, intercept: 200 };
+      const center = 500;
+      const sigma = 20;
+      // limitLow = 500 - 2.5*20 = 450, limitHigh = 500 + 2.5*20 = 550
+      // At center (midpoint), should be average of left(450) and right(550)
+      const yLow = 100; // leftLine at 450
+      const yHigh = 200; // rightLine at 550
+      const expected = (yLow + yHigh) / 2;
+
+      const result = evaluatePiecewiseBg(center, center, sigma, leftLine, rightLine);
+      expect(result).toBeCloseTo(expected, 5);
+    });
+
+    it('should clamp negative background to zero', () => {
+      const leftLine = { slope: 0, intercept: -50 };
+      const rightLine = { slope: 0, intercept: -50 };
+      const result = evaluatePiecewiseBg(500, 500, 20, leftLine, rightLine);
+      expect(result).toBe(0);
     });
   });
 
   describe('fitLinearBackground', () => {
     it('should fit left background line', () => {
-      // Data with clear background on left side
-      // bins[i] represents value at x = minValue + (i + 0.5) * binWidth
-      // For binWidth=1, minValue=0: x = i + 0.5
-      // We want y = 2x + 50, so bins[i] = 2*(i+0.5) + 50 = 2i + 51
       const bins = new Array(1000).fill(0);
       for (let i = 0; i < 400; i++) {
         bins[i] = 2 * (i + 0.5) + 50;
@@ -149,7 +236,6 @@ describe('FittingService', () => {
 
     it('should fit right background line', () => {
       const bins = new Array(1000).fill(0);
-      // y = -1.5x + 1800, bins[i] = -1.5*(i+0.5) + 1800
       for (let i = 600; i < 1000; i++) {
         bins[i] = -1.5 * (i + 0.5) + 1800;
       }
@@ -166,48 +252,11 @@ describe('FittingService', () => {
     it('should calculate background connecting left and right edges', () => {
       const leftLine = { slope: 1, intercept: 100 };
       const rightLine = { slope: -1, intercept: 1500 };
-      const fitRangeMin = 400;
-      const fitRangeMax = 600;
 
-      const bgLine = service.calculateBackgroundLine(
-        leftLine,
-        rightLine,
-        fitRangeMin,
-        fitRangeMax
-      );
+      const bgLine = service.calculateBackgroundLine(leftLine, rightLine, 400, 600);
 
-      // At x=400: left gives 1*400+100=500
-      // At x=600: right gives -1*600+1500=900
-      // BG line should connect (400, 500) to (600, 900)
-      // slope = (900-500)/(600-400) = 2
-      // intercept = 500 - 2*400 = -300
       expect(bgLine.slope).toBeCloseTo(2, 5);
       expect(bgLine.intercept).toBeCloseTo(-300, 5);
-    });
-  });
-
-  describe('chi-squared calculation', () => {
-    it('should calculate chi2 and ndf', () => {
-      const center = 500;
-      const sigma = 20;
-      const amplitude = 1000;
-      const bins = generateGaussian(center, sigma, amplitude, 0, 1000, 1000);
-
-      const input: FitInput = {
-        bins,
-        binWidth: 1,
-        minValue: 0,
-        fitRangeMin: 400,
-        fitRangeMax: 600,
-      };
-
-      const result = service.fitGaussian(input);
-
-      expect(result).not.toBeNull();
-      expect(result!.chi2).toBeGreaterThanOrEqual(0);
-      expect(result!.ndf).toBeGreaterThan(0);
-      // For perfect Gaussian fit, chi2/ndf should be close to 1
-      expect(result!.chi2 / result!.ndf).toBeLessThan(5);
     });
   });
 });
@@ -252,6 +301,47 @@ function generateGaussianWithBackground(
     const gaussian = amplitude * Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
     const background = bgSlope * x + bgIntercept;
     bins.push(Math.round(gaussian + background));
+  }
+
+  return bins;
+}
+
+/** Generate test data with piecewise BG (different left/right slopes) */
+function generateGaussianWithPiecewiseBg(
+  center: number,
+  sigma: number,
+  amplitude: number,
+  leftSlope: number,
+  leftIntercept: number,
+  rightSlope: number,
+  rightIntercept: number,
+  minValue: number,
+  maxValue: number,
+  numBins: number
+): number[] {
+  const bins: number[] = [];
+  const binWidth = (maxValue - minValue) / numBins;
+  const limitLow = center - BG_RANGE * sigma;
+  const limitHigh = center + BG_RANGE * sigma;
+
+  for (let i = 0; i < numBins; i++) {
+    const x = minValue + (i + 0.5) * binWidth;
+    const gaussian = amplitude * Math.exp(-0.5 * Math.pow((x - center) / sigma, 2));
+
+    let bg: number;
+    if (x < limitLow) {
+      bg = leftIntercept + leftSlope * x;
+    } else if (x > limitHigh) {
+      bg = rightIntercept + rightSlope * x;
+    } else {
+      const yLow = leftIntercept + leftSlope * limitLow;
+      const yHigh = rightIntercept + rightSlope * limitHigh;
+      const slope = (yHigh - yLow) / (limitHigh - limitLow);
+      bg = yLow + slope * (x - limitLow);
+    }
+    bg = Math.max(0, bg);
+
+    bins.push(Math.round(gaussian + bg));
   }
 
   return bins;

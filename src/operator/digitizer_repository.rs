@@ -352,6 +352,7 @@ mod tests {
             board: BoardConfig::default(),
             channel_defaults: ChannelConfig::default(),
             channel_overrides: std::collections::HashMap::new(),
+            channel_names: None,
         }
     }
 

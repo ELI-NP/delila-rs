@@ -162,13 +162,14 @@ struct ComponentMetrics {
 
 ```rust
 enum CommandType {
-    Configure,    // Load configuration
-    Arm,          // Prepare hardware (two-phase start phase 1)
-    Start,        // Begin acquisition (two-phase start phase 2)
-    Stop,         // End acquisition
-    Reset,        // Return to Idle state
-    GetStatus,    // Query current status
-    Ping,         // Check if alive
+    Configure,           // Load configuration
+    Arm,                 // Prepare hardware (two-phase start phase 1)
+    Start,               // Begin acquisition (two-phase start phase 2)
+    Stop,                // End acquisition
+    Reset,               // Return to Idle state
+    GetStatus,           // Query current status
+    Ping,                // Check if alive
+    RegisterChannels,    // Pre-register channels with Monitor (sent after Configure)
 }
 
 struct Command {
@@ -188,7 +189,19 @@ struct CommandResponse {
     message: String,
     payload: Option<String>,
 }
+
+// Channel registration (sent to Monitor after Configure / Tune Up Start)
+struct ChannelRegistration {
+    module_id: u32,      // Source ID (= digitizer_id)
+    channel_id: u32,     // Channel number
+    name: String,        // Per-channel display name (e.g., "LaBr3-A")
+}
 ```
+
+**RegisterChannels コマンド**: Operator が Configure 成功後に Monitor へ送信。
+Monitor は空ヒストグラムを事前生成し、チャンネルリスト API に登録チャンネルを含める。
+`channel_names` が DigitizerConfig に設定されていれば個別名を使用、
+未設定チャンネルは `"{digitizer_name}/Ch{n}"` がデフォルト。
 
 ## 3. Heartbeat System
 
