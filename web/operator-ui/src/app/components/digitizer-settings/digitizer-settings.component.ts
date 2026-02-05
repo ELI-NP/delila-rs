@@ -303,7 +303,7 @@ import {
                   <h3 class="section-title">Data Acquisition</h3>
                   <div class="form-grid">
                     <mat-form-field appearance="outline">
-                      <mat-label>Record Length {{ config.firmware === 'PSD2' ? '(ns)' : '(samples)' }}</mat-label>
+                      <mat-label>Record Length (ns)</mat-label>
                       <input matInput type="number" [(ngModel)]="config.board.record_length" />
                     </mat-form-field>
 

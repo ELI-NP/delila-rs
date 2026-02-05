@@ -19,6 +19,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
+/// Time step in ns for PSD1/PHA1 (500 MS/s → 1 sample = 2 ns).
+/// Used to convert ns config values to samples before writing to DevTree.
+const TIME_STEP_NS: u32 = 2;
+
 /// Digitizer configuration
 ///
 /// Represents complete configuration for a CAEN digitizer.
@@ -208,12 +212,9 @@ pub struct ChannelConfig {
     /// Record length in ns (PSD2 per-channel)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record_length_ns: Option<u32>,
-    /// Pre-trigger in ns (PSD2)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Pre-trigger in ns (all FW). PSD1/PHA1: converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "pre_trigger")]
     pub pre_trigger_ns: Option<u32>,
-    /// Pre-trigger in samples (PSD1/PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pre_trigger: Option<u32>,
     /// Waveform downsampling factor (PSD2: "1","2","4","8")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wave_downsampling: Option<String>,
@@ -231,18 +232,15 @@ pub struct ChannelConfig {
     /// Trigger threshold in ADC counts
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_threshold: Option<u32>,
-    /// CFD delay in ns (PSD2)
+    /// CFD delay in ns (PSD2/PSD1). PSD1: converted to samples at apply time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cfd_delay_ns: Option<u32>,
     /// CFD fraction (PSD2: "25","50","75","100")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cfd_fraction: Option<String>,
-    /// Trigger holdoff in ns (PSD2)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Trigger holdoff in ns (all FW). PSD1/PHA1: converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "trigger_holdoff")]
     pub trigger_holdoff_ns: Option<u32>,
-    /// Trigger holdoff in samples (PSD1/PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trigger_holdoff: Option<u32>,
     /// Smoothing factor (PSD2: "1","2","4","8","16")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smoothing_factor: Option<String>,
@@ -255,9 +253,9 @@ pub struct ChannelConfig {
     /// Fast discriminator smoothing (PHA1: "RCCR2_SMTH_*")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_discr_smoothing: Option<String>,
-    /// Input rise time in samples (PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_rise_time: Option<u32>,
+    /// Input rise time in ns (PHA1). Converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "input_rise_time")]
+    pub input_rise_time_ns: Option<u32>,
     /// Event trigger source (PSD2: "GlobalTriggerSource", "ChSelfTrigger", ...)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_trigger_source: Option<String>,
@@ -278,13 +276,13 @@ pub struct ChannelConfig {
     /// Energy coarse gain (PSD2: "x1","x4",..., PSD1: "CHARGESENS_*")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_coarse_gain: Option<String>,
-    /// Long gate length in ns/samples (PSD)
+    /// Long gate length in ns (PSD). PSD1: converted to samples at apply time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_long_ns: Option<u32>,
-    /// Short gate length in ns/samples (PSD)
+    /// Short gate length in ns (PSD). PSD1: converted to samples at apply time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_short_ns: Option<u32>,
-    /// Pre-gate length in ns/samples (PSD)
+    /// Pre-gate length in ns (PSD). PSD1: converted to samples at apply time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_pre_ns: Option<u32>,
     /// Charge pedestal value (PSD2)
@@ -299,24 +297,24 @@ pub struct ChannelConfig {
     /// Charge pedestal enable (PSD1: "FALSE","TRUE")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub charge_pedestal_en: Option<String>,
-    /// Trapezoid rise time in samples (PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trap_rise_time: Option<u32>,
-    /// Trapezoid flat top in samples (PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trap_flat_top: Option<u32>,
-    /// Trapezoid pole-zero in samples (PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trap_pole_zero: Option<u32>,
+    /// Trapezoid rise time in ns (PHA1). Converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "trap_rise_time")]
+    pub trap_rise_time_ns: Option<u32>,
+    /// Trapezoid flat top in ns (PHA1). Converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "trap_flat_top")]
+    pub trap_flat_top_ns: Option<u32>,
+    /// Trapezoid pole-zero in ns (PHA1). Converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "trap_pole_zero")]
+    pub trap_pole_zero_ns: Option<u32>,
     /// Peaking time as percentage (PHA1, 0.0-100.0%)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peaking_time: Option<f64>,
     /// N samples for peak mean (PHA1: "PEAK_NSMEAN_1",...)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_nsmean: Option<String>,
-    /// Peak holdoff in samples (PHA1)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub peak_holdoff: Option<u32>,
+    /// Peak holdoff in ns (PHA1). Converted to samples at apply time.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "peak_holdoff")]
+    pub peak_holdoff_ns: Option<u32>,
     /// Energy fine gain (PHA1, 1.0-10.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_fine_gain: Option<f32>,
@@ -508,7 +506,6 @@ impl DigitizerConfig {
             merge_field!(fixed_baseline);
             merge_field!(record_length_ns);
             merge_field!(pre_trigger_ns);
-            merge_field!(pre_trigger);
             merge_field!(wave_downsampling);
             merge_field!(input_dynamic);
             merge_field!(coarse_gain);
@@ -518,12 +515,11 @@ impl DigitizerConfig {
             merge_field!(cfd_delay_ns);
             merge_field!(cfd_fraction);
             merge_field!(trigger_holdoff_ns);
-            merge_field!(trigger_holdoff);
             merge_field!(smoothing_factor);
             merge_field!(time_filter_smoothing);
             merge_field!(input_smoothing);
             merge_field!(fast_discr_smoothing);
-            merge_field!(input_rise_time);
+            merge_field!(input_rise_time_ns);
             merge_field!(event_trigger_source);
             merge_field!(wave_trigger_source);
             merge_field!(self_trigger);
@@ -538,12 +534,12 @@ impl DigitizerConfig {
             merge_field!(short_charge_pedestal);
             merge_field!(charge_smoothing);
             merge_field!(charge_pedestal_en);
-            merge_field!(trap_rise_time);
-            merge_field!(trap_flat_top);
-            merge_field!(trap_pole_zero);
+            merge_field!(trap_rise_time_ns);
+            merge_field!(trap_flat_top_ns);
+            merge_field!(trap_pole_zero_ns);
             merge_field!(peaking_time);
             merge_field!(peak_nsmean);
-            merge_field!(peak_holdoff);
+            merge_field!(peak_holdoff_ns);
             merge_field!(energy_fine_gain);
             // Coincidence
             merge_field!(ch_trigger_mask);
@@ -771,13 +767,13 @@ impl DigitizerConfig {
             });
         }
 
-        // Record length: PSD1 = board-level, PSD2 = per-channel
+        // Record length: PSD1/PHA1 = board-level (ns→samples), PSD2 = per-channel (ns direct)
         if let Some(v) = board.record_length {
             match self.firmware {
                 FirmwareType::PSD1 | FirmwareType::PHA1 => {
                     params.push(CaenParameter {
                         path: "/par/reclen".to_string(),
-                        value: v.to_string(),
+                        value: (v / TIME_STEP_NS).to_string(),
                     });
                 }
                 _ => {
@@ -1004,8 +1000,8 @@ impl DigitizerConfig {
                 if let Some(v) = config.fixed_baseline {
                     push_num!("ch_bline_fixed", v);
                 }
-                if let Some(v) = config.pre_trigger {
-                    push_num!("ch_pretrg", v);
+                if let Some(v) = config.pre_trigger_ns {
+                    push_num!("ch_pretrg", v / TIME_STEP_NS);
                 }
                 // ---- Trigger ----
                 if let Some(ref v) = config.discriminator_mode {
@@ -1015,7 +1011,7 @@ impl DigitizerConfig {
                     push_num!("ch_threshold", v);
                 }
                 if let Some(v) = config.cfd_delay_ns {
-                    push_num!("ch_cfd_delay", v);
+                    push_num!("ch_cfd_delay", v / TIME_STEP_NS);
                 }
                 if let Some(ref v) = config.cfd_fraction {
                     push_str!("ch_cfd_fraction", v);
@@ -1023,8 +1019,8 @@ impl DigitizerConfig {
                 if let Some(ref v) = config.input_smoothing {
                     push_str!("ch_cfd_smoothexp", v);
                 }
-                if let Some(v) = config.trigger_holdoff {
-                    push_num!("ch_trg_holdoff", v);
+                if let Some(v) = config.trigger_holdoff_ns {
+                    push_num!("ch_trg_holdoff", v / TIME_STEP_NS);
                 }
                 if let Some(ref v) = config.self_trigger {
                     push_str!("ch_self_trg_enable", v);
@@ -1040,13 +1036,13 @@ impl DigitizerConfig {
                     push_str!("ch_energy_cgain", v);
                 }
                 if let Some(v) = config.gate_long_ns {
-                    push_num!("ch_gate", v);
+                    push_num!("ch_gate", v / TIME_STEP_NS);
                 }
                 if let Some(v) = config.gate_short_ns {
-                    push_num!("ch_gateshort", v);
+                    push_num!("ch_gateshort", v / TIME_STEP_NS);
                 }
                 if let Some(v) = config.gate_pre_ns {
-                    push_num!("ch_gatepre", v);
+                    push_num!("ch_gatepre", v / TIME_STEP_NS);
                 }
                 if let Some(ref v) = config.charge_pedestal_en {
                     push_str!("ch_pedestal_en", v);
@@ -1084,21 +1080,21 @@ impl DigitizerConfig {
                 if let Some(ref v) = config.baseline_avg {
                     push_str!("ch_bline_nsmean", v);
                 }
-                if let Some(v) = config.pre_trigger {
-                    push_num!("ch_pretrg", v);
+                if let Some(v) = config.pre_trigger_ns {
+                    push_num!("ch_pretrg", v / TIME_STEP_NS);
                 }
                 // ---- Trigger ----
                 if let Some(v) = config.trigger_threshold {
                     push_num!("ch_threshold", v);
                 }
-                if let Some(v) = config.trigger_holdoff {
-                    push_num!("ch_trg_holdoff", v);
+                if let Some(v) = config.trigger_holdoff_ns {
+                    push_num!("ch_trg_holdoff", v / TIME_STEP_NS);
                 }
                 if let Some(ref v) = config.fast_discr_smoothing {
                     push_str!("ch_rccr2_smooth", v);
                 }
-                if let Some(v) = config.input_rise_time {
-                    push_num!("ch_rccr2_rise", v);
+                if let Some(v) = config.input_rise_time_ns {
+                    push_num!("ch_rccr2_rise", v / TIME_STEP_NS);
                 }
                 if let Some(ref v) = config.self_trigger {
                     push_str!("ch_self_trg_enable", v);
@@ -1110,14 +1106,14 @@ impl DigitizerConfig {
                     push_str!("ch_out_propagate", v);
                 }
                 // ---- Energy ----
-                if let Some(v) = config.trap_rise_time {
-                    push_num!("ch_trap_trise", v);
+                if let Some(v) = config.trap_rise_time_ns {
+                    push_num!("ch_trap_trise", v / TIME_STEP_NS);
                 }
-                if let Some(v) = config.trap_flat_top {
-                    push_num!("ch_trap_tflat", v);
+                if let Some(v) = config.trap_flat_top_ns {
+                    push_num!("ch_trap_tflat", v / TIME_STEP_NS);
                 }
-                if let Some(v) = config.trap_pole_zero {
-                    push_num!("ch_tdecay", v);
+                if let Some(v) = config.trap_pole_zero_ns {
+                    push_num!("ch_tdecay", v / TIME_STEP_NS);
                 }
                 if let Some(v) = config.peaking_time {
                     push_num!("ch_trap_ftd", v);
@@ -1125,8 +1121,8 @@ impl DigitizerConfig {
                 if let Some(ref v) = config.peak_nsmean {
                     push_str!("ch_peak_nsmean", v);
                 }
-                if let Some(v) = config.peak_holdoff {
-                    push_num!("ch_peak_holdoff", v);
+                if let Some(v) = config.peak_holdoff_ns {
+                    push_num!("ch_peak_holdoff", v / TIME_STEP_NS);
                 }
                 if let Some(v) = config.energy_fine_gain {
                     push_num!("ch_fgain", v);
@@ -1464,5 +1460,108 @@ mod tests {
 
         let ch1 = config.get_channel_config(1);
         assert_eq!(ch1.enabled, Some("False".to_string())); // Overridden
+    }
+
+    #[test]
+    fn test_psd1_ns_to_samples_conversion() {
+        let mut config = DigitizerConfig::new(0, "Test PSD1", FirmwareType::PSD1);
+        // Set time params in ns
+        config.channel_defaults.pre_trigger_ns = Some(80); // 80 ns = 40 samples
+        config.channel_defaults.cfd_delay_ns = Some(20); // 20 ns = 10 samples
+        config.channel_defaults.trigger_holdoff_ns = Some(1000); // 1000 ns = 500 samples
+        config.channel_defaults.gate_long_ns = Some(400); // 400 ns = 200 samples
+        config.channel_defaults.gate_short_ns = Some(100); // 100 ns = 50 samples
+        config.channel_defaults.gate_pre_ns = Some(60); // 60 ns = 30 samples
+                                                        // Board-level record length in ns
+        config.board.record_length = Some(2048); // 2048 ns = 1024 samples
+
+        let params = config.to_caen_parameters();
+
+        // Verify channel time params are converted to samples (÷2)
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..7/par/ch_pretrg" && p.value == "40"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..7/par/ch_cfd_delay" && p.value == "10"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..7/par/ch_trg_holdoff" && p.value == "500"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..7/par/ch_gate" && p.value == "200"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..7/par/ch_gateshort" && p.value == "50"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..7/par/ch_gatepre" && p.value == "30"));
+        // Board-level record length converted to samples
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/par/reclen" && p.value == "1024"));
+    }
+
+    #[test]
+    fn test_pha1_ns_to_samples_conversion() {
+        let mut config = DigitizerConfig::new(0, "Test PHA1", FirmwareType::PHA1);
+        // Set time params in ns
+        config.channel_defaults.pre_trigger_ns = Some(128); // 128 ns = 64 samples
+        config.channel_defaults.trigger_holdoff_ns = Some(16); // 16 ns = 8 samples
+        config.channel_defaults.input_rise_time_ns = Some(32); // 32 ns = 16 samples
+        config.channel_defaults.trap_rise_time_ns = Some(1000); // 1000 ns = 500 samples
+        config.channel_defaults.trap_flat_top_ns = Some(200); // 200 ns = 100 samples
+        config.channel_defaults.trap_pole_zero_ns = Some(50000); // 50000 ns = 25000 samples
+        config.channel_defaults.peak_holdoff_ns = Some(500); // 500 ns = 250 samples
+        config.board.record_length = Some(4000); // 4000 ns = 2000 samples
+
+        let params = config.to_caen_parameters();
+
+        // PHA1 has 32 channels → /ch/0..31/ range
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_pretrg" && p.value == "64"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_trg_holdoff" && p.value == "8"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_rccr2_rise" && p.value == "16"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_trap_trise" && p.value == "500"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_trap_tflat" && p.value == "100"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_tdecay" && p.value == "25000"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/ch/0..31/par/ch_peak_holdoff" && p.value == "250"));
+        assert!(params
+            .iter()
+            .any(|p| p.path == "/par/reclen" && p.value == "2000"));
+    }
+
+    #[test]
+    fn test_psd1_serde_alias_backward_compat() {
+        // Old config format with sample-based field names should still deserialize
+        let json = r#"{
+            "digitizer_id": 0,
+            "name": "Old PSD1",
+            "firmware": "PSD1",
+            "num_channels": 8,
+            "board": {},
+            "channel_defaults": {
+                "pre_trigger": 40,
+                "trigger_holdoff": 500
+            }
+        }"#;
+
+        let config: DigitizerConfig = serde_json::from_str(json).unwrap();
+        // Old field names should map to the _ns fields via serde alias
+        assert_eq!(config.channel_defaults.pre_trigger_ns, Some(40));
+        assert_eq!(config.channel_defaults.trigger_holdoff_ns, Some(500));
     }
 }

@@ -32,7 +32,7 @@ const PSD1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'input_dynamic', label: 'Input Dynamic', type: 'enum', options: ['INDYN_2_0_VPP', 'INDYN_0_5_VPP'], setInRun: true },
   { key: 'baseline_avg', label: 'N Samples Baseline', type: 'enum', options: ['BLINE_NSMEAN_FIXED', 'BLINE_NSMEAN_16', 'BLINE_NSMEAN_64', 'BLINE_NSMEAN_256', 'BLINE_NSMEAN_1024'] },
   { key: 'fixed_baseline', label: 'Fixed Baseline', type: 'number', min: 0, max: 16383, setInRun: true },
-  { key: 'pre_trigger', label: 'Pre-trigger', type: 'number', unit: 'samples', min: 40, max: 2016 },
+  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 80, max: 4032 },
 ];
 
 const PHA_INPUT_PARAMS: ChannelParamDef[] = [
@@ -41,7 +41,7 @@ const PHA_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
   { key: 'coarse_gain', label: 'Coarse Gain', type: 'enum', options: ['COARSE_GAIN_X1', 'COARSE_GAIN_X4'], setInRun: true },
   { key: 'baseline_avg', label: 'N Samples Baseline', type: 'enum', options: ['BLINE_NSMEAN_FIXED', 'BLINE_NSMEAN_16', 'BLINE_NSMEAN_64', 'BLINE_NSMEAN_256', 'BLINE_NSMEAN_1024', 'BLINE_NSMEAN_4096', 'BLINE_NSMEAN_16384'] },
-  { key: 'pre_trigger', label: 'Pre-trigger', type: 'number', unit: 'samples', min: 64, max: 2000 },
+  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 128, max: 4000 },
 ];
 
 // --- Trigger -----------------------------------------------------------------
@@ -61,10 +61,10 @@ const PSD2_TRIGGER_PARAMS: ChannelParamDef[] = [
 const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'discriminator_mode', label: 'Discriminator', type: 'enum', options: ['DISCR_MODE_LED', 'DISCR_MODE_CFD'], setInRun: true },
   { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, setInRun: true },
-  { key: 'cfd_delay_ns', label: 'CFD Delay', type: 'number', unit: 'samples', min: 0, max: 510, setInRun: true },
+  { key: 'cfd_delay_ns', label: 'CFD Delay', type: 'number', unit: 'ns', min: 0, max: 1020, setInRun: true },
   { key: 'cfd_fraction', label: 'CFD Fraction', type: 'enum', options: ['CFD_FRACTLIST_25', 'CFD_FRACTLIST_50', 'CFD_FRACTLIST_75', 'CFD_FRACTLIST_100'], setInRun: true },
   { key: 'input_smoothing', label: 'Input Smoothing', type: 'enum', options: ['CFD_SMOOTH_EXP_1', 'CFD_SMOOTH_EXP_2', 'CFD_SMOOTH_EXP_4', 'CFD_SMOOTH_EXP_8', 'CFD_SMOOTH_EXP_16'] },
-  { key: 'trigger_holdoff', label: 'Trigger Holdoff', type: 'number', unit: 'samples', min: 0, max: 524280, setInRun: true },
+  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 0, max: 1048560, setInRun: true },
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'trigger_out_propagate', label: 'Trigger Out Prop.', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -72,9 +72,9 @@ const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
 
 const PHA_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, setInRun: true },
-  { key: 'trigger_holdoff', label: 'Trigger Holdoff', type: 'number', unit: 'samples', min: 8, max: 8184, setInRun: true },
+  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368, setInRun: true },
   { key: 'fast_discr_smoothing', label: 'Fast Discr Smooth', type: 'enum', options: ['RCCR2_SMTH_1', 'RCCR2_SMTH_2', 'RCCR2_SMTH_4', 'RCCR2_SMTH_8', 'RCCR2_SMTH_16', 'RCCR2_SMTH_32', 'RCCR2_SMTH_64', 'RCCR2_SMTH_128'] },
-  { key: 'input_rise_time', label: 'Input Rise Time', type: 'number', unit: 'samples', min: 16, max: 2040 },
+  { key: 'input_rise_time_ns', label: 'Input Rise Time', type: 'number', unit: 'ns', min: 32, max: 4080 },
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'trigger_out_propagate', label: 'Trigger Out Prop.', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -94,19 +94,19 @@ const PSD2_ENERGY_PARAMS: ChannelParamDef[] = [
 
 const PSD1_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'energy_coarse_gain', label: 'Energy Coarse Gain', type: 'enum', options: ['CHARGESENS_2.5_FC_LSB_VPP', 'CHARGESENS_10_FC_LSB_VPP', 'CHARGESENS_40_FC_LSB_VPP', 'CHARGESENS_160_FC_LSB_VPP', 'CHARGESENS_640_FC_LSB_VPP', 'CHARGESENS_2560_FC_LSB_VPP'], setInRun: true },
-  { key: 'gate_long_ns', label: 'Gate Long', type: 'number', unit: 'samples', min: 4, max: 32766, setInRun: true },
-  { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'samples', min: 2, max: 2046, setInRun: true },
-  { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'samples', min: 0, max: 510 },
+  { key: 'gate_long_ns', label: 'Gate Long', type: 'number', unit: 'ns', min: 8, max: 65532, setInRun: true },
+  { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'ns', min: 4, max: 4092, setInRun: true },
+  { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'ns', min: 0, max: 1020 },
   { key: 'charge_pedestal_en', label: 'Charge Pedestal', type: 'enum', options: ['FALSE', 'TRUE'] },
 ];
 
 const PHA_ENERGY_PARAMS: ChannelParamDef[] = [
-  { key: 'trap_rise_time', label: 'Trap Rise Time', type: 'number', unit: 'samples', min: 8, max: 32760 },
-  { key: 'trap_flat_top', label: 'Trap Flat Top', type: 'number', unit: 'samples', min: 8, max: 8184 },
-  { key: 'trap_pole_zero', label: 'Trap Pole Zero', type: 'number', unit: 'samples', min: 8, max: 524280 },
+  { key: 'trap_rise_time_ns', label: 'Trap Rise Time', type: 'number', unit: 'ns', min: 16, max: 65520 },
+  { key: 'trap_flat_top_ns', label: 'Trap Flat Top', type: 'number', unit: 'ns', min: 16, max: 16368 },
+  { key: 'trap_pole_zero_ns', label: 'Trap Pole Zero', type: 'number', unit: 'ns', min: 16, max: 1048560 },
   { key: 'peaking_time', label: 'Peaking Time', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
   { key: 'peak_nsmean', label: 'N Samples Peak', type: 'enum', options: ['PEAK_NSMEAN_1', 'PEAK_NSMEAN_4', 'PEAK_NSMEAN_16', 'PEAK_NSMEAN_64'] },
-  { key: 'peak_holdoff', label: 'Peak Holdoff', type: 'number', unit: 'samples', min: 8, max: 8184 },
+  { key: 'peak_holdoff_ns', label: 'Peak Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368 },
   { key: 'energy_fine_gain', label: 'Energy Fine Gain', type: 'number', min: 1.0, max: 10.0, setInRun: true },
 ];
 

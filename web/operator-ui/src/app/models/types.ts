@@ -143,7 +143,6 @@ export interface ChannelConfig {
   fixed_baseline?: number;
   record_length_ns?: number;
   pre_trigger_ns?: number;
-  pre_trigger?: number;
   wave_downsampling?: string;
   input_dynamic?: string;
   coarse_gain?: string;
@@ -153,12 +152,11 @@ export interface ChannelConfig {
   cfd_delay_ns?: number;
   cfd_fraction?: string;
   trigger_holdoff_ns?: number;
-  trigger_holdoff?: number;
   smoothing_factor?: string;
   time_filter_smoothing?: string;
   input_smoothing?: string;
   fast_discr_smoothing?: string;
-  input_rise_time?: number;
+  input_rise_time_ns?: number;
   event_trigger_source?: string;
   wave_trigger_source?: string;
   self_trigger?: string;
@@ -173,12 +171,12 @@ export interface ChannelConfig {
   short_charge_pedestal?: number;
   charge_smoothing?: string;
   charge_pedestal_en?: string;
-  trap_rise_time?: number;
-  trap_flat_top?: number;
-  trap_pole_zero?: number;
+  trap_rise_time_ns?: number;
+  trap_flat_top_ns?: number;
+  trap_pole_zero_ns?: number;
   peaking_time?: number;
   peak_nsmean?: string;
-  peak_holdoff?: number;
+  peak_holdoff_ns?: number;
   energy_fine_gain?: number;
   // --- Coincidence ---
   ch_trigger_mask?: string;

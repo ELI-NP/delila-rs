@@ -4,7 +4,7 @@
   "firmware": "PSD1",
   "num_channels": 8,
   "board": {
-    "record_length": 1024,
+    "record_length": 2048,
     "waveforms_enabled": false,
     "extra": {
       "startmode": "START_MODE_SW",
@@ -16,9 +16,9 @@
     "dc_offset": 50.0,
     "polarity": "Negative",
     "trigger_threshold": 500,
-    "gate_long_ns": 200,
-    "gate_short_ns": 50,
-    "gate_pre_ns": 30,
+    "gate_long_ns": 400,
+    "gate_short_ns": 100,
+    "gate_pre_ns": 60,
     "extra": {
       "ch_extras_opt": "EXTRAS_OPT_TT48_FLAGS_FINETT"
     }
