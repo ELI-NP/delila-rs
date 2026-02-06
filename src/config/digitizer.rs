@@ -21,6 +21,10 @@ use utoipa::ToSchema;
 
 /// Time step in ns for PSD1/PHA1 (500 MS/s → 1 sample = 2 ns).
 /// Used to convert ns config values to samples before writing to DevTree.
+///
+/// TODO: Currently hardcoded for DT5730 (500 MS/s). If DT5725 (250 MS/s, 4 ns/sample)
+/// or other sampling rates are needed, this should be derived from DeviceInfo.sampling_rate_sps
+/// or stored per-digitizer in DigitizerConfig.
 const TIME_STEP_NS: u32 = 2;
 
 /// Digitizer configuration
@@ -174,6 +178,56 @@ pub struct BoardConfig {
     /// Enable waveform readout
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waveforms_enabled: Option<bool>,
+
+    // ---- Virtual Probes (PSD1/PHA1 only) ----
+    /// Analog Probe 1 (PSD1: "VPROBE_INPUT", "VPROBE_CFD")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vtrace_probe_0: Option<String>,
+
+    /// Analog Probe 2 (PSD1: "VPROBE_NONE", "VPROBE_BASELINE", "VPROBE_CFD")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vtrace_probe_1: Option<String>,
+
+    /// Digital Probe 1 (PSD1: "VPROBE_GATE", "VPROBE_OVERTHRESHOLD", etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vtrace_probe_2: Option<String>,
+
+    /// Digital Probe 2 (PSD1: "VPROBE_GATESHORT", "VPROBE_OVERTHRESHOLD", etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vtrace_probe_3: Option<String>,
+
+    // ---- PSD1/PHA1 Trigger Configuration ----
+    /// External trigger enable (PSD1/PHA1: "FALSE", "TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ext_trigger_enable: Option<String>,
+
+    /// Software trigger enable (PSD1/PHA1: "FALSE", "TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sw_trigger_enable: Option<String>,
+
+    /// I/O level (PSD1/PHA1: "FPIOTYPE_NIM", "FPIOTYPE_TTL")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub io_level: Option<String>,
+
+    /// External clock enable (PSD1/PHA1: "FALSE", "TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ext_clock: Option<String>,
+
+    /// Start delay in samples (PSD1/PHA1: 0-4080)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_delay: Option<u32>,
+
+    /// Extras enable (PSD1/PHA1: "FALSE", "TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras_enabled: Option<String>,
+
+    /// Event aggregation (PSD1/PHA1: 1-1023)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_aggregation: Option<u32>,
+
+    /// Coincidence TrgOut window in samples (PSD1/PHA1: 0-8184)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinc_trgout: Option<u32>,
 
     /// Additional board parameters as key-value pairs
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -348,6 +402,32 @@ pub struct ChannelConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pileup_rejection: Option<String>,
 
+    // ---- PSD1/PHA1 Extended Coincidence ----
+    /// Trigger latency mode (PSD1: "TRG_LATENCY_MODE_NONE", "_COUPLES", "_ONETOALL")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_latency: Option<String>,
+    /// Coincidence mask (PSD1/PHA1: 0-15)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinc_mask: Option<u32>,
+    /// Coincidence operation (PSD1/PHA1: "COINC_OPERATION_OR", "_AND", "_MAJ")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinc_operation: Option<String>,
+    /// Majority level (PSD1/PHA1: 0-7)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinc_majority_level: Option<u32>,
+    /// External trigger coincidence (PSD1/PHA1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinc_trgext: Option<String>,
+    /// Software trigger coincidence (PSD1/PHA1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinc_trgsw: Option<String>,
+    /// Pileup gap in LSB (PSD1: 0-4095)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pileup_gap: Option<u32>,
+    /// Pileup counting enable (PSD1: "FALSE","TRUE")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pileup_counting_en: Option<String>,
+
     // ---- Waveform ----
     /// Wave saving mode (PSD2: "Always","OnRequest")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -435,6 +515,39 @@ impl DigitizerConfig {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
+    }
+
+    /// Sanitize configuration by removing fields that don't apply to this firmware.
+    ///
+    /// This should be called before saving to ensure the config file doesn't contain
+    /// invalid fields (e.g., `global_trigger_source` for PSD1/PHA1).
+    pub fn sanitize_for_firmware(&mut self) {
+        if self.firmware.is_dig1() {
+            // PSD1/PHA1: Remove PSD2-only board fields
+            self.board.global_trigger_source = None;
+
+            // Remove PSD2-only channel fields from defaults
+            self.channel_defaults.event_trigger_source = None;
+            self.channel_defaults.wave_trigger_source = None;
+            self.channel_defaults.wave_saving = None;
+            self.channel_defaults.ch_trigger_mask = None;
+            self.channel_defaults.anti_coincidence_mask = None;
+            self.channel_defaults.coincidence_window_ns = None;
+            self.channel_defaults.ch_veto_width_ns = None;
+            self.channel_defaults.event_selector = None;
+
+            // Remove from all channel overrides
+            for (_, ch_config) in self.channel_overrides.iter_mut() {
+                ch_config.event_trigger_source = None;
+                ch_config.wave_trigger_source = None;
+                ch_config.wave_saving = None;
+                ch_config.ch_trigger_mask = None;
+                ch_config.anti_coincidence_mask = None;
+                ch_config.coincidence_window_ns = None;
+                ch_config.ch_veto_width_ns = None;
+                ch_config.event_selector = None;
+            }
+        }
     }
 
     /// Create a new digitizer config with defaults for the given firmware
@@ -551,6 +664,15 @@ impl DigitizerConfig {
             merge_field!(ch_veto_width_ns);
             merge_field!(event_selector);
             merge_field!(pileup_rejection);
+            // PSD1/PHA1 Extended Coincidence
+            merge_field!(trigger_latency);
+            merge_field!(coinc_mask);
+            merge_field!(coinc_operation);
+            merge_field!(coinc_majority_level);
+            merge_field!(coinc_trgext);
+            merge_field!(coinc_trgsw);
+            merge_field!(pileup_gap);
+            merge_field!(pileup_counting_en);
             // Waveform
             merge_field!(wave_saving);
             merge_field!(analog_probe_0);
@@ -670,6 +792,15 @@ impl DigitizerConfig {
                 "ch_gateshort",
                 "ch_veto_src",
                 "ch_pur_en",
+                // Extended Coincidence
+                "ch_trg_latency",
+                "ch_coinc_mask",
+                "ch_coinc_operation",
+                "ch_coinc_majlev",
+                "ch_coinc_trgext",
+                "ch_coinc_trgsw",
+                "ch_purgap",
+                "ch_pu_count_en",
             ]),
             FirmwareType::PHA1 => HashSet::from([
                 // Board
@@ -690,6 +821,13 @@ impl DigitizerConfig {
                 "ch_trap_ftd",
                 "ch_fgain",
                 "ch_veto_src",
+                // Extended Coincidence
+                "ch_trg_latency",
+                "ch_coinc_mask",
+                "ch_coinc_operation",
+                "ch_coinc_majlev",
+                "ch_coinc_trgext",
+                "ch_coinc_trgsw",
             ]),
         }
     }
@@ -697,30 +835,47 @@ impl DigitizerConfig {
     fn add_board_parameters(&self, params: &mut Vec<CaenParameter>) {
         let board = &self.board;
 
+        // DIG1 (PSD1/PHA1) uses different parameter paths than DIG2 (PSD2)
+        let is_dig1 = matches!(self.firmware, FirmwareType::PSD1 | FirmwareType::PHA1);
+        let start_path = if is_dig1 {
+            "/par/startmode"
+        } else {
+            "/par/startsource"
+        };
+        let gpio_path = if is_dig1 {
+            "/par/out_selection"
+        } else {
+            "/par/gpiomode"
+        };
+
         // Sync parameters (applied before other board params)
         if let Some(ref sync) = self.sync {
             // Start source (from sync config takes priority)
             if let Some(ref v) = sync.start_source {
                 params.push(CaenParameter {
-                    path: "/par/startsource".to_string(),
+                    path: start_path.to_string(),
                     value: v.clone(),
                 });
             }
 
-            // TrgOut source (master only)
-            if let Some(ref v) = sync.trgout_source {
-                params.push(CaenParameter {
-                    path: "/par/trgoutsource".to_string(),
-                    value: v.clone(),
-                });
+            // TrgOut source (master only) - PSD2 only
+            if !is_dig1 {
+                if let Some(ref v) = sync.trgout_source {
+                    params.push(CaenParameter {
+                        path: "/par/trgoutsource".to_string(),
+                        value: v.clone(),
+                    });
+                }
             }
 
-            // SIN source (slave only)
-            if let Some(ref v) = sync.sin_source {
-                params.push(CaenParameter {
-                    path: "/par/sinsource".to_string(),
-                    value: v.clone(),
-                });
+            // SIN source (slave only) - PSD2 only
+            if !is_dig1 {
+                if let Some(ref v) = sync.sin_source {
+                    params.push(CaenParameter {
+                        path: "/par/sinsource".to_string(),
+                        value: v.clone(),
+                    });
+                }
             }
         }
 
@@ -733,7 +888,7 @@ impl DigitizerConfig {
         {
             if let Some(ref v) = board.start_source {
                 params.push(CaenParameter {
-                    path: "/par/startsource".to_string(),
+                    path: start_path.to_string(),
                     value: v.clone(),
                 });
             }
@@ -741,7 +896,7 @@ impl DigitizerConfig {
 
         if let Some(ref v) = board.gpio_mode {
             params.push(CaenParameter {
-                path: "/par/gpiomode".to_string(),
+                path: gpio_path.to_string(),
                 value: v.clone(),
             });
         }
@@ -760,20 +915,24 @@ impl DigitizerConfig {
             });
         }
 
-        if let Some(ref v) = board.global_trigger_source {
-            params.push(CaenParameter {
-                path: "/par/globaltriggersource".to_string(),
-                value: v.clone(),
-            });
+        // Global trigger source - PSD2 only (does not exist for PSD1/PHA1)
+        if !is_dig1 {
+            if let Some(ref v) = board.global_trigger_source {
+                params.push(CaenParameter {
+                    path: "/par/globaltriggersource".to_string(),
+                    value: v.clone(),
+                });
+            }
         }
 
-        // Record length: PSD1/PHA1 = board-level (ns→samples), PSD2 = per-channel (ns direct)
+        // Record length: PSD1/PHA1 = board-level (ns), PSD2 = per-channel (ns)
+        // DevTree expuom: -9 indicates ns unit for all firmware types
         if let Some(v) = board.record_length {
             match self.firmware {
                 FirmwareType::PSD1 | FirmwareType::PHA1 => {
                     params.push(CaenParameter {
                         path: "/par/reclen".to_string(),
-                        value: (v / TIME_STEP_NS).to_string(),
+                        value: v.to_string(),
                     });
                 }
                 _ => {
@@ -786,15 +945,96 @@ impl DigitizerConfig {
             }
         }
 
-        // Waveform enable: PSD1 only (PSD2 uses per-channel WaveTriggerSource)
+        // Waveform enable: PSD1/PHA1 only (PSD2 uses per-channel WaveTriggerSource)
         if let Some(v) = board.waveforms_enabled {
             if matches!(self.firmware, FirmwareType::PSD1 | FirmwareType::PHA1) {
                 params.push(CaenParameter {
                     path: "/par/waveforms".to_string(),
-                    value: v.to_string().to_lowercase(),
+                    value: if v { "TRUE" } else { "FALSE" }.to_string(),
                 });
             }
             // PSD2: waveform is controlled by channel-level wave_trigger_source
+        }
+
+        // Virtual Probes (VTrace): PSD1/PHA1 only
+        // These control which signals are recorded in the waveform data
+        if matches!(self.firmware, FirmwareType::PSD1 | FirmwareType::PHA1) {
+            if let Some(ref v) = board.vtrace_probe_0 {
+                params.push(CaenParameter {
+                    path: "/vtrace/0/par/vtrace_probe".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(ref v) = board.vtrace_probe_1 {
+                params.push(CaenParameter {
+                    path: "/vtrace/1/par/vtrace_probe".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(ref v) = board.vtrace_probe_2 {
+                params.push(CaenParameter {
+                    path: "/vtrace/2/par/vtrace_probe".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(ref v) = board.vtrace_probe_3 {
+                params.push(CaenParameter {
+                    path: "/vtrace/3/par/vtrace_probe".to_string(),
+                    value: v.clone(),
+                });
+            }
+        }
+
+        // PSD1/PHA1-specific board parameters
+        if is_dig1 {
+            if let Some(ref v) = board.ext_trigger_enable {
+                params.push(CaenParameter {
+                    path: "/par/trg_ext_enable".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(ref v) = board.sw_trigger_enable {
+                params.push(CaenParameter {
+                    path: "/par/trg_sw_enable".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(ref v) = board.io_level {
+                params.push(CaenParameter {
+                    path: "/par/iolevel".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(ref v) = board.ext_clock {
+                params.push(CaenParameter {
+                    path: "/par/dt_ext_clock".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(v) = board.start_delay {
+                params.push(CaenParameter {
+                    path: "/par/start_delay".to_string(),
+                    value: v.to_string(),
+                });
+            }
+            if let Some(ref v) = board.extras_enabled {
+                params.push(CaenParameter {
+                    path: "/par/extras".to_string(),
+                    value: v.clone(),
+                });
+            }
+            if let Some(v) = board.event_aggregation {
+                params.push(CaenParameter {
+                    path: "/par/eventaggr".to_string(),
+                    value: v.to_string(),
+                });
+            }
+            if let Some(v) = board.coinc_trgout {
+                params.push(CaenParameter {
+                    path: "/par/coinc_trgout".to_string(),
+                    value: v.to_string(),
+                });
+            }
         }
 
         // Extra parameters
@@ -1057,6 +1297,31 @@ impl DigitizerConfig {
                 if let Some(ref v) = config.pileup_rejection {
                     push_str!("ch_pur_en", v);
                 }
+                // ---- PSD1 Extended Coincidence ----
+                if let Some(ref v) = config.trigger_latency {
+                    push_str!("ch_trg_latency", v);
+                }
+                if let Some(v) = config.coinc_mask {
+                    push_num!("ch_coinc_mask", v);
+                }
+                if let Some(ref v) = config.coinc_operation {
+                    push_str!("ch_coinc_operation", v);
+                }
+                if let Some(v) = config.coinc_majority_level {
+                    push_num!("ch_coinc_majlev", v);
+                }
+                if let Some(ref v) = config.coinc_trgext {
+                    push_str!("ch_coinc_trgext", v);
+                }
+                if let Some(ref v) = config.coinc_trgsw {
+                    push_str!("ch_coinc_trgsw", v);
+                }
+                if let Some(v) = config.pileup_gap {
+                    push_num!("ch_purgap", v);
+                }
+                if let Some(ref v) = config.pileup_counting_en {
+                    push_str!("ch_pu_count_en", v);
+                }
             }
             FirmwareType::PHA1 => {
                 // ---- Input ----
@@ -1133,6 +1398,25 @@ impl DigitizerConfig {
                 }
                 if let Some(ref v) = config.ch_veto_source {
                     push_str!("ch_veto_src", v);
+                }
+                // ---- PHA1 Extended Coincidence ----
+                if let Some(ref v) = config.trigger_latency {
+                    push_str!("ch_trg_latency", v);
+                }
+                if let Some(v) = config.coinc_mask {
+                    push_num!("ch_coinc_mask", v);
+                }
+                if let Some(ref v) = config.coinc_operation {
+                    push_str!("ch_coinc_operation", v);
+                }
+                if let Some(v) = config.coinc_majority_level {
+                    push_num!("ch_coinc_majlev", v);
+                }
+                if let Some(ref v) = config.coinc_trgext {
+                    push_str!("ch_coinc_trgext", v);
+                }
+                if let Some(ref v) = config.coinc_trgsw {
+                    push_str!("ch_coinc_trgsw", v);
                 }
             }
         }
@@ -1496,10 +1780,10 @@ mod tests {
         assert!(params
             .iter()
             .any(|p| p.path == "/ch/0..7/par/ch_gatepre" && p.value == "30"));
-        // Board-level record length converted to samples
+        // Board-level record length in ns (DevTree expuom: -9)
         assert!(params
             .iter()
-            .any(|p| p.path == "/par/reclen" && p.value == "1024"));
+            .any(|p| p.path == "/par/reclen" && p.value == "2048"));
     }
 
     #[test]
@@ -1539,9 +1823,10 @@ mod tests {
         assert!(params
             .iter()
             .any(|p| p.path == "/ch/0..31/par/ch_peak_holdoff" && p.value == "250"));
+        // Board-level record length in ns (DevTree expuom: -9)
         assert!(params
             .iter()
-            .any(|p| p.path == "/par/reclen" && p.value == "2000"));
+            .any(|p| p.path == "/par/reclen" && p.value == "4000"));
     }
 
     #[test]
@@ -1563,5 +1848,81 @@ mod tests {
         // Old field names should map to the _ns fields via serde alias
         assert_eq!(config.channel_defaults.pre_trigger_ns, Some(40));
         assert_eq!(config.channel_defaults.trigger_holdoff_ns, Some(500));
+    }
+
+    #[test]
+    fn test_psd1_board_params_use_correct_paths() {
+        let mut config = DigitizerConfig::new(0, "Test PSD1", FirmwareType::PSD1);
+        config.board.start_source = Some("START_MODE_SW".to_string());
+        config.board.gpio_mode = Some("OUT_PROPAGATION_RUN".to_string());
+        config.board.global_trigger_source = Some("ITLA".to_string()); // Should be ignored
+
+        let params = config.to_caen_parameters();
+
+        // PSD1 should use /par/startmode, NOT /par/startsource
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/startmode" && p.value == "START_MODE_SW"),
+            "PSD1 should use /par/startmode"
+        );
+        assert!(
+            !params.iter().any(|p| p.path == "/par/startsource"),
+            "PSD1 should NOT use /par/startsource"
+        );
+
+        // PSD1 should use /par/out_selection, NOT /par/gpiomode
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/out_selection" && p.value == "OUT_PROPAGATION_RUN"),
+            "PSD1 should use /par/out_selection"
+        );
+        assert!(
+            !params.iter().any(|p| p.path == "/par/gpiomode"),
+            "PSD1 should NOT use /par/gpiomode"
+        );
+
+        // PSD1 should NOT send globaltriggersource
+        assert!(
+            !params
+                .iter()
+                .any(|p| p.path.contains("globaltriggersource")),
+            "PSD1 should NOT have globaltriggersource"
+        );
+    }
+
+    #[test]
+    fn test_psd2_board_params_use_correct_paths() {
+        let mut config = DigitizerConfig::new(0, "Test PSD2", FirmwareType::PSD2);
+        config.board.start_source = Some("SWcmd".to_string());
+        config.board.gpio_mode = Some("Run".to_string());
+        config.board.global_trigger_source = Some("ITLA".to_string());
+
+        let params = config.to_caen_parameters();
+
+        // PSD2 should use /par/startsource
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/startsource" && p.value == "SWcmd"),
+            "PSD2 should use /par/startsource"
+        );
+
+        // PSD2 should use /par/gpiomode
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/gpiomode" && p.value == "Run"),
+            "PSD2 should use /par/gpiomode"
+        );
+
+        // PSD2 should have globaltriggersource
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/globaltriggersource" && p.value == "ITLA"),
+            "PSD2 should have globaltriggersource"
+        );
     }
 }

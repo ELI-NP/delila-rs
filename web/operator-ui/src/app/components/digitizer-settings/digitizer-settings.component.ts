@@ -171,7 +171,7 @@ import {
                     } @else {
                       <mat-form-field appearance="outline">
                         <mat-label>Ext Clock</mat-label>
-                        <mat-select [(value)]="config.board.extra!['dt_ext_clock']">
+                        <mat-select [(value)]="config.board.ext_clock">
                           <mat-option value="FALSE">Disabled</mat-option>
                           <mat-option value="TRUE">Enabled</mat-option>
                         </mat-select>
@@ -179,7 +179,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Start Delay (samples)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.extra!['start_delay']" min="0" max="4080" />
+                        <input matInput type="number" [(ngModel)]="config.board.start_delay" min="0" max="4080" />
                       </mat-form-field>
                     }
                   </div>
@@ -187,10 +187,10 @@ import {
                   <mat-divider></mat-divider>
                   <h3 class="section-title">Trigger &amp; I/O</h3>
                   <div class="form-grid">
-                    <mat-form-field appearance="outline">
-                      <mat-label>Global Trigger Source</mat-label>
-                      <mat-select [(value)]="config.board.global_trigger_source">
-                        @if (config.firmware === 'PSD2') {
+                    @if (config.firmware === 'PSD2') {
+                      <mat-form-field appearance="outline">
+                        <mat-label>Global Trigger Source</mat-label>
+                        <mat-select [(value)]="config.board.global_trigger_source">
                           <mat-option value="TrgIn">TrgIn</mat-option>
                           <mat-option value="P0">P0</mat-option>
                           <mat-option value="TestPulse">TestPulse</mat-option>
@@ -203,17 +203,13 @@ import {
                           <mat-option value="ITLA_OR_ITLB">ITLA_OR_ITLB</mat-option>
                           <mat-option value="EncodedClkIn">EncodedClkIn</mat-option>
                           <mat-option value="GPIO">GPIO</mat-option>
-                        } @else {
-                          <mat-option value="SwTrg">Software Trigger</mat-option>
-                          <mat-option value="TestPulse">Test Pulse</mat-option>
-                          <mat-option value="ITLA">Internal Trigger</mat-option>
-                        }
-                      </mat-select>
-                    </mat-form-field>
+                        </mat-select>
+                      </mat-form-field>
+                    }
 
                     <mat-form-field appearance="outline">
                       <mat-label>FPIO Type</mat-label>
-                      <mat-select [(value)]="config.board.extra!['iolevel']">
+                      <mat-select [(value)]="config.board.io_level">
                         @if (config.firmware === 'PSD2') {
                           <mat-option value="NIM">NIM</mat-option>
                           <mat-option value="TTL">TTL</mat-option>
@@ -224,14 +220,16 @@ import {
                       </mat-select>
                     </mat-form-field>
 
-                    <mat-form-field appearance="outline">
-                      <mat-label>GPO Mode</mat-label>
-                      <mat-select [(value)]="config.board.gpio_mode">
-                        @for (opt of gpoModeOptions(config.firmware); track opt) {
-                          <mat-option [value]="opt">{{ opt }}</mat-option>
-                        }
-                      </mat-select>
-                    </mat-form-field>
+                    @if (config.firmware === 'PSD2') {
+                      <mat-form-field appearance="outline">
+                        <mat-label>GPO Mode</mat-label>
+                        <mat-select [(value)]="config.board.gpio_mode">
+                          @for (opt of gpoModeOptions(config.firmware); track opt) {
+                            <mat-option [value]="opt">{{ opt }}</mat-option>
+                          }
+                        </mat-select>
+                      </mat-form-field>
+                    }
 
                     @if (config.firmware === 'PSD2') {
                       <mat-form-field appearance="outline">
@@ -245,7 +243,7 @@ import {
                     } @else {
                       <mat-form-field appearance="outline">
                         <mat-label>TRG OUT / GPO</mat-label>
-                        <mat-select [(value)]="config.board.extra!['out_selection']">
+                        <mat-select [(value)]="config.board.gpio_mode">
                           @for (opt of outSelectionOptions(); track opt) {
                             <mat-option [value]="opt">{{ opt }}</mat-option>
                           }
@@ -314,7 +312,7 @@ import {
                     @if (config.firmware !== 'PSD2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Extras</mat-label>
-                        <mat-select [(value)]="config.board.extra!['extras']">
+                        <mat-select [(value)]="config.board.extras_enabled">
                           <mat-option value="TRUE">Enabled</mat-option>
                           <mat-option value="FALSE">Disabled</mat-option>
                         </mat-select>
@@ -322,15 +320,16 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Event Aggregation</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.extra!['eventaggr']" min="1" max="1023" />
+                        <input matInput type="number" [(ngModel)]="config.board.event_aggregation" min="1" max="1023" />
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
                         <mat-label>Coincidence Window (samples)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.extra!['coinc_trgout']" min="0" max="8184" />
+                        <input matInput type="number" [(ngModel)]="config.board.coinc_trgout" min="0" max="8184" />
                       </mat-form-field>
                     }
                   </div>
+
                 </mat-card-content>
               </mat-card>
             </div>
@@ -396,10 +395,11 @@ import {
             </div>
           </mat-tab>
 
-          <!-- Tab 6: Waveform (hidden if empty) -->
-          @if (waveformParams().length > 0) {
-            <mat-tab label="Waveform">
-              <div class="tab-content">
+          <!-- Tab 6: Waveform -->
+          <mat-tab label="Waveform">
+            <div class="tab-content">
+              @if (waveformParams().length > 0) {
+                <!-- PSD2: Channel-level waveform settings -->
                 <app-channel-table
                   [params]="waveformParams()"
                   [numChannels]="config.num_channels"
@@ -409,9 +409,73 @@ import {
                   (defaultChange)="onDefaultChange($event)"
                   (channelChange)="onChannelChange($event)"
                 />
-              </div>
-            </mat-tab>
-          }
+              } @else {
+                <!-- PSD1/PHA: Board-level waveform settings -->
+                <mat-card class="config-card">
+                  <mat-card-content>
+                    <h3 class="section-title">Waveform Acquisition</h3>
+                    <div class="form-grid">
+                      <mat-slide-toggle [(ngModel)]="config.board.waveforms_enabled">
+                        Enable Waveforms
+                      </mat-slide-toggle>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Record Length (ns)</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.board.record_length" />
+                      </mat-form-field>
+                    </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Virtual Probes</h3>
+                    <p class="hint-text">These settings apply to all channels (board-level)</p>
+                    <div class="form-grid">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Analog Probe 1</mat-label>
+                        <mat-select [(value)]="config.board.vtrace_probe_0">
+                          <mat-option value="VPROBE_INPUT">Input</mat-option>
+                          <mat-option value="VPROBE_CFD">CFD</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Analog Probe 2</mat-label>
+                        <mat-select [(value)]="config.board.vtrace_probe_1">
+                          <mat-option value="VPROBE_NONE">None</mat-option>
+                          <mat-option value="VPROBE_BASELINE">Baseline</mat-option>
+                          <mat-option value="VPROBE_CFD">CFD</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Digital Probe 1</mat-label>
+                        <mat-select [(value)]="config.board.vtrace_probe_2">
+                          <mat-option value="VPROBE_GATE">Gate</mat-option>
+                          <mat-option value="VPROBE_OVERTHRESHOLD">Over Threshold</mat-option>
+                          <mat-option value="VPROBE_TRGOUT">Trigger Out</mat-option>
+                          <mat-option value="VPROBE_TRGVALWIN">Trigger Validation Window</mat-option>
+                          <mat-option value="VPROBE_PILEUP">Pileup</mat-option>
+                          <mat-option value="VPROBE_COINCIDENCE">Coincidence</mat-option>
+                          <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Digital Probe 2</mat-label>
+                        <mat-select [(value)]="config.board.vtrace_probe_3">
+                          <mat-option value="VPROBE_GATESHORT">Gate Short</mat-option>
+                          <mat-option value="VPROBE_OVERTHRESHOLD">Over Threshold</mat-option>
+                          <mat-option value="VPROBE_TRGVAL">Trigger Validation</mat-option>
+                          <mat-option value="VPROBE_TRGHOLDOFF">Trigger Holdoff</mat-option>
+                          <mat-option value="VPROBE_PILEUP_TRIGGER">Pileup Trigger</mat-option>
+                          <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                    </div>
+                  </mat-card-content>
+                </mat-card>
+              }
+            </div>
+          </mat-tab>
         </mat-tab-group>
       } @else {
         <mat-card class="no-selection">
@@ -501,6 +565,13 @@ import {
       font-size: 14px;
       font-weight: 500;
       color: #666;
+    }
+
+    .hint-text {
+      font-size: 12px;
+      color: #888;
+      font-style: italic;
+      margin: 4px 0 8px;
     }
 
     .no-params-msg {

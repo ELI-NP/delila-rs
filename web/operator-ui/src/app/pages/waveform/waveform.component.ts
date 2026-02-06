@@ -19,6 +19,9 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatInputModule } from '@angular/material/input';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
+import { MatDividerModule } from '@angular/material/divider';
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
 import { Subject, Subscription, interval, takeUntil, switchMap, forkJoin, of } from 'rxjs';
@@ -62,12 +65,15 @@ interface ChannelChart {
     MatCardModule,
     MatSelectModule,
     MatFormFieldModule,
+    MatInputModule,
     MatButtonModule,
     MatIconModule,
     MatCheckboxModule,
     MatButtonToggleModule,
+    MatSlideToggleModule,
     MatProgressSpinnerModule,
     MatSnackBarModule,
+    MatDividerModule,
     NgxEchartsDirective,
     ChannelTableComponent,
     HistogramChartComponent,
@@ -196,15 +202,73 @@ interface ChannelChart {
                     @for (cat of categoryGrid(); track cat.key) {
                       <div class="param-grid-cell">
                         <div class="param-grid-header">{{ cat.label }}</div>
-                        <app-channel-table
-                          [params]="cat.params"
-                          [numChannels]="config.num_channels"
-                          [defaultValues]="defaultValues()"
-                          [channelValues]="channelValues()"
-                          [visibleChannels]="visibleChannelIndices()"
-                          (defaultChange)="onTuneUpDefaultChange($event)"
-                          (channelChange)="onTuneUpChannelChange($event)"
-                        />
+                        @if (cat.key === 'waveform' && cat.params.length === 0) {
+                          <!-- PSD1/PHA: Board-level waveform settings -->
+                          <div class="board-waveform-panel">
+                            <div class="board-waveform-row">
+                              <mat-slide-toggle [(ngModel)]="config.board.waveforms_enabled">
+                                Enable
+                              </mat-slide-toggle>
+                              <mat-form-field appearance="outline" class="compact-field">
+                                <mat-label>Record Length (ns)</mat-label>
+                                <input matInput type="number" [(ngModel)]="config.board.record_length" />
+                              </mat-form-field>
+                            </div>
+                            <mat-divider></mat-divider>
+                            <div class="board-waveform-row">
+                              <mat-form-field appearance="outline" class="compact-field">
+                                <mat-label>Analog 1</mat-label>
+                                <mat-select [(value)]="config.board.vtrace_probe_0">
+                                  <mat-option value="VPROBE_INPUT">Input</mat-option>
+                                  <mat-option value="VPROBE_CFD">CFD</mat-option>
+                                </mat-select>
+                              </mat-form-field>
+                              <mat-form-field appearance="outline" class="compact-field">
+                                <mat-label>Analog 2</mat-label>
+                                <mat-select [(value)]="config.board.vtrace_probe_1">
+                                  <mat-option value="VPROBE_NONE">None</mat-option>
+                                  <mat-option value="VPROBE_BASELINE">Baseline</mat-option>
+                                  <mat-option value="VPROBE_CFD">CFD</mat-option>
+                                </mat-select>
+                              </mat-form-field>
+                            </div>
+                            <div class="board-waveform-row">
+                              <mat-form-field appearance="outline" class="compact-field">
+                                <mat-label>Digital 1</mat-label>
+                                <mat-select [(value)]="config.board.vtrace_probe_2">
+                                  <mat-option value="VPROBE_GATE">Gate</mat-option>
+                                  <mat-option value="VPROBE_OVERTHRESHOLD">Over Thresh</mat-option>
+                                  <mat-option value="VPROBE_TRGOUT">Trig Out</mat-option>
+                                  <mat-option value="VPROBE_TRGVALWIN">Trig Val Win</mat-option>
+                                  <mat-option value="VPROBE_PILEUP">Pileup</mat-option>
+                                  <mat-option value="VPROBE_COINCIDENCE">Coincidence</mat-option>
+                                  <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                                </mat-select>
+                              </mat-form-field>
+                              <mat-form-field appearance="outline" class="compact-field">
+                                <mat-label>Digital 2</mat-label>
+                                <mat-select [(value)]="config.board.vtrace_probe_3">
+                                  <mat-option value="VPROBE_GATESHORT">Gate Short</mat-option>
+                                  <mat-option value="VPROBE_OVERTHRESHOLD">Over Thresh</mat-option>
+                                  <mat-option value="VPROBE_TRGVAL">Trig Val</mat-option>
+                                  <mat-option value="VPROBE_TRGHOLDOFF">Trig Holdoff</mat-option>
+                                  <mat-option value="VPROBE_PILEUP_TRIGGER">Pileup Trig</mat-option>
+                                  <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                                </mat-select>
+                              </mat-form-field>
+                            </div>
+                          </div>
+                        } @else {
+                          <app-channel-table
+                            [params]="cat.params"
+                            [numChannels]="config.num_channels"
+                            [defaultValues]="defaultValues()"
+                            [channelValues]="channelValues()"
+                            [visibleChannels]="visibleChannelIndices()"
+                            (defaultChange)="onTuneUpDefaultChange($event)"
+                            (channelChange)="onTuneUpChannelChange($event)"
+                          />
+                        }
                       </div>
                     }
                   </div>
@@ -611,6 +675,29 @@ interface ChannelChart {
       font-size: 12px;
       border-bottom: 1px solid #e0e0e0;
     }
+
+    .board-waveform-panel {
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .board-waveform-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .compact-field {
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .compact-field .mat-mdc-form-field-subscript-wrapper {
+      display: none;
+    }
   `,
 })
 export class WaveformPageComponent implements OnInit, OnDestroy {
@@ -703,7 +790,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     if (!config) return [];
     return this.allCategories
       .map(c => ({ ...c, params: getCategoryParams(config.firmware, c.key) }))
-      .filter(c => c.params.length > 0);
+      .filter(c => c.params.length > 0 || c.key === 'waveform');
+  });
+
+  /** Check if firmware uses board-level waveform settings */
+  readonly isBoardLevelWaveform = computed(() => {
+    const config = this.tuneUpConfig();
+    return config?.firmware === 'PSD1' || config?.firmware === 'PHA';
   });
 
   readonly histLogScale = signal(false);
