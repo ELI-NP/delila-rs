@@ -1,7 +1,7 @@
 # Settings UI v2: カテゴリ再編 + SetInRun 対応
 
 **Created:** 2026-02-04
-**Status: ✅ 完了 (Phase 1-4)**
+**Status: ✅ 完了 (Phase 1-6)**
 **Priority:** High — MVP 機能改善
 **前提:** TODO/19 (Settings UI Phase 6) COMPLETED
 
@@ -315,7 +315,7 @@ Phase 5 (結合テスト) ← 全フェーズ完了後
 
 ## Phase 6: PSD1/PHA1 時間単位変換 (ns ↔ samples)
 
-**Status:** 📋 計画中
+**Status:** ✅ 完了
 **前提:** Phase 1-4 完了
 
 ### 背景

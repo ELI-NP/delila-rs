@@ -12,13 +12,13 @@
     "global_trigger_source": "UserTrg",
     "waveforms_enabled": true,
     "extra": {
-      "boardvetopolarity": "ActiveHigh",
-      "enclockoutfp": "True",
       "syncoutmode": "SyncIn",
-      "clocksource": "Internal",
-      "iolevel": "NIM",
       "trgoutmode": "GPIO",
-      "boardvetosource": "Disabled"
+      "enclockoutfp": "True",
+      "boardvetopolarity": "ActiveHigh",
+      "iolevel": "NIM",
+      "boardvetosource": "Disabled",
+      "clocksource": "Internal"
     }
   },
   "channel_defaults": {
@@ -39,7 +39,7 @@
     "smoothing_factor": "1",
     "time_filter_smoothing": "Disabled",
     "event_trigger_source": "ChSelfTrigger",
-    "wave_trigger_source": "ChSelfTrigger",
+    "wave_trigger_source": "Disabled",
     "energy_coarse_gain": "x256",
     "gate_long_ns": 400,
     "gate_short_ns": 100,
@@ -56,14 +56,14 @@
     "digital_probe_3": "CFDFilterArmed"
   },
   "channel_overrides": {
+    "16": {
+      "enabled": "True",
+      "trigger_threshold": 300
+    },
     "8": {
       "enabled": "True",
       "dc_offset": 20.0,
       "energy_coarse_gain": "x64"
-    },
-    "16": {
-      "enabled": "True",
-      "trigger_threshold": 300
     }
   }
 }

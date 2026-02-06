@@ -155,10 +155,8 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
         } else {
             source.name.clone()
         };
-        // Convert bind address (tcp://*:port) to connect address (tcp://localhost:port)
-        let address = source
-            .command_address()
-            .replace("tcp://*:", "tcp://localhost:");
+        // Resolve bind address to connect address using source's host
+        let address = source.command_connect_address();
         components.push(ComponentConfig {
             name,
             address,

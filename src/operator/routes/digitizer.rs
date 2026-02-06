@@ -95,7 +95,7 @@ pub(super) async fn list_digitizers(
 
 /// Detect connected digitizer hardware
 ///
-/// Sends a Detect command to all digitizer Reader components (Idle state only).
+/// Sends a Detect command to all digitizer Reader components (Idle or Configured state).
 /// For each detected digitizer, looks up its serial number in MongoDB to find
 /// a previously saved configuration.
 ///
@@ -591,7 +591,7 @@ pub(super) async fn save_digitizer(
 ) -> (StatusCode, Json<ApiResponse>) {
     let configs = state.digitizer_configs.read().await;
 
-    let config = match configs.get(&id) {
+    let mut config = match configs.get(&id) {
         Some(c) => c.clone(),
         None => {
             return (
@@ -601,6 +601,9 @@ pub(super) async fn save_digitizer(
         }
     };
     drop(configs); // Release read lock
+
+    // Sanitize config to remove firmware-incompatible fields before saving
+    config.sanitize_for_firmware();
 
     // Determine save path: use config_file from component if available
     let file_path = state
@@ -686,7 +689,10 @@ pub(super) async fn save_all_digitizers(
 
     for (id, config) in configs.iter() {
         let file_path = state.config_dir.join(format!("digitizer_{}.json", id));
-        match serde_json::to_string_pretty(config) {
+        // Clone and sanitize before saving
+        let mut sanitized_config = config.clone();
+        sanitized_config.sanitize_for_firmware();
+        match serde_json::to_string_pretty(&sanitized_config) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&file_path, json) {
                     errors.push(format!("digitizer_{}: {}", id, e));

@@ -65,6 +65,7 @@ const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'cfd_fraction', label: 'CFD Fraction', type: 'enum', options: ['CFD_FRACTLIST_25', 'CFD_FRACTLIST_50', 'CFD_FRACTLIST_75', 'CFD_FRACTLIST_100'], setInRun: true },
   { key: 'input_smoothing', label: 'Input Smoothing', type: 'enum', options: ['CFD_SMOOTH_EXP_1', 'CFD_SMOOTH_EXP_2', 'CFD_SMOOTH_EXP_4', 'CFD_SMOOTH_EXP_8', 'CFD_SMOOTH_EXP_16'] },
   { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 0, max: 1048560, setInRun: true },
+  { key: 'trigger_latency', label: 'Trigger Latency', type: 'enum', options: ['TRG_LATENCY_MODE_NONE', 'TRG_LATENCY_MODE_COUPLES', 'TRG_LATENCY_MODE_ONETOALL'], setInRun: true },
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'trigger_out_propagate', label: 'Trigger Out Prop.', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -75,6 +76,7 @@ const PHA_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368, setInRun: true },
   { key: 'fast_discr_smoothing', label: 'Fast Discr Smooth', type: 'enum', options: ['RCCR2_SMTH_1', 'RCCR2_SMTH_2', 'RCCR2_SMTH_4', 'RCCR2_SMTH_8', 'RCCR2_SMTH_16', 'RCCR2_SMTH_32', 'RCCR2_SMTH_64', 'RCCR2_SMTH_128'] },
   { key: 'input_rise_time_ns', label: 'Input Rise Time', type: 'number', unit: 'ns', min: 32, max: 4080 },
+  { key: 'trigger_latency', label: 'Trigger Latency', type: 'enum', options: ['TRG_LATENCY_MODE_NONE', 'TRG_LATENCY_MODE_COUPLES', 'TRG_LATENCY_MODE_ONETOALL'], setInRun: true },
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'trigger_out_propagate', label: 'Trigger Out Prop.', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -123,13 +125,25 @@ const PSD2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
 ];
 
 const PSD1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
-  { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'] },
+  { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
+  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, setInRun: true },
+  { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
+  { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, setInRun: true },
+  { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
+  { key: 'coinc_trgsw', label: 'Coinc TrgSW', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['VETO_SRC_DISABLED', 'VETO_SRC_COMMON', 'VETO_SRC_INDIVIDUAL', 'VETO_SRC_SATURATION'], setInRun: true },
   { key: 'pileup_rejection', label: 'Pileup Rejection', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
+  { key: 'pileup_gap', label: 'Pileup Gap', type: 'number', unit: 'LSB', min: 0, max: 4095, setInRun: true },
+  { key: 'pileup_counting_en', label: 'Pileup Counting', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
 ];
 
 const PHA_COINCIDENCE_PARAMS: ChannelParamDef[] = [
-  { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'] },
+  { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
+  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, setInRun: true },
+  { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
+  { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, setInRun: true },
+  { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
+  { key: 'coinc_trgsw', label: 'Coinc TrgSW', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['VETO_SRC_DISABLED', 'VETO_SRC_COMMON', 'VETO_SRC_INDIVIDUAL', 'VETO_SRC_SATURATION'], setInRun: true },
 ];
 

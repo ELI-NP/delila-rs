@@ -307,12 +307,12 @@ pub fn handle_command<E: CommandHandlerExt>(
         }
 
         Command::Detect => {
-            // Detect is only valid from Idle state and does not change state
-            if current != ComponentState::Idle {
+            // Detect is valid from Idle or Configured state (ReadLoop is alive in both)
+            if current != ComponentState::Idle && current != ComponentState::Configured {
                 return CommandResponse::error(
                     current,
                     format!(
-                        "Detect only available from Idle state, currently {}",
+                        "Detect only available from Idle or Configured state, currently {}",
                         current
                     ),
                 );

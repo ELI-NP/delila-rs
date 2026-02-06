@@ -37,6 +37,8 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config = Config::load(&args.merger.common.config_file)?;
+    // Auto-resolve subscribe addresses from source hosts if not specified in TOML
+    let resolved_subscribe = config.resolved_merger_subscribe();
     let merger_net = config
         .network
         .merger
@@ -47,7 +49,7 @@ async fn main() -> Result<()> {
     // CLI overrides config file
     let merger_config = MergerConfig {
         sub_addresses: if args.merger.sub_addresses.is_empty() {
-            merger_net.subscribe
+            resolved_subscribe
         } else {
             args.merger.sub_addresses
         },

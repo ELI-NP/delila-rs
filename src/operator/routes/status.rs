@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{extract::State, http::StatusCode, Json};
 
-use crate::common::RunConfig;
+use crate::common::{Command, RunConfig};
 
 use super::super::{
     ApiResponse, ConfigureRequest, CurrentRunInfo, RunStats, RunStatus, StartRequest, SystemState,
@@ -122,6 +122,35 @@ pub(super) async fn configure(
         .with_results(results);
 
     let status = if response.success {
+        // Push digitizer configs to remote Readers
+        let configs = state.digitizer_configs.read().await;
+        for comp in &state.components {
+            if comp.is_digitizer {
+                if let Some(source_id) = comp.source_id {
+                    if let Some(config) = configs.get(&source_id) {
+                        tracing::info!(
+                            source_id,
+                            name = %comp.name,
+                            "Pushing digitizer config to Reader"
+                        );
+                        if let Err(e) = state
+                            .client
+                            .send_command(
+                                &comp.address,
+                                &Command::ApplyDigitizerConfig(Box::new(config.clone())),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                source_id,
+                                error = %e,
+                                "Failed to send ApplyDigitizerConfig command"
+                            );
+                        }
+                    }
+                }
+            }
+        }
         StatusCode::OK
     } else {
         StatusCode::BAD_REQUEST
@@ -455,6 +484,56 @@ pub(super) async fn run_start(
             );
         }
         Ok(_) => {}
+    }
+
+    // Phase 1.5: Apply digitizer configs to remote Readers
+    // This pushes configs over ZMQ so remote Readers don't need local config files
+    {
+        let configs = state.digitizer_configs.read().await;
+        for comp in &state.components {
+            if comp.is_digitizer {
+                if let Some(source_id) = comp.source_id {
+                    // digitizer_id == source_id by convention
+                    if let Some(config) = configs.get(&source_id) {
+                        tracing::info!(
+                            source_id,
+                            name = %comp.name,
+                            "Pushing digitizer config to Reader"
+                        );
+                        match state
+                            .client
+                            .send_command(
+                                &comp.address,
+                                &Command::ApplyDigitizerConfig(Box::new(config.clone())),
+                            )
+                            .await
+                        {
+                            Ok(resp) if resp.success => {
+                                tracing::info!(
+                                    source_id,
+                                    params = resp.message,
+                                    "Digitizer config applied successfully"
+                                );
+                            }
+                            Ok(resp) => {
+                                tracing::warn!(
+                                    source_id,
+                                    error = %resp.message,
+                                    "Failed to apply digitizer config"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    source_id,
+                                    error = %e,
+                                    "Failed to send ApplyDigitizerConfig command"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Register channels with Monitor (best-effort, after configure success)

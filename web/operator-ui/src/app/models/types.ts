@@ -129,6 +129,20 @@ export interface BoardConfig {
   global_trigger_source?: string;
   record_length?: number;
   waveforms_enabled?: boolean;
+  // Virtual Probes (PSD1/PHA1 only)
+  vtrace_probe_0?: string; // Analog Probe 1
+  vtrace_probe_1?: string; // Analog Probe 2
+  vtrace_probe_2?: string; // Digital Probe 1
+  vtrace_probe_3?: string; // Digital Probe 2
+  // PSD1/PHA1 specific
+  ext_trigger_enable?: string;
+  sw_trigger_enable?: string;
+  io_level?: string;
+  ext_clock?: string;
+  start_delay?: number;
+  extras_enabled?: string;
+  event_aggregation?: number;
+  coinc_trgout?: number;
   extra?: Record<string, unknown>;
 }
 
@@ -188,6 +202,15 @@ export interface ChannelConfig {
   ch_veto_width_ns?: number;
   event_selector?: string;
   pileup_rejection?: string;
+  // --- PSD1/PHA1 Extended Coincidence ---
+  trigger_latency?: string;
+  coinc_mask?: number;
+  coinc_operation?: string;
+  coinc_majority_level?: number;
+  coinc_trgext?: string;
+  coinc_trgsw?: string;
+  pileup_gap?: number;
+  pileup_counting_en?: string;
   // --- Waveform ---
   wave_saving?: string;
   analog_probe_0?: string;

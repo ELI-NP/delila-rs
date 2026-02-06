@@ -5,7 +5,7 @@
 # Options:
 #   --no-mongo    Skip MongoDB/Docker startup
 
-CONFIG_FILE="config.toml"
+CONFIG_FILE="config/config_psd1_test.toml"
 BINARY_DIR="./target/release"
 SKIP_MONGO=false
 
@@ -163,6 +163,40 @@ is_emulator() {
     [ "$src_type" = "emulator" ] || [ -z "$src_type" ]
 }
 
+# Function to get source host (defaults to "localhost")
+get_source_host() {
+    local src_id=$1
+    local host
+    host=$(awk -v target_id="$src_id" '
+        /^\[\[network\.sources\]\]/ {
+            if (in_target) { print src_host; printed=1; exit }
+            in_block=1; in_target=0; src_host="localhost"; next
+        }
+        in_block && /^\[/ {
+            if (in_target) { print src_host; printed=1; exit }
+            in_block=0; in_target=0
+        }
+        in_block && /^id *=/ {
+            gsub(/[^0-9]/, "", $3)
+            if ($3 == target_id) in_target=1
+            else in_target=0
+        }
+        in_block && in_target && /^host *=/ {
+            gsub(/.*= *"/, "", $0)
+            gsub(/".*/, "", $0)
+            src_host=$0
+        }
+        END { if (in_target && !printed) print src_host }
+    ' "$CONFIG_FILE")
+    echo "${host:-localhost}"
+}
+
+# Function to check if source is remote (host != localhost)
+is_remote() {
+    local host=$(get_source_host $1)
+    [ "$host" != "localhost" ] && [ "$host" != "127.0.0.1" ]
+}
+
 # Extract source IDs from config
 SOURCE_IDS=$(grep -E "^id = " "$CONFIG_FILE" | head -n $(grep -c "\[\[network.sources\]\]" "$CONFIG_FILE") | awk '{print $3}')
 
@@ -179,9 +213,14 @@ rm -f ./logs/latest
 ln -sf "${TIMESTAMP}" ./logs/latest
 
 # Start emulators or readers based on source type
+REMOTE_SOURCES=()
 for id in $SOURCE_IDS; do
     src_type=$(get_source_type $id)
-    if is_emulator $id; then
+    if is_remote $id; then
+        host=$(get_source_host $id)
+        echo -e "  ${YELLOW}Skipping source $id ($src_type) — remote at $host${NC}"
+        REMOTE_SOURCES+=("$id")
+    elif is_emulator $id; then
         echo "  Starting emulator (source_id=$id)..."
         $BINARY_DIR/emulator --config "$CONFIG_FILE" --source-id "$id" > "$LOG_DIR/emulator_$id.log" 2>&1 &
     else
@@ -221,13 +260,16 @@ fi
 sleep 0.5
 
 echo ""
-echo -e "${GREEN}All components started.${NC}"
+echo -e "${GREEN}All local components started.${NC}"
 echo ""
 echo "Command ports:"
 for id in $SOURCE_IDS; do
     port=$((5560 + id))
     src_type=$(get_source_type $id)
-    if is_emulator $id; then
+    host=$(get_source_host $id)
+    if is_remote $id; then
+        echo -e "  Reader $id:   tcp://${host}:$port ($src_type) ${YELLOW}[REMOTE]${NC}"
+    elif is_emulator $id; then
         echo "  Emulator $id: tcp://localhost:$port"
     else
         echo "  Reader $id:   tcp://localhost:$port ($src_type)"
@@ -236,6 +278,22 @@ done
 echo "  Merger:     tcp://localhost:5570"
 echo "  Recorder:   tcp://localhost:5580"
 echo "  Monitor:    tcp://localhost:5590"
+
+# Print remote Reader instructions if any
+if [ ${#REMOTE_SOURCES[@]} -gt 0 ]; then
+    echo ""
+    echo -e "${CYAN}=== Remote Readers ===${NC}"
+    echo -e "Start these Readers on the remote machines:"
+    echo ""
+    for id in "${REMOTE_SOURCES[@]}"; do
+        host=$(get_source_host $id)
+        src_type=$(get_source_type $id)
+        echo -e "  ${YELLOW}[$host] source_id=$id ($src_type):${NC}"
+        echo "    ./reader --config $CONFIG_FILE --source-id $id"
+        echo ""
+    done
+fi
+
 echo ""
 echo -e "${CYAN}=== Web UI ===${NC}"
 echo -e "  Swagger UI:    ${YELLOW}http://localhost:8080/swagger-ui/${NC}"

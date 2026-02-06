@@ -151,6 +151,18 @@ name = "event_builder"
 path = "src/bin/event_builder.rs"
 required-features = ["root"]
 
+[[bin]]
+name = "psd1_waveform_test"
+path = "src/bin/psd1_waveform_test.rs"
+
+[[bin]]
+name = "psd1_raw_dump"
+path = "src/bin/psd1_raw_dump.rs"
+
+[[bin]]
+name = "psd1_timing_test"
+path = "src/bin/psd1_timing_test.rs"
+
 [[example]]
 name = "test_oxyroot"
 required-features = ["root"]

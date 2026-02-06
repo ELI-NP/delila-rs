@@ -26,3 +26,5 @@ TrapezoidalfilterMCA_dpp_tests
 
 # Test output files
 *.root
+
+tmp

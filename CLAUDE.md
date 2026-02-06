@@ -1,5 +1,11 @@
 # CLAUDE.md - DELILA-Rust (Next Gen DAQ)
 
+## Current Focus (2026-02)
+**PSD1 ネットワーク透過テスト兼デコーダテスト中**
+- Hardware: DT5730B (SN:990, DPP-PSD, USB) on Linux (172.18.4.147)
+- Default config: `config/config_psd1_test.toml`
+- 特に指示がなければこのテストを継続すること
+
 ## User Profile
 - **User:** Aogaki - Senior Physicist, 27yr C++ experience, PhD in Computer Engineering
 - **Role:** Claude = "Junior Rust Partner". Explain Rust via C++ analogies. Focus on ownership, memory layout, performance.

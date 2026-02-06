@@ -2,33 +2,49 @@
   "digitizer_id": 0,
   "name": "PSD1 Ch4 Pulser Test (DT5730B)",
   "firmware": "PSD1",
+  "serial_number": "990",
+  "model": "DT5730B",
   "num_channels": 8,
+  "is_master": false,
   "board": {
-    "record_length": 2048,
-    "waveforms_enabled": false,
-    "extra": {
-      "startmode": "START_MODE_SW",
-      "extras": "TRUE"
-    }
+    "start_source": "START_MODE_SW",
+    "gpio_mode": "OUT_PROPAGATION_RUN",
+    "record_length": 512,
+    "waveforms_enabled": true,
+    "vtrace_probe_0": "VPROBE_INPUT",
+    "vtrace_probe_1": "VPROBE_CFD",
+    "vtrace_probe_2": "VPROBE_GATE",
+    "vtrace_probe_3": "VPROBE_TRIGGER",
+    "io_level": "FPIOTYPE_NIM",
+    "ext_clock": "FALSE",
+    "extras_enabled": "TRUE",
+    "event_aggregation": 1023,
+    "coinc_trgout": 1024
   },
   "channel_defaults": {
-    "enabled": "false",
+    "enabled": "True",
+    "polarity": "POLARITY_NEGATIVE",
     "dc_offset": 50.0,
-    "polarity": "Negative",
+    "baseline_avg": "BLINE_NSMEAN_16",
+    "pre_trigger_ns": 128,
+    "input_dynamic": "INDYN_2_0_VPP",
+    "discriminator_mode": "DISCR_MODE_CFD",
     "trigger_threshold": 500,
-    "gate_long_ns": 400,
+    "cfd_delay_ns": 4,
+    "cfd_fraction": "CFD_FRACTLIST_25",
+    "trigger_holdoff_ns": 256,
+    "input_smoothing": "CFD_SMOOTH_EXP_16",
+    "self_trigger": "TRUE",
+    "global_trigger_gen": "FALSE",
+    "trigger_out_propagate": "FALSE",
+    "energy_coarse_gain": "CHARGESENS_10_FC_LSB_VPP",
+    "gate_long_ns": 256,
     "gate_short_ns": 100,
-    "gate_pre_ns": 60,
-    "extra": {
-      "ch_extras_opt": "EXTRAS_OPT_TT48_FLAGS_FINETT"
-    }
-  },
-  "channel_overrides": {
-    "4": {
-      "enabled": "true",
-      "extra": {
-        "ch_self_trg_enable": "TRUE"
-      }
-    }
+    "gate_pre_ns": 256,
+    "charge_pedestal_en": "FALSE",
+    "coincidence_mode": "TRIGGER_MODE_NORMAL",
+    "ch_veto_source": "VETO_SRC_DISABLED",
+    "pileup_rejection": "FALSE",
+    "trigger_latency": "TRG_LATENCY_MODE_NONE"
   }
 }

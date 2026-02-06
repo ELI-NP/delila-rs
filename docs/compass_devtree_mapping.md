@@ -119,6 +119,15 @@
 | 33 | Extras enable | `extras` | STRING | FALSE, TRUE | No | **新規** |
 | 34 | Event aggregation | `eventaggr` | NUMBER | 1-1023 | No | **新規** |
 
+### Virtual Probes (VTrace) — Waveform Signal Selection
+
+| # | CoMPASS名 | DevTree名 | 型 | 範囲/選択肢 | SetInRun | UI実装 |
+|---|---|---|---|---|---|---|
+| 35 | Analog Probe 1 | `/vtrace/0/par/vtrace_probe` | STRING | VPROBE_INPUT, VPROBE_CFD | Yes | 実装済 |
+| 36 | Analog Probe 2 | `/vtrace/1/par/vtrace_probe` | STRING | VPROBE_NONE, VPROBE_BASELINE, VPROBE_CFD | Yes | 実装済 |
+| 37 | Digital Probe 1 | `/vtrace/2/par/vtrace_probe` | STRING | VPROBE_GATE, VPROBE_OVERTHRESHOLD, VPROBE_TRGOUT, VPROBE_TRGVALWIN, VPROBE_PILEUP, VPROBE_COINCIDENCE, VPROBE_TRIGGER | Yes | 実装済 |
+| 38 | Digital Probe 2 | `/vtrace/3/par/vtrace_probe` | STRING | VPROBE_GATESHORT, VPROBE_OVERTHRESHOLD, VPROBE_TRGVAL, VPROBE_TRGHOLDOFF, VPROBE_PILEUP_TRIGGER, VPROBE_TRIGGER | Yes | 実装済 |
+
 ---
 
 ## PHA1 (DT5730B, DPP_PHA, FW 139.10)

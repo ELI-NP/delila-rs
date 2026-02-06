@@ -12,7 +12,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
-| **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) Phase 6 | **📋 計画中** | PSD1/PHA1 時間単位変換 (ns ↔ samples)。Phase 1-4 完了済 |
+| **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2 全Phase完了 (Phase 1-6)。PSD1/PHA1 ns変換含む |
 | **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
 | - | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **参照** | Event Builder 仕様 |
 
@@ -21,11 +21,10 @@ Claudeセッション開始時に必ず読み込まれます。
 ## 次のセッション候補
 
 - **A:** マルチデジタイザスケーリング MVP 項目 (A1, A3, C3) → `TODO/26_multi_digitizer_scaling.md`
-- **B:** PSD1/PHA1 時間単位変換 ns ↔ samples (Settings UI v2 Phase 6) → `TODO/27_settings_ui_v2.md`
-- **C:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
-- **D:** L2 Filter 実装 (Counter/Flag/Accept) → `TODO/24_l2_filter_implementation.md`
-- **E:** Event Builder L1 の実データ検証 (C++ ELIFANT-Event との出力比較)
-- **F:** rust-embed 統合 (簡単ならやる、難しければ不要)
+- **B:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
+- **C:** L2 Filter 実装 (Counter/Flag/Accept) → `TODO/24_l2_filter_implementation.md`
+- **D:** Event Builder L1 の実データ検証 (C++ ELIFANT-Event との出力比較)
+- **E:** rust-embed 統合 (簡単ならやる、難しければ不要)
 
 ---
 
@@ -97,10 +96,14 @@ Claudeセッション開始時に必ず読み込まれます。
 
 ---
 
+## Known Issues / Future Work
+
+- **TIME_STEP_NS ハードコード:** `src/config/digitizer.rs` の `TIME_STEP_NS = 2` は DT5730 (500 MS/s) 固定。DT5725 (250 MS/s → 4 ns/sample) など別サンプリングレートのデジタイザに対応する場合、`DeviceInfo.sampling_rate_sps` から動的計算するか、`DigitizerConfig` にサンプリングレートを持たせる必要あり。
+
 ## Notes
 
 - **MVP目標:** 2026年3月中旬
-- **現在のフェーズ:** MVP 最終段階 — 主要機能は全て実装済み。残りはスケーリング改善、PSD1/PHA1 ns変換、実機検証
+- **現在のフェーズ:** MVP 最終段階 — 主要機能は全て実装済み。残りはスケーリング改善、実機検証
 - **実機確認済み:**
   - VX2730 (Serial: 52621, DPP_PSD2, 32ch, Ethernet, 172.18.4.57)
   - DT5730B (Serial: 990, DPP_PSD1/PHA1, 8ch, USB)

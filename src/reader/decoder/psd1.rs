@@ -144,7 +144,8 @@ impl DualChannelHeader {
             size += 1;
         }
         if self.samples_enabled {
-            size += self.num_samples_wave as usize * 2;
+            // CAEN spec: waveform words = num_samples_wave * 4 (2 samples per word)
+            size += self.num_samples_wave as usize * 4;
         }
         if self.charge_enabled {
             size += 1;
@@ -461,7 +462,13 @@ impl Psd1Decoder {
         ch_header: &DualChannelHeader,
         pair_index: u8,
     ) -> Result<EventData, String> {
-        // Time tag
+        // Event data order per CAEN PDF (Fig. 2.2):
+        // 1. Time tag (if ET=1)
+        // 2. Waveform (if ES=1)
+        // 3. Extras (if EE=1)
+        // 4. Charge (if EQ=1)
+
+        // 1. Time tag
         let mut trigger_time_tag: u32 = 0;
         let mut channel_flag: u8 = 0;
         if ch_header.time_enabled {
@@ -471,7 +478,14 @@ impl Psd1Decoder {
             trigger_time_tag = w & constants::event::TRIGGER_TIME_MASK;
         }
 
-        // Extras
+        // 2. Waveform (before Extras per PDF spec)
+        let waveform = if ch_header.samples_enabled {
+            Some(self.decode_waveform(data, offset, ch_header))
+        } else {
+            None
+        };
+
+        // 3. Extras (after Waveform per PDF spec)
         let mut extended_time: u16 = 0;
         let mut fine_time: u16 = 0;
         let mut flags: u32 = 0;
@@ -484,14 +498,7 @@ impl Psd1Decoder {
             flags = fl;
         }
 
-        // Waveform
-        let waveform = if ch_header.samples_enabled {
-            Some(self.decode_waveform(data, offset, ch_header))
-        } else {
-            None
-        };
-
-        // Charge
+        // 4. Charge
         let mut charge_long: u16 = 0;
         let mut charge_short: u16 = 0;
         if ch_header.charge_enabled {
@@ -541,7 +548,15 @@ impl Psd1Decoder {
         offset: &mut usize,
         ch_header: &DualChannelHeader,
     ) -> Waveform {
-        let total_words = ch_header.num_samples_wave as usize * 2;
+        // PSD1/PHA1 waveform data format (CAEN spec):
+        // - Channel header word1 bits[0:15] = num_samples / 8 = num_samples_wave
+        // - Waveform words = num_samples_wave * 4 (each word has 2 samples)
+        // - Actual samples = num_samples_wave * 8
+        //
+        // In dual trace mode (DT=1): even samples → probe1, odd → probe2
+        // In single trace mode (DT=0): all samples → probe1
+        // Note: Each sample is duplicated (CAEN style) to match expected array size.
+        let total_words = ch_header.num_samples_wave as usize * 4;
         let total_samples =
             ch_header.num_samples_wave as usize * constants::waveform::SAMPLES_PER_GROUP;
 
@@ -572,17 +587,28 @@ impl Psd1Decoder {
             let s2_dp2 = ((upper >> constants::waveform::DP2_SHIFT) & 1) as u8;
 
             if ch_header.dual_trace {
-                // Even samples = probe1, odd samples = probe2
+                // Dual trace: even samples → probe1, odd samples → probe2
+                // Duplicate each sample (CAEN style: same value at t and t+1)
+                analog_probe1.push(s1_analog);
                 analog_probe1.push(s1_analog);
                 analog_probe2.push(s2_analog);
+                analog_probe2.push(s2_analog);
             } else {
+                // Single trace: all samples to probe1, each duplicated
                 analog_probe1.push(s1_analog);
+                analog_probe1.push(s1_analog);
+                analog_probe1.push(s2_analog);
                 analog_probe1.push(s2_analog);
             }
 
+            // Digital probes: also duplicate each sample
+            digital_probe1.push(s1_dp1);
             digital_probe1.push(s1_dp1);
             digital_probe1.push(s2_dp1);
+            digital_probe1.push(s2_dp1);
             digital_probe2.push(s1_dp2);
+            digital_probe2.push(s1_dp2);
+            digital_probe2.push(s2_dp2);
             digital_probe2.push(s2_dp2);
         }
 
@@ -992,7 +1018,7 @@ mod tests {
     fn test_dual_channel_event_size_with_waveform() {
         let header = DualChannelHeader {
             block_size: 0,
-            num_samples_wave: 4, // 4 * 8 = 32 samples, 4 * 2 = 8 words
+            num_samples_wave: 4, // 4 * 8 = 32 samples, 4 * 4 = 16 words (CAEN spec)
             digital_probe1: 0,
             digital_probe2: 0,
             analog_probe: 0,
@@ -1003,7 +1029,7 @@ mod tests {
             charge_enabled: true,
             dual_trace: false,
         };
-        assert_eq!(header.event_size_words(), 3 + 8); // 3 + 8 waveform words
+        assert_eq!(header.event_size_words(), 3 + 16); // 3 + 16 waveform words
     }
 
     // -----------------------------------------------------------------------
@@ -1366,32 +1392,38 @@ mod tests {
     fn test_decode_waveform_basic() {
         let mut dec = default_decoder();
 
-        let num_samples_wave: u16 = 1; // 1 * 8 = 8 samples, 1 * 2 = 2 words
+        // CAEN spec: num_samples_wave = actual_samples / 8, waveform_words = num_samples_wave * 4
+        let num_samples_wave: u16 = 1; // 1 * 8 = 8 samples, 1 * 4 = 4 words
         let ch_flags = DualChFlags {
             es: true,
             num_samples: num_samples_wave,
             ..Default::default()
         };
-        let waveform_words = num_samples_wave as usize * 2;
+        let waveform_words = num_samples_wave as usize * 4;
         let ch_size = 2 + 3 + waveform_words; // header + event(time+extras+charge) + waveform
         let total_size = 4 + ch_size;
 
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
         data.extend(make_dual_channel_header(ch_size as u32, &ch_flags));
 
-        // Time + Extras (before waveform)
+        // Event data order per CAEN PDF: Time → Waveform → Extras → Charge
+        // 1. Time
         push_u32(&mut data, make_time_word(100, false));
+
+        // 2. Waveform: 4 words = 8 samples
+        // Word 0: sample0=100, sample1=200
+        push_u32(&mut data, 100 | (200 << 16));
+        // Word 1: sample2=300, sample3=400
+        push_u32(&mut data, 300 | (400 << 16));
+        // Word 2: sample4=500, sample5=600
+        push_u32(&mut data, 500 | (600 << 16));
+        // Word 3: sample6=700, sample7=800
+        push_u32(&mut data, 700 | (800 << 16));
+
+        // 3. Extras
         push_u32(&mut data, make_extras_word(0, 0, 0));
 
-        // Waveform: 2 words = 4 samples
-        // Word 0: sample0=100, sample1=200
-        let wf_word0: u32 = 100 | (200 << 16);
-        push_u32(&mut data, wf_word0);
-        // Word 1: sample2=300, sample3=400
-        let wf_word1: u32 = 300 | (400 << 16);
-        push_u32(&mut data, wf_word1);
-
-        // Charge (after waveform)
+        // 4. Charge
         push_u32(&mut data, make_charge_word(500, 250, false));
 
         let raw = RawData::new(data);
@@ -1399,11 +1431,24 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         let wf = events[0].waveform.as_ref().unwrap();
-        assert_eq!(wf.analog_probe1.len(), 4);
+        // CAEN style: each sample is duplicated (16 output samples from 8 data points)
+        assert_eq!(wf.analog_probe1.len(), 16);
         assert_eq!(wf.analog_probe1[0], 100);
-        assert_eq!(wf.analog_probe1[1], 200);
-        assert_eq!(wf.analog_probe1[2], 300);
-        assert_eq!(wf.analog_probe1[3], 400);
+        assert_eq!(wf.analog_probe1[1], 100); // duplicate
+        assert_eq!(wf.analog_probe1[2], 200);
+        assert_eq!(wf.analog_probe1[3], 200); // duplicate
+        assert_eq!(wf.analog_probe1[4], 300);
+        assert_eq!(wf.analog_probe1[5], 300); // duplicate
+        assert_eq!(wf.analog_probe1[6], 400);
+        assert_eq!(wf.analog_probe1[7], 400); // duplicate
+        assert_eq!(wf.analog_probe1[8], 500);
+        assert_eq!(wf.analog_probe1[9], 500); // duplicate
+        assert_eq!(wf.analog_probe1[10], 600);
+        assert_eq!(wf.analog_probe1[11], 600); // duplicate
+        assert_eq!(wf.analog_probe1[12], 700);
+        assert_eq!(wf.analog_probe1[13], 700); // duplicate
+        assert_eq!(wf.analog_probe1[14], 800);
+        assert_eq!(wf.analog_probe1[15], 800); // duplicate
     }
 
     #[test]
@@ -1416,33 +1461,45 @@ mod tests {
             num_samples: num_samples_wave,
             ..Default::default()
         };
-        let waveform_words = num_samples_wave as usize * 2;
+        let waveform_words = num_samples_wave as usize * 4;
         let ch_size = 2 + 3 + waveform_words;
         let total_size = 4 + ch_size;
 
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
         data.extend(make_dual_channel_header(ch_size as u32, &ch_flags));
 
+        // Event data order per CAEN PDF: Time → Waveform → Extras → Charge
+        // 1. Time
         push_u32(&mut data, make_time_word(100, false));
-        push_u32(&mut data, make_extras_word(0, 0, 0));
 
-        // Waveform with digital probes set
-        // Lower: analog=50, DP1=1 (bit14), DP2=0 (bit15)
-        // Upper: analog=60, DP1=0 (bit30), DP2=1 (bit31)
+        // 2. Waveform with digital probes set (4 words)
+        // Word 0: Lower: analog=50, DP1=1 (bit14), DP2=0 (bit15)
+        //         Upper: analog=60, DP1=0 (bit30), DP2=1 (bit31)
         let wf_word: u32 = 50 | (1 << 14) | (60 << 16) | (1 << 31);
         push_u32(&mut data, wf_word);
-        push_u32(&mut data, 0); // Second waveform word
+        push_u32(&mut data, 0); // Word 1
+        push_u32(&mut data, 0); // Word 2
+        push_u32(&mut data, 0); // Word 3
 
+        // 3. Extras
+        push_u32(&mut data, make_extras_word(0, 0, 0));
+
+        // 4. Charge
         push_u32(&mut data, make_charge_word(100, 50, false));
 
         let raw = RawData::new(data);
         let events = dec.decode(&raw);
         let wf = events[0].waveform.as_ref().unwrap();
 
+        // CAEN style: each sample duplicated
         assert_eq!(wf.digital_probe1[0], 1); // s1 dp1
+        assert_eq!(wf.digital_probe1[1], 1); // s1 dp1 duplicate
         assert_eq!(wf.digital_probe2[0], 0); // s1 dp2
-        assert_eq!(wf.digital_probe1[1], 0); // s2 dp1
-        assert_eq!(wf.digital_probe2[1], 1); // s2 dp2
+        assert_eq!(wf.digital_probe2[1], 0); // s1 dp2 duplicate
+        assert_eq!(wf.digital_probe1[2], 0); // s2 dp1
+        assert_eq!(wf.digital_probe1[3], 0); // s2 dp1 duplicate
+        assert_eq!(wf.digital_probe2[2], 1); // s2 dp2
+        assert_eq!(wf.digital_probe2[3], 1); // s2 dp2 duplicate
     }
 
     #[test]
@@ -1456,36 +1513,57 @@ mod tests {
             num_samples: num_samples_wave,
             ..Default::default()
         };
-        let waveform_words = num_samples_wave as usize * 2;
+        let waveform_words = num_samples_wave as usize * 4;
         let ch_size = 2 + 3 + waveform_words;
         let total_size = 4 + ch_size;
 
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
         data.extend(make_dual_channel_header(ch_size as u32, &ch_flags));
 
+        // Event data order per CAEN PDF: Time → Waveform → Extras → Charge
+        // 1. Time
         push_u32(&mut data, make_time_word(100, false));
+
+        // 2. Waveform - Dual trace: even=probe1, odd=probe2 (4 words)
+        // Word 0: lower(probe1)=100, upper(probe2)=200
+        push_u32(&mut data, 100 | (200 << 16));
+        // Word 1: lower(probe1)=300, upper(probe2)=400
+        push_u32(&mut data, 300 | (400 << 16));
+        // Word 2: lower(probe1)=500, upper(probe2)=600
+        push_u32(&mut data, 500 | (600 << 16));
+        // Word 3: lower(probe1)=700, upper(probe2)=800
+        push_u32(&mut data, 700 | (800 << 16));
+
+        // 3. Extras
         push_u32(&mut data, make_extras_word(0, 0, 0));
 
-        // Dual trace: even=probe1, odd=probe2
-        // Word 0: lower(probe1)=100, upper(probe2)=200
-        let wf_word0: u32 = 100 | (200 << 16);
-        push_u32(&mut data, wf_word0);
-        // Word 1: lower(probe1)=300, upper(probe2)=400
-        let wf_word1: u32 = 300 | (400 << 16);
-        push_u32(&mut data, wf_word1);
-
+        // 4. Charge
         push_u32(&mut data, make_charge_word(100, 50, false));
 
         let raw = RawData::new(data);
         let events = dec.decode(&raw);
         let wf = events[0].waveform.as_ref().unwrap();
 
-        assert_eq!(wf.analog_probe1.len(), 2); // Even samples
-        assert_eq!(wf.analog_probe2.len(), 2); // Odd samples
+        // CAEN style: each sample duplicated in dual trace mode
+        // 4 words = 4 probe1 samples, 4 probe2 samples, each duplicated
+        assert_eq!(wf.analog_probe1.len(), 8); // 4 samples * 2 (duplicated)
+        assert_eq!(wf.analog_probe2.len(), 8); // 4 samples * 2 (duplicated)
         assert_eq!(wf.analog_probe1[0], 100);
+        assert_eq!(wf.analog_probe1[1], 100); // duplicate
         assert_eq!(wf.analog_probe2[0], 200);
-        assert_eq!(wf.analog_probe1[1], 300);
-        assert_eq!(wf.analog_probe2[1], 400);
+        assert_eq!(wf.analog_probe2[1], 200); // duplicate
+        assert_eq!(wf.analog_probe1[2], 300);
+        assert_eq!(wf.analog_probe1[3], 300); // duplicate
+        assert_eq!(wf.analog_probe2[2], 400);
+        assert_eq!(wf.analog_probe2[3], 400); // duplicate
+        assert_eq!(wf.analog_probe1[4], 500);
+        assert_eq!(wf.analog_probe1[5], 500); // duplicate
+        assert_eq!(wf.analog_probe2[4], 600);
+        assert_eq!(wf.analog_probe2[5], 600); // duplicate
+        assert_eq!(wf.analog_probe1[6], 700);
+        assert_eq!(wf.analog_probe1[7], 700); // duplicate
+        assert_eq!(wf.analog_probe2[6], 800);
+        assert_eq!(wf.analog_probe2[7], 800); // duplicate
     }
 
     // -----------------------------------------------------------------------
