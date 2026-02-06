@@ -22,11 +22,6 @@ use utoipa::ToSchema;
 /// Time step in ns for PSD1/PHA1 (500 MS/s → 1 sample = 2 ns).
 /// Used to convert ns config values to samples before writing to DevTree.
 ///
-/// TODO: Currently hardcoded for DT5730 (500 MS/s). If DT5725 (250 MS/s, 4 ns/sample)
-/// or other sampling rates are needed, this should be derived from DeviceInfo.sampling_rate_sps
-/// or stored per-digitizer in DigitizerConfig.
-const TIME_STEP_NS: u32 = 2;
-
 /// Digitizer configuration
 ///
 /// Represents complete configuration for a CAEN digitizer.
@@ -1241,7 +1236,7 @@ impl DigitizerConfig {
                     push_num!("ch_bline_fixed", v);
                 }
                 if let Some(v) = config.pre_trigger_ns {
-                    push_num!("ch_pretrg", v / TIME_STEP_NS);
+                    push_num!("ch_pretrg", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 // ---- Trigger ----
                 if let Some(ref v) = config.discriminator_mode {
@@ -1251,7 +1246,7 @@ impl DigitizerConfig {
                     push_num!("ch_threshold", v);
                 }
                 if let Some(v) = config.cfd_delay_ns {
-                    push_num!("ch_cfd_delay", v / TIME_STEP_NS);
+                    push_num!("ch_cfd_delay", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(ref v) = config.cfd_fraction {
                     push_str!("ch_cfd_fraction", v);
@@ -1260,7 +1255,7 @@ impl DigitizerConfig {
                     push_str!("ch_cfd_smoothexp", v);
                 }
                 if let Some(v) = config.trigger_holdoff_ns {
-                    push_num!("ch_trg_holdoff", v / TIME_STEP_NS);
+                    push_num!("ch_trg_holdoff", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(ref v) = config.self_trigger {
                     push_str!("ch_self_trg_enable", v);
@@ -1276,13 +1271,13 @@ impl DigitizerConfig {
                     push_str!("ch_energy_cgain", v);
                 }
                 if let Some(v) = config.gate_long_ns {
-                    push_num!("ch_gate", v / TIME_STEP_NS);
+                    push_num!("ch_gate", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(v) = config.gate_short_ns {
-                    push_num!("ch_gateshort", v / TIME_STEP_NS);
+                    push_num!("ch_gateshort", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(v) = config.gate_pre_ns {
-                    push_num!("ch_gatepre", v / TIME_STEP_NS);
+                    push_num!("ch_gatepre", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(ref v) = config.charge_pedestal_en {
                     push_str!("ch_pedestal_en", v);
@@ -1346,20 +1341,20 @@ impl DigitizerConfig {
                     push_str!("ch_bline_nsmean", v);
                 }
                 if let Some(v) = config.pre_trigger_ns {
-                    push_num!("ch_pretrg", v / TIME_STEP_NS);
+                    push_num!("ch_pretrg", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 // ---- Trigger ----
                 if let Some(v) = config.trigger_threshold {
                     push_num!("ch_threshold", v);
                 }
                 if let Some(v) = config.trigger_holdoff_ns {
-                    push_num!("ch_trg_holdoff", v / TIME_STEP_NS);
+                    push_num!("ch_trg_holdoff", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(ref v) = config.fast_discr_smoothing {
                     push_str!("ch_rccr2_smooth", v);
                 }
                 if let Some(v) = config.input_rise_time_ns {
-                    push_num!("ch_rccr2_rise", v / TIME_STEP_NS);
+                    push_num!("ch_rccr2_rise", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(ref v) = config.self_trigger {
                     push_str!("ch_self_trg_enable", v);
@@ -1372,13 +1367,13 @@ impl DigitizerConfig {
                 }
                 // ---- Energy ----
                 if let Some(v) = config.trap_rise_time_ns {
-                    push_num!("ch_trap_trise", v / TIME_STEP_NS);
+                    push_num!("ch_trap_trise", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(v) = config.trap_flat_top_ns {
-                    push_num!("ch_trap_tflat", v / TIME_STEP_NS);
+                    push_num!("ch_trap_tflat", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(v) = config.trap_pole_zero_ns {
-                    push_num!("ch_tdecay", v / TIME_STEP_NS);
+                    push_num!("ch_tdecay", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(v) = config.peaking_time {
                     push_num!("ch_trap_ftd", v);
@@ -1387,7 +1382,7 @@ impl DigitizerConfig {
                     push_str!("ch_peak_nsmean", v);
                 }
                 if let Some(v) = config.peak_holdoff_ns {
-                    push_num!("ch_peak_holdoff", v / TIME_STEP_NS);
+                    push_num!("ch_peak_holdoff", v); // DevTree expects nanoseconds directly (expuom: -9)
                 }
                 if let Some(v) = config.energy_fine_gain {
                     push_num!("ch_fgain", v);

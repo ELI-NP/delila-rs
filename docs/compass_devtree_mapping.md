@@ -80,7 +80,7 @@
 | # | CoMPASS名 | DevTree名 | 型 | 範囲/選択肢 | SetInRun | UI実装 |
 |---|---|---|---|---|---|---|
 | 1 | Enable | `ch_enabled` | STRING | FALSE, TRUE | Yes | 実装済 |
-| 2 | Pre-trigger | `ch_pretrg` | NUMBER | 40-2016 samples | No | **新規** |
+| 2 | Pre-trigger | `ch_pretrg` | NUMBER | 40-2016 ns (expuom:-9) | No | **新規** |
 | 3 | Polarity | `ch_polarity` | STRING | POLARITY_POSITIVE, POLARITY_NEGATIVE | Yes | 実装済 |
 | 4 | N samples baseline | `ch_bline_nsmean` | STRING | BLINE_NSMEAN_FIXED, _16, _64, _256, _1024 | No | **新規** |
 | 5 | Fixed baseline value | `ch_bline_fixed` | NUMBER | 0-16383 | Yes | **新規** |
@@ -88,14 +88,14 @@
 | 7 | Input dynamic | `ch_indyn` | STRING | INDYN_2_0_VPP, INDYN_0_5_VPP | Yes | **新規** |
 | 8 | Discriminator mode | `ch_discr_mode` | STRING | DISCR_MODE_LED, DISCR_MODE_CFD | Yes | **新規** |
 | 9 | Threshold | `ch_threshold` | NUMBER | 0-16383 LSB | Yes | 実装済 |
-| 10 | Trigger holdoff | `ch_trg_holdoff` | NUMBER | 0-524280 samples | Yes | **新規** |
-| 11 | CFD delay | `ch_cfd_delay` | NUMBER | 0-510 samples | Yes | 実装済 |
+| 10 | Trigger holdoff | `ch_trg_holdoff` | NUMBER | 0-524280 ns (expuom:-9) | Yes | **新規** |
+| 11 | CFD delay | `ch_cfd_delay` | NUMBER | 0-510 ns (expuom:-9) | Yes | 実装済 |
 | 12 | CFD fraction | `ch_cfd_fraction` | STRING | CFD_FRACTLIST_25, _50, _75, _100 | Yes | **新規** |
 | 13 | Input Smoothing | `ch_cfd_smoothexp` | STRING | CFD_SMOOTH_EXP_1, _2, _4, _8, _16 | No | **新規** |
 | 14 | Energy coarse gain | `ch_energy_cgain` | STRING | CHARGESENS_2.5/10/40/160/640/2560_FC_LSB_VPP | Yes | **新規** |
-| 15 | Gate (Long) | `ch_gate` | NUMBER | 4-32766 samples | Yes | 実装済 |
-| 16 | Short gate | `ch_gateshort` | NUMBER | 2-2046 samples | Yes | 実装済 |
-| 17 | Pre-gate | `ch_gatepre` | NUMBER | 0-510 samples | No | 実装済 |
+| 15 | Gate (Long) | `ch_gate` | NUMBER | 4-32766 ns (expuom:-9) | Yes | 実装済 |
+| 16 | Short gate | `ch_gateshort` | NUMBER | 2-2046 ns (expuom:-9) | Yes | 実装済 |
+| 17 | Pre-gate | `ch_gatepre` | NUMBER | 0-510 ns (expuom:-9) | No | 実装済 |
 | 18 | Charge pedestal en. | `ch_pedestal_en` | STRING | FALSE, TRUE | No | **新規** |
 | 19 | Self trigger enable | `ch_self_trg_enable` | STRING | FALSE, TRUE | Yes | **新規** |
 | 20 | Global trigger gen | `ch_trg_global_gen` | STRING | FALSE, TRUE | Yes | **新規** |
@@ -137,21 +137,21 @@
 | # | CoMPASS名 | DevTree名 | 型 | 範囲/選択肢 | SetInRun | UI実装 |
 |---|---|---|---|---|---|---|
 | 1 | Enable | `ch_enabled` | STRING | FALSE, TRUE | Yes | 実装済 |
-| 2 | Pre-trigger | `ch_pretrg` | NUMBER | 64-2000 samples | No | **新規** |
+| 2 | Pre-trigger | `ch_pretrg` | NUMBER | 64-2000 ns (expuom:-9) | No | **新規** |
 | 3 | Polarity | `ch_polarity` | STRING | POLARITY_POSITIVE, POLARITY_NEGATIVE | Yes | 実装済 |
 | 4 | N samples baseline | `ch_bline_nsmean` | STRING | BLINE_NSMEAN_FIXED, _16, _64, _256, _1024, _4096, _16384 | No | **新規** |
 | 5 | DC Offset | `ch_dcoffset` | NUMBER | 0-100 % | Yes | 実装済 |
 | 6 | Coarse gain | `ch_cgain` | STRING | COARSE_GAIN_X1, _X4 | Yes | **新規** |
 | 7 | Threshold | `ch_threshold` | NUMBER | 0-16383 LSB | Yes | 実装済 |
-| 8 | Trigger holdoff | `ch_trg_holdoff` | NUMBER | 8-8184 samples | Yes | **新規** |
+| 8 | Trigger holdoff | `ch_trg_holdoff` | NUMBER | 8-8184 ns (expuom:-9) | Yes | **新規** |
 | 9 | Fast Discr smoothing | `ch_rccr2_smooth` | STRING | RCCR2_SMTH_1, _2, _4, _8, _16, _32, _64, _128 | No | **新規** |
-| 10 | Input rise time | `ch_rccr2_rise` | NUMBER | 16-2040 samples | No | **新規** |
-| 11 | Trap. rise time | `ch_trap_trise` | NUMBER | 8-32760 samples | No | **新規** |
-| 12 | Trap. flat top | `ch_trap_tflat` | NUMBER | 8-8184 samples | No | **新規** |
-| 13 | Trap. pole zero | `ch_tdecay` | NUMBER | 8-524280 samples | No | **新規** |
+| 10 | Input rise time | `ch_rccr2_rise` | NUMBER | 16-2040 ns (expuom:-9) | No | **新規** |
+| 11 | Trap. rise time | `ch_trap_trise` | NUMBER | 8-32760 ns (expuom:-9) | No | **新規** |
+| 12 | Trap. flat top | `ch_trap_tflat` | NUMBER | 8-8184 ns (expuom:-9) | No | **新規** |
+| 13 | Trap. pole zero | `ch_tdecay` | NUMBER | 8-524280 ns (expuom:-9) | No | **新規** |
 | 14 | Peaking time | `ch_trap_ftd` | NUMBER | 0-100 % | Yes | **新規** |
 | 15 | N samples peak | `ch_peak_nsmean` | STRING | PEAK_NSMEAN_1, _4, _16, _64 | No | **新規** |
-| 16 | Peak holdoff | `ch_peak_holdoff` | NUMBER | 8-8184 samples | No | **新規** |
+| 16 | Peak holdoff | `ch_peak_holdoff` | NUMBER | 8-8184 ns (expuom:-9) | No | **新規** |
 | 17 | Energy fine gain | `ch_fgain` | NUMBER | 1.00-10.00 | Yes | **新規** |
 | 18 | Self trigger enable | `ch_self_trg_enable` | STRING | FALSE, TRUE | Yes | **新規** |
 | 19 | Global trigger gen | `ch_trg_global_gen` | STRING | FALSE, TRUE | Yes | **新規** |
@@ -178,14 +178,24 @@
 
 ## 注記
 
-### Unit問題: PSD1/PHA1 の samples → 時間変換
+### Unit問題: PSD1/PHA1 のタイミングパラメーター
 
-PSD2はFELibが `t` suffix パラメーター（ns単位）を提供するため変換不要。
-PSD1/PHA1は全て samples 単位のため、UIでは時間表示するために `sampling_rate` での変換が必要。
+**重要（2026-02-06確認）:** DevTree `expuom: -9` は nanoseconds (10^-9秒) を意味する。
 
-- **サンプリングレート:** 500 MS/s → 1 sample = 2 ns
-- **変換式:** time_ns = samples × (1000 / sampling_rate_MHz)
-- **変換レイヤー:** 実装時に決定（Backend apply時 or Frontend表示時）
+PSD1/PHA1の全タイミングパラメーターはナノ秒単位を直接受け付ける：
+
+**PSD1 (全て expuom: -9, nanoseconds):**
+- `ch_pretrg`, `ch_trg_holdoff`, `ch_cfd_delay`
+- `ch_gate`, `ch_gateshort`, `ch_gatepre`
+
+**PHA1 (全て expuom: -9, nanoseconds):**
+- `ch_pretrg`, `ch_trg_holdoff`
+- `ch_rccr2_rise` (Input rise time)
+- `ch_trap_trise`, `ch_trap_tflat`, `ch_tdecay` (Trapezoid filter)
+- `ch_peak_holdoff`
+
+**注意:** 以前はこれらが samples 単位と誤解されていたため、backend で `/ TIME_STEP_NS` 変換をしていたが、これは誤り。
+DevTree は nanoseconds を直接受け付けるため、変換なしで値を渡す。
 
 ### Enum値の表記差異
 
