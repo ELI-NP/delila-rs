@@ -90,6 +90,26 @@ impl Config {
     pub fn get_source(&self, source_id: u32) -> Option<&SourceNetworkConfig> {
         self.network.sources.iter().find(|s| s.id == source_id)
     }
+
+    /// Get resolved Merger subscribe addresses.
+    /// If `merger.subscribe` is empty, auto-generate from source `data_connect_address()`.
+    /// This ensures the Merger always connects to the correct host for each source.
+    pub fn resolved_merger_subscribe(&self) -> Vec<String> {
+        if let Some(ref merger) = self.network.merger {
+            if merger.subscribe.is_empty() {
+                // Auto-generate from sources
+                self.network
+                    .sources
+                    .iter()
+                    .map(|s| s.data_connect_address())
+                    .collect()
+            } else {
+                merger.subscribe.clone()
+            }
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 // =============================================================================
@@ -212,10 +232,24 @@ pub struct SourceNetworkConfig {
     /// 2. Start master only → Slaves auto-start via TrgOut
     #[serde(default)]
     pub is_master: bool,
+
+    /// Hostname or IP address where this Reader is running.
+    /// Used by the Operator to resolve `tcp://*:PORT` bind addresses
+    /// into connect addresses (`tcp://{host}:PORT`).
+    /// Defaults to "localhost" (same machine).
+    ///
+    /// Example: `host = "172.18.4.147"` for a USB digitizer Reader
+    /// running on a remote Linux machine.
+    #[serde(default = "default_host")]
+    pub host: String,
 }
 
 fn default_source_pipeline_order() -> u32 {
     1 // Sources are upstream
+}
+
+fn default_host() -> String {
+    "localhost".to_string()
 }
 
 impl SourceNetworkConfig {
@@ -234,11 +268,33 @@ impl SourceNetworkConfig {
         self.is_master && self.is_digitizer()
     }
 
-    /// Get command address with default fallback
+    /// Get command bind address with default fallback
     pub fn command_address(&self) -> String {
         self.command
             .clone()
             .unwrap_or_else(|| format!("tcp://*:{}", 5560 + self.id as u16))
+    }
+
+    /// Resolve a bind address (`tcp://*:PORT`) to a connect address
+    /// using the configured `host`. If the address already contains
+    /// a specific hostname/IP (not `*`), it is returned as-is.
+    pub fn resolve_address(&self, bind_addr: &str) -> String {
+        bind_addr.replace("tcp://*:", &format!("tcp://{}:", self.host))
+    }
+
+    /// Get the command connect address for the Operator to reach this Reader.
+    pub fn command_connect_address(&self) -> String {
+        self.resolve_address(&self.command_address())
+    }
+
+    /// Get the data connect address for Merger to subscribe to this Reader.
+    pub fn data_connect_address(&self) -> String {
+        self.resolve_address(&self.bind)
+    }
+
+    /// Check if this source runs on a remote machine (host != localhost).
+    pub fn is_remote(&self) -> bool {
+        self.host != "localhost" && self.host != "127.0.0.1"
     }
 
     /// Load digitizer configuration from the config_file path
@@ -274,7 +330,9 @@ impl SourceNetworkConfig {
 /// Merger network configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct MergerNetworkConfig {
-    /// ZMQ addresses to subscribe to (upstream sources)
+    /// ZMQ addresses to subscribe to (upstream sources).
+    /// If empty, auto-generated from source `data_connect_address()`.
+    #[serde(default)]
     pub subscribe: Vec<String>,
 
     /// ZMQ address to publish to (downstream)
