@@ -13,6 +13,7 @@ import { MatDividerModule } from '@angular/material/divider';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { firstValueFrom } from 'rxjs';
 import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
 import { FirmwareType } from '../../models/types';
@@ -792,7 +793,19 @@ export class DigitizerSettingsComponent {
     };
 
     try {
-      const result = await this.digitizerService.applyToHardware(updatedConfig);
+      let result: { success: boolean; message?: string };
+
+      if (this.operator.isTuneUp()) {
+        // Tune Up mode: use tuneupApply which does Stop → Apply → Arm → Start
+        // This ensures SetInRun=False parameters (pre-trigger, record_length, etc.) are applied
+        result = await firstValueFrom(
+          this.operator.tuneupApply(config.digitizer_id, updatedConfig)
+        );
+      } else {
+        // Normal mode: use direct apply
+        result = await this.digitizerService.applyToHardware(updatedConfig);
+      }
+
       this.snackBar.open(result.message || 'Configuration applied to hardware', 'OK', {
         duration: 5000,
       });

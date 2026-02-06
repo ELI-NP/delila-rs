@@ -700,6 +700,9 @@ impl Reader {
                                 // DIG1 requires full reset to properly re-enable triggers on next run
                                 info!("DIG1: Using reset (triggers require full reset after stop)");
                                 let _ = handle.send_command("/cmd/reset");
+                                // Wait for reset to complete - DIG1 needs ~500ms after reset
+                                // before it can accept parameter writes
+                                std::thread::sleep(Duration::from_millis(500));
                                 dig1_needs_reconfig = true; // Config was cleared by reset
                             } else {
                                 let _ = handle.send_command("/cmd/disarmacquisition");
@@ -981,6 +984,9 @@ impl Reader {
                                 // DIG1 requires full reset to properly re-enable triggers on next run
                                 info!("DIG1: Using reset (triggers require full reset after stop)");
                                 let _ = handle.send_command("/cmd/reset");
+                                // Wait for reset to complete - DIG1 needs ~500ms after reset
+                                // before it can accept parameter writes
+                                std::thread::sleep(Duration::from_millis(500));
                                 dig1_needs_reconfig = true; // Config was cleared by reset
                             } else {
                                 let _ = handle.send_command("/cmd/disarmacquisition");
