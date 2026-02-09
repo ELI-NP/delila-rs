@@ -9,6 +9,7 @@ pub mod data_source_emulator;
 pub mod event_builder;
 pub mod merger;
 pub mod monitor;
+pub mod node_agent;
 pub mod operator;
 pub mod reader;
 pub mod recorder;

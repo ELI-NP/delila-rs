@@ -1,0 +1,45 @@
+# Node Agent - Local Mac
+# Manages: PSD2 Reader, Operator, Merger, Recorder, Monitor
+#
+# Start: ./target/release/node_agent -f config/agent_local.toml --start-all
+# API:   http://localhost:8090/api/status
+
+[agent]
+name = "local-mac"
+port = 8090
+log_buffer_lines = 1000
+
+[[process]]
+name = "merger"
+command = "./target/release/merger"
+args = ["--config", "config/config_combined.toml"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "recorder"
+command = "./target/release/recorder"
+args = ["--config", "config/config_combined.toml"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "monitor"
+command = "./target/release/monitor"
+args = ["--config", "config/config_combined.toml"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "reader-psd2"
+command = "./target/release/reader"
+args = ["--config", "config/config_combined.toml", "--source-id", "1"]
+auto_restart = true
+restart_delay_secs = 5
+
+[[process]]
+name = "operator"
+command = "./target/release/operator"
+args = ["--config", "config/config_combined.toml", "--mongodb-uri", "mongodb://delila:delila_pass@localhost:27017", "--mongodb-database", "delila"]
+auto_restart = true
+restart_delay_secs = 5

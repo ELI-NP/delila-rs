@@ -160,6 +160,10 @@ name = "psd1_raw_dump"
 path = "src/bin/psd1_raw_dump.rs"
 
 [[bin]]
+name = "node_agent"
+path = "src/bin/node_agent.rs"
+
+[[bin]]
 name = "psd1_timing_test"
 path = "src/bin/psd1_timing_test.rs"
 

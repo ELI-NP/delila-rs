@@ -1,0 +1,17 @@
+# Node Agent - Remote Linux (172.18.4.147)
+# Manages: PSD1 Reader (DT5730B via USB)
+#
+# Start: ./target/release/node_agent -f config/agent_remote.toml --start-all
+# API:   http://172.18.4.147:8090/api/status
+
+[agent]
+name = "reader-linux"
+port = 8090
+log_buffer_lines = 1000
+
+[[process]]
+name = "reader-psd1"
+command = "./target/release/reader"
+args = ["--config", "config/config_combined.toml", "--source-id", "0"]
+auto_restart = true
+restart_delay_secs = 5
