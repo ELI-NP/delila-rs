@@ -93,6 +93,7 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         last_run_info,
         tuneup_mode,
         tuneup_digitizer_id,
+        monitor_http_port: state.config.monitor_http_port,
     })
 }
 

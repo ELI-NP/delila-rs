@@ -75,10 +75,12 @@ fn load_config(
                     None
                 }
             });
+        let monitor_http_port = config.network.monitor.as_ref().map(|m| m.http_port);
         let operator_config = OperatorConfig {
             port: config.operator.port,
             experiment_name: config.operator.experiment_name,
             web_ui_dir,
+            monitor_http_port,
             ..OperatorConfig::default()
         };
         // Load emulator settings from config

@@ -95,6 +95,8 @@ export interface SystemStatus {
   tuneup_mode?: boolean;
   /** Digitizer ID being tuned (when tuneup_mode is true) */
   tuneup_digitizer_id?: number;
+  /** Monitor HTTP port (for constructing Monitor API URL) */
+  monitor_http_port?: number;
 }
 
 // Configure request

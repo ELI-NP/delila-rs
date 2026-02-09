@@ -77,6 +77,9 @@ pub struct SystemStatus {
     /// Digitizer ID being tuned (when tuneup_mode is true)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tuneup_digitizer_id: Option<u32>,
+    /// Monitor HTTP port (for frontend to construct Monitor API URL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor_http_port: Option<u16>,
 }
 
 /// Aggregated system state
@@ -256,6 +259,8 @@ pub struct OperatorConfig {
     pub experiment_name: String,
     /// Directory containing built Angular UI files (serves at /)
     pub web_ui_dir: Option<PathBuf>,
+    /// Monitor HTTP port (from TOML monitor config)
+    pub monitor_http_port: Option<u16>,
 }
 
 impl Default for OperatorConfig {
@@ -268,6 +273,7 @@ impl Default for OperatorConfig {
             start_timeout_ms: 5000,
             experiment_name: "DefaultExp".to_string(),
             web_ui_dir: None,
+            monitor_http_port: None,
         }
     }
 }
@@ -542,6 +548,7 @@ mod tests {
             last_run_info: None,
             tuneup_mode: false,
             tuneup_digitizer_id: None,
+            monitor_http_port: Some(8081),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"system_state\":\"Idle\""));

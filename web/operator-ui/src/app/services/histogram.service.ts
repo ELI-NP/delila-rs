@@ -10,15 +10,24 @@ import {
   WaveformListResponse,
   LatestWaveform,
 } from '../models/histogram.types';
+import { OperatorService } from './operator.service';
 
 @Injectable({
   providedIn: 'root',
 })
 export class HistogramService {
-  private readonly baseUrl = 'http://localhost:8081/api';
   private readonly refreshInterval = 1000; // 1 second
 
   private readonly http = inject(HttpClient);
+  private readonly operator = inject(OperatorService);
+
+  // Dynamic Monitor base URL from Operator status
+  readonly monitorBaseUrl = computed(() => {
+    const port = this.operator.status()?.monitor_http_port;
+    if (!port) return null;
+    const host = window.location.hostname || 'localhost';
+    return `http://${host}:${port}/api`;
+  });
   private stopPolling$ = new Subject<void>();
 
   // Signals for reactive state
@@ -105,33 +114,45 @@ export class HistogramService {
     );
   }
 
-  // API calls
+  // API calls — return of(null) if Monitor URL not yet available
   fetchStatus(): Observable<MonitorStatusResponse | null> {
-    return this.http.get<MonitorStatusResponse>(`${this.baseUrl}/status`).pipe(catchError(() => of(null)));
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http.get<MonitorStatusResponse>(`${url}/status`).pipe(catchError(() => of(null)));
   }
 
   fetchHistogramList(): Observable<HistogramListResponse | null> {
-    return this.http.get<HistogramListResponse>(`${this.baseUrl}/histograms`).pipe(catchError(() => of(null)));
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http.get<HistogramListResponse>(`${url}/histograms`).pipe(catchError(() => of(null)));
   }
 
   fetchHistogram(moduleId: number, channelId: number): Observable<Histogram1D | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
     return this.http
-      .get<Histogram1D>(`${this.baseUrl}/histograms/${moduleId}/${channelId}`)
+      .get<Histogram1D>(`${url}/histograms/${moduleId}/${channelId}`)
       .pipe(catchError(() => of(null)));
   }
 
-  clearHistograms(): Observable<void> {
-    return this.http.post<void>(`${this.baseUrl}/histograms/clear`, {});
+  clearHistograms(): Observable<void | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http.post<void>(`${url}/histograms/clear`, {});
   }
 
   // Waveform API calls
   fetchWaveformList(): Observable<WaveformListResponse | null> {
-    return this.http.get<WaveformListResponse>(`${this.baseUrl}/waveforms`).pipe(catchError(() => of(null)));
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http.get<WaveformListResponse>(`${url}/waveforms`).pipe(catchError(() => of(null)));
   }
 
   fetchWaveform(moduleId: number, channelId: number): Observable<LatestWaveform | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
     return this.http
-      .get<LatestWaveform>(`${this.baseUrl}/waveforms/${moduleId}/${channelId}`)
+      .get<LatestWaveform>(`${url}/waveforms/${moduleId}/${channelId}`)
       .pipe(catchError(() => of(null)));
   }
 }
