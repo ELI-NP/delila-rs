@@ -1,0 +1,85 @@
+# DELILA DAQ Configuration - Production (172.18.4.76)
+# 5x VX1730B (PSD1) via CONET2/A3818 + 1x VX2730 (PSD2) at 172.18.4.57
+# Usage: cp config/config_76_production.toml config.toml
+
+[operator]
+experiment_name = "DELILA_Production"
+port = 9090
+
+# =============================================================================
+# Network Topology
+# =============================================================================
+# Port auto-allocation: data = 6000 + id, command = 6100 + id
+
+[network]
+
+# --- PSD1 digitizers (VX1730B via CONET2/A3818) ---
+
+[[network.sources]]
+id = 0
+name = "PSD1-SN53"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/psd1_sn53.json"
+pipeline_order = 1
+
+[[network.sources]]
+id = 1
+name = "PSD1-SN56"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+config_file = "config/digitizers/psd1_sn56.json"
+pipeline_order = 1
+
+[[network.sources]]
+id = 2
+name = "PSD1-SN69"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=2"
+config_file = "config/digitizers/psd1_sn69.json"
+pipeline_order = 1
+
+[[network.sources]]
+id = 3
+name = "PSD1-SN59"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
+config_file = "config/digitizers/psd1_sn59.json"
+pipeline_order = 1
+
+[[network.sources]]
+id = 4
+name = "PSD1-SN54"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=1"
+config_file = "config/digitizers/psd1_sn54.json"
+pipeline_order = 1
+
+# --- PSD2 digitizer (VX2730 via Ethernet) ---
+
+[[network.sources]]
+id = 5
+name = "PSD2-57"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/psd2_production.json"
+pipeline_order = 1
+
+# --- Pipeline components ---
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
