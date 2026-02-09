@@ -572,11 +572,7 @@ impl Reader {
         // Track digitizer hardware state
         let mut hw_armed = false;
         let mut hw_running = false;
-        let mut dig1_needs_reconfig = false; // DIG1: set after reset, cleared after config applied
         let mut prev_state = ComponentState::Idle;
-
-        // Cache for config pushed from Operator (used instead of local file on Arm)
-        let mut cached_config: Option<crate::config::digitizer::DigitizerConfig> = None;
 
         // Pre-allocate reusable read buffer.
         // CAEN FELib does NOT check buffer bounds — undersized buffers cause SIGBUS.
@@ -631,40 +627,6 @@ impl Reader {
 
                     // Arm digitizer when entering Armed state
                     (_, ComponentState::Armed) => {
-                        // DIG1: re-apply config if reset was performed (reset clears all params)
-                        if dig1_needs_reconfig {
-                            // Prefer cached config from Operator (network transparency)
-                            // Fall back to local file if no cached config
-                            if let Some(ref dig_config) = cached_config {
-                                info!("DIG1: Re-applying cached config from Operator after reset");
-                                match handle.apply_config(dig_config) {
-                                    Ok(count) => {
-                                        info!(count, "DIG1: Cached configuration re-applied");
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, "DIG1: Failed to re-apply cached config");
-                                    }
-                                }
-                            } else if let Some(ref config_path) = config.config_file {
-                                info!(path = %config_path, "DIG1: Re-applying config from file after reset");
-                                match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                                    Ok(dig_config) => match handle.apply_config(&dig_config) {
-                                        Ok(count) => {
-                                            info!(count, "DIG1: File configuration re-applied");
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "DIG1: Failed to re-apply config");
-                                        }
-                                    },
-                                    Err(e) => {
-                                        error!(error = %e, "DIG1: Failed to load config for re-apply");
-                                    }
-                                }
-                            } else {
-                                warn!("DIG1: No cached config and no config_file - settings may be default");
-                            }
-                            dig1_needs_reconfig = false;
-                        }
                         if !hw_armed {
                             if let Err(e) = send_arm_command(&handle, config.firmware) {
                                 error!(error = %e, "Failed to arm digitizer - continuing anyway");
@@ -696,21 +658,8 @@ impl Reader {
                     (ComponentState::Running, ComponentState::Configured) => {
                         if hw_running {
                             info!("Stopping digitizer acquisition");
-                            if config.firmware.is_dig1() {
-                                // DIG1: explicitly stop acquisition first, then reset
-                                let _ = handle.send_command("/cmd/disarmacquisition");
-                                info!("DIG1: Using reset (triggers require full reset after stop)");
-                                let _ = handle.send_command("/cmd/reset");
-                                // Wait for reset to complete before parameter writes
-                                std::thread::sleep(Duration::from_millis(500));
-                                dig1_needs_reconfig = true; // Config was cleared by reset
-                            } else {
-                                let _ = handle.send_command("/cmd/disarmacquisition");
-                                // Clear data buffers to ensure clean state for next run
-                                // (preserves register settings, unlike /cmd/reset)
-                                info!("Clearing digitizer data buffers");
-                                let _ = handle.send_command("/cmd/cleardata");
-                            }
+                            let _ = handle.send_command("/cmd/disarmacquisition");
+                            let _ = handle.send_command("/cmd/cleardata");
                             hw_armed = false;
                             hw_running = false;
                         }
@@ -747,10 +696,6 @@ impl Reader {
                         config: dig_config,
                         response_tx,
                     } => {
-                        // Cache config for use on next Arm (DIG1 reset clears settings)
-                        cached_config = Some((*dig_config).clone());
-                        info!("Cached digitizer config from Operator");
-
                         let result = handle
                             .apply_config(&dig_config)
                             .map_err(|e| format!("Failed to apply config: {}", e));
@@ -826,8 +771,13 @@ impl Reader {
                 Err(e) => {
                     // Check if it's a stop signal
                     if e.code == caen::error::codes::STOP {
-                        info!("Received STOP signal from digitizer");
-                        break;
+                        if shutdown.load(Ordering::Relaxed) {
+                            info!("Received STOP signal during shutdown");
+                            break;
+                        }
+                        // Digitizer stopped externally - wait for state change
+                        info!("Received STOP signal from digitizer, waiting for state change");
+                        continue;
                     }
                     error!(error = %e, code = e.code, "Read error");
                     // Continue on non-fatal errors
@@ -869,11 +819,7 @@ impl Reader {
         // Track digitizer hardware state
         let mut hw_armed = false;
         let mut hw_running = false;
-        let mut dig1_needs_reconfig = false; // DIG1: set after reset, cleared after config applied
         let mut prev_state = ComponentState::Idle;
-
-        // Cache for config pushed from Operator (used instead of local file on Arm)
-        let mut cached_config: Option<crate::config::digitizer::DigitizerConfig> = None;
 
         // Buffer for user info words
         let mut user_info_buffer = [0u64; 16];
@@ -918,40 +864,6 @@ impl Reader {
 
                     // Arm digitizer when entering Armed state
                     (_, ComponentState::Armed) => {
-                        // DIG1: re-apply config if reset was performed (reset clears all params)
-                        if dig1_needs_reconfig {
-                            // Prefer cached config from Operator (network transparency)
-                            // Fall back to local file if no cached config
-                            if let Some(ref dig_config) = cached_config {
-                                info!("DIG1: Re-applying cached config from Operator after reset");
-                                match handle.apply_config(dig_config) {
-                                    Ok(count) => {
-                                        info!(count, "DIG1: Cached configuration re-applied");
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, "DIG1: Failed to re-apply cached config");
-                                    }
-                                }
-                            } else if let Some(ref config_path) = config.config_file {
-                                info!(path = %config_path, "DIG1: Re-applying config from file after reset");
-                                match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                                    Ok(dig_config) => match handle.apply_config(&dig_config) {
-                                        Ok(count) => {
-                                            info!(count, "DIG1: File configuration re-applied");
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "DIG1: Failed to re-apply config");
-                                        }
-                                    },
-                                    Err(e) => {
-                                        error!(error = %e, "DIG1: Failed to load config for re-apply");
-                                    }
-                                }
-                            } else {
-                                warn!("DIG1: No cached config and no config_file - settings may be default");
-                            }
-                            dig1_needs_reconfig = false;
-                        }
                         if !hw_armed {
                             if let Err(e) = send_arm_command(&handle, config.firmware) {
                                 error!(error = %e, "Failed to arm digitizer - continuing anyway");
@@ -980,21 +892,8 @@ impl Reader {
                     (ComponentState::Running, ComponentState::Configured) => {
                         if hw_running {
                             info!("Stopping digitizer acquisition");
-                            if config.firmware.is_dig1() {
-                                // DIG1: explicitly stop acquisition first, then reset
-                                let _ = handle.send_command("/cmd/disarmacquisition");
-                                info!("DIG1: Using reset (triggers require full reset after stop)");
-                                let _ = handle.send_command("/cmd/reset");
-                                // Wait for reset to complete before parameter writes
-                                std::thread::sleep(Duration::from_millis(500));
-                                dig1_needs_reconfig = true; // Config was cleared by reset
-                            } else {
-                                let _ = handle.send_command("/cmd/disarmacquisition");
-                                // Clear data buffers to ensure clean state for next run
-                                // (preserves register settings, unlike /cmd/reset)
-                                info!("Clearing digitizer data buffers");
-                                let _ = handle.send_command("/cmd/cleardata");
-                            }
+                            let _ = handle.send_command("/cmd/disarmacquisition");
+                            let _ = handle.send_command("/cmd/cleardata");
                             hw_armed = false;
                             hw_running = false;
                         }
@@ -1031,10 +930,6 @@ impl Reader {
                         config: dig_config,
                         response_tx,
                     } => {
-                        // Cache config for use on next Arm (DIG1 reset clears settings)
-                        cached_config = Some((*dig_config).clone());
-                        info!("Cached digitizer config from Operator");
-
                         let result = handle
                             .apply_config(&dig_config)
                             .map_err(|e| format!("Failed to apply config: {}", e));
@@ -1105,8 +1000,13 @@ impl Reader {
                 Err(e) => {
                     // Check if it's a stop signal
                     if e.code == caen::error::codes::STOP {
-                        info!("Received STOP signal from digitizer");
-                        break;
+                        if shutdown.load(Ordering::Relaxed) {
+                            info!("Received STOP signal during shutdown");
+                            break;
+                        }
+                        // Digitizer stopped externally - wait for state change
+                        info!("Received STOP signal from digitizer, waiting for state change");
+                        continue;
                     }
                     error!(error = %e, code = e.code, "Read error (OpenDPP)");
                 }
