@@ -78,17 +78,19 @@ export class ControlPageComponent {
 
   onTimerStarted(): void {
     const runNumber = this.controlPanel.displayRunNumber();
-    this.operator.start(runNumber).subscribe({
+    const comment = this.controlPanel.comment;
+    this.operator.start(runNumber, comment).subscribe({
       next: (res) => {
         if (res.success) {
           this.notification.success(`Started run ${runNumber} with timer`);
-          // Backend handles run_info update automatically
         } else {
           this.notification.error(`Start failed: ${res.message}`);
         }
       },
-      error: () => {
-        this.notification.error('Start failed: Network error');
+      error: (err: unknown) => {
+        const e = err as { error?: { message?: string }; message?: string };
+        const msg = e?.error?.message || e?.message || 'Network error';
+        this.notification.error(`Start failed: ${msg}`);
       },
     });
   }
