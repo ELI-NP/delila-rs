@@ -81,5 +81,5 @@ pipeline_order = 3
 [network.monitor]
 subscribe = "tcp://localhost:5557"
 command = "tcp://*:5590"
-http_port = 8081
+http_port = 8181
 pipeline_order = 3
