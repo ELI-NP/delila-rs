@@ -414,11 +414,11 @@ export class ControlPanelComponent {
     this.overrideRunNumber.set(null);
   }
 
-  // Start is enabled for both Configured and Armed states
-  // (backend will auto-arm if needed)
+  // Start is enabled from Idle, Configured, and Armed states
+  // (backend does full Reset → Configure → Arm → Start cycle)
   canStart(): boolean {
     const state = this.operator.systemState();
-    return state === 'Configured' || state === 'Armed';
+    return state === 'Idle' || state === 'Configured' || state === 'Armed';
   }
 
   onConfigure(): void {

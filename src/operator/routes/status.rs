@@ -423,15 +423,17 @@ pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Js
     (status, Json(response))
 }
 
-/// Start a run with two-phase synchronization
+/// Start a run with full auto-cycle synchronization
 ///
 /// This endpoint performs the complete run startup sequence:
+/// 0. Reset all components (ensures clean state)
 /// 1. Configure all components (with sync)
 /// 2. Arm all components (with sync - waits for all to be Armed)
 /// 3. Start all components (with sync)
 ///
 /// Each phase waits for all components to reach the expected state
 /// before proceeding, with configurable timeouts.
+/// Config is always freshly applied, guaranteeing parameter consistency.
 #[utoipa::path(
     post,
     path = "/api/run/start",
@@ -440,7 +442,8 @@ pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Js
     responses(
         (status = 200, description = "Run started successfully", body = ApiResponse),
         (status = 400, description = "Failed to start run", body = ApiResponse),
-        (status = 408, description = "Timeout during synchronization", body = ApiResponse)
+        (status = 408, description = "Timeout during synchronization", body = ApiResponse),
+        (status = 409, description = "System is Running or in Tune Up mode", body = ApiResponse)
     )
 )]
 pub(super) async fn run_start(
@@ -457,8 +460,43 @@ pub(super) async fn run_start(
         );
     }
 
-    let run_config: RunConfig = request.into();
+    // Guard: reject if system is Running
+    let components = state.client.get_all_status(&state.components).await;
+    let system_state = SystemState::from_components(&components);
+    if system_state == SystemState::Running {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "System is currently Running. Stop the run first before starting a new one.",
+            )),
+        );
+    }
+
+    let run_config: RunConfig = request.clone().into();
     let run_number = run_config.run_number;
+    let comment = request.comment.clone();
+
+    // Phase 0: Reset (ensure clean state — idempotent if already Idle)
+    let reset_result = state
+        .client
+        .reset_all_sync(&state.components, state.config.reset_timeout_ms)
+        .await;
+
+    match reset_result {
+        Err(e) => {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(ApiResponse::error(format!("Reset phase failed: {}", e))),
+            );
+        }
+        Ok(results) if results.iter().any(|r| !r.success) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error("Reset phase failed").with_results(results)),
+            );
+        }
+        Ok(_) => {}
+    }
 
     // Phase 1: Configure
     let configure_result = state
@@ -581,9 +619,47 @@ pub(super) async fn run_start(
             Json(ApiResponse::error("Start phase failed").with_results(results)),
         ),
         Ok(results) => {
+            let exp_name = &state.config.experiment_name;
+
+            // Record run start in MongoDB and update current_run
+            if let Some(ref repo) = state.run_repo {
+                match repo
+                    .start_run(run_number as i32, exp_name, &comment, None)
+                    .await
+                {
+                    Ok(doc) => {
+                        let info = CurrentRunInfo::from_document(&doc);
+                        *state.current_run.write().await = Some(info);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to record run start in MongoDB: {}", e);
+                        *state.current_run.write().await = Some(CurrentRunInfo {
+                            run_number: run_number as i32,
+                            exp_name: exp_name.clone(),
+                            comment: comment.clone(),
+                            start_time: chrono::Utc::now().timestamp_millis(),
+                            elapsed_secs: 0,
+                            status: RunStatus::Running,
+                            stats: RunStats::default(),
+                            notes: Vec::new(),
+                        });
+                    }
+                }
+            } else {
+                *state.current_run.write().await = Some(CurrentRunInfo {
+                    run_number: run_number as i32,
+                    exp_name: exp_name.clone(),
+                    comment,
+                    start_time: chrono::Utc::now().timestamp_millis(),
+                    elapsed_secs: 0,
+                    status: RunStatus::Running,
+                    stats: RunStats::default(),
+                    notes: Vec::new(),
+                });
+            }
+
             // Create digitizer config snapshot for this run
             if let Some(ref digitizer_repo) = state.digitizer_repo {
-                let exp_name = &state.config.experiment_name;
                 let configs: Vec<_> = state
                     .digitizer_configs
                     .read()

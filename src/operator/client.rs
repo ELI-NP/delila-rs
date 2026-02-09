@@ -67,6 +67,13 @@ impl ComponentClient {
 
     /// Get status of a single component
     pub async fn get_status(&self, config: &ComponentConfig) -> ComponentStatus {
+        let role = if config.source_id.is_some() {
+            "source"
+        } else {
+            "pipeline"
+        }
+        .to_string();
+
         match self
             .send_command(&config.address, &Command::GetStatus)
             .await
@@ -83,6 +90,7 @@ impl ComponentClient {
                     None
                 },
                 online: true,
+                role,
             },
             Err(e) => ComponentStatus {
                 name: config.name.clone(),
@@ -92,6 +100,7 @@ impl ComponentClient {
                 metrics: None,
                 error: Some(e),
                 online: false,
+                role,
             },
         }
     }
@@ -422,13 +431,10 @@ impl ComponentClient {
             .await
     }
 
-    /// Reset all components
+    /// Reset all components with parallel execution for same pipeline_order
     pub async fn reset_all(&self, configs: &[ComponentConfig]) -> Vec<CommandResult> {
-        let mut results = Vec::with_capacity(configs.len());
-        for config in configs {
-            results.push(self.reset(config).await);
-        }
-        results
+        self.execute_on_pipeline_groups(configs, false, "Reset", |_| Command::Reset)
+            .await
     }
 
     /// Wait for all components to reach the expected state
@@ -527,6 +533,17 @@ impl ComponentClient {
     ) -> Result<Vec<CommandResult>, String> {
         let results = self.arm_all(configs).await;
         self.wait_after_execute(configs, results, ComponentState::Armed, timeout_ms)
+            .await
+    }
+
+    /// Two-phase reset: send reset and wait for all to reach Idle
+    pub async fn reset_all_sync(
+        &self,
+        configs: &[ComponentConfig],
+        timeout_ms: u64,
+    ) -> Result<Vec<CommandResult>, String> {
+        let results = self.reset_all(configs).await;
+        self.wait_after_execute(configs, results, ComponentState::Idle, timeout_ms)
             .await
     }
 

@@ -49,6 +49,8 @@ pub struct ComponentStatus {
     pub error: Option<String>,
     /// Whether communication succeeded
     pub online: bool,
+    /// Role: "source" for readers/emulators, "pipeline" for merger/recorder/monitor
+    pub role: String,
 }
 
 /// System-wide status
@@ -240,6 +242,8 @@ pub struct ComponentConfig {
 /// Operator configuration with timeouts
 #[derive(Debug, Clone)]
 pub struct OperatorConfig {
+    /// Timeout for reset phase (ms)
+    pub reset_timeout_ms: u64,
     /// Timeout for configure phase (ms)
     pub configure_timeout_ms: u64,
     /// Timeout for arm phase (ms)
@@ -253,6 +257,7 @@ pub struct OperatorConfig {
 impl Default for OperatorConfig {
     fn default() -> Self {
         Self {
+            reset_timeout_ms: 5000,
             configure_timeout_ms: 5000,
             arm_timeout_ms: 5000,
             start_timeout_ms: 5000,
@@ -278,6 +283,7 @@ mod tests {
                 None
             },
             online,
+            role: "pipeline".to_string(),
         }
     }
 

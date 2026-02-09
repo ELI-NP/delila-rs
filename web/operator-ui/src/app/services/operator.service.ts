@@ -40,6 +40,23 @@ export class OperatorService {
   /** Digitizer ID being tuned */
   readonly tuneupDigitizerId = computed(() => this.status()?.tuneup_digitizer_id ?? null);
 
+  // Grouped components by role
+  readonly sourceComponents = computed(() =>
+    this.components().filter((c) => c.role === 'source')
+  );
+  readonly pipelineComponents = computed(() =>
+    this.components().filter((c) => c.role !== 'source')
+  );
+  readonly sourceSummary = computed(() => {
+    const sources = this.sourceComponents();
+    return {
+      total: sources.length,
+      online: sources.filter((c) => c.online).length,
+      hasError: sources.some((c) => c.state === 'Error' || !c.online),
+      totalRate: sources.reduce((sum, c) => sum + (c.metrics?.event_rate ?? 0), 0),
+    };
+  });
+
   // Metrics from Recorder (authoritative source for recorded data)
   readonly recorderMetrics = computed(() => {
     const comps = this.components();
@@ -105,10 +122,13 @@ export class OperatorService {
     return this.http.post<ApiResponse>(`${this.baseUrl}/configure`, request);
   }
 
-  // Note: arm() removed - backend auto-arms on start()
-  // run_number and comment are passed at start time
+  // Full auto-cycle: backend does Reset → Configure → Arm → Start
   start(runNumber: number, comment = ''): Observable<ApiResponse> {
-    return this.http.post<ApiResponse>(`${this.baseUrl}/start`, { run_number: runNumber, comment });
+    return this.http.post<ApiResponse>(`${this.baseUrl}/run/start`, {
+      run_number: runNumber,
+      comment,
+      exp_name: this.experimentName(),
+    });
   }
 
   stop(): Observable<ApiResponse> {

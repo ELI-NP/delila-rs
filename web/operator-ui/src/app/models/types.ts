@@ -42,6 +42,7 @@ export interface ComponentStatus {
   metrics?: ComponentMetrics;
   error?: string;
   online: boolean;
+  role: string;
 }
 
 // Run status
@@ -335,7 +336,8 @@ export interface EventBuilderHistoryItem {
 export function getButtonStates(state: SystemState): ButtonStates {
   switch (state) {
     case 'Idle':
-      return { configure: true, start: false, stop: false, reset: false };
+      // Start enabled - backend does full Reset → Configure → Arm → Start
+      return { configure: true, start: true, stop: false, reset: false };
     case 'Configured':
       // Start is enabled - backend will auto-arm
       return { configure: false, start: true, stop: false, reset: true };
