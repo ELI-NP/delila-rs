@@ -40,6 +40,9 @@ export class TimerService {
   startTimer(): void {
     if (this.isRunning()) return;
 
+    // Pre-create AudioContext during user gesture (click) so Safari allows playback later
+    this.ensureAudioContext();
+
     this.remainingSeconds.set(this.durationMinutes() * 60);
     this.isRunning.set(true);
 
@@ -84,20 +87,26 @@ export class TimerService {
       clearInterval(this.alarmIntervalId);
       this.alarmIntervalId = null;
     }
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
+    // Suspend but don't close — reuse for next timer cycle
+    if (this.audioContext && this.audioContext.state === 'running') {
+      this.audioContext.suspend();
+    }
+  }
+
+  /** Create or resume AudioContext. Must be called during a user gesture (click). */
+  private ensureAudioContext(): void {
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      this.audioContext = new AudioContext();
+    }
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
     }
   }
 
   private playBeep(): void {
     try {
-      // Create new context if needed
-      if (!this.audioContext || this.audioContext.state === 'closed') {
-        this.audioContext = new AudioContext();
-      }
-
-      const ctx = this.audioContext;
+      this.ensureAudioContext();
+      const ctx = this.audioContext!;
 
       // Play a series of beeps
       for (let i = 0; i < 3; i++) {
