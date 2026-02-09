@@ -194,7 +194,7 @@ impl ReaderConfig {
 
         Some(Self {
             url: url.clone(),
-            data_address: source.bind.clone(),
+            data_address: source.data_address(config.network.port_base_data),
             command_address: source.command_address(),
             source_id,
             firmware,
@@ -905,7 +905,9 @@ impl Reader {
                             let _ = handle.send_command("/cmd/disarmacquisition");
                             // Drain remaining buffered events before clearing
                             let mut drained = 0u64;
-                            while let Ok(Some(evt)) = endpoint.read_opendpp_event(100, &mut user_info_buffer) {
+                            while let Ok(Some(evt)) =
+                                endpoint.read_opendpp_event(100, &mut user_info_buffer)
+                            {
                                 drained += 1;
                                 let event_data = opendpp_to_event_data(&evt, config.module_id);
                                 let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));

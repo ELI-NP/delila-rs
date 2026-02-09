@@ -107,14 +107,8 @@ RUST_LOG = "debug"
         assert_eq!(config.agent.log_buffer_lines, 500);
         assert_eq!(config.process[0].restart_delay_secs, 10);
         assert!(config.process[0].auto_restart);
-        assert_eq!(
-            config.process[0].env.get("RUST_LOG").unwrap(),
-            "debug"
-        );
-        assert_eq!(
-            config.process[0].working_dir,
-            Some("/opt/daq".to_string())
-        );
+        assert_eq!(config.process[0].env.get("RUST_LOG").unwrap(), "debug");
+        assert_eq!(config.process[0].working_dir, Some("/opt/daq".to_string()));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "digitizer_id": 0,
+  "digitizer_id": 1,
   "name": "PSD2 Test",
   "firmware": "PSD2",
   "serial_number": "52622",
@@ -10,15 +10,15 @@
     "start_source": "SWcmd",
     "gpio_mode": "Run",
     "global_trigger_source": "UserTrg",
-    "waveforms_enabled": true,
+    "waveforms_enabled": false,
     "extra": {
-      "syncoutmode": "SyncIn",
-      "trgoutmode": "GPIO",
-      "enclockoutfp": "True",
       "boardvetopolarity": "ActiveHigh",
+      "clocksource": "Internal",
+      "enclockoutfp": "True",
+      "syncoutmode": "SyncIn",
       "iolevel": "NIM",
-      "boardvetosource": "Disabled",
-      "clocksource": "Internal"
+      "trgoutmode": "GPIO",
+      "boardvetosource": "Disabled"
     }
   },
   "channel_defaults": {
@@ -56,14 +56,14 @@
     "digital_probe_3": "CFDFilterArmed"
   },
   "channel_overrides": {
-    "16": {
-      "enabled": "True",
-      "trigger_threshold": 300
-    },
     "8": {
       "enabled": "True",
       "dc_offset": 20.0,
       "energy_coarse_gain": "x64"
+    },
+    "16": {
+      "enabled": "True",
+      "trigger_threshold": 300
     }
   }
 }

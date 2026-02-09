@@ -97,11 +97,12 @@ impl Config {
     pub fn resolved_merger_subscribe(&self) -> Vec<String> {
         if let Some(ref merger) = self.network.merger {
             if merger.subscribe.is_empty() {
-                // Auto-generate from sources
+                // Auto-generate from sources using port_base_data
+                let port_base = self.network.port_base_data;
                 self.network
                     .sources
                     .iter()
-                    .map(|s| s.data_connect_address())
+                    .map(|s| s.data_connect_address_with_base(port_base))
                     .collect()
             } else {
                 merger.subscribe.clone()
@@ -123,6 +124,16 @@ pub struct NetworkConfig {
     #[serde(default = "default_cluster_name")]
     pub cluster_name: String,
 
+    /// Base port for source data (PUB) sockets: port = port_base_data + source_id.
+    /// Only used when `bind` is omitted in a `[[network.sources]]` entry.
+    #[serde(default = "default_port_base_data")]
+    pub port_base_data: u16,
+
+    /// Base port for source command (REP) sockets: port = port_base_command + source_id.
+    /// Only used when `command` is omitted in a `[[network.sources]]` entry.
+    #[serde(default = "default_port_base_command")]
+    pub port_base_command: u16,
+
     /// Data source configurations
     #[serde(default)]
     pub sources: Vec<SourceNetworkConfig>,
@@ -135,6 +146,14 @@ pub struct NetworkConfig {
 
     /// Monitor configuration
     pub monitor: Option<MonitorNetworkConfig>,
+}
+
+fn default_port_base_data() -> u16 {
+    6000
+}
+
+fn default_port_base_command() -> u16 {
+    6100
 }
 
 fn default_cluster_name() -> String {
@@ -192,8 +211,10 @@ pub struct SourceNetworkConfig {
     #[serde(default, rename = "type")]
     pub source_type: SourceType,
 
-    /// ZMQ bind address for data (e.g., "tcp://*:5555")
-    pub bind: String,
+    /// ZMQ bind address for data (e.g., "tcp://*:5555").
+    /// If omitted, auto-allocated as "tcp://*:{port_base_data + id}".
+    #[serde(default)]
+    pub bind: Option<String>,
 
     /// ZMQ bind address for commands (e.g., "tcp://*:5560")
     #[serde(default)]
@@ -268,11 +289,27 @@ impl SourceNetworkConfig {
         self.is_master && self.is_digitizer()
     }
 
-    /// Get command bind address with default fallback
+    /// Get data bind address with auto-allocation fallback.
+    /// `port_base` is typically `NetworkConfig::port_base_data`.
+    pub fn data_address(&self, port_base: u16) -> String {
+        self.bind
+            .clone()
+            .unwrap_or_else(|| format!("tcp://*:{}", port_base + self.id as u16))
+    }
+
+    /// Get command bind address with auto-allocation fallback (legacy default: 5560 + id).
     pub fn command_address(&self) -> String {
         self.command
             .clone()
             .unwrap_or_else(|| format!("tcp://*:{}", 5560 + self.id as u16))
+    }
+
+    /// Get command bind address with configurable base port.
+    /// `port_base` is typically `NetworkConfig::port_base_command`.
+    pub fn command_address_with_base(&self, port_base: u16) -> String {
+        self.command
+            .clone()
+            .unwrap_or_else(|| format!("tcp://*:{}", port_base + self.id as u16))
     }
 
     /// Resolve a bind address (`tcp://*:PORT`) to a connect address
@@ -287,9 +324,19 @@ impl SourceNetworkConfig {
         self.resolve_address(&self.command_address())
     }
 
-    /// Get the data connect address for Merger to subscribe to this Reader.
+    /// Get the command connect address with configurable base port.
+    pub fn command_connect_address_with_base(&self, port_base: u16) -> String {
+        self.resolve_address(&self.command_address_with_base(port_base))
+    }
+
+    /// Get the data connect address for Merger to subscribe to this Reader (legacy, uses 6000 base).
     pub fn data_connect_address(&self) -> String {
-        self.resolve_address(&self.bind)
+        self.resolve_address(&self.data_address(default_port_base_data()))
+    }
+
+    /// Get the data connect address with configurable base port.
+    pub fn data_connect_address_with_base(&self, port_base: u16) -> String {
+        self.resolve_address(&self.data_address(port_base))
     }
 
     /// Check if this source runs on a remote machine (host != localhost).
@@ -635,7 +682,10 @@ batch_interval_ms = 50
         assert_eq!(config.network.cluster_name, "daq-cluster-1");
         assert_eq!(config.network.sources.len(), 2);
         assert_eq!(config.network.sources[0].id, 1);
-        assert_eq!(config.network.sources[1].bind, "tcp://*:5556");
+        assert_eq!(
+            config.network.sources[1].bind,
+            Some("tcp://*:5556".to_string())
+        );
 
         // Merger
         let merger = config.network.merger.as_ref().unwrap();
@@ -950,5 +1000,114 @@ bind = "tcp://*:5555"
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("config_file required"));
+    }
+
+    #[test]
+    fn auto_allocate_data_port() {
+        let toml = r#"
+[network]
+[[network.sources]]
+id = 3
+name = "source-3"
+type = "psd2"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        let source = &config.network.sources[0];
+
+        // bind is None → auto-allocate from port_base_data (6000) + id (3)
+        assert!(source.bind.is_none());
+        assert_eq!(source.data_address(6000), "tcp://*:6003");
+        assert_eq!(source.command_address_with_base(6100), "tcp://*:6103");
+    }
+
+    #[test]
+    fn explicit_bind_overrides_auto() {
+        let toml = r#"
+[network]
+[[network.sources]]
+id = 3
+name = "source-3"
+type = "psd2"
+bind = "tcp://*:9999"
+command = "tcp://*:8888"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        let source = &config.network.sources[0];
+
+        // Explicit bind/command override auto-allocation
+        assert_eq!(source.data_address(6000), "tcp://*:9999");
+        assert_eq!(source.command_address_with_base(6100), "tcp://*:8888");
+    }
+
+    #[test]
+    fn custom_port_bases() {
+        let toml = r#"
+[network]
+port_base_data = 7000
+port_base_command = 7100
+
+[[network.sources]]
+id = 5
+name = "source-5"
+type = "psd2"
+host = "192.168.1.10"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert_eq!(config.network.port_base_data, 7000);
+        assert_eq!(config.network.port_base_command, 7100);
+
+        let source = &config.network.sources[0];
+        assert_eq!(
+            source.data_address(config.network.port_base_data),
+            "tcp://*:7005"
+        );
+        assert_eq!(
+            source.data_connect_address_with_base(config.network.port_base_data),
+            "tcp://192.168.1.10:7005"
+        );
+        assert_eq!(
+            source.command_connect_address_with_base(config.network.port_base_command),
+            "tcp://192.168.1.10:7105"
+        );
+    }
+
+    #[test]
+    fn merger_auto_subscribe_with_auto_ports() {
+        let toml = r#"
+[network]
+port_base_data = 7000
+
+[[network.sources]]
+id = 0
+name = "src-0"
+type = "psd2"
+host = "192.168.1.10"
+
+[[network.sources]]
+id = 1
+name = "src-1"
+type = "psd1"
+host = "192.168.1.20"
+
+[network.merger]
+publish = "tcp://*:5557"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        let subs = config.resolved_merger_subscribe();
+
+        // Auto-resolved from port_base_data (7000) + source id + host
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0], "tcp://192.168.1.10:7000");
+        assert_eq!(subs[1], "tcp://192.168.1.20:7001");
+    }
+
+    #[test]
+    fn default_port_bases() {
+        let toml = r#"
+[network]
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert_eq!(config.network.port_base_data, 6000);
+        assert_eq!(config.network.port_base_command, 6100);
     }
 }

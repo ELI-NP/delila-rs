@@ -156,7 +156,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             source.name.clone()
         };
         // Resolve bind address to connect address using source's host
-        let address = source.command_connect_address();
+        let address = source.command_connect_address_with_base(config.network.port_base_command);
         components.push(ComponentConfig {
             name,
             address,

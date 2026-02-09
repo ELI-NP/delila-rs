@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         let bind_address = if let Some(addr) = &args.source.address {
             addr.clone()
         } else if let Some(src) = source_net {
-            src.bind.clone()
+            src.data_address(config.network.port_base_data)
         } else {
             format!("tcp://*:{}", 5555 + sid as u16)
         };
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         );
 
         let command_addr = source_net
-            .and_then(|s| s.command.clone())
+            .map(|s| s.command_address_with_base(config.network.port_base_command))
             .unwrap_or_else(|| format!("tcp://*:{}", 5560 + sid as u16));
 
         EmulatorConfig {

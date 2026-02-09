@@ -209,11 +209,7 @@ impl ProcessManager {
                 started_at: info.started_at,
                 restart_count: info.restart_count,
                 auto_restart: handle.config.auto_restart,
-                command: format!(
-                    "{} {}",
-                    handle.config.command,
-                    handle.config.args.join(" ")
-                ),
+                command: format!("{} {}", handle.config.command, handle.config.args.join(" ")),
             });
         }
         statuses
@@ -224,7 +220,14 @@ impl ProcessManager {
         let info = handle.info.read().await;
         let total = info.total_lines;
         let lines: Vec<String> = match tail {
-            Some(n) => info.log_buffer.iter().rev().take(n).rev().cloned().collect(),
+            Some(n) => info
+                .log_buffer
+                .iter()
+                .rev()
+                .take(n)
+                .rev()
+                .cloned()
+                .collect(),
             None => info.log_buffer.iter().cloned().collect(),
         };
         Some(LogResponse {
@@ -258,11 +261,7 @@ async fn spawn_child(
     match cmd.spawn() {
         Ok(mut child) => {
             let pid = child.id();
-            info!(
-                name = config.name,
-                pid = pid,
-                "Process started"
-            );
+            info!(name = config.name, pid = pid, "Process started");
 
             // Capture stdout
             if let Some(stdout) = child.stdout.take() {
