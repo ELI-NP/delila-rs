@@ -58,12 +58,24 @@ pub struct OperatorFileConfig {
     /// Experiment name (server-authoritative, not editable by UI)
     #[serde(default = "default_experiment_name")]
     pub experiment_name: String,
+    /// HTTP server port (default: 9090)
+    #[serde(default = "default_operator_port")]
+    pub port: u16,
+    /// Directory containing built Angular UI files (serves at /)
+    /// If not set, auto-detects from web/operator-ui/dist/operator-ui/browser/
+    pub web_ui_dir: Option<String>,
+}
+
+fn default_operator_port() -> u16 {
+    9090
 }
 
 impl Default for OperatorFileConfig {
     fn default() -> Self {
         Self {
             experiment_name: default_experiment_name(),
+            port: default_operator_port(),
+            web_ui_dir: None,
         }
     }
 }

@@ -87,7 +87,7 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   providedIn: 'root',
 })
 export class DigitizerService {
-  private readonly apiUrl = 'http://localhost:8080/api/digitizers';
+  private readonly apiUrl = '/api/digitizers';
 
   // Signal holding the list of digitizer configurations
   readonly digitizers = signal<DigitizerConfig[]>([]);

@@ -8,7 +8,7 @@ import { EventBuilderConfig, EventBuilderHistoryItem, ChSettings, TimeCalibratio
 })
 export class EventBuilderService {
   private readonly http = inject(HttpClient);
-  private readonly apiUrl = 'http://localhost:8080/api/event-builder';
+  private readonly apiUrl = '/api/event-builder';
 
   // Signals for reactive state
   experiments = signal<string[]>([]);

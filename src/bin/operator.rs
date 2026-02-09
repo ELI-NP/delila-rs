@@ -61,8 +61,24 @@ fn load_config(
     if let Ok(config) = Config::load(config_file) {
         info!("Loaded configuration from {}", config_file);
         let components = build_components_from_config(&config);
+        // Resolve web_ui_dir: explicit TOML value, or auto-detect
+        let web_ui_dir = config
+            .operator
+            .web_ui_dir
+            .map(PathBuf::from)
+            .or_else(|| {
+                let default_path =
+                    PathBuf::from("web/operator-ui/dist/operator-ui/browser");
+                if default_path.exists() {
+                    Some(default_path)
+                } else {
+                    None
+                }
+            });
         let operator_config = OperatorConfig {
+            port: config.operator.port,
             experiment_name: config.operator.experiment_name,
+            web_ui_dir,
             ..OperatorConfig::default()
         };
         // Load emulator settings from config
@@ -243,6 +259,11 @@ async fn main() -> anyhow::Result<()> {
         info!("  {} -> {}", comp.name, comp.address);
     }
     info!("Experiment name: {}", operator_config.experiment_name);
+    if let Some(ref ui_dir) = operator_config.web_ui_dir {
+        info!("Web UI directory: {}", ui_dir.display());
+    } else {
+        info!("Web UI: not configured (use web_ui_dir in [operator] or build Angular app)");
+    }
     info!(
         "Emulator settings: {} events/batch, {}ms interval",
         emulator_settings.events_per_batch, emulator_settings.batch_interval_ms
@@ -288,6 +309,9 @@ async fn main() -> anyhow::Result<()> {
         (None, None)
     };
 
+    // Resolve port (CLI --port overrides TOML config)
+    let port = args.operator.port.unwrap_or(operator_config.port);
+
     // Create router with builder
     let app = RouterBuilder::new(components)
         .config(operator_config)
@@ -297,9 +321,6 @@ async fn main() -> anyhow::Result<()> {
         .digitizer_repo(digitizer_repo)
         .emulator_settings(emulator_settings)
         .build();
-
-    // Start server
-    let port = args.operator.port;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Starting Operator server on http://{}", addr);
     info!("Swagger UI: http://localhost:{}/swagger-ui/", port);

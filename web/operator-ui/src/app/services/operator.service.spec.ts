@@ -7,7 +7,7 @@ import { SystemStatus, ConfigureRequest, ApiResponse, ComponentStatus } from '..
 describe('OperatorService', () => {
   let service: OperatorService;
   let httpMock: HttpTestingController;
-  const baseUrl = 'http://localhost:8080/api';
+  const baseUrl = '/api';
 
   // Test fixtures
   const mockComponentStatus: ComponentStatus = {

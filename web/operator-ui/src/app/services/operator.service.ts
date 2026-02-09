@@ -16,7 +16,7 @@ import {
   providedIn: 'root',
 })
 export class OperatorService {
-  private readonly baseUrl = 'http://localhost:8080/api';
+  private readonly baseUrl = '/api';
   private readonly pollingInterval = 1000; // 1 second
 
   // Signals for reactive state

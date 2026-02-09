@@ -99,9 +99,9 @@ pub struct OperatorArgs {
     #[command(flatten)]
     pub common: CommonArgs,
 
-    /// HTTP server port
-    #[arg(long, default_value = "8080")]
-    pub port: u16,
+    /// HTTP server port (overrides TOML config; default from TOML or 9090)
+    #[arg(long)]
+    pub port: Option<u16>,
 }
 
 /// Arguments for Controller (CLI control client)
@@ -199,13 +199,13 @@ mod tests {
     fn test_operator_args_default() {
         let args = OperatorArgs::try_parse_from(["test"]).unwrap();
         assert_eq!(args.common.config_file, "config.toml");
-        assert_eq!(args.port, 8080);
+        assert!(args.port.is_none()); // Default comes from TOML config
     }
 
     #[test]
     fn test_operator_args_port() {
         let args = OperatorArgs::try_parse_from(["test", "--port", "9090"]).unwrap();
-        assert_eq!(args.port, 9090);
+        assert_eq!(args.port, Some(9090));
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         let args =
             OperatorArgs::try_parse_from(["test", "-f", "op.toml", "--port", "8888"]).unwrap();
         assert_eq!(args.common.config_file, "op.toml");
-        assert_eq!(args.port, 8888);
+        assert_eq!(args.port, Some(8888));
     }
 
     #[test]

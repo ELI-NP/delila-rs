@@ -18,6 +18,7 @@ use axum::{
 };
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -371,6 +372,9 @@ impl RouterBuilder {
             load_digitizer_configs_from_files(&self.config_files)
         };
 
+        // Extract web_ui_dir before moving config into AppState
+        let web_ui_dir = self.config.web_ui_dir.clone();
+
         let state = Arc::new(AppState {
             client: ComponentClient::new(),
             components: self.components,
@@ -391,7 +395,7 @@ impl RouterBuilder {
             .allow_methods(Any)
             .allow_headers(Any);
 
-        Router::new()
+        let mut router = Router::new()
             // DAQ Control API routes
             .route("/api/status", get(get_status))
             .route("/api/configure", post(configure))
@@ -471,7 +475,24 @@ impl RouterBuilder {
             // Swagger UI
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .layer(cors)
-            .with_state(state)
+            .with_state(state);
+
+        // Serve Angular SPA from web_ui_dir (if configured)
+        if let Some(ref ui_dir) = web_ui_dir {
+            if ui_dir.exists() {
+                let index = ui_dir.join("index.html");
+                let spa_service = ServeDir::new(ui_dir).fallback(ServeFile::new(index));
+                router = router.fallback_service(spa_service);
+                tracing::info!("Serving Web UI from {}", ui_dir.display());
+            } else {
+                tracing::warn!(
+                    "web_ui_dir {} does not exist, Web UI disabled",
+                    ui_dir.display()
+                );
+            }
+        }
+
+        router
     }
 }
 

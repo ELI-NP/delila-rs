@@ -7,7 +7,7 @@ import { firstValueFrom } from 'rxjs';
   providedIn: 'root',
 })
 export class EmulatorService {
-  private readonly apiUrl = 'http://localhost:8080/api/emulator';
+  private readonly apiUrl = '/api/emulator';
 
   // Signal holding the current emulator configuration
   readonly config = signal<EmulatorConfig | null>(null);

@@ -242,6 +242,8 @@ pub struct ComponentConfig {
 /// Operator configuration with timeouts
 #[derive(Debug, Clone)]
 pub struct OperatorConfig {
+    /// HTTP server port
+    pub port: u16,
     /// Timeout for reset phase (ms)
     pub reset_timeout_ms: u64,
     /// Timeout for configure phase (ms)
@@ -252,16 +254,20 @@ pub struct OperatorConfig {
     pub start_timeout_ms: u64,
     /// Experiment name (server-authoritative, from config file)
     pub experiment_name: String,
+    /// Directory containing built Angular UI files (serves at /)
+    pub web_ui_dir: Option<PathBuf>,
 }
 
 impl Default for OperatorConfig {
     fn default() -> Self {
         Self {
+            port: 9090,
             reset_timeout_ms: 5000,
             configure_timeout_ms: 5000,
             arm_timeout_ms: 5000,
             start_timeout_ms: 5000,
             experiment_name: "DefaultExp".to_string(),
+            web_ui_dir: None,
         }
     }
 }
@@ -475,6 +481,7 @@ mod tests {
     #[test]
     fn test_operator_config_default() {
         let config = OperatorConfig::default();
+        assert_eq!(config.port, 9090);
         assert_eq!(config.configure_timeout_ms, 5000);
         assert_eq!(config.arm_timeout_ms, 5000);
         assert_eq!(config.start_timeout_ms, 5000);
