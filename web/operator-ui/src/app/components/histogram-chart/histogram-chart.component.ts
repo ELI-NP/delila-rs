@@ -195,7 +195,7 @@ export class HistogramChartComponent implements OnChanges {
 
     // Y axis: calculate max within visible X range (use full-resolution data)
     const maxInRange = this.getMaxCountInRange(xMin, xMax);
-    const yMax = this.yRange === 'auto' ? maxInRange * 1.1 : this.yRange.max;
+    const yMax = this.yRange === 'auto' ? Math.ceil(maxInRange * 1.1) : this.yRange.max;
 
     // Downsample for display: max-pool bins that map to the same pixel
     // This prevents sub-pixel bars from hiding peaks (same approach as ROOT TH1)
