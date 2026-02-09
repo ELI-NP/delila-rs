@@ -1,4 +1,5 @@
 import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
@@ -11,6 +12,7 @@ import {
   ExpandDialogResult,
 } from '../../components/histogram-expand-dialog/histogram-expand-dialog.component';
 import { HistogramService } from '../../services/histogram.service';
+import { DigitizerService } from '../../services/digitizer.service';
 import {
   MonitorState,
   SetupConfig,
@@ -85,6 +87,7 @@ const STORAGE_KEY = 'delila-monitor-state';
             [config]="setupConfig()"
             (configChange)="onSetupConfigChange($event)"
             (createView)="onCreateView($event)"
+            (quickCreate)="onQuickCreate($event)"
           ></app-setup-tab>
         } @else if (activeViewTab(); as tab) {
           <!-- View tab content -->
@@ -190,6 +193,8 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
   private readonly dialog = inject(MatDialog);
   private readonly snackBar = inject(MatSnackBar);
   readonly histogramService = inject(HistogramService);
+  private readonly digitizerService = inject(DigitizerService);
+  private readonly http = inject(HttpClient);
 
   readonly setupConfig = signal<SetupConfig>(createDefaultSetupConfig());
   readonly viewTabs = signal<ViewTab[]>([]);
@@ -204,6 +209,7 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.loadState();
     this.histogramService.startPolling();
+    this.digitizerService.loadDigitizers();
   }
 
   ngOnDestroy(): void {
@@ -259,6 +265,23 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
 
   onSetupConfigChange(config: SetupConfig): void {
     this.setupConfig.set(config);
+    this.saveState();
+  }
+
+  onQuickCreate(configs: SetupConfig[]): void {
+    let firstTabId: string | null = null;
+
+    for (const config of configs) {
+      const viewTab = createViewTabFromSetup(config);
+      if (viewTab) {
+        this.viewTabs.update((tabs) => [...tabs, viewTab]);
+        if (!firstTabId) firstTabId = viewTab.id;
+      }
+    }
+
+    if (firstTabId) {
+      this.activeTabId.set(firstTabId);
+    }
     this.saveState();
   }
 
@@ -327,17 +350,29 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
   }
 
   private loadState(): void {
+    // Try server first, fall back to localStorage
+    this.http.get<MonitorState>('/api/monitor/layout').subscribe({
+      next: (state) => {
+        if (state && state.viewTabs && state.viewTabs.length > 0) {
+          this.applyState(state);
+        } else {
+          this.loadFromLocalStorage();
+        }
+      },
+      error: () => this.loadFromLocalStorage(),
+    });
+  }
+
+  private loadFromLocalStorage(): void {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const state: MonitorState = JSON.parse(stored);
-        this.setupConfig.set(state.setupConfig);
-        this.viewTabs.set(state.viewTabs);
-        this.activeTabId.set(state.activeTabId);
+        this.applyState(state);
         return;
       }
     } catch {
-      console.warn('Failed to load monitor state');
+      console.warn('Failed to load monitor state from localStorage');
     }
 
     // Default state
@@ -346,12 +381,25 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
     this.activeTabId.set(null);
   }
 
+  private applyState(state: MonitorState): void {
+    this.setupConfig.set(state.setupConfig ?? createDefaultSetupConfig());
+    this.viewTabs.set(state.viewTabs ?? []);
+    this.activeTabId.set(state.activeTabId ?? null);
+  }
+
   private saveState(): void {
     const state: MonitorState = {
       setupConfig: this.setupConfig(),
       viewTabs: this.viewTabs(),
       activeTabId: this.activeTabId(),
     };
+
+    // Save to localStorage (immediate)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+    // Save to server (fire-and-forget)
+    this.http.put('/api/monitor/layout', state).subscribe({
+      error: (err) => console.warn('Failed to save layout to server:', err.message),
+    });
   }
 }

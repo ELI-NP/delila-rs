@@ -3,6 +3,7 @@
 mod digitizer;
 mod emulator;
 mod event_builder;
+mod monitor_layout;
 mod run;
 mod status;
 mod tuneup;
@@ -58,6 +59,7 @@ use event_builder::{
 };
 use run::{add_run_note, get_next_run_number, get_run, get_run_config_snapshot, get_run_history};
 use status::{arm, configure, get_status, reset, run_start, start, stop};
+use monitor_layout::{get_monitor_layout, save_monitor_layout};
 use tuneup::{tuneup_apply, tuneup_start, tuneup_stop};
 
 /// Application state shared across handlers
@@ -83,6 +85,8 @@ pub struct AppState {
     pub tuneup_mode: RwLock<bool>,
     /// Digitizer ID being tuned (when tuneup_mode is true)
     pub tuneup_digitizer_id: RwLock<Option<u32>>,
+    /// Monitor layout state (opaque JSON, persisted to file)
+    pub monitor_layout: RwLock<serde_json::Value>,
 }
 
 /// Emulator runtime settings (API model)
@@ -375,6 +379,8 @@ impl RouterBuilder {
         // Extract web_ui_dir before moving config into AppState
         let web_ui_dir = self.config.web_ui_dir.clone();
 
+        let monitor_layout = monitor_layout::load_monitor_layout(&self.config_dir);
+
         let state = Arc::new(AppState {
             client: ComponentClient::new(),
             components: self.components,
@@ -388,6 +394,7 @@ impl RouterBuilder {
             emulator_settings: RwLock::new(self.emulator_settings),
             tuneup_mode: RwLock::new(false),
             tuneup_digitizer_id: RwLock::new(None),
+            monitor_layout: RwLock::new(monitor_layout),
         });
 
         let cors = CorsLayer::new()
@@ -437,6 +444,8 @@ impl RouterBuilder {
             )
             // Run config snapshots
             .route("/api/runs/:run_number/config", get(get_run_config_snapshot))
+            // Monitor layout persistence
+            .route("/api/monitor/layout", get(get_monitor_layout).put(save_monitor_layout))
             // Emulator settings routes
             .route("/api/emulator", get(get_emulator_settings))
             .route("/api/emulator", put(update_emulator_settings))

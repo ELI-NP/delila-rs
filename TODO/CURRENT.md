@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-05
+**Updated:** 2026-02-09
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -69,6 +69,8 @@ Claudeセッション開始時に必ず読み込まれます。
 - Tune Up Mode (Waveform + ヒストグラム + パラメータ 3-panel UI)
 - Channel Registration (Monitor チャンネル事前登録 + 個別チャンネル名)
 - AMax Viewer (スタンドアロン GUI ツール: 2D Histogram + Waveform + パラメータ調整 + ROOT出力)
+- Monitor Quick Create (デジタイザ選択で全チャンネルビュー自動生成)
+- Monitor レイアウト永続化 (Operator REST API + ファイル保存, 全ブラウザ共有)
 
 ---
 
@@ -106,7 +108,8 @@ Claudeセッション開始時に必ず読み込まれます。
 - **現在のフェーズ:** MVP 最終段階 — 主要機能は全て実装済み。残りはスケーリング改善、実機検証
 - **実機確認済み:**
   - VX2730 (Serial: 52621, DPP_PSD2, 32ch, Ethernet, 172.18.4.57)
-  - DT5730B (Serial: 990, DPP_PSD1/PHA1, 8ch, USB)
+  - DT5730B (Serial: 990, DPP_PSD1/PHA1, 16ch, USB)
+  - 5x VX1730B (PSD1, 16ch each) + 1x VX2730 (PSD2, 32ch) on 172.18.4.76
 - **動作環境:** Linux (Ubuntu, Rust 1.93.0) + macOS (クロスマシン統合)
 
 ## Reference Documents

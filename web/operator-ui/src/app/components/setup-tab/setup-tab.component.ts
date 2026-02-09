@@ -1,12 +1,14 @@
-import { Component, Input, Output, EventEmitter, inject } from '@angular/core';
+import { Component, Input, Output, EventEmitter, inject, signal } from '@angular/core';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatCardModule } from '@angular/material/card';
+import { MatDividerModule } from '@angular/material/divider';
 import { FormsModule } from '@angular/forms';
 import { HistogramService } from '../../services/histogram.service';
+import { DigitizerService } from '../../services/digitizer.service';
 import {
   SetupConfig,
   SetupCell,
@@ -25,10 +27,41 @@ import {
     MatButtonModule,
     MatIconModule,
     MatCardModule,
+    MatDividerModule,
     FormsModule,
   ],
   template: `
     <div class="setup-container">
+      <!-- Quick Create section -->
+      <div class="quick-create">
+        <span class="quick-create-label">Quick Create</span>
+        <mat-form-field appearance="outline" class="digitizer-select">
+          <mat-label>Digitizer</mat-label>
+          <mat-select
+            [value]="selectedDigitizerId()"
+            (selectionChange)="selectedDigitizerId.set($event.value)"
+          >
+            @for (d of digitizerService.digitizers(); track d.digitizer_id) {
+              <mat-option [value]="d.digitizer_id">
+                #{{ d.digitizer_id }} {{ d.name }} ({{ d.num_channels }}ch)
+              </mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+        <button
+          mat-raised-button
+          color="accent"
+          (click)="onQuickCreate()"
+          [disabled]="selectedDigitizerId() === null"
+        >
+          <mat-icon>auto_awesome</mat-icon>
+          Quick Create
+        </button>
+      </div>
+
+      <mat-divider></mat-divider>
+
+      <!-- Manual setup -->
       <div class="setup-header">
         <mat-form-field appearance="outline" class="name-input">
           <mat-label>View Name</mat-label>
@@ -131,6 +164,23 @@ import {
       gap: 16px;
     }
 
+    .quick-create {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .quick-create-label {
+      font-weight: 500;
+      font-size: 14px;
+      color: #666;
+      white-space: nowrap;
+    }
+
+    .digitizer-select {
+      width: 280px;
+    }
+
     .setup-header {
       display: flex;
       align-items: center;
@@ -200,10 +250,13 @@ export class SetupTabComponent {
   @Input() config!: SetupConfig;
   @Output() configChange = new EventEmitter<SetupConfig>();
   @Output() createView = new EventEmitter<SetupConfig>();
+  @Output() quickCreate = new EventEmitter<SetupConfig[]>();
 
   private readonly histogramService = inject(HistogramService);
+  readonly digitizerService = inject(DigitizerService);
 
   readonly availableChannels = this.histogramService.channelList;
+  readonly selectedDigitizerId = signal<number | null>(null);
 
   channelKey(channel: ChannelSummary): string {
     return `${channel.module_id}:${channel.channel_id}`;
@@ -275,6 +328,51 @@ export class SetupTabComponent {
     if (this.canCreateView()) {
       this.createView.emit(this.config);
     }
+  }
+
+  onQuickCreate(): void {
+    const id = this.selectedDigitizerId();
+    if (id === null) return;
+
+    const digitizer = this.digitizerService.digitizers().find((d) => d.digitizer_id === id);
+    if (!digitizer) return;
+
+    const numCh = digitizer.num_channels;
+    const configs: SetupConfig[] = [];
+    const chunkSize = numCh <= 8 ? numCh : 16;
+
+    for (let offset = 0; offset < numCh; offset += chunkSize) {
+      const end = Math.min(offset + chunkSize, numCh);
+      const count = end - offset;
+      const rows = count <= 8 ? 2 : 4;
+      const cols = 4;
+      const totalCells = rows * cols;
+
+      const cells: SetupCell[] = [];
+      for (let i = 0; i < totalCells; i++) {
+        const ch = offset + i;
+        if (ch < end) {
+          cells.push({ sourceId: id, channelId: ch });
+        } else {
+          cells.push({ sourceId: null, channelId: null });
+        }
+      }
+
+      const name =
+        numCh <= chunkSize
+          ? `${digitizer.name}`
+          : `${digitizer.name} Ch${offset}-${end - 1}`;
+
+      configs.push({
+        name,
+        gridRows: rows,
+        gridCols: cols,
+        xAxisLabel: 'Channel',
+        cells,
+      });
+    }
+
+    this.quickCreate.emit(configs);
   }
 
   private emitConfigChange(changes: Partial<SetupConfig>): void {
