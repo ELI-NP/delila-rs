@@ -64,8 +64,7 @@ enum ReadLoopOutput {
     /// Start signal from digitizer (reserved for future use)
     #[allow(dead_code)]
     Start,
-    /// Stop signal from digitizer (reserved for future use)
-    #[allow(dead_code)]
+    /// Stop signal — triggers EOS publication in DecodeLoop
     Stop,
 }
 
@@ -659,6 +658,17 @@ impl Reader {
                         if hw_running {
                             info!("Stopping digitizer acquisition");
                             let _ = handle.send_command("/cmd/disarmacquisition");
+                            // Drain remaining buffered data before clearing
+                            let mut drained = 0u64;
+                            while let Ok(Some(raw)) = endpoint.read_data(100, &mut read_buffer) {
+                                drained += 1;
+                                let decoder_raw = decoder::RawData::from(raw);
+                                let _ = tx.try_send(ReadLoopOutput::Raw(decoder_raw));
+                            }
+                            if drained > 0 {
+                                info!(drained, "Drained remaining data after stop");
+                            }
+                            let _ = tx.try_send(ReadLoopOutput::Stop);
                             let _ = handle.send_command("/cmd/cleardata");
                             hw_armed = false;
                             hw_running = false;
@@ -893,6 +903,17 @@ impl Reader {
                         if hw_running {
                             info!("Stopping digitizer acquisition");
                             let _ = handle.send_command("/cmd/disarmacquisition");
+                            // Drain remaining buffered events before clearing
+                            let mut drained = 0u64;
+                            while let Ok(Some(evt)) = endpoint.read_opendpp_event(100, &mut user_info_buffer) {
+                                drained += 1;
+                                let event_data = opendpp_to_event_data(&evt, config.module_id);
+                                let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));
+                            }
+                            if drained > 0 {
+                                info!(drained, "Drained remaining events after stop");
+                            }
+                            let _ = tx.try_send(ReadLoopOutput::Stop);
                             let _ = handle.send_command("/cmd/cleardata");
                             hw_armed = false;
                             hw_running = false;
