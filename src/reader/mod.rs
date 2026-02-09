@@ -195,7 +195,7 @@ impl ReaderConfig {
         Some(Self {
             url: url.clone(),
             data_address: source.data_address(config.network.port_base_data),
-            command_address: source.command_address(),
+            command_address: source.command_address_with_base(config.network.port_base_command),
             source_id,
             firmware,
             module_id: source.module_id.unwrap_or(source_id as u8),
