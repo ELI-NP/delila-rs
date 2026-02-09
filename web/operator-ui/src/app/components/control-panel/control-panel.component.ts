@@ -433,7 +433,7 @@ export class ControlPanelComponent {
           this.showMessage(`Configure failed: ${res.message}`);
         }
       },
-      error: () => this.showMessage('Configure failed: Network error'),
+      error: (err: unknown) => this.showMessage(`Configure failed: ${this.extractError(err)}`),
     });
   }
 
@@ -452,7 +452,7 @@ export class ControlPanelComponent {
           this.showMessage(`Start failed: ${res.message}`);
         }
       },
-      error: () => this.showMessage('Start failed: Network error'),
+      error: (err: unknown) => this.showMessage(`Start failed: ${this.extractError(err)}`),
     });
   }
 
@@ -468,7 +468,7 @@ export class ControlPanelComponent {
           this.showMessage(`Stop failed: ${res.message}`);
         }
       },
-      error: () => this.showMessage('Stop failed: Network error'),
+      error: (err: unknown) => this.showMessage(`Stop failed: ${this.extractError(err)}`),
     });
   }
 
@@ -483,7 +483,7 @@ export class ControlPanelComponent {
           this.showMessage(`Reset failed: ${res.message}`);
         }
       },
-      error: () => this.showMessage('Reset failed: Network error'),
+      error: (err: unknown) => this.showMessage(`Reset failed: ${this.extractError(err)}`),
     });
   }
 
@@ -498,6 +498,11 @@ export class ControlPanelComponent {
       },
       error: () => this.showMessage('Failed to add note'),
     });
+  }
+
+  private extractError(err: unknown): string {
+    const e = err as { error?: { message?: string }; message?: string };
+    return e?.error?.message || e?.message || 'Network error';
   }
 
   private showMessage(message: string): void {
