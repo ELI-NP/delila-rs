@@ -11,6 +11,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
+| **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
 | **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2 全Phase完了 (Phase 1-6)。PSD1/PHA1 ns変換含む |
 | **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
@@ -20,11 +21,12 @@ Claudeセッション開始時に必ず読み込まれます。
 
 ## 次のセッション候補
 
-- **A:** マルチデジタイザスケーリング MVP 項目 (A1, A3, C3) → `TODO/26_multi_digitizer_scaling.md`
-- **B:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
-- **C:** L2 Filter 実装 (Counter/Flag/Accept) → `TODO/24_l2_filter_implementation.md`
-- **D:** Event Builder L1 の実データ検証 (C++ ELIFANT-Event との出力比較)
-- **E:** rust-embed 統合 (簡単ならやる、難しければ不要)
+- **A:** ステータス並列化 + start_daq.sh 改善 + タイムアウト設定化 → Phase 1 基盤整備
+- **B:** PHA1 コンフィグテンプレート + Settings UI パラメータ確認
+- **C:** Event Builder オンラインパイプライン統合 (EB-1〜EB-4) → Phase 2
+- **D:** Grafana モニタリング (Prometheus exporter + HV exporter) → Phase 3
+- **E:** PHA1 実機テスト (ハードウェア確定後)
+- **F:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
 
 ---
 
