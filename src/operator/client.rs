@@ -105,13 +105,10 @@ impl ComponentClient {
         }
     }
 
-    /// Get status of multiple components
+    /// Get status of multiple components (parallel)
     pub async fn get_all_status(&self, configs: &[ComponentConfig]) -> Vec<ComponentStatus> {
-        let mut statuses = Vec::with_capacity(configs.len());
-        for config in configs {
-            statuses.push(self.get_status(config).await);
-        }
-        statuses
+        let futures: Vec<_> = configs.iter().map(|c| self.get_status(c)).collect();
+        join_all(futures).await
     }
 
     /// Send configure command to a component
@@ -163,18 +160,17 @@ impl ComponentClient {
         }
     }
 
-    /// Execute command on all components
+    /// Execute command on all components (parallel)
     pub async fn execute_on_all(
         &self,
         configs: &[ComponentConfig],
         command_fn: impl Fn(&ComponentConfig) -> Command,
     ) -> Vec<CommandResult> {
-        let mut results = Vec::with_capacity(configs.len());
-        for config in configs {
-            let command = command_fn(config);
-            results.push(self.execute_command(config, command).await);
-        }
-        results
+        let futures: Vec<_> = configs
+            .iter()
+            .map(|config| self.execute_command(config, command_fn(config)))
+            .collect();
+        join_all(futures).await
     }
 
     /// Configure all components with parallel execution for same pipeline_order

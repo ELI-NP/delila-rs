@@ -3,6 +3,7 @@ tools/*/target/
 
 .serena
 .claude
+.mcp.json
 
 # Data output files
 /data/

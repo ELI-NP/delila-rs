@@ -12,6 +12,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
+| **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
 | **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2 全Phase完了 (Phase 1-6)。PSD1/PHA1 ns変換含む |
 | **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |

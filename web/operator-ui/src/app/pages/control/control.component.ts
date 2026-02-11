@@ -61,6 +61,7 @@ export class ControlPageComponent {
   private readonly notification = inject(NotificationService);
 
   @ViewChild('controlPanel') controlPanel!: ControlPanelComponent;
+  @ViewChild(TimerComponent) timerComp!: TimerComponent;
 
   // Run info is now managed by the backend and displayed reactively
   // No need for manual startRun/stopRun calls
@@ -82,12 +83,15 @@ export class ControlPageComponent {
     this.operator.start(runNumber, comment).subscribe({
       next: (res) => {
         if (res.success) {
+          this.timerComp.confirmStarted();
           this.notification.success(`Started run ${runNumber} with timer`);
         } else {
+          this.timerComp.confirmFailed();
           this.notification.error(`Start failed: ${res.message}`);
         }
       },
       error: (err: unknown) => {
+        this.timerComp.confirmFailed();
         const e = err as { error?: { message?: string }; message?: string };
         const msg = e?.error?.message || e?.message || 'Network error';
         this.notification.error(`Start failed: ${msg}`);

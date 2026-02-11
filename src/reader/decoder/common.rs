@@ -75,6 +75,9 @@ pub struct Waveform {
     pub time_resolution: u8,
     /// Trigger threshold
     pub trigger_threshold: u16,
+    /// Nanoseconds per waveform sample (set by decoder)
+    #[serde(default)]
+    pub ns_per_sample: f64,
 }
 
 /// Event data structure

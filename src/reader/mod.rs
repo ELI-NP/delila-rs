@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tmq::publish;
+use tmq::{publish, AsZmqSocket};
 use tmq::Context;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::interval;
@@ -443,12 +443,17 @@ impl Reader {
     pub async fn new(config: ReaderConfig) -> Result<Self, ReaderError> {
         let context = Context::new();
         let data_socket = publish(&context).bind(&config.data_address)?;
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        data_socket
+            .get_socket()
+            .set_sndhwm(0)
+            .map_err(|e| ReaderError::Zmq(e.into()))?;
 
         info!(
             data_address = %config.data_address,
             command_address = %config.command_address,
             url = %config.url,
-            "Reader bound to data address"
+            "Reader bound to data address (SNDHWM=0)"
         );
 
         let (state_tx, state_rx) = watch::channel(ComponentState::Idle);
@@ -493,6 +498,7 @@ impl Reader {
                     digital_probe4: wf.digital_probe4, // move
                     time_resolution: wf.time_resolution,
                     trigger_threshold: wf.trigger_threshold,
+                    ns_per_sample: wf.ns_per_sample,
                 },
             )
         } else {
@@ -1548,6 +1554,7 @@ mod tests {
             digital_probe4: vec![0, 0, 1],
             time_resolution: 2,
             trigger_threshold: 500,
+            ns_per_sample: 2.0,
         };
 
         let event = EventData {
@@ -1569,5 +1576,6 @@ mod tests {
         assert_eq!(cwf.digital_probe1, vec![1, 0, 1]);
         assert_eq!(cwf.time_resolution, 2);
         assert_eq!(cwf.trigger_threshold, 500);
+        assert_eq!(cwf.ns_per_sample, 2.0);
     }
 }

@@ -617,6 +617,7 @@ dependencies = [
  "cc",
  "chrono",
  "clap",
+ "crossbeam-channel",
  "dashmap",
  "futures",
  "mongodb",

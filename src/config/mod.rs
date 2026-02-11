@@ -64,6 +64,18 @@ pub struct OperatorFileConfig {
     /// Directory containing built Angular UI files (serves at /)
     /// If not set, auto-detects from web/operator-ui/dist/operator-ui/browser/
     pub web_ui_dir: Option<String>,
+    /// Timeout for configure phase in ms (default: 5000)
+    #[serde(default)]
+    pub configure_timeout_ms: Option<u64>,
+    /// Timeout for arm phase in ms (default: 5000)
+    #[serde(default)]
+    pub arm_timeout_ms: Option<u64>,
+    /// Timeout for start phase in ms (default: 5000)
+    #[serde(default)]
+    pub start_timeout_ms: Option<u64>,
+    /// Timeout for reset phase in ms (default: 5000)
+    #[serde(default)]
+    pub reset_timeout_ms: Option<u64>,
 }
 
 fn default_operator_port() -> u16 {
@@ -76,6 +88,10 @@ impl Default for OperatorFileConfig {
             experiment_name: default_experiment_name(),
             port: default_operator_port(),
             web_ui_dir: None,
+            configure_timeout_ms: None,
+            arm_timeout_ms: None,
+            start_timeout_ms: None,
+            reset_timeout_ms: None,
         }
     }
 }
@@ -158,6 +174,10 @@ pub struct NetworkConfig {
 
     /// Monitor configuration
     pub monitor: Option<MonitorNetworkConfig>,
+
+    /// Event Builder configuration
+    #[serde(default)]
+    pub event_builder: Option<EventBuilderNetworkConfig>,
 }
 
 fn default_port_base_data() -> u16 {
@@ -474,6 +494,61 @@ pub struct MonitorNetworkConfig {
 
 fn default_http_port() -> u16 {
     8081
+}
+
+/// Event Builder network configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct EventBuilderNetworkConfig {
+    /// ZMQ address to subscribe to (Merger PUB)
+    pub subscribe: String,
+
+    /// ZMQ bind address for commands (e.g., "tcp://*:5595")
+    #[serde(default)]
+    pub command: Option<String>,
+
+    /// Output directory for ROOT event files
+    #[serde(default = "default_eb_output_dir")]
+    pub output_dir: String,
+
+    /// Coincidence window in nanoseconds (default: 500)
+    #[serde(default = "default_coincidence_window_ns")]
+    pub coincidence_window_ns: f64,
+
+    /// Time slice duration in nanoseconds (default: 10_000_000 = 10ms)
+    #[serde(default = "default_slice_duration_ns")]
+    pub slice_duration_ns: f64,
+
+    /// TimeSortBuffer delay in nanoseconds (default: 5_000_000 = 5ms)
+    #[serde(default = "default_buffer_delay_ns")]
+    pub buffer_delay_ns: f64,
+
+    /// Channel settings JSON file path (optional)
+    #[serde(default)]
+    pub ch_settings_file: Option<String>,
+
+    /// Time calibration JSON file path (optional)
+    #[serde(default)]
+    pub time_calib_file: Option<String>,
+
+    /// Pipeline order for Start/Stop sequencing (default: 3)
+    #[serde(default = "default_sink_pipeline_order")]
+    pub pipeline_order: u32,
+}
+
+fn default_eb_output_dir() -> String {
+    "./data/events".to_string()
+}
+
+fn default_coincidence_window_ns() -> f64 {
+    500.0
+}
+
+fn default_slice_duration_ns() -> f64 {
+    10_000_000.0 // 10ms
+}
+
+fn default_buffer_delay_ns() -> f64 {
+    5_000_000.0 // 5ms
 }
 
 // =============================================================================

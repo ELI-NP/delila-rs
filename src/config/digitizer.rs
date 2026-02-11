@@ -1742,39 +1742,38 @@ mod tests {
     }
 
     #[test]
-    fn test_psd1_ns_to_samples_conversion() {
+    fn test_psd1_ns_direct_passthrough() {
         let mut config = DigitizerConfig::new(0, "Test PSD1", FirmwareType::PSD1);
-        // Set time params in ns
-        config.channel_defaults.pre_trigger_ns = Some(80); // 80 ns = 40 samples
-        config.channel_defaults.cfd_delay_ns = Some(20); // 20 ns = 10 samples
-        config.channel_defaults.trigger_holdoff_ns = Some(1000); // 1000 ns = 500 samples
-        config.channel_defaults.gate_long_ns = Some(400); // 400 ns = 200 samples
-        config.channel_defaults.gate_short_ns = Some(100); // 100 ns = 50 samples
-        config.channel_defaults.gate_pre_ns = Some(60); // 60 ns = 30 samples
-                                                        // Board-level record length in ns
-        config.board.record_length = Some(2048); // 2048 ns = 1024 samples
+        // Set time params in ns — DevTree accepts nanoseconds directly (expuom: -9)
+        config.channel_defaults.pre_trigger_ns = Some(80);
+        config.channel_defaults.cfd_delay_ns = Some(20);
+        config.channel_defaults.trigger_holdoff_ns = Some(1000);
+        config.channel_defaults.gate_long_ns = Some(400);
+        config.channel_defaults.gate_short_ns = Some(100);
+        config.channel_defaults.gate_pre_ns = Some(60);
+        config.board.record_length = Some(2048);
 
         let params = config.to_caen_parameters();
 
-        // Verify channel time params are converted to samples (÷2)
+        // All time params pass through as nanoseconds (no conversion)
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..7/par/ch_pretrg" && p.value == "40"));
+            .any(|p| p.path == "/ch/0..7/par/ch_pretrg" && p.value == "80"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..7/par/ch_cfd_delay" && p.value == "10"));
+            .any(|p| p.path == "/ch/0..7/par/ch_cfd_delay" && p.value == "20"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..7/par/ch_trg_holdoff" && p.value == "500"));
+            .any(|p| p.path == "/ch/0..7/par/ch_trg_holdoff" && p.value == "1000"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..7/par/ch_gate" && p.value == "200"));
+            .any(|p| p.path == "/ch/0..7/par/ch_gate" && p.value == "400"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..7/par/ch_gateshort" && p.value == "50"));
+            .any(|p| p.path == "/ch/0..7/par/ch_gateshort" && p.value == "100"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..7/par/ch_gatepre" && p.value == "30"));
+            .any(|p| p.path == "/ch/0..7/par/ch_gatepre" && p.value == "60"));
         // Board-level record length in ns (DevTree expuom: -9)
         assert!(params
             .iter()
@@ -1782,42 +1781,43 @@ mod tests {
     }
 
     #[test]
-    fn test_pha1_ns_to_samples_conversion() {
+    fn test_pha1_ns_direct_passthrough() {
         let mut config = DigitizerConfig::new(0, "Test PHA1", FirmwareType::PHA1);
-        // Set time params in ns
-        config.channel_defaults.pre_trigger_ns = Some(128); // 128 ns = 64 samples
-        config.channel_defaults.trigger_holdoff_ns = Some(16); // 16 ns = 8 samples
-        config.channel_defaults.input_rise_time_ns = Some(32); // 32 ns = 16 samples
-        config.channel_defaults.trap_rise_time_ns = Some(1000); // 1000 ns = 500 samples
-        config.channel_defaults.trap_flat_top_ns = Some(200); // 200 ns = 100 samples
-        config.channel_defaults.trap_pole_zero_ns = Some(50000); // 50000 ns = 25000 samples
-        config.channel_defaults.peak_holdoff_ns = Some(500); // 500 ns = 250 samples
-        config.board.record_length = Some(4000); // 4000 ns = 2000 samples
+        // Set time params in ns — DevTree accepts nanoseconds directly (expuom: -9)
+        config.channel_defaults.pre_trigger_ns = Some(128);
+        config.channel_defaults.trigger_holdoff_ns = Some(16);
+        config.channel_defaults.input_rise_time_ns = Some(32);
+        config.channel_defaults.trap_rise_time_ns = Some(1000);
+        config.channel_defaults.trap_flat_top_ns = Some(200);
+        config.channel_defaults.trap_pole_zero_ns = Some(50000);
+        config.channel_defaults.peak_holdoff_ns = Some(500);
+        config.board.record_length = Some(4000);
 
         let params = config.to_caen_parameters();
 
         // PHA1 has 32 channels → /ch/0..31/ range
+        // All time params pass through as nanoseconds (no conversion)
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_pretrg" && p.value == "64"));
+            .any(|p| p.path == "/ch/0..31/par/ch_pretrg" && p.value == "128"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_trg_holdoff" && p.value == "8"));
+            .any(|p| p.path == "/ch/0..31/par/ch_trg_holdoff" && p.value == "16"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_rccr2_rise" && p.value == "16"));
+            .any(|p| p.path == "/ch/0..31/par/ch_rccr2_rise" && p.value == "32"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_trap_trise" && p.value == "500"));
+            .any(|p| p.path == "/ch/0..31/par/ch_trap_trise" && p.value == "1000"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_trap_tflat" && p.value == "100"));
+            .any(|p| p.path == "/ch/0..31/par/ch_trap_tflat" && p.value == "200"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_tdecay" && p.value == "25000"));
+            .any(|p| p.path == "/ch/0..31/par/ch_tdecay" && p.value == "50000"));
         assert!(params
             .iter()
-            .any(|p| p.path == "/ch/0..31/par/ch_peak_holdoff" && p.value == "250"));
+            .any(|p| p.path == "/ch/0..31/par/ch_peak_holdoff" && p.value == "500"));
         // Board-level record length in ns (DevTree expuom: -9)
         assert!(params
             .iter()

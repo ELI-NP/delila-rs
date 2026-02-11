@@ -564,24 +564,20 @@ impl Pha1Decoder {
     ) -> Waveform {
         // PHA1 waveform data format (CAEN spec):
         // - Channel header word1 bits[0:15] = num_samples / 8 = num_samples_wave
-        // - Waveform words = num_samples_wave * 4 (each word has 2 samples)
-        // - Actual samples = num_samples_wave * 8
+        // - Waveform words = num_samples_wave * 4 (each word has 2 raw samples)
+        // - Raw sample count = num_samples_wave * 8 = total_samples
         //
-        // In dual trace mode (DT=1): even samples → probe1, odd → probe2
-        // In single trace mode (DT=0): all samples → probe1
-        // Note: Each sample is duplicated (CAEN style) to match expected array size.
+        // Output principle: all probes have exactly total_samples points.
+        // - Single trace (DT=0): all samples → probe1, no duplication
+        // - Dual trace (DT=1): even → probe1, odd → probe2,
+        //   each duplicated 2x (sample-and-hold) to match digital probe length
         let total_words = ch_header.num_samples_wave as usize * 4;
         let total_samples =
             ch_header.num_samples_wave as usize * constants::waveform::SAMPLES_PER_GROUP;
 
-        let capacity = if ch_header.dual_trace {
-            total_samples / 2
-        } else {
-            total_samples
-        };
-
-        let mut analog_probe1 = Vec::with_capacity(capacity);
-        let mut analog_probe2 = Vec::with_capacity(if ch_header.dual_trace { capacity } else { 0 });
+        let mut analog_probe1 = Vec::with_capacity(total_samples);
+        let mut analog_probe2 =
+            Vec::with_capacity(if ch_header.dual_trace { total_samples } else { 0 });
         let mut digital_probe1 = Vec::with_capacity(total_samples);
         let mut digital_probe2 = Vec::with_capacity(total_samples);
 
@@ -602,29 +598,23 @@ impl Pha1Decoder {
             let s2_tn = ((upper >> constants::waveform::TRIGGER_FLAG_SHIFT) & 1) as u8;
 
             if ch_header.dual_trace {
-                // Dual trace: even samples → probe1, odd samples → probe2
-                // Duplicate each sample (CAEN style: same value at t and t+1)
-                analog_probe1.push(s1_analog);
-                analog_probe1.push(s1_analog);
-                analog_probe2.push(s2_analog);
-                analog_probe2.push(s2_analog);
-            } else {
-                // Single trace: all samples to probe1, each duplicated
-                analog_probe1.push(s1_analog);
-                analog_probe1.push(s1_analog);
+                // CAEN DPP-PHA dual trace: even(s1) = VTrace 1, odd(s2) = VTrace 0
+                // Each duplicated 2x (sample-and-hold) to match digital probe length
                 analog_probe1.push(s2_analog);
+                analog_probe1.push(s2_analog);
+                analog_probe2.push(s1_analog);
+                analog_probe2.push(s1_analog);
+            } else {
+                // Single trace: all samples to probe1, no duplication
+                analog_probe1.push(s1_analog);
                 analog_probe1.push(s2_analog);
             }
 
             // PHA1: digital_probe1 = DP, digital_probe2 = Trigger flag
-            // Also duplicate each sample
-            digital_probe1.push(s1_dp);
+            // No duplication (1 value per raw sample)
             digital_probe1.push(s1_dp);
             digital_probe1.push(s2_dp);
-            digital_probe1.push(s2_dp);
             digital_probe2.push(s1_tn);
-            digital_probe2.push(s1_tn);
-            digital_probe2.push(s2_tn);
             digital_probe2.push(s2_tn);
         }
 
@@ -637,6 +627,7 @@ impl Pha1Decoder {
             digital_probe4: vec![],
             time_resolution: 0,
             trigger_threshold: 0,
+            ns_per_sample: self.config.time_step_ns,
         }
     }
 }
@@ -1444,25 +1435,17 @@ mod tests {
         let events = dec.decode(&raw);
         assert_eq!(events.len(), 1);
 
-        // CAEN style: each sample is duplicated (16 output samples from 8 data points)
+        // Single trace: no duplication (8 output = 8 raw samples)
         let wf = events[0].waveform.as_ref().unwrap();
-        assert_eq!(wf.analog_probe1.len(), 16);
+        assert_eq!(wf.analog_probe1.len(), 8);
         assert_eq!(wf.analog_probe1[0], 100);
-        assert_eq!(wf.analog_probe1[1], 100); // duplicate
-        assert_eq!(wf.analog_probe1[2], 200);
-        assert_eq!(wf.analog_probe1[3], 200); // duplicate
-        assert_eq!(wf.analog_probe1[4], 300);
-        assert_eq!(wf.analog_probe1[5], 300); // duplicate
-        assert_eq!(wf.analog_probe1[6], 400);
-        assert_eq!(wf.analog_probe1[7], 400); // duplicate
-        assert_eq!(wf.analog_probe1[8], 500);
-        assert_eq!(wf.analog_probe1[9], 500); // duplicate
-        assert_eq!(wf.analog_probe1[10], 600);
-        assert_eq!(wf.analog_probe1[11], 600); // duplicate
-        assert_eq!(wf.analog_probe1[12], 700);
-        assert_eq!(wf.analog_probe1[13], 700); // duplicate
-        assert_eq!(wf.analog_probe1[14], 800);
-        assert_eq!(wf.analog_probe1[15], 800); // duplicate
+        assert_eq!(wf.analog_probe1[1], 200);
+        assert_eq!(wf.analog_probe1[2], 300);
+        assert_eq!(wf.analog_probe1[3], 400);
+        assert_eq!(wf.analog_probe1[4], 500);
+        assert_eq!(wf.analog_probe1[5], 600);
+        assert_eq!(wf.analog_probe1[6], 700);
+        assert_eq!(wf.analog_probe1[7], 800);
     }
 
     #[test]
@@ -1505,16 +1488,12 @@ mod tests {
         let events = dec.decode(&raw);
         let wf = events[0].waveform.as_ref().unwrap();
 
-        // CAEN style: each sample is duplicated
-        // Word 0: s1(dp=1,tn=0), s2(dp=0,tn=1) → duplicated
-        assert_eq!(wf.digital_probe1[0], 1); // s1 dp (duplicate 0)
-        assert_eq!(wf.digital_probe1[1], 1); // s1 dp (duplicate 1)
-        assert_eq!(wf.digital_probe2[0], 0); // s1 trigger (duplicate 0)
-        assert_eq!(wf.digital_probe2[1], 0); // s1 trigger (duplicate 1)
-        assert_eq!(wf.digital_probe1[2], 0); // s2 dp (duplicate 0)
-        assert_eq!(wf.digital_probe1[3], 0); // s2 dp (duplicate 1)
-        assert_eq!(wf.digital_probe2[2], 1); // s2 trigger (duplicate 0)
-        assert_eq!(wf.digital_probe2[3], 1); // s2 trigger (duplicate 1)
+        // No duplication: 1 value per raw sample
+        // Word 0: s1(dp=1,tn=0), s2(dp=0,tn=1)
+        assert_eq!(wf.digital_probe1[0], 1); // s1 dp
+        assert_eq!(wf.digital_probe1[1], 0); // s2 dp
+        assert_eq!(wf.digital_probe2[0], 0); // s1 trigger
+        assert_eq!(wf.digital_probe2[1], 1); // s2 trigger
     }
 
     #[test]
@@ -1539,11 +1518,12 @@ mod tests {
         // 1. Time
         push_u32(&mut data, make_time_word(100, false));
 
-        // 2. Waveform - Dual trace: even=probe1, odd=probe2 (4 words)
-        push_u32(&mut data, 100 | (200 << 16)); // Word 0: probe1=100, probe2=200
-        push_u32(&mut data, 300 | (400 << 16)); // Word 1: probe1=300, probe2=400
-        push_u32(&mut data, 500 | (600 << 16)); // Word 2: probe1=500, probe2=600
-        push_u32(&mut data, 700 | (800 << 16)); // Word 3: probe1=700, probe2=800
+        // 2. Waveform - Dual trace (4 words)
+        // CAEN packing: lower(even/s1) = VTrace 1, upper(odd/s2) = VTrace 0
+        push_u32(&mut data, 100 | (200 << 16)); // lower=100→probe2, upper=200→probe1
+        push_u32(&mut data, 300 | (400 << 16));
+        push_u32(&mut data, 500 | (600 << 16));
+        push_u32(&mut data, 700 | (800 << 16));
 
         // 3. Extras2
         push_u32(&mut data, make_extras_word(0, 0, 0));
@@ -1555,26 +1535,25 @@ mod tests {
         let events = dec.decode(&raw);
         let wf = events[0].waveform.as_ref().unwrap();
 
-        // CAEN style: each sample duplicated
-        // 4 words = 4 probe1 samples, 4 probe2 samples, each duplicated
+        // CAEN dual trace: even(s1)→probe2, odd(s2)→probe1, each duplicated
         assert_eq!(wf.analog_probe1.len(), 8);
         assert_eq!(wf.analog_probe2.len(), 8);
-        assert_eq!(wf.analog_probe1[0], 100);
-        assert_eq!(wf.analog_probe1[1], 100); // duplicate
-        assert_eq!(wf.analog_probe2[0], 200);
-        assert_eq!(wf.analog_probe2[1], 200); // duplicate
-        assert_eq!(wf.analog_probe1[2], 300);
-        assert_eq!(wf.analog_probe1[3], 300); // duplicate
-        assert_eq!(wf.analog_probe2[2], 400);
-        assert_eq!(wf.analog_probe2[3], 400); // duplicate
-        assert_eq!(wf.analog_probe1[4], 500);
-        assert_eq!(wf.analog_probe1[5], 500); // duplicate
-        assert_eq!(wf.analog_probe2[4], 600);
-        assert_eq!(wf.analog_probe2[5], 600); // duplicate
-        assert_eq!(wf.analog_probe1[6], 700);
-        assert_eq!(wf.analog_probe1[7], 700); // duplicate
-        assert_eq!(wf.analog_probe2[6], 800);
-        assert_eq!(wf.analog_probe2[7], 800); // duplicate
+        assert_eq!(wf.analog_probe1[0], 200); // upper(s2) = VTrace 0
+        assert_eq!(wf.analog_probe1[1], 200); // duplicate
+        assert_eq!(wf.analog_probe2[0], 100); // lower(s1) = VTrace 1
+        assert_eq!(wf.analog_probe2[1], 100); // duplicate
+        assert_eq!(wf.analog_probe1[2], 400);
+        assert_eq!(wf.analog_probe1[3], 400);
+        assert_eq!(wf.analog_probe2[2], 300);
+        assert_eq!(wf.analog_probe2[3], 300);
+        assert_eq!(wf.analog_probe1[4], 600);
+        assert_eq!(wf.analog_probe1[5], 600);
+        assert_eq!(wf.analog_probe2[4], 500);
+        assert_eq!(wf.analog_probe2[5], 500);
+        assert_eq!(wf.analog_probe1[6], 800);
+        assert_eq!(wf.analog_probe1[7], 800);
+        assert_eq!(wf.analog_probe2[6], 700);
+        assert_eq!(wf.analog_probe2[7], 700);
     }
 
     // -----------------------------------------------------------------------

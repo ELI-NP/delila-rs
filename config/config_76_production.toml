@@ -83,3 +83,14 @@ subscribe = "tcp://localhost:5557"
 command = "tcp://*:5590"
 http_port = 8181
 pipeline_order = 3
+
+# [network.event_builder]
+# subscribe = "tcp://localhost:5557"
+# command = "tcp://*:5595"
+# output_dir = "./data/events"
+# coincidence_window_ns = 500.0
+# slice_duration_ns = 10000000.0
+# buffer_delay_ns = 5000000.0
+# # ch_settings_file = "config/ch_settings.json"
+# # time_calib_file = "config/timeSettings.json"
+# pipeline_order = 3

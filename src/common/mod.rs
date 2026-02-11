@@ -114,6 +114,9 @@ pub struct Waveform {
     pub time_resolution: u8,
     /// Trigger threshold
     pub trigger_threshold: u16,
+    /// Nanoseconds per waveform sample (0.0 = unknown)
+    #[serde(default)]
+    pub ns_per_sample: f64,
 }
 
 /// Event data with optional waveform
@@ -598,6 +601,7 @@ mod tests {
             digital_probe4: vec![],
             time_resolution: 1,
             trigger_threshold: 500,
+            ns_per_sample: 2.0,
         };
 
         let event = EventData::with_waveform(1, 2, 1000, 800, 123456789.0, 0, wf);

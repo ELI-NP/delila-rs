@@ -76,12 +76,16 @@ fn load_config(
                 }
             });
         let monitor_http_port = config.network.monitor.as_ref().map(|m| m.http_port);
+        let defaults = OperatorConfig::default();
         let operator_config = OperatorConfig {
             port: config.operator.port,
             experiment_name: config.operator.experiment_name,
             web_ui_dir,
             monitor_http_port,
-            ..OperatorConfig::default()
+            configure_timeout_ms: config.operator.configure_timeout_ms.unwrap_or(defaults.configure_timeout_ms),
+            arm_timeout_ms: config.operator.arm_timeout_ms.unwrap_or(defaults.arm_timeout_ms),
+            start_timeout_ms: config.operator.start_timeout_ms.unwrap_or(defaults.start_timeout_ms),
+            reset_timeout_ms: config.operator.reset_timeout_ms.unwrap_or(defaults.reset_timeout_ms),
         };
         // Load emulator settings from config
         let emulator_settings = if let Ok(settings) = config.settings.get_settings() {
@@ -233,6 +237,24 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             name: "Monitor".to_string(),
             address,
             pipeline_order: monitor.pipeline_order,
+            is_master: false,
+            source_id: None,
+            is_digitizer: false,
+            config_file: None,
+        });
+    }
+
+    // Add event builder
+    if let Some(ref eb) = config.network.event_builder {
+        let address = eb
+            .command
+            .clone()
+            .unwrap_or_else(|| "tcp://*:5595".to_string())
+            .replace("tcp://*:", "tcp://localhost:");
+        components.push(ComponentConfig {
+            name: "EventBuilder".to_string(),
+            address,
+            pipeline_order: eb.pipeline_order,
             is_master: false,
             source_id: None,
             is_digitizer: false,

@@ -245,6 +245,7 @@ export interface Waveform {
   digital_probe4: number[];
   time_resolution: number;
   trigger_threshold: number;
+  ns_per_sample?: number;
 }
 
 // Latest waveform response

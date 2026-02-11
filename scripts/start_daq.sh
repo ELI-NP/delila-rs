@@ -41,7 +41,7 @@ echo "Config: $CONFIG_FILE"
 
 # Kill any leftover DAQ processes from previous sessions
 KILLED=false
-for proc in operator monitor recorder merger reader emulator data_sink; do
+for proc in operator monitor recorder merger reader emulator data_sink online_event_builder; do
     if pkill -f "target/release/$proc" 2>/dev/null; then
         KILLED=true
     fi
@@ -200,6 +200,10 @@ is_remote() {
 # Extract source IDs from config
 SOURCE_IDS=$(grep -E "^id = " "$CONFIG_FILE" | head -n $(grep -c "\[\[network.sources\]\]" "$CONFIG_FILE") | awk '{print $3}')
 
+# Extract operator port from config (default: 8080)
+OPERATOR_PORT=$(awk '/^\[operator\]/{in_op=1} in_op && /^port *=/{print $3; exit}' "$CONFIG_FILE")
+OPERATOR_PORT=${OPERATOR_PORT:-8080}
+
 echo ""
 echo -e "${GREEN}Starting components...${NC}"
 
@@ -212,6 +216,10 @@ mkdir -p "$LOG_DIR"
 rm -f ./logs/latest
 ln -sf "${TIMESTAMP}" ./logs/latest
 
+# Track component names and PIDs for summary
+declare -a COMP_NAMES=()
+declare -a COMP_PIDS=()
+
 # Start emulators or readers based on source type
 REMOTE_SOURCES=()
 for id in $SOURCE_IDS; do
@@ -223,27 +231,45 @@ for id in $SOURCE_IDS; do
     elif is_emulator $id; then
         echo "  Starting emulator (source_id=$id)..."
         $BINARY_DIR/emulator --config "$CONFIG_FILE" --source-id "$id" > "$LOG_DIR/emulator_$id.log" 2>&1 &
+        COMP_NAMES+=("Emulator $id")
+        COMP_PIDS+=($!)
     else
         echo "  Starting reader (source_id=$id) [type=$src_type]..."
         $BINARY_DIR/reader --config "$CONFIG_FILE" --source-id "$id" > "$LOG_DIR/reader_$id.log" 2>&1 &
+        COMP_NAMES+=("Reader $id ($src_type)")
+        COMP_PIDS+=($!)
     fi
-    sleep 0.3
 done
 
 # Start merger
 echo "  Starting merger..."
 $BINARY_DIR/merger --config "$CONFIG_FILE" > "$LOG_DIR/merger.log" 2>&1 &
-sleep 0.3
+COMP_NAMES+=("Merger")
+COMP_PIDS+=($!)
 
 # Start recorder
 echo "  Starting recorder..."
 $BINARY_DIR/recorder --config "$CONFIG_FILE" > "$LOG_DIR/recorder.log" 2>&1 &
-sleep 0.3
+COMP_NAMES+=("Recorder")
+COMP_PIDS+=($!)
 
 # Start monitor
 echo "  Starting monitor..."
 $BINARY_DIR/monitor --config "$CONFIG_FILE" > "$LOG_DIR/monitor.log" 2>&1 &
-sleep 0.3
+COMP_NAMES+=("Monitor")
+COMP_PIDS+=($!)
+
+# Start online event builder (if configured and binary exists)
+if grep -q "\[network\.event_builder\]" "$CONFIG_FILE" 2>/dev/null; then
+    if [ -f "$BINARY_DIR/online_event_builder" ]; then
+        echo "  Starting online event builder..."
+        $BINARY_DIR/online_event_builder --config "$CONFIG_FILE" > "$LOG_DIR/event_builder.log" 2>&1 &
+        COMP_NAMES+=("EventBuilder")
+        COMP_PIDS+=($!)
+    else
+        echo -e "  ${YELLOW}Event Builder configured but binary not found (build with --features root)${NC}"
+    fi
+fi
 
 # Start operator (Web UI)
 echo "  Starting operator (Web UI)..."
@@ -257,27 +283,68 @@ else
     $BINARY_DIR/operator --config "$CONFIG_FILE" > "$LOG_DIR/operator.log" 2>&1 &
     echo "    (without MongoDB)"
 fi
-sleep 0.5
+COMP_NAMES+=("Operator")
+COMP_PIDS+=($!)
 
 echo ""
-echo -e "${GREEN}All local components started.${NC}"
+
+# --- Health check: wait for Operator API ---
+echo -e "${CYAN}=== Health Check ===${NC}"
+echo -n "  Waiting for Operator API (port $OPERATOR_PORT)..."
+MAX_RETRIES=15
+HEALTH_OK=false
+STATUS_JSON=""
+for i in $(seq 1 $MAX_RETRIES); do
+    STATUS_JSON=$(curl -s --max-time 2 "http://localhost:${OPERATOR_PORT}/api/status" 2>/dev/null)
+    if [ $? -eq 0 ] && [ -n "$STATUS_JSON" ]; then
+        HEALTH_OK=true
+        echo -e " ${GREEN}ready${NC} (${i}s)"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+if [ "$HEALTH_OK" = false ]; then
+    echo -e " ${RED}timeout${NC}"
+    echo -e "  ${YELLOW}Operator did not respond within ${MAX_RETRIES}s. Check $LOG_DIR/operator.log${NC}"
+fi
+
+# --- Startup summary table ---
 echo ""
-echo "Command ports:"
-for id in $SOURCE_IDS; do
-    port=$((5560 + id))
-    src_type=$(get_source_type $id)
-    host=$(get_source_host $id)
-    if is_remote $id; then
-        echo -e "  Reader $id:   tcp://${host}:$port ($src_type) ${YELLOW}[REMOTE]${NC}"
-    elif is_emulator $id; then
-        echo "  Emulator $id: tcp://localhost:$port"
+echo -e "${GREEN}=== Startup Summary ===${NC}"
+printf "  %-24s  %7s  %s\n" "Component" "PID" "Status"
+printf "  %-24s  %7s  %s\n" "------------------------" "-------" "----------"
+
+for idx in "${!COMP_NAMES[@]}"; do
+    name="${COMP_NAMES[$idx]}"
+    pid="${COMP_PIDS[$idx]}"
+    if kill -0 "$pid" 2>/dev/null; then
+        printf "  %-24s  %7s  ${GREEN}%s${NC}\n" "$name" "$pid" "running"
     else
-        echo "  Reader $id:   tcp://localhost:$port ($src_type)"
+        printf "  %-24s  %7s  ${RED}%s${NC}\n" "$name" "$pid" "DEAD"
     fi
 done
-echo "  Merger:     tcp://localhost:5570"
-echo "  Recorder:   tcp://localhost:5580"
-echo "  Monitor:    tcp://localhost:5590"
+
+# Show component states from Operator API if available
+if [ "$HEALTH_OK" = true ] && command -v python3 &>/dev/null; then
+    echo ""
+    echo -e "${CYAN}=== Component States (from Operator) ===${NC}"
+    echo "$STATUS_JSON" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    comps = data.get('components', [])
+    print(f'  System state: {data.get(\"system_state\", \"unknown\")}')
+    print(f'  Components:   {len(comps)}')
+    for c in comps:
+        state = c.get('state', 'Unknown')
+        name = c.get('name', '?')
+        print(f'    {name:24s}  {state}')
+except:
+    pass
+" 2>/dev/null
+fi
 
 # Print remote Reader instructions if any
 if [ ${#REMOTE_SOURCES[@]} -gt 0 ]; then
@@ -296,7 +363,7 @@ fi
 
 echo ""
 echo -e "${CYAN}=== Web UI ===${NC}"
-echo -e "  Swagger UI:    ${YELLOW}http://localhost:8080/swagger-ui/${NC}"
+echo -e "  Swagger UI:    ${YELLOW}http://localhost:${OPERATOR_PORT}/swagger-ui/${NC}"
 echo -e "  Monitor:       ${YELLOW}http://localhost:8081/${NC}"
 if [ "$MONGO_AVAILABLE" = true ]; then
     echo -e "  Mongo Express: ${YELLOW}http://localhost:8082/${NC}"
