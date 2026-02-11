@@ -1,24 +1,21 @@
 //! Event Builder module for delila-rs
 //!
-//! Time Slice 方式のイベントビルダー。
-//! CBM/FLES で実績のある並列処理可能なアルゴリズムを採用。
-//!
-//! # アルゴリズム
-//!
-//! - **Time Slice**: 時間軸を固定サイズのスライスに分割
-//! - **オーバーラップ**: 境界のイベントを正しく処理するための重複領域
-//! - **並列処理**: rayon によるスライス単位の並列化
+//! チャンク＋ソート＋Safe Horizon 方式のイベントビルダー。
+//! Legacy ELIFANT-Event と同じアプローチで、シンプルかつ高性能。
 //!
 //! # 主要コンポーネント
 //!
-//! - `SliceBuilder` - Time Slice 方式のイベント構築 (推奨)
+//! - `SliceBuilder` - Time Slice 方式のオフラインイベント構築
 //! - `L1Builder` - Moving Time Window 方式 (非推奨、互換性のため維持)
 //! - `TimeCalibrator` - チャンネル間時間オフセット測定
+//! - `chunk_builder` - チャンクベースのイベント構築 (v2, オンライン用)
 
 mod built_event;
+pub mod chunk_builder;
 mod config;
 mod hit;
 mod l1_builder;
+pub mod online;
 mod root_io;
 mod slice_builder;
 mod time_calibrator;
@@ -37,5 +34,3 @@ pub use l1_builder::L1Builder;
 pub use root_io::{read_hits_from_root, write_events_to_root, write_hits_to_root, RootError};
 pub use slice_builder::{SliceBuilder, SliceBuilderStats};
 pub use time_calibrator::{TimeCalibrator, TimeHistogram};
-pub use time_slice::{create_slices, TimeSlice};
-pub use time_sort::TimeSortBuffer;
