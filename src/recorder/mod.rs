@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use thiserror::Error;
-use tmq::{subscribe, Context};
+use tmq::{subscribe, AsZmqSocket, Context};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
@@ -590,10 +590,15 @@ impl Recorder {
         let socket = subscribe(&context)
             .connect(&self.config.subscribe_address)?
             .subscribe(b"")?;
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        socket
+            .get_socket()
+            .set_rcvhwm(0)
+            .map_err(tmq::TmqError::from)?;
 
         info!(
             address = %self.config.subscribe_address,
-            "Recorder connected to upstream"
+            "Recorder connected to upstream (RCVHWM=0)"
         );
 
         // === Spawn Writer Task ===

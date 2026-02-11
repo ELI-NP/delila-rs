@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use thiserror::Error;
-use tmq::{subscribe, Context};
+use tmq::{subscribe, AsZmqSocket, Context};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
@@ -300,8 +300,13 @@ impl DataSink {
         let socket = subscribe(&context)
             .connect(&self.config.address)?
             .subscribe(b"")?;
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        socket
+            .get_socket()
+            .set_rcvhwm(0)
+            .map_err(tmq::TmqError::from)?;
 
-        info!(address = %self.config.address, "DataSink connected to upstream");
+        info!(address = %self.config.address, "DataSink connected to upstream (RCVHWM=0)");
         info!(
             state = %self.state(),
             "DataSink ready, waiting for commands"

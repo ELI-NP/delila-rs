@@ -310,8 +310,10 @@ impl Merger {
             .ok_or(MergerError::NoUpstreamAddresses)?;
 
         let sub_socket = subscribe(&context).connect(first_addr)?.subscribe(b"")?;
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        sub_socket.get_socket().set_rcvhwm(0)?;
 
-        info!(address = %first_addr, "Merger subscribed to upstream");
+        info!(address = %first_addr, "Merger subscribed to upstream (RCVHWM=0)");
 
         for addr in self.config.sub_addresses.iter().skip(1) {
             sub_socket.get_socket().connect(addr)?;
@@ -319,7 +321,9 @@ impl Merger {
         }
 
         let pub_socket = publish(&context).bind(&self.config.pub_address)?;
-        info!(address = %self.config.pub_address, "Merger publishing to downstream");
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        pub_socket.get_socket().set_sndhwm(0)?;
+        info!(address = %self.config.pub_address, "Merger publishing to downstream (SNDHWM=0)");
 
         info!(state = %self.state(), "Merger ready, waiting for commands");
 
