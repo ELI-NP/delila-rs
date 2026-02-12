@@ -208,7 +208,7 @@ pub struct BoardConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ext_clock: Option<String>,
 
-    /// Start delay in samples (PSD1/PHA1: 0-4080)
+    /// Start delay in ns (PSD1/PHA1: 0-4080, DevTree expuom=-9)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_delay: Option<u32>,
 
@@ -220,7 +220,7 @@ pub struct BoardConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_aggregation: Option<u32>,
 
-    /// Coincidence TrgOut window in samples (PSD1/PHA1: 0-8184)
+    /// Coincidence TrgOut window in ns (PSD1/PHA1: 0-8184, DevTree expuom=-9)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coinc_trgout: Option<u32>,
 

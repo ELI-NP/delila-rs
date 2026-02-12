@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-09
+**Updated:** 2026-02-12
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,6 +15,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
 | **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2 全Phase完了 (Phase 1-6)。PSD1/PHA1 ns変換含む |
+| **2** | — | **✅ 完了** | PHA1 Settings UI修正: FirmwareType統一 + Virtual Probe データ駆動型対応 + ボードパラメータ単位修正 |
 | **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
 | - | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **参照** | Event Builder 仕様 |
 
@@ -23,10 +24,10 @@ Claudeセッション開始時に必ず読み込まれます。
 ## 次のセッション候補
 
 - **A:** ステータス並列化 + start_daq.sh 改善 + タイムアウト設定化 → Phase 1 基盤整備
-- **B:** PHA1 コンフィグテンプレート + Settings UI パラメータ確認
+- **B:** ~~PHA1 コンフィグテンプレート + Settings UI パラメータ確認~~ → **完了** (2026-02-12)
 - **C:** Event Builder オンラインパイプライン統合 (EB-1〜EB-4) → Phase 2
 - **D:** Grafana モニタリング (Prometheus exporter + HV exporter) → Phase 3
-- **E:** PHA1 実機テスト (ハードウェア確定後)
+- **E:** ~~PHA1 実機テスト (ハードウェア確定後)~~ → **実機検証済み** (2026-02-12, DT5730B SN:990)
 - **F:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
 
 ---
@@ -74,6 +75,7 @@ Claudeセッション開始時に必ず読み込まれます。
 - AMax Viewer (スタンドアロン GUI ツール: 2D Histogram + Waveform + パラメータ調整 + ROOT出力)
 - Monitor Quick Create (デジタイザ選択で全チャンネルビュー自動生成)
 - Monitor レイアウト永続化 (Operator REST API + ファイル保存, 全ブラウザ共有)
+- PHA1 Settings UI修正 (FirmwareType PHA→PHA1統一 + Virtual Probe データ駆動型 + 単位修正)
 
 ---
 

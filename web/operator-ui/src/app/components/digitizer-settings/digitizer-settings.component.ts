@@ -17,7 +17,7 @@ import { firstValueFrom } from 'rxjs';
 import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
 import { FirmwareType } from '../../models/types';
-import { getCategoryParams, getAllChannelParams } from '../../models/channel-params';
+import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
 import {
   ChannelTableComponent,
   DefaultValueChange,
@@ -179,7 +179,7 @@ import {
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
-                        <mat-label>Start Delay (samples)</mat-label>
+                        <mat-label>Start Delay (ns)</mat-label>
                         <input matInput type="number" [(ngModel)]="config.board.start_delay" min="0" max="4080" />
                       </mat-form-field>
                     }
@@ -325,7 +325,7 @@ import {
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
-                        <mat-label>Coincidence Window (samples)</mat-label>
+                        <mat-label>Coincidence Window (ns)</mat-label>
                         <input matInput type="number" [(ngModel)]="config.board.coinc_trgout" min="0" max="8184" />
                       </mat-form-field>
                     }
@@ -411,7 +411,7 @@ import {
                   (channelChange)="onChannelChange($event)"
                 />
               } @else {
-                <!-- PSD1/PHA: Board-level waveform settings -->
+                <!-- PSD1/PHA1: Board-level waveform settings -->
                 <mat-card class="config-card">
                   <mat-card-content>
                     <h3 class="section-title">Waveform Acquisition</h3>
@@ -433,42 +433,36 @@ import {
                       <mat-form-field appearance="outline">
                         <mat-label>Analog Probe 1</mat-label>
                         <mat-select [(value)]="config.board.vtrace_probe_0">
-                          <mat-option value="VPROBE_INPUT">Input</mat-option>
-                          <mat-option value="VPROBE_CFD">CFD</mat-option>
+                          @for (opt of probeOptions()[0]; track opt.value) {
+                            <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                          }
                         </mat-select>
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
                         <mat-label>Analog Probe 2</mat-label>
                         <mat-select [(value)]="config.board.vtrace_probe_1">
-                          <mat-option value="VPROBE_NONE">None</mat-option>
-                          <mat-option value="VPROBE_BASELINE">Baseline</mat-option>
-                          <mat-option value="VPROBE_CFD">CFD</mat-option>
+                          @for (opt of probeOptions()[1]; track opt.value) {
+                            <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                          }
                         </mat-select>
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
                         <mat-label>Digital Probe 1</mat-label>
                         <mat-select [(value)]="config.board.vtrace_probe_2">
-                          <mat-option value="VPROBE_GATE">Gate</mat-option>
-                          <mat-option value="VPROBE_OVERTHRESHOLD">Over Threshold</mat-option>
-                          <mat-option value="VPROBE_TRGOUT">Trigger Out</mat-option>
-                          <mat-option value="VPROBE_TRGVALWIN">Trigger Validation Window</mat-option>
-                          <mat-option value="VPROBE_PILEUP">Pileup</mat-option>
-                          <mat-option value="VPROBE_COINCIDENCE">Coincidence</mat-option>
-                          <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                          @for (opt of probeOptions()[2]; track opt.value) {
+                            <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                          }
                         </mat-select>
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
                         <mat-label>Digital Probe 2</mat-label>
                         <mat-select [(value)]="config.board.vtrace_probe_3">
-                          <mat-option value="VPROBE_GATESHORT">Gate Short</mat-option>
-                          <mat-option value="VPROBE_OVERTHRESHOLD">Over Threshold</mat-option>
-                          <mat-option value="VPROBE_TRGVAL">Trigger Validation</mat-option>
-                          <mat-option value="VPROBE_TRGHOLDOFF">Trigger Holdoff</mat-option>
-                          <mat-option value="VPROBE_PILEUP_TRIGGER">Pileup Trigger</mat-option>
-                          <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                          @for (opt of probeOptions()[3]; track opt.value) {
+                            <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                          }
                         </mat-select>
                       </mat-form-field>
                     </div>
@@ -643,6 +637,12 @@ export class DigitizerSettingsComponent {
   readonly waveformParams = computed(() => {
     const config = this.selectedConfig();
     return config ? getCategoryParams(config.firmware, 'waveform') : [];
+  });
+
+  /** Virtual Probe options per firmware (board-level, PSD1/PHA1 only) */
+  readonly probeOptions = computed((): ProbeOption[][] => {
+    const fw = this.selectedConfig()?.firmware;
+    return fw ? [0, 1, 2, 3].map((i) => getProbeOptions(fw, i)) : [[], [], [], []];
   });
 
   /** System state from OperatorService (auto-polled) */

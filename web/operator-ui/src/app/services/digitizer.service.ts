@@ -352,7 +352,7 @@ export class DigitizerService {
       {
         digitizer_id: 1,
         name: 'HPGe Detector',
-        firmware: 'PHA',
+        firmware: 'PHA1',
         num_channels: 16,
         board: {
           start_source: 'SWcmd',

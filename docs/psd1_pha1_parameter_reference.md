@@ -143,10 +143,7 @@ This document provides a complete reference for DT5730B PSD1 and PHA1 firmware p
 
 ## Virtual Trace Parameters
 
-| Parameter | DevTree Path | Type | Values |
-|-----------|-------------|------|--------|
-| vtrace_probe | `/vtrace/N/par/vtrace_probe` | STRING | **PSD1**: VPROBE_INPUT, VPROBE_CFD, VPROBE_GATE, VPROBE_GATESHORT, VPROBE_BASELINE, VPROBE_TRIGGER, VPROBE_NONE |
-| | | | **PHA1**: VPROBE_INPUT, VPROBE_DELTA, VPROBE_DELTA2, VPROBE_TRAPEZOID |
+DevTree path: `/vtrace/N/par/vtrace_probe` (N = 0..3)
 
 ### VTrace Index Mapping
 
@@ -157,17 +154,58 @@ This document provides a complete reference for DT5730B PSD1 and PHA1 firmware p
 | 2 | Digital Probe 1 | Primary digital trace |
 | 3 | Digital Probe 2 | Secondary digital trace |
 
-## Timing Unit Conversion
+### PHA1 Virtual Probe Options (per index)
 
-DT5730B samples at 500 MHz (2 ns per sample).
+| Index | Options |
+|-------|---------|
+| 0 (Analog 1) | VPROBE_INPUT, VPROBE_DELTA, VPROBE_DELTA2, VPROBE_TRAPEZOID |
+| 1 (Analog 2) | VPROBE_NONE, VPROBE_INPUT, VPROBE_THRESHOLD, VPROBE_TRAPCORRECTED, VPROBE_BASELINE |
+| 2 (Digital 1) | VPROBE_TRIGGER |
+| 3 (Digital 2) | VPROBE_ARMED, VPROBE_PKRUN, VPROBE_PILEUP, VPROBE_PEAKING, VPROBE_TRGVALWIN, VPROBE_TRGHOLDOFF, VPROBE_TRGVAL, VPROBE_ACQVETO, VPROBE_EXTTRG, VPROBE_BUSY |
 
-| Config Unit | DevTree Unit | Conversion |
-|-------------|--------------|------------|
-| ns (nanoseconds) | samples (s) | samples = ns / 2 |
+### PSD1 Virtual Probe Options (per index)
 
-Parameters requiring conversion:
-- `ch_cfd_delay`: config in ns → DevTree in samples
-- `ch_trg_holdoff`: config in ns → DevTree in samples
-- `ch_pretrg`: config in ns → DevTree in samples
-- `ch_gate`, `ch_gateshort`, `ch_gatepre`: config in ns → DevTree in samples
-- `reclen`: config in samples → DevTree in samples (no conversion)
+| Index | Options |
+|-------|---------|
+| 0 (Analog 1) | VPROBE_INPUT, VPROBE_CFD |
+| 1 (Analog 2) | VPROBE_NONE, VPROBE_BASELINE, VPROBE_CFD |
+| 2 (Digital 1) | VPROBE_GATE, VPROBE_OVERTHRESHOLD, VPROBE_TRGOUT, VPROBE_TRGVALWIN, VPROBE_PILEUP, VPROBE_COINCIDENCE, VPROBE_TRIGGER |
+| 3 (Digital 2) | VPROBE_GATESHORT, VPROBE_OVERTHRESHOLD, VPROBE_TRGVAL, VPROBE_TRGHOLDOFF, VPROBE_PILEUP_TRIGGER, VPROBE_TRIGGER |
+
+## Parameter Units (DevTree Verification)
+
+All units verified against DevTree `expuom` field. DT5730B samples at 500 MHz (2 ns per sample).
+
+### Board-Level Parameters
+
+| Parameter | DevTree `expuom` | Unit | UI Label |
+|-----------|-----------------|------|----------|
+| reclen | -9 | ns | Record Length (ns) |
+| start_delay | -9 | ns | Start Delay (ns) |
+| coinc_trgout | -9 | ns | Coincidence Window (ns) |
+| eventaggr | 0 | unitless | Event Aggregation |
+
+### Channel-Level Parameters
+
+| Parameter | DevTree `expuom` | Unit | UI Label |
+|-----------|-----------------|------|----------|
+| ch_pretrg | -9 | ns | Pre-Trigger (ns) |
+| ch_trg_holdoff | -9 | ns | Trigger Holdoff (ns) |
+| ch_cfd_delay | -9 | ns | CFD Delay (ns) |
+| ch_gate | -9 | ns | Gate Long (ns) |
+| ch_gateshort | -9 | ns | Gate Short (ns) |
+| ch_gatepre | -9 | ns | Gate Pre (ns) |
+| ch_trap_trise | -9 | ns | Trap Rise Time (ns) |
+| ch_trap_tflat | -9 | ns | Trap Flat Top (ns) |
+| ch_tdecay | -9 | ns | Trap Pole Zero (ns) |
+| ch_peak_holdoff | -9 | ns | Peak Holdoff (ns) |
+| ch_rccr2_rise | -9 | ns | Input Rise Time (ns) |
+| ch_threshold | 0 | LSB | Trigger Threshold (LSB) |
+| ch_dcoffset | 0 | % (0-100) | DC Offset (%) |
+| ch_trap_ftd | 0 | % (0.1-100) | Peaking Time (%) |
+| ch_fgain | 0 | unitless (1-10) | Energy Fine Gain |
+
+### Timing Conversion (Backend)
+
+Config and UI use nanoseconds. Backend converts to samples for DevTree write:
+`samples = ns / TIME_STEP_NS` where `TIME_STEP_NS = 2` (DT5730B @ 500 MS/s)

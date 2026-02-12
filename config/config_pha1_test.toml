@@ -1,0 +1,41 @@
+# DELILA DAQ Configuration - PHA1 Real Hardware Test
+# Hardware: DT5730B (Serial: 990, DPP-PHA, USB, 8ch, 14-bit, 500 MS/s)
+# Host: 172.18.4.147
+# Usage: ./scripts/start_daq.sh config/config_pha1_test.toml
+
+[operator]
+experiment_name = "PHA1_Test"
+port = 8080
+
+[network]
+# Real PHA1 digitizer (DT5730 via USB)
+[[network.sources]]
+id = 0
+name = "pha1-dt5730"
+type = "pha1"
+host = "localhost"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig1://caen.internal/usb?link_num=0"
+config_file = "config/digitizers/pha1_test.json"
+pipeline_order = 1
+
+# Merger (subscribe auto-resolved from source host)
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+# Recorder
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+# Monitor
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

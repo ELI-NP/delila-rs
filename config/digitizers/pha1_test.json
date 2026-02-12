@@ -1,9 +1,9 @@
 {
   "digitizer_id": 0,
-  "name": "PHA1-Template",
+  "name": "PHA1 Test (DT5730B)",
   "firmware": "PHA1",
-  "serial_number": "",
-  "model": "VX1730B",
+  "serial_number": "990",
+  "model": "DT5730B",
   "num_channels": 8,
   "is_master": false,
   "board": {
@@ -23,7 +23,7 @@
   },
   "channel_defaults": {
     "enabled": "True",
-    "polarity": "POLARITY_NEGATIVE",
+    "polarity": "POLARITY_POSITIVE",
     "dc_offset": 50.0,
     "baseline_avg": "BLINE_NSMEAN_256",
     "pre_trigger_ns": 256,

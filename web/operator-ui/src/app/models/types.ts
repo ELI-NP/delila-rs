@@ -121,7 +121,7 @@ export interface ButtonStates {
 }
 
 // Firmware types for digitizer
-export type FirmwareType = 'PSD1' | 'PSD2' | 'PHA';
+export type FirmwareType = 'PSD1' | 'PSD2' | 'PHA1';
 
 // Board-level configuration
 export interface BoardConfig {

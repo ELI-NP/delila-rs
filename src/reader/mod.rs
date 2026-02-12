@@ -383,6 +383,90 @@ impl CommandHandlerExt for ReaderCommandExt {
     }
 }
 
+/// Bundles CaenHandle + EndpointHandle + hardware state tracking.
+///
+/// When dropped, endpoint is dropped before handle (Rust struct field drop order),
+/// ensuring the endpoint is released before the connection is closed.
+struct DeviceConnection {
+    handle: CaenHandle,
+    endpoint: EndpointHandle,
+    /// Whether digitizer config has been applied since connection
+    hw_configured: bool,
+    /// Whether digitizer has been armed
+    hw_armed: bool,
+    /// Whether acquisition is running
+    hw_running: bool,
+}
+
+/// Try to connect to a digitizer and configure the RAW endpoint.
+/// Returns None on failure (non-fatal — ReadLoop stays alive).
+fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection> {
+    match CaenHandle::open(url) {
+        Ok(h) => match h.configure_endpoint(include_n_events) {
+            Ok(ep) => {
+                info!("Connected to digitizer (RAW endpoint)");
+                Some(DeviceConnection {
+                    handle: h,
+                    endpoint: ep,
+                    hw_configured: false,
+                    hw_armed: false,
+                    hw_running: false,
+                })
+            }
+            Err(e) => {
+                error!(error = %e, "Connected but endpoint configuration failed");
+                None // h drops here → CAEN_FELib_Close
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to connect to digitizer");
+            None
+        }
+    }
+}
+
+/// Try to connect to a digitizer and configure the OpenDPP endpoint.
+/// Returns None on failure (non-fatal — ReadLoop stays alive).
+fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
+    match CaenHandle::open(url) {
+        Ok(h) => match h.configure_opendpp_endpoint(false) {
+            Ok(ep) => {
+                info!("Connected to digitizer (OpenDPP endpoint)");
+                Some(DeviceConnection {
+                    handle: h,
+                    endpoint: ep,
+                    hw_configured: false,
+                    hw_armed: false,
+                    hw_running: false,
+                })
+            }
+            Err(e) => {
+                error!(error = %e, "Connected but OpenDPP endpoint configuration failed");
+                None
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to connect to digitizer");
+            None
+        }
+    }
+}
+
+/// Map ComponentState to a rank for ordering comparisons.
+/// Transitional/Error states map to 0 (treated as Idle).
+fn state_rank(s: ComponentState) -> u8 {
+    match s {
+        ComponentState::Idle => 0,
+        ComponentState::Configured => 1,
+        ComponentState::Armed => 2,
+        ComponentState::Running => 3,
+        _ => 0,
+    }
+}
+
+/// Reconnection cooldown interval
+const RECONNECT_COOLDOWN: Duration = Duration::from_millis(1000);
+
 /// Send firmware-specific arm command to the digitizer.
 ///
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, the actual arm is deferred to start phase.
@@ -554,7 +638,8 @@ impl Reader {
     /// ReadLoop task for RAW endpoint (PSD1/PSD2/PHA1) - runs in spawn_blocking
     ///
     /// Reads raw data from CAEN digitizer and sends to decode channel.
-    /// Respects state machine: only arms/starts digitizer when state transitions occur.
+    /// Uses lazy connection: if the digitizer is not available at startup,
+    /// the loop stays alive and retries connection on demand (Detect, Configure, etc.).
     fn read_loop_raw(
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
@@ -563,25 +648,16 @@ impl Reader {
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
     ) -> Result<(), ReaderError> {
-        info!(url = %config.url, "ReadLoop (RAW) starting, connecting to digitizer");
+        info!(url = %config.url, "ReadLoop (RAW) starting");
 
-        // Open connection to digitizer
-        let handle = CaenHandle::open(&config.url)?;
-        info!("Connected to digitizer");
-
-        // Configure endpoint for RAW data
         let include_n_events = config.firmware.includes_n_events();
-        let endpoint = handle.configure_endpoint(include_n_events)?;
-        info!("Endpoint configured");
 
-        // Track digitizer hardware state
-        let mut hw_armed = false;
-        let mut hw_running = false;
-        let mut prev_state = ComponentState::Idle;
+        // Lazy connection: try initial connect (non-fatal)
+        let mut connection = try_connect_raw(&config.url, include_n_events);
+        let mut last_connect_attempt = Instant::now();
 
         // Pre-allocate reusable read buffer.
         // CAEN FELib does NOT check buffer bounds — undersized buffers cause SIGBUS.
-        // Must be large enough for worst-case data (high rate + waveforms).
         let mut read_buffer: Vec<u8> = vec![0u8; config.buffer_size];
         info!(
             buffer_size = config.buffer_size,
@@ -595,215 +671,226 @@ impl Reader {
                 break;
             }
 
-            // Get current state
-            let current_state = *state_rx.borrow();
-
-            // Handle state transitions
-            if current_state != prev_state {
-                info!(from = %prev_state, to = %current_state, "State transition");
-
-                match (prev_state, current_state) {
-                    // Configure digitizer when entering Configured state from Idle
-                    (ComponentState::Idle, ComponentState::Configured) => {
-                        // Apply configuration from JSON file if specified
-                        if let Some(ref config_path) = config.config_file {
-                            info!(path = %config_path, "Loading digitizer configuration");
-                            match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                                Ok(dig_config) => {
-                                    match handle.apply_config(&dig_config) {
-                                        Ok(count) => {
-                                            info!(count, "Digitizer configuration applied");
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "Failed to apply digitizer configuration");
-                                            // Continue anyway - some parameters may have been applied
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(error = %e, path = %config_path, "Failed to load digitizer configuration");
-                                    // Continue without configuration
-                                }
-                            }
-                        } else {
-                            info!("No config_file specified, using current digitizer settings");
-                        }
-                    }
-
-                    // Arm digitizer when entering Armed state
-                    (_, ComponentState::Armed) => {
-                        if !hw_armed {
-                            if let Err(e) = send_arm_command(&handle, config.firmware) {
-                                error!(error = %e, "Failed to arm digitizer - continuing anyway");
-                            }
-                            hw_armed = true;
-                        }
-                    }
-
-                    // Start acquisition when entering Running state
-                    // Use (_, Running) to handle both Armed→Running and
-                    // Configured→Running (when watch channel misses Armed state)
-                    (_, ComponentState::Running) => {
-                        if !hw_running {
-                            // Arm if not yet armed (handles skipped Armed state)
-                            if !hw_armed {
-                                if let Err(e) = send_arm_command(&handle, config.firmware) {
-                                    error!(error = %e, "Failed to arm digitizer - continuing anyway");
-                                }
-                                hw_armed = true;
-                            }
-                            if let Err(e) = send_start_command(&handle, config.firmware) {
-                                error!(error = %e, "Failed to start acquisition - continuing anyway");
-                            }
-                            hw_running = true;
-                        }
-                    }
-
-                    // Stop acquisition when leaving Running state
-                    (ComponentState::Running, ComponentState::Configured) => {
-                        if hw_running {
-                            info!("Stopping digitizer acquisition");
-                            let _ = handle.send_command("/cmd/disarmacquisition");
-                            // Drain remaining buffered data before clearing
-                            let mut drained = 0u64;
-                            while let Ok(Some(raw)) = endpoint.read_data(100, &mut read_buffer) {
-                                drained += 1;
-                                let decoder_raw = decoder::RawData::from(raw);
-                                let _ = tx.try_send(ReadLoopOutput::Raw(decoder_raw));
-                            }
-                            if drained > 0 {
-                                info!(drained, "Drained remaining data after stop");
-                            }
-                            let _ = tx.try_send(ReadLoopOutput::Stop);
-                            let _ = handle.send_command("/cmd/cleardata");
-                            hw_armed = false;
-                            hw_running = false;
-                        }
-                    }
-
-                    // Reset: disarm if armed
-                    (_, ComponentState::Idle) => {
-                        if hw_armed || hw_running {
-                            info!("Resetting digitizer");
-                            let _ = handle.send_command("/cmd/disarmacquisition");
-                            let _ = handle.send_command("/cmd/cleardata");
-                            hw_armed = false;
-                            hw_running = false;
-                        }
-                    }
-
-                    _ => {}
-                }
-
-                prev_state = current_state;
+            // --- Connection management: periodic retry when disconnected ---
+            if connection.is_none()
+                && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN
+            {
+                last_connect_attempt = Instant::now();
+                connection = try_connect_raw(&config.url, include_n_events);
             }
 
-            // Handle requests from command handler (Detect / ApplyConfig)
+            // Get target state from Operator
+            let target_state = *state_rx.borrow();
+
+            // --- Target state synchronization ---
+            // Ensures hardware catches up to target state after (re)connection.
+            if let Some(ref mut conn) = connection {
+                let target_rank = state_rank(target_state);
+
+                // Configure needed?
+                if target_rank >= state_rank(ComponentState::Configured) && !conn.hw_configured {
+                    if let Some(ref config_path) = config.config_file {
+                        info!(path = %config_path, "Loading digitizer configuration");
+                        match crate::config::digitizer::DigitizerConfig::load(config_path) {
+                            Ok(dig_config) => match conn.handle.apply_config(&dig_config) {
+                                Ok(count) => {
+                                    info!(count, "Digitizer configuration applied");
+                                    conn.hw_configured = true;
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to apply config, dropping connection");
+                                    connection = None;
+                                    continue;
+                                }
+                            },
+                            Err(e) => {
+                                error!(error = %e, path = %config_path, "Failed to load config file");
+                                // Mark as configured anyway — digitizer keeps its current settings
+                                conn.hw_configured = true;
+                            }
+                        }
+                    } else {
+                        info!("No config_file specified, using current digitizer settings");
+                        conn.hw_configured = true;
+                    }
+                }
+
+                // Arm needed?
+                if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
+                    if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
+                        error!(error = %e, "Failed to arm digitizer");
+                    }
+                    conn.hw_armed = true;
+                }
+
+                // Start needed?
+                if target_rank >= state_rank(ComponentState::Running) && !conn.hw_running {
+                    if let Err(e) = send_start_command(&conn.handle, config.firmware) {
+                        error!(error = %e, "Failed to start acquisition");
+                    }
+                    conn.hw_running = true;
+                }
+
+                // Stop needed? (target dropped below Running)
+                if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
+                    info!("Stopping digitizer acquisition");
+                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                    // Drain remaining buffered data before clearing
+                    let mut drained = 0u64;
+                    while let Ok(Some(raw)) = conn.endpoint.read_data(100, &mut read_buffer) {
+                        drained += 1;
+                        let decoder_raw = decoder::RawData::from(raw);
+                        let _ = tx.try_send(ReadLoopOutput::Raw(decoder_raw));
+                    }
+                    if drained > 0 {
+                        info!(drained, "Drained remaining data after stop");
+                    }
+                    let _ = tx.try_send(ReadLoopOutput::Stop);
+                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    conn.hw_armed = false;
+                    conn.hw_running = false;
+                }
+
+                // Reset needed? (target is Idle, but we have armed/configured state)
+                if target_state == ComponentState::Idle && (conn.hw_armed || conn.hw_configured) {
+                    info!("Resetting digitizer");
+                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    conn.hw_armed = false;
+                    conn.hw_running = false;
+                    conn.hw_configured = false;
+                }
+            }
+
+            // --- Handle requests from command handler (Detect / ApplyConfig) ---
             if let Ok(req) = request_rx.try_recv() {
                 match req {
                     ReadLoopRequest::Detect { response_tx } => {
-                        let result = handle
-                            .get_device_info()
-                            .map(|info| serde_json::to_value(&info).unwrap_or_default())
-                            .map_err(|e| format!("Failed to read device info: {}", e));
+                        // Try to connect on-demand for Detect
+                        if connection.is_none() {
+                            connection = try_connect_raw(&config.url, include_n_events);
+                            last_connect_attempt = Instant::now();
+                        }
+                        let result = match connection.as_ref() {
+                            Some(conn) => conn
+                                .handle
+                                .get_device_info()
+                                .map(|info| serde_json::to_value(&info).unwrap_or_default())
+                                .map_err(|e| format!("Failed to read device info: {}", e)),
+                            None => Err("Not connected to digitizer".to_string()),
+                        };
                         let _ = response_tx.send(result);
                     }
                     ReadLoopRequest::ApplyConfig {
                         config: dig_config,
                         response_tx,
                     } => {
-                        let result = handle
-                            .apply_config(&dig_config)
-                            .map_err(|e| format!("Failed to apply config: {}", e));
+                        if connection.is_none() {
+                            connection = try_connect_raw(&config.url, include_n_events);
+                            last_connect_attempt = Instant::now();
+                        }
+                        let result = match connection.as_ref() {
+                            Some(conn) => conn
+                                .handle
+                                .apply_config(&dig_config)
+                                .map_err(|e| format!("Failed to apply config: {}", e)),
+                            None => Err("Not connected to digitizer".to_string()),
+                        };
                         let _ = response_tx.send(result);
                     }
                     ReadLoopRequest::ApplyConfigRunning {
                         config: dig_config,
                         response_tx,
                     } => {
-                        let result = handle
-                            .apply_config_running(&dig_config)
-                            .map_err(|e| format!("Failed to apply SetInRun config: {}", e));
+                        let result = match connection.as_ref() {
+                            Some(conn) => conn
+                                .handle
+                                .apply_config_running(&dig_config)
+                                .map_err(|e| format!("Failed to apply SetInRun config: {}", e)),
+                            None => Err("Not connected to digitizer".to_string()),
+                        };
                         let _ = response_tx.send(result);
                     }
                 }
             }
 
-            // Only read data when Running
-            if current_state != ComponentState::Running {
-                // Not running, sleep briefly and check again
+            // --- Data reading (Running only) ---
+            if target_state != ComponentState::Running {
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
             }
 
-            // Read data from digitizer (reusing pre-allocated buffer)
-            match endpoint.read_data(config.read_timeout_ms, &mut read_buffer) {
-                Ok(Some(raw)) => {
-                    metrics
-                        .bytes_read
-                        .fetch_add(raw.size as u64, Ordering::Relaxed);
+            if let Some(ref conn) = connection {
+                if !conn.hw_running {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
 
-                    // Convert to decoder RawData and wrap in ReadLoopOutput
-                    let decoder_raw = decoder::RawData::from(raw);
-                    let output = ReadLoopOutput::Raw(decoder_raw);
+                match conn.endpoint.read_data(config.read_timeout_ms, &mut read_buffer) {
+                    Ok(Some(raw)) => {
+                        metrics
+                            .bytes_read
+                            .fetch_add(raw.size as u64, Ordering::Relaxed);
 
-                    // Update queue length metric (approximate)
-                    metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+                        let decoder_raw = decoder::RawData::from(raw);
+                        let output = ReadLoopOutput::Raw(decoder_raw);
+                        metrics.queue_length.fetch_add(1, Ordering::Relaxed);
 
-                    // Send to decode channel with back-pressure retry.
-                    // NOTE: blocking_send() causes TLS fatal error on macOS,
-                    // so we use try_send() + retry loop instead.
-                    // Check shutdown/state on each retry to avoid hanging on Stop.
-                    let mut pending = output;
-                    let mut channel_closed = false;
-                    loop {
-                        match tx.try_send(pending) {
-                            Ok(()) => break,
-                            Err(mpsc::error::TrySendError::Full(returned)) => {
-                                // Check if we should stop retrying
-                                if shutdown.load(Ordering::Relaxed)
-                                    || *state_rx.borrow() != ComponentState::Running
-                                {
-                                    warn!("Dropping pending data during shutdown/stop");
+                        // Send to decode channel with back-pressure retry
+                        let mut pending = output;
+                        let mut channel_closed = false;
+                        loop {
+                            match tx.try_send(pending) {
+                                Ok(()) => break,
+                                Err(mpsc::error::TrySendError::Full(returned)) => {
+                                    if shutdown.load(Ordering::Relaxed)
+                                        || *state_rx.borrow() != ComponentState::Running
+                                    {
+                                        warn!("Dropping pending data during shutdown/stop");
+                                        break;
+                                    }
+                                    pending = returned;
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    warn!("Decode channel closed, stopping read loop");
+                                    channel_closed = true;
                                     break;
                                 }
-                                pending = returned;
-                                std::thread::sleep(Duration::from_millis(1));
-                            }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                warn!("Decode channel closed, stopping read loop");
-                                channel_closed = true;
-                                break;
                             }
                         }
-                    }
-                    if channel_closed {
-                        break;
-                    }
-                }
-                Ok(None) => {
-                    // Timeout - no data available, continue polling
-                }
-                Err(e) => {
-                    // Check if it's a stop signal
-                    if e.code == caen::error::codes::STOP {
-                        if shutdown.load(Ordering::Relaxed) {
-                            info!("Received STOP signal during shutdown");
+                        if channel_closed {
                             break;
                         }
-                        // Digitizer stopped externally - wait for state change
-                        info!("Received STOP signal from digitizer, waiting for state change");
-                        continue;
                     }
-                    error!(error = %e, code = e.code, "Read error");
-                    // Continue on non-fatal errors
+                    Ok(None) => {
+                        // Timeout - no data available, continue polling
+                    }
+                    Err(e) => {
+                        if e.code == caen::error::codes::STOP {
+                            if shutdown.load(Ordering::Relaxed) {
+                                info!("Received STOP signal during shutdown");
+                                break;
+                            }
+                            info!("Received STOP signal from digitizer, waiting for state change");
+                            continue;
+                        }
+                        // Non-timeout read error: drop connection for reconnect
+                        error!(error = %e, code = e.code, "Read error, dropping connection");
+                        connection = None;
+                    }
                 }
+            } else {
+                // Running but no connection — wait for reconnect at loop top
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
 
-        // Cleanup: stop acquisition if still running
-        if hw_armed || hw_running {
-            let _ = handle.send_command("/cmd/disarmacquisition");
+        // Cleanup
+        if let Some(conn) = connection {
+            if conn.hw_armed || conn.hw_running {
+                let _ = conn.handle.send_command("/cmd/disarmacquisition");
+            }
         }
         info!("ReadLoop (RAW) stopped");
         Ok(())
@@ -814,6 +901,8 @@ impl Reader {
     /// Reads pre-decoded event data from CAEN digitizer via OpenDPP endpoint.
     /// Each event is already decoded by the hardware, so no software decoding is needed.
     /// Used for AMax/DPP_OPEN firmware.
+    /// Uses lazy connection: if the digitizer is not available at startup,
+    /// the loop stays alive and retries connection on demand (Detect, Configure, etc.).
     fn read_loop_opendpp(
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
@@ -822,20 +911,11 @@ impl Reader {
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
     ) -> Result<(), ReaderError> {
-        info!(url = %config.url, "ReadLoop (OpenDPP) starting, connecting to digitizer");
+        info!(url = %config.url, "ReadLoop (OpenDPP) starting");
 
-        // Open connection to digitizer
-        let handle = CaenHandle::open(&config.url)?;
-        info!("Connected to digitizer");
-
-        // Configure OpenDPP endpoint (no waveform for now)
-        let endpoint = handle.configure_opendpp_endpoint(false)?;
-        info!("OpenDPP endpoint configured");
-
-        // Track digitizer hardware state
-        let mut hw_armed = false;
-        let mut hw_running = false;
-        let mut prev_state = ComponentState::Idle;
+        // Lazy connection: try initial connect (non-fatal)
+        let mut connection = try_connect_opendpp(&config.url);
+        let mut last_connect_attempt = Instant::now();
 
         // Buffer for user info words
         let mut user_info_buffer = [0u64; 16];
@@ -847,204 +927,231 @@ impl Reader {
                 break;
             }
 
-            // Get current state
-            let current_state = *state_rx.borrow();
-
-            // Handle state transitions (same logic as read_loop_raw)
-            if current_state != prev_state {
-                info!(from = %prev_state, to = %current_state, "State transition");
-
-                match (prev_state, current_state) {
-                    // Configure digitizer when entering Configured state from Idle
-                    (ComponentState::Idle, ComponentState::Configured) => {
-                        // Apply configuration from JSON file if specified
-                        if let Some(ref config_path) = config.config_file {
-                            info!(path = %config_path, "Loading digitizer configuration");
-                            match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                                Ok(dig_config) => match handle.apply_config(&dig_config) {
-                                    Ok(count) => {
-                                        info!(count, "Digitizer configuration applied");
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, "Failed to apply digitizer configuration");
-                                    }
-                                },
-                                Err(e) => {
-                                    error!(error = %e, path = %config_path, "Failed to load digitizer configuration");
-                                }
-                            }
-                        } else {
-                            info!("No config_file specified, using current digitizer settings");
-                        }
-                    }
-
-                    // Arm digitizer when entering Armed state
-                    (_, ComponentState::Armed) => {
-                        if !hw_armed {
-                            if let Err(e) = send_arm_command(&handle, config.firmware) {
-                                error!(error = %e, "Failed to arm digitizer - continuing anyway");
-                            }
-                            hw_armed = true;
-                        }
-                    }
-
-                    // Start acquisition when entering Running state
-                    (_, ComponentState::Running) => {
-                        if !hw_running {
-                            if !hw_armed {
-                                if let Err(e) = send_arm_command(&handle, config.firmware) {
-                                    error!(error = %e, "Failed to arm digitizer - continuing anyway");
-                                }
-                                hw_armed = true;
-                            }
-                            if let Err(e) = send_start_command(&handle, config.firmware) {
-                                error!(error = %e, "Failed to start acquisition - continuing anyway");
-                            }
-                            hw_running = true;
-                        }
-                    }
-
-                    // Stop acquisition when leaving Running state
-                    (ComponentState::Running, ComponentState::Configured) => {
-                        if hw_running {
-                            info!("Stopping digitizer acquisition");
-                            let _ = handle.send_command("/cmd/disarmacquisition");
-                            // Drain remaining buffered events before clearing
-                            let mut drained = 0u64;
-                            while let Ok(Some(evt)) =
-                                endpoint.read_opendpp_event(100, &mut user_info_buffer)
-                            {
-                                drained += 1;
-                                let event_data = opendpp_to_event_data(&evt, config.module_id);
-                                let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));
-                            }
-                            if drained > 0 {
-                                info!(drained, "Drained remaining events after stop");
-                            }
-                            let _ = tx.try_send(ReadLoopOutput::Stop);
-                            let _ = handle.send_command("/cmd/cleardata");
-                            hw_armed = false;
-                            hw_running = false;
-                        }
-                    }
-
-                    // Reset: disarm if armed
-                    (_, ComponentState::Idle) => {
-                        if hw_armed || hw_running {
-                            info!("Resetting digitizer");
-                            let _ = handle.send_command("/cmd/disarmacquisition");
-                            let _ = handle.send_command("/cmd/cleardata");
-                            hw_armed = false;
-                            hw_running = false;
-                        }
-                    }
-
-                    _ => {}
-                }
-
-                prev_state = current_state;
+            // --- Connection management: periodic retry when disconnected ---
+            if connection.is_none()
+                && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN
+            {
+                last_connect_attempt = Instant::now();
+                connection = try_connect_opendpp(&config.url);
             }
 
-            // Handle requests from command handler (Detect / ApplyConfig)
+            // Get target state from Operator
+            let target_state = *state_rx.borrow();
+
+            // --- Target state synchronization ---
+            // Ensures hardware catches up to target state after (re)connection.
+            if let Some(ref mut conn) = connection {
+                let target_rank = state_rank(target_state);
+
+                // Configure needed?
+                if target_rank >= state_rank(ComponentState::Configured) && !conn.hw_configured {
+                    if let Some(ref config_path) = config.config_file {
+                        info!(path = %config_path, "Loading digitizer configuration");
+                        match crate::config::digitizer::DigitizerConfig::load(config_path) {
+                            Ok(dig_config) => match conn.handle.apply_config(&dig_config) {
+                                Ok(count) => {
+                                    info!(count, "Digitizer configuration applied");
+                                    conn.hw_configured = true;
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to apply config, dropping connection");
+                                    connection = None;
+                                    continue;
+                                }
+                            },
+                            Err(e) => {
+                                error!(error = %e, path = %config_path, "Failed to load config file");
+                                // Mark as configured anyway — digitizer keeps its current settings
+                                conn.hw_configured = true;
+                            }
+                        }
+                    } else {
+                        info!("No config_file specified, using current digitizer settings");
+                        conn.hw_configured = true;
+                    }
+                }
+
+                // Arm needed?
+                if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
+                    if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
+                        error!(error = %e, "Failed to arm digitizer");
+                    }
+                    conn.hw_armed = true;
+                }
+
+                // Start needed?
+                if target_rank >= state_rank(ComponentState::Running) && !conn.hw_running {
+                    if let Err(e) = send_start_command(&conn.handle, config.firmware) {
+                        error!(error = %e, "Failed to start acquisition");
+                    }
+                    conn.hw_running = true;
+                }
+
+                // Stop needed? (target dropped below Running)
+                if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
+                    info!("Stopping digitizer acquisition");
+                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                    // Drain remaining buffered events before clearing
+                    let mut drained = 0u64;
+                    while let Ok(Some(evt)) =
+                        conn.endpoint.read_opendpp_event(100, &mut user_info_buffer)
+                    {
+                        drained += 1;
+                        let event_data = opendpp_to_event_data(&evt, config.module_id);
+                        let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));
+                    }
+                    if drained > 0 {
+                        info!(drained, "Drained remaining events after stop");
+                    }
+                    let _ = tx.try_send(ReadLoopOutput::Stop);
+                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    conn.hw_armed = false;
+                    conn.hw_running = false;
+                }
+
+                // Reset needed? (target is Idle, but we have armed/configured state)
+                if target_state == ComponentState::Idle && (conn.hw_armed || conn.hw_configured) {
+                    info!("Resetting digitizer");
+                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    conn.hw_armed = false;
+                    conn.hw_running = false;
+                    conn.hw_configured = false;
+                }
+            }
+
+            // --- Handle requests from command handler (Detect / ApplyConfig) ---
             if let Ok(req) = request_rx.try_recv() {
                 match req {
                     ReadLoopRequest::Detect { response_tx } => {
-                        let result = handle
-                            .get_device_info()
-                            .map(|info| serde_json::to_value(&info).unwrap_or_default())
-                            .map_err(|e| format!("Failed to read device info: {}", e));
+                        // Try to connect on-demand for Detect
+                        if connection.is_none() {
+                            connection = try_connect_opendpp(&config.url);
+                            last_connect_attempt = Instant::now();
+                        }
+                        let result = match connection.as_ref() {
+                            Some(conn) => conn
+                                .handle
+                                .get_device_info()
+                                .map(|info| serde_json::to_value(&info).unwrap_or_default())
+                                .map_err(|e| format!("Failed to read device info: {}", e)),
+                            None => Err("Not connected to digitizer".to_string()),
+                        };
                         let _ = response_tx.send(result);
                     }
                     ReadLoopRequest::ApplyConfig {
                         config: dig_config,
                         response_tx,
                     } => {
-                        let result = handle
-                            .apply_config(&dig_config)
-                            .map_err(|e| format!("Failed to apply config: {}", e));
+                        if connection.is_none() {
+                            connection = try_connect_opendpp(&config.url);
+                            last_connect_attempt = Instant::now();
+                        }
+                        let result = match connection.as_ref() {
+                            Some(conn) => conn
+                                .handle
+                                .apply_config(&dig_config)
+                                .map_err(|e| format!("Failed to apply config: {}", e)),
+                            None => Err("Not connected to digitizer".to_string()),
+                        };
                         let _ = response_tx.send(result);
                     }
                     ReadLoopRequest::ApplyConfigRunning {
                         config: dig_config,
                         response_tx,
                     } => {
-                        let result = handle
-                            .apply_config_running(&dig_config)
-                            .map_err(|e| format!("Failed to apply SetInRun config: {}", e));
+                        let result = match connection.as_ref() {
+                            Some(conn) => conn
+                                .handle
+                                .apply_config_running(&dig_config)
+                                .map_err(|e| format!("Failed to apply SetInRun config: {}", e)),
+                            None => Err("Not connected to digitizer".to_string()),
+                        };
                         let _ = response_tx.send(result);
                     }
                 }
             }
 
-            // Only read data when Running
-            if current_state != ComponentState::Running {
+            // --- Data reading (Running only) ---
+            if target_state != ComponentState::Running {
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
             }
 
-            // Read event from OpenDPP endpoint
-            match endpoint.read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer) {
-                Ok(Some(event)) => {
-                    metrics
-                        .bytes_read
-                        .fetch_add(event.event_size as u64, Ordering::Relaxed);
+            if let Some(ref conn) = connection {
+                if !conn.hw_running {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
 
-                    // Convert OpenDPP event to EventData
-                    let event_data = opendpp_to_event_data(&event, config.module_id);
-                    let output = ReadLoopOutput::Decoded(event_data);
+                match conn.endpoint.read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer) {
+                    Ok(Some(event)) => {
+                        metrics
+                            .bytes_read
+                            .fetch_add(event.event_size as u64, Ordering::Relaxed);
 
-                    // Update queue length metric
-                    metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+                        // Convert OpenDPP event to EventData
+                        let event_data = opendpp_to_event_data(&event, config.module_id);
+                        let output = ReadLoopOutput::Decoded(event_data);
 
-                    // Send to decode channel with back-pressure retry
-                    let mut pending = output;
-                    let mut channel_closed = false;
-                    loop {
-                        match tx.try_send(pending) {
-                            Ok(()) => break,
-                            Err(mpsc::error::TrySendError::Full(returned)) => {
-                                if shutdown.load(Ordering::Relaxed)
-                                    || *state_rx.borrow() != ComponentState::Running
-                                {
-                                    warn!("Dropping pending event during shutdown/stop");
+                        // Update queue length metric
+                        metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+
+                        // Send to decode channel with back-pressure retry
+                        let mut pending = output;
+                        let mut channel_closed = false;
+                        loop {
+                            match tx.try_send(pending) {
+                                Ok(()) => break,
+                                Err(mpsc::error::TrySendError::Full(returned)) => {
+                                    if shutdown.load(Ordering::Relaxed)
+                                        || *state_rx.borrow() != ComponentState::Running
+                                    {
+                                        warn!("Dropping pending event during shutdown/stop");
+                                        break;
+                                    }
+                                    pending = returned;
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    warn!("Decode channel closed, stopping read loop");
+                                    channel_closed = true;
                                     break;
                                 }
-                                pending = returned;
-                                std::thread::sleep(Duration::from_millis(1));
-                            }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                warn!("Decode channel closed, stopping read loop");
-                                channel_closed = true;
-                                break;
                             }
                         }
-                    }
-                    if channel_closed {
-                        break;
-                    }
-                }
-                Ok(None) => {
-                    // Timeout - no data available, continue polling
-                }
-                Err(e) => {
-                    // Check if it's a stop signal
-                    if e.code == caen::error::codes::STOP {
-                        if shutdown.load(Ordering::Relaxed) {
-                            info!("Received STOP signal during shutdown");
+                        if channel_closed {
                             break;
                         }
-                        // Digitizer stopped externally - wait for state change
-                        info!("Received STOP signal from digitizer, waiting for state change");
-                        continue;
                     }
-                    error!(error = %e, code = e.code, "Read error (OpenDPP)");
+                    Ok(None) => {
+                        // Timeout - no data available, continue polling
+                    }
+                    Err(e) => {
+                        if e.code == caen::error::codes::STOP {
+                            if shutdown.load(Ordering::Relaxed) {
+                                info!("Received STOP signal during shutdown");
+                                break;
+                            }
+                            info!("Received STOP signal from digitizer, waiting for state change");
+                            continue;
+                        }
+                        // Non-timeout read error: drop connection for reconnect
+                        error!(error = %e, code = e.code, "Read error (OpenDPP), dropping connection");
+                        connection = None;
+                    }
                 }
+            } else {
+                // Running but no connection — wait for reconnect at loop top
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
 
-        // Cleanup: stop acquisition if still running
-        if hw_armed || hw_running {
-            let _ = handle.send_command("/cmd/disarmacquisition");
+        // Cleanup
+        if let Some(conn) = connection {
+            if conn.hw_armed || conn.hw_running {
+                let _ = conn.handle.send_command("/cmd/disarmacquisition");
+            }
         }
         info!("ReadLoop (OpenDPP) stopped");
         Ok(())

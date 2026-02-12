@@ -35,7 +35,7 @@ import {
   DefaultValueChange,
   ChannelValueChange,
 } from '../../components/channel-table/channel-table.component';
-import { getCategoryParams, getAllChannelParams, ChannelCategory } from '../../models/channel-params';
+import { getCategoryParams, getAllChannelParams, getProbeOptions, ChannelCategory, ProbeOption } from '../../models/channel-params';
 import { HistogramChartComponent, RangeChangeEvent } from '../../components/histogram-chart/histogram-chart.component';
 
 interface ProbeConfig {
@@ -220,16 +220,17 @@ interface ChannelChart {
                               <mat-form-field appearance="outline" class="compact-field">
                                 <mat-label>Analog 1</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_0">
-                                  <mat-option value="VPROBE_INPUT">Input</mat-option>
-                                  <mat-option value="VPROBE_CFD">CFD</mat-option>
+                                  @for (opt of probeOptions()[0]; track opt.value) {
+                                    <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                                  }
                                 </mat-select>
                               </mat-form-field>
                               <mat-form-field appearance="outline" class="compact-field">
                                 <mat-label>Analog 2</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_1">
-                                  <mat-option value="VPROBE_NONE">None</mat-option>
-                                  <mat-option value="VPROBE_BASELINE">Baseline</mat-option>
-                                  <mat-option value="VPROBE_CFD">CFD</mat-option>
+                                  @for (opt of probeOptions()[1]; track opt.value) {
+                                    <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                                  }
                                 </mat-select>
                               </mat-form-field>
                             </div>
@@ -237,24 +238,17 @@ interface ChannelChart {
                               <mat-form-field appearance="outline" class="compact-field">
                                 <mat-label>Digital 1</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_2">
-                                  <mat-option value="VPROBE_GATE">Gate</mat-option>
-                                  <mat-option value="VPROBE_OVERTHRESHOLD">Over Thresh</mat-option>
-                                  <mat-option value="VPROBE_TRGOUT">Trig Out</mat-option>
-                                  <mat-option value="VPROBE_TRGVALWIN">Trig Val Win</mat-option>
-                                  <mat-option value="VPROBE_PILEUP">Pileup</mat-option>
-                                  <mat-option value="VPROBE_COINCIDENCE">Coincidence</mat-option>
-                                  <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                                  @for (opt of probeOptions()[2]; track opt.value) {
+                                    <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                                  }
                                 </mat-select>
                               </mat-form-field>
                               <mat-form-field appearance="outline" class="compact-field">
                                 <mat-label>Digital 2</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_3">
-                                  <mat-option value="VPROBE_GATESHORT">Gate Short</mat-option>
-                                  <mat-option value="VPROBE_OVERTHRESHOLD">Over Thresh</mat-option>
-                                  <mat-option value="VPROBE_TRGVAL">Trig Val</mat-option>
-                                  <mat-option value="VPROBE_TRGHOLDOFF">Trig Holdoff</mat-option>
-                                  <mat-option value="VPROBE_PILEUP_TRIGGER">Pileup Trig</mat-option>
-                                  <mat-option value="VPROBE_TRIGGER">Trigger</mat-option>
+                                  @for (opt of probeOptions()[3]; track opt.value) {
+                                    <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
+                                  }
                                 </mat-select>
                               </mat-form-field>
                             </div>
@@ -804,7 +798,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   /** Check if firmware uses board-level waveform settings */
   readonly isBoardLevelWaveform = computed(() => {
     const config = this.tuneUpConfig();
-    return config?.firmware === 'PSD1' || config?.firmware === 'PHA';
+    return config?.firmware === 'PSD1' || config?.firmware === 'PHA1';
+  });
+
+  /** Virtual Probe options per firmware (data-driven, PSD1/PHA1) */
+  readonly probeOptions = computed((): ProbeOption[][] => {
+    const fw = this.tuneUpConfig()?.firmware;
+    return fw ? [0, 1, 2, 3].map((i) => getProbeOptions(fw, i)) : [[], [], [], []];
   });
 
   readonly histLogScale = signal(false);

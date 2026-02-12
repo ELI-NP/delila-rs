@@ -35,7 +35,7 @@ const PSD1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 80, max: 4032 },
 ];
 
-const PHA_INPUT_PARAMS: ChannelParamDef[] = [
+const PHA1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'enabled', label: 'Enable', type: 'boolean', setInRun: true },
   { key: 'polarity', label: 'Polarity', type: 'enum', options: ['POLARITY_POSITIVE', 'POLARITY_NEGATIVE'], setInRun: true },
   { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
@@ -71,7 +71,7 @@ const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'trigger_out_propagate', label: 'Trigger Out Prop.', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
 ];
 
-const PHA_TRIGGER_PARAMS: ChannelParamDef[] = [
+const PHA1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, setInRun: true },
   { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368, setInRun: true },
   { key: 'fast_discr_smoothing', label: 'Fast Discr Smooth', type: 'enum', options: ['RCCR2_SMTH_1', 'RCCR2_SMTH_2', 'RCCR2_SMTH_4', 'RCCR2_SMTH_8', 'RCCR2_SMTH_16', 'RCCR2_SMTH_32', 'RCCR2_SMTH_64', 'RCCR2_SMTH_128'] },
@@ -102,7 +102,7 @@ const PSD1_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'charge_pedestal_en', label: 'Charge Pedestal', type: 'enum', options: ['FALSE', 'TRUE'] },
 ];
 
-const PHA_ENERGY_PARAMS: ChannelParamDef[] = [
+const PHA1_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'trap_rise_time_ns', label: 'Trap Rise Time', type: 'number', unit: 'ns', min: 16, max: 65520 },
   { key: 'trap_flat_top_ns', label: 'Trap Flat Top', type: 'number', unit: 'ns', min: 16, max: 16368 },
   { key: 'trap_pole_zero_ns', label: 'Trap Pole Zero', type: 'number', unit: 'ns', min: 16, max: 1048560 },
@@ -137,7 +137,7 @@ const PSD1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'pileup_counting_en', label: 'Pileup Counting', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
 ];
 
-const PHA_COINCIDENCE_PARAMS: ChannelParamDef[] = [
+const PHA1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
   { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, setInRun: true },
   { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
@@ -161,7 +161,7 @@ const PSD2_WAVEFORM_PARAMS: ChannelParamDef[] = [
 
 const PSD1_WAVEFORM_PARAMS: ChannelParamDef[] = [];
 
-const PHA_WAVEFORM_PARAMS: ChannelParamDef[] = [];
+const PHA1_WAVEFORM_PARAMS: ChannelParamDef[] = [];
 
 // --- Category lookup ---------------------------------------------------------
 
@@ -182,12 +182,12 @@ const CATEGORY_PARAMS: Record<FirmwareType, Record<ChannelCategory, ChannelParam
     coincidence: PSD1_COINCIDENCE_PARAMS,
     waveform: PSD1_WAVEFORM_PARAMS,
   },
-  PHA: {
-    input: PHA_INPUT_PARAMS,
-    trigger: PHA_TRIGGER_PARAMS,
-    energy: PHA_ENERGY_PARAMS,
-    coincidence: PHA_COINCIDENCE_PARAMS,
-    waveform: PHA_WAVEFORM_PARAMS,
+  PHA1: {
+    input: PHA1_INPUT_PARAMS,
+    trigger: PHA1_TRIGGER_PARAMS,
+    energy: PHA1_ENERGY_PARAMS,
+    coincidence: PHA1_COINCIDENCE_PARAMS,
+    waveform: PHA1_WAVEFORM_PARAMS,
   },
 };
 
@@ -201,4 +201,92 @@ export function getAllChannelParams(fw: FirmwareType): ChannelParamDef[] {
   const cats = CATEGORY_PARAMS[fw];
   if (!cats) return [];
   return [...cats.input, ...cats.trigger, ...cats.energy, ...cats.coincidence, ...cats.waveform];
+}
+
+// =============================================================================
+// Virtual Probe Options — Board-level, firmware-specific (PSD1/PHA1 only)
+// Source: docs/devtree_examples/dt5730b_pha1_sn990.json, dt5730b_psd1_sn990.json
+// =============================================================================
+
+export interface ProbeOption {
+  value: string;
+  label: string;
+}
+
+const PSD1_PROBE_OPTIONS: ProbeOption[][] = [
+  // probe_0 (Analog Probe 1)
+  [
+    { value: 'VPROBE_INPUT', label: 'Input' },
+    { value: 'VPROBE_CFD', label: 'CFD' },
+  ],
+  // probe_1 (Analog Probe 2)
+  [
+    { value: 'VPROBE_NONE', label: 'None' },
+    { value: 'VPROBE_BASELINE', label: 'Baseline' },
+    { value: 'VPROBE_CFD', label: 'CFD' },
+  ],
+  // probe_2 (Digital Probe 1)
+  [
+    { value: 'VPROBE_GATE', label: 'Gate' },
+    { value: 'VPROBE_OVERTHRESHOLD', label: 'Over Threshold' },
+    { value: 'VPROBE_TRGOUT', label: 'Trigger Out' },
+    { value: 'VPROBE_TRGVALWIN', label: 'Trg Val Window' },
+    { value: 'VPROBE_PILEUP', label: 'Pileup' },
+    { value: 'VPROBE_COINCIDENCE', label: 'Coincidence' },
+    { value: 'VPROBE_TRIGGER', label: 'Trigger' },
+  ],
+  // probe_3 (Digital Probe 2)
+  [
+    { value: 'VPROBE_GATESHORT', label: 'Gate Short' },
+    { value: 'VPROBE_OVERTHRESHOLD', label: 'Over Threshold' },
+    { value: 'VPROBE_TRGVAL', label: 'Trg Validation' },
+    { value: 'VPROBE_TRGHOLDOFF', label: 'Trg Holdoff' },
+    { value: 'VPROBE_PILEUP_TRIGGER', label: 'Pileup Trigger' },
+    { value: 'VPROBE_TRIGGER', label: 'Trigger' },
+  ],
+];
+
+const PHA1_PROBE_OPTIONS: ProbeOption[][] = [
+  // probe_0 (Analog Probe 1)
+  [
+    { value: 'VPROBE_INPUT', label: 'Input' },
+    { value: 'VPROBE_DELTA', label: 'Delta' },
+    { value: 'VPROBE_DELTA2', label: 'Delta\u00B2' },
+    { value: 'VPROBE_TRAPEZOID', label: 'Trapezoid' },
+  ],
+  // probe_1 (Analog Probe 2)
+  [
+    { value: 'VPROBE_NONE', label: 'None' },
+    { value: 'VPROBE_INPUT', label: 'Input' },
+    { value: 'VPROBE_THRESHOLD', label: 'Threshold' },
+    { value: 'VPROBE_TRAPCORRECTED', label: 'Trap Corrected' },
+    { value: 'VPROBE_BASELINE', label: 'Baseline' },
+  ],
+  // probe_2 (Digital Probe 1)
+  [
+    { value: 'VPROBE_TRIGGER', label: 'Trigger' },
+  ],
+  // probe_3 (Digital Probe 2)
+  [
+    { value: 'VPROBE_ARMED', label: 'Armed' },
+    { value: 'VPROBE_PKRUN', label: 'Peak Run' },
+    { value: 'VPROBE_PILEUP', label: 'Pileup' },
+    { value: 'VPROBE_PEAKING', label: 'Peaking' },
+    { value: 'VPROBE_TRGVALWIN', label: 'Trg Val Window' },
+    { value: 'VPROBE_TRGHOLDOFF', label: 'Trg Holdoff' },
+    { value: 'VPROBE_TRGVAL', label: 'Trg Validation' },
+    { value: 'VPROBE_ACQVETO', label: 'Acq Veto' },
+    { value: 'VPROBE_EXTTRG', label: 'Ext Trigger' },
+    { value: 'VPROBE_BUSY', label: 'Busy' },
+  ],
+];
+
+const PROBE_OPTIONS: Record<string, ProbeOption[][]> = {
+  PSD1: PSD1_PROBE_OPTIONS,
+  PHA1: PHA1_PROBE_OPTIONS,
+};
+
+/** Get Virtual Probe options for a firmware and probe index (0-3) */
+export function getProbeOptions(fw: FirmwareType, probeIndex: number): ProbeOption[] {
+  return PROBE_OPTIONS[fw]?.[probeIndex] ?? [];
 }

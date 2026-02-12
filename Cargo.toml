@@ -150,6 +150,10 @@ name = "amax_opendpp_test"
 path = "src/bin/amax_opendpp_test.rs"
 
 [[bin]]
+name = "amax_energy_check"
+path = "src/bin/amax_energy_check.rs"
+
+[[bin]]
 name = "event_builder"
 path = "src/bin/event_builder.rs"
 required-features = ["root"]
