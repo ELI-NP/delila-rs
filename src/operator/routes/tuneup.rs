@@ -143,6 +143,66 @@ pub(super) async fn tuneup_start(
         );
     }
 
+    // Apply digitizer config to Reader (same as Phase 1.5 in run_start)
+    {
+        let configs = state.digitizer_configs.read().await;
+        if let Some(config) = configs.get(&digitizer_id) {
+            let reader_comp = filtered
+                .iter()
+                .find(|c| c.is_digitizer && c.source_id == Some(digitizer_id));
+            if let Some(comp) = reader_comp {
+                tracing::info!(
+                    digitizer_id,
+                    name = %comp.name,
+                    "Pushing digitizer config to Reader (Tune Up)"
+                );
+                match state
+                    .client
+                    .send_command(
+                        &comp.address,
+                        &Command::ApplyDigitizerConfig(Box::new(config.clone())),
+                    )
+                    .await
+                {
+                    Ok(resp) if resp.success => {
+                        tracing::info!(
+                            digitizer_id,
+                            params = resp.message,
+                            "Digitizer config applied (Tune Up)"
+                        );
+                    }
+                    Ok(resp) => {
+                        *state.tuneup_mode.write().await = false;
+                        *state.tuneup_digitizer_id.write().await = None;
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ApiResponse::error(format!(
+                                "Tune Up config apply failed: {}",
+                                resp.message
+                            ))),
+                        );
+                    }
+                    Err(e) => {
+                        *state.tuneup_mode.write().await = false;
+                        *state.tuneup_digitizer_id.write().await = None;
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ApiResponse::error(format!(
+                                "Failed to send config to Reader: {}",
+                                e
+                            ))),
+                        );
+                    }
+                }
+            }
+        } else {
+            tracing::warn!(
+                digitizer_id,
+                "No digitizer config in memory — Reader will use its JSON file defaults"
+            );
+        }
+    }
+
     // Register channels for the tuned digitizer with Monitor (best-effort)
     {
         let configs = state.digitizer_configs.read().await;

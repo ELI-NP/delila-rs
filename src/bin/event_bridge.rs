@@ -7,7 +7,7 @@
 use clap::Parser;
 use delila_rs::common::{setup_shutdown_with_message, EventData, Message};
 use futures::{SinkExt, StreamExt};
-use tmq::{publish, subscribe, Context};
+use tmq::{publish, subscribe, AsZmqSocket, Context};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -68,9 +68,12 @@ async fn main() -> anyhow::Result<()> {
     let mut sub_socket = subscribe(&context)
         .connect(&args.sub_address)?
         .subscribe(b"")?;
+    // Never drop messages — buffer in memory instead (DAQ: no data loss)
+    sub_socket.get_socket().set_rcvhwm(0)?;
     let mut pub_socket = publish(&context).bind(&args.pub_address)?;
+    pub_socket.get_socket().set_sndhwm(0)?;
 
-    info!(sub = %args.sub_address, pub_ = %args.pub_address, "Event Bridge started");
+    info!(sub = %args.sub_address, pub_ = %args.pub_address, "Event Bridge started (HWM=0)");
 
     println!("========================================");
     println!("       DELILA Event Bridge");

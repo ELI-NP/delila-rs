@@ -2,6 +2,9 @@
 //!
 //! BTreeMap ベースのタイムソートバッファ。
 //! Watermark 方式で安全にデータを取り出す。
+//!
+//! Note: Used internally by L1Builder (offline). Not exported publicly.
+#![allow(dead_code)]
 
 use super::hit::Hit;
 use std::collections::BTreeMap;

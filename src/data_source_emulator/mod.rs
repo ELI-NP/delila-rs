@@ -14,7 +14,7 @@ use futures::SinkExt;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use thiserror::Error;
-use tmq::{publish, Context};
+use tmq::{publish, AsZmqSocket, Context};
 use tokio::sync::{watch, Mutex};
 use tokio::time::interval;
 use tracing::{debug, info};
@@ -313,11 +313,16 @@ impl Emulator {
     pub async fn new(config: EmulatorConfig) -> Result<Self, EmulatorError> {
         let context = Context::new();
         let data_socket = publish(&context).bind(&config.address)?;
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        data_socket
+            .get_socket()
+            .set_sndhwm(0)
+            .map_err(|e| EmulatorError::Zmq(e.into()))?;
 
         info!(
             data_address = %config.address,
             command_address = %config.command_address,
-            "Emulator bound to data address"
+            "Emulator bound to data address (SNDHWM=0)"
         );
 
         let (state_tx, state_rx) = watch::channel(ComponentState::Idle);
@@ -451,6 +456,7 @@ impl Emulator {
             digital_probe4,
             time_resolution: 0, // 1x resolution
             trigger_threshold: 100,
+            ns_per_sample: 2.0,
         }
     }
 

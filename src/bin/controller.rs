@@ -37,6 +37,9 @@ enum ControllerCommand {
         /// Optional comment
         #[arg(long)]
         comment: Option<String>,
+        /// Experiment name (used in output filenames)
+        #[arg(long = "exp-name", default_value = "")]
+        exp_name: String,
     },
     /// Prepare for acquisition (Configured → Armed)
     Arm {
@@ -74,11 +77,12 @@ impl ControllerCommand {
             ControllerCommand::Configure {
                 run_number,
                 comment,
+                exp_name,
                 ..
             } => Command::Configure(RunConfig {
                 run_number: *run_number,
                 comment: comment.clone().unwrap_or_default(),
-                exp_name: String::new(),
+                exp_name: exp_name.clone(),
             }),
             ControllerCommand::Arm { .. } => Command::Arm,
             ControllerCommand::Start { run_number, .. } => Command::Start {

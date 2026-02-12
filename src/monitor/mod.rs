@@ -24,7 +24,7 @@ use axum::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tmq::{subscribe, Context};
+use tmq::{subscribe, AsZmqSocket, Context};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -776,10 +776,15 @@ impl Monitor {
         let socket = subscribe(&context)
             .connect(&self.config.subscribe_address)?
             .subscribe(b"")?;
+        // Never drop messages — buffer in memory instead (DAQ: no data loss)
+        socket
+            .get_socket()
+            .set_rcvhwm(0)
+            .map_err(tmq::TmqError::from)?;
 
         info!(
             address = %self.config.subscribe_address,
-            "Monitor connected to upstream"
+            "Monitor connected to upstream (RCVHWM=0)"
         );
 
         // Start HTTP server

@@ -366,6 +366,7 @@ impl AMaxDecoder {
             digital_probe4: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
+            ns_per_sample: constants::TIME_STEP_NS,
         })
     }
 

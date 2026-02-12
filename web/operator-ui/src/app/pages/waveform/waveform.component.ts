@@ -53,6 +53,7 @@ interface ChannelChart {
   channelId: number;
   energy: number;
   samples: number;
+  nsPerSample: number;
   options: EChartsCoreOption;
 }
 
@@ -139,7 +140,7 @@ interface ChannelChart {
                   <span class="channel-info">E: {{ chart.energy }} | S: {{ chart.samples }}</span>
                 </div>
                 <div class="tuneup-chart-fill">
-                  <div echarts [options]="chart.options" class="waveform-chart"></div>
+                  <div echarts [options]="tuneUpWfOptions()" [merge]="tuneUpWfMerge()" class="waveform-chart"></div>
                 </div>
               } @else {
                 <div class="no-data compact">
@@ -761,6 +762,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly selectedCategory = signal<ChannelCategory | 'all'>('all');
   readonly tuneUpHistogram = signal<Histogram1D | null>(null);
 
+  // Tune Up waveform chart: options + merge pattern (preserves zoom across polls)
+  readonly tuneUpWfOptions = computed<EChartsCoreOption>(() => {
+    this.selectedChannels(); // re-init chart when channel changes
+    return this.buildTuneUpWfInitOptions();
+  });
+  readonly tuneUpWfMerge = signal<EChartsCoreOption>({});
+
   /** In Tune Up mode, only show channels belonging to the target digitizer */
   readonly tuneUpChannels = computed(() => {
     const digitizerId = this.tuneUpDigitizerId();
@@ -827,6 +835,24 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         this.tuneUpHistogram.set(null);
         this.stopHistogramPolling();
       }
+    });
+  });
+
+  // Update Tune Up waveform merge options when data arrives (preserves zoom)
+  private readonly tuneUpWfEffect = effect(() => {
+    const charts = this.channelCharts();
+    const isTuneUp = this.isTuneUp();
+    untracked(() => {
+      if (!isTuneUp || charts.length === 0) return;
+      const chart = charts[0];
+      const useTime = chart.nsPerSample > 0;
+      this.tuneUpWfMerge.set({
+        series: (chart.options as Record<string, unknown>)['series'],
+        xAxis: {
+          name: useTime ? 'Time (ns)' : 'Sample',
+          max: useTime ? chart.samples * chart.nsPerSample : (chart.samples || undefined),
+        },
+      });
     });
   });
 
@@ -1090,12 +1116,14 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       );
       const label = channelInfo?.name ?? `Src${wf.module_id}/Ch${wf.channel_id}`;
       const series: unknown[] = [];
+      const nsPerSample = wf.waveform.ns_per_sample || 0;
+      const toX = nsPerSample > 0 ? (i: number) => i * nsPerSample : (i: number) => i;
 
       if (config.analog1 && wf.waveform.analog_probe1.length > 0) {
         series.push({
           name: 'Analog 1',
           type: 'line',
-          data: wf.waveform.analog_probe1.map((v, i) => [i, v]),
+          data: wf.waveform.analog_probe1.map((v, i) => [toX(i), v]),
           symbol: 'none',
           lineStyle: { width: 1.5, color: this.probeColors.analog1 },
           itemStyle: { color: this.probeColors.analog1 },
@@ -1106,7 +1134,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         series.push({
           name: 'Analog 2',
           type: 'line',
-          data: wf.waveform.analog_probe2.map((v, i) => [i, v]),
+          data: wf.waveform.analog_probe2.map((v, i) => [toX(i), v]),
           symbol: 'none',
           lineStyle: { width: 1.5, color: this.probeColors.analog2 },
           itemStyle: { color: this.probeColors.analog2 },
@@ -1126,7 +1154,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           series.push({
             name: `Digital ${dp.index + 1}`,
             type: 'line',
-            data: dp.data.map((v, i) => [i, v * 10000 + dp.index * 1000]),
+            data: dp.data.map((v, i) => [toX(i), v * 10000 + dp.index * 1000]),
             symbol: 'none',
             step: 'end',
             lineStyle: { width: 1, color: this.probeColors[colorKey] },
@@ -1143,12 +1171,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         channelId: wf.channel_id,
         energy: wf.energy,
         samples,
-        options: this.buildSingleChartOptions(series, this.yAxisMode()),
+        nsPerSample,
+        options: this.buildSingleChartOptions(series, this.yAxisMode(), nsPerSample > 0),
       };
     });
   }
 
-  private buildSingleChartOptions(series: unknown[], yMode: 'auto' | 'fixed'): EChartsCoreOption {
+  private buildSingleChartOptions(series: unknown[], yMode: 'auto' | 'fixed', useTime = false): EChartsCoreOption {
     return {
       animation: false,
       grid: {
@@ -1170,7 +1199,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       },
       xAxis: {
         type: 'value',
-        name: 'Sample',
+        name: useTime ? 'Time (ns)' : 'Sample',
         nameLocation: 'middle',
         nameGap: 25,
         min: 0,
@@ -1217,6 +1246,42 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         },
       ],
       series,
+    };
+  }
+
+  /** Initial chart options for Tune Up waveform (skeleton — data filled via merge) */
+  private buildTuneUpWfInitOptions(): EChartsCoreOption {
+    return {
+      animation: false,
+      grid: { left: 60, right: 50, top: 40, bottom: 50 },
+      legend: { show: true, top: 5, type: 'scroll' },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+      xAxis: {
+        type: 'value',
+        name: 'Sample',
+        nameLocation: 'middle',
+        nameGap: 25,
+        min: 0,
+      },
+      yAxis: {
+        type: 'value',
+        name: 'ADC',
+        min: 0,
+        max: 20000,
+        axisLabel: {
+          formatter: (value: number) => {
+            if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'k';
+            return value.toString();
+          },
+        },
+      },
+      dataZoom: [
+        { type: 'inside', xAxisIndex: 0, yAxisIndex: [], zoomOnMouseWheel: 'shift', moveOnMouseMove: true },
+        { type: 'inside', xAxisIndex: [], yAxisIndex: 0, zoomOnMouseWheel: 'ctrl', moveOnMouseMove: false },
+        { type: 'slider', xAxisIndex: 0, height: 20, bottom: 5 },
+        { type: 'slider', yAxisIndex: 0, width: 20, right: 5 },
+      ],
+      series: [],
     };
   }
 

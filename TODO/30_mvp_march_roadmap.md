@@ -1,7 +1,8 @@
 # MVP March 2026 Roadmap
 
 **Created:** 2026-02-10
-**Status:** 計画中
+**Updated:** 2026-02-10
+**Status:** Phase 1 進行中
 **Target:** 2026年3月中旬
 
 ## 目標
@@ -9,6 +10,7 @@
 1. **172.18.4.76 で PSD2 + PSD1 + PHA1 DAQ を走らせる**
 2. **カウントレート・HV モニタリング（Grafana 別系統）**
 3. **簡単にデプロイ・管理・運用できるシステム**
+4. **ELOG 電子ログブック統合（Run Stop 時に自動投稿）**
 
 ---
 
@@ -21,13 +23,13 @@
 
 ### タスク
 
-| # | タスク | 優先度 | 依存 | 見積 |
-|---|--------|--------|------|------|
-| 1-1 | PHA1 用 JSON コンフィグテンプレート作成 | **高** | なし | 小 |
-| 1-2 | PHA1 デジタイザの Settings UI パラメータ確認 | **中** | 1-1 | 小 |
-| 1-3 | config_76_production.toml に PHA1 ソース追加 | **高** | ハードウェア確定後 | 小 |
-| 1-4 | PHA1 実機接続テスト (76) | **高** | 1-3 + HW | 中 |
-| 1-5 | Event Builder オンラインパイプライン統合 | **高** | 下記 Goal 1-EB 参照 | 大 |
+| # | タスク | 優先度 | 依存 | 見積 | 状態 |
+|---|--------|--------|------|------|------|
+| 1-1 | PHA1 用 JSON コンフィグテンプレート作成 | **高** | なし | 小 | ✅ 完了 (`config/digitizers/pha1_template.json`) |
+| 1-2 | PHA1 デジタイザの Settings UI パラメータ確認 | **中** | 1-1 | 小 | |
+| 1-3 | config_76_production.toml に PHA1 ソース追加 | **高** | ハードウェア確定後 | 小 | |
+| 1-4 | PHA1 実機接続テスト (76) | **高** | 1-3 + HW | 中 | |
+| 1-5 | Event Builder オンラインパイプライン統合 | **高** | 下記 Goal 1-EB 参照 | 大 | |
 
 ### Goal 1-EB: Event Builder オンライン統合
 
@@ -58,33 +60,35 @@ Reader x N → Merger → PUB ──┬── Monitor (SUB, 既存)
 
 ---
 
-## Goal 2: カウントレート・HV モニタリング（Grafana）
+## Goal 2: カウントレート・HV モニタリング + 通知
 
 ### 方針
-DAQ Web UI には統合しない。Grafana + Prometheus/InfluxDB で別系統のモニタリングダッシュボードを構築。
+DAQ Web UI には統合しない。**InfluxDB v3 Core + Grafana** で別系統のモニタリングダッシュボードを構築。
+通知は **Webhook（Telegram or Discord — 実装時に決定）** で実現。
+インフラは **Docker (docker-compose)** で管理。
+
+### アーキテクチャ
+```
+Rust (Operator/Monitor)  ──→  InfluxDB v3 Core  ──→  Grafana  ──→  Webhook (Alert)
+                          ──→  Webhook (直接 POST: Run start/stop, エラー)
+Python (HV tools)         ──→  InfluxDB v3 Core  ──→  Grafana  ──→  Webhook (Alert)
+```
 
 ### タスク
 
 | # | タスク | 優先度 | 見積 |
 |---|--------|--------|------|
-| 2-1 | Prometheus exporter 設計（Monitor API → metrics） | **中** | 中 |
-| 2-2 | HV exporter 作成（SY5527 → Prometheus/InfluxDB） | **中** | 中 |
-| 2-3 | docker-compose に Prometheus + Grafana 追加 | **中** | 小 |
+| 2-1 | docker-compose に InfluxDB v3 Core + Grafana 追加 | **高** | 小 |
+| 2-2 | Rust → InfluxDB 書き込み（Operator/Monitor からレート・イベント数を push） | **高** | 中 |
+| 2-3 | Python HV exporter → InfluxDB 書き込み（SY5527 VMon/IMon/Status） | **中** | 中 |
 | 2-4 | Grafana ダッシュボード作成（レート、HV 電圧/電流） | **中** | 中 |
+| 2-5 | Webhook 通知統合（Run start/stop を Rust から直接送信） | **中** | 小 |
+| 2-6 | Grafana → Webhook アラート設定（レート低下、HV トリップ等） | **中** | 小 |
 
-**選択肢:**
-- **A: Prometheus exporter (推奨)** — Python/Rust で `/metrics` エンドポイント提供。Prometheus が scrape
-- **B: InfluxDB + Telegraf** — Telegraf が Monitor API と SY5527 をポーリング → InfluxDB → Grafana
-
-**DAQ カウントレート exporter:**
-- Monitor の `GET /api/histograms` から per-channel count を取得
-- `GET /api/status` から total_events, event_rate を取得
-- Prometheus gauge として公開
-
-**HV exporter:**
-- 既存の `tools/hv_calibration/` の CAENHVWrapper バインディングを再利用
-- VMon (実測電圧), IMon (実測電流), V0Set (設定電圧), Status を定期読み出し
-- Prometheus gauge として公開
+### 技術選定の理由
+- **InfluxDB v3 Core** (not Prometheus): Push 型で DAQ からの直接書き込みに適合。InfluxQL サポートあり（v1 経験を活用）。Telegraf 不要
+- **Webhook 通知 (Telegram or Discord)**: API がシンプル（HTTP POST 1発）。Grafana Alert にも built-in 対応。薄い抽象層で切り替え可能
+- **Docker**: InfluxDB + Grafana のインフラをコードで管理。172.18.4.76 にそのままデプロイ可能
 
 ---
 
@@ -92,15 +96,15 @@ DAQ Web UI には統合しない。Grafana + Prometheus/InfluxDB で別系統の
 
 ### タスク
 
-| # | タスク | 優先度 | 参照 | 見積 |
-|---|--------|--------|------|------|
-| 3-1 | Operator ステータスポーリング並列化 (A1) | **高** | TODO/26 | 小 |
-| 3-2 | start_daq.sh 改善: ヘルスチェック + サマリー (C1) | **中** | TODO/26 | 小 |
-| 3-3 | タイムアウト TOML 設定化 (C3) | **中** | TODO/26 | 小 |
-| 3-4 | 設定自動生成スクリプト (A3) | **中** | TODO/26 | 中 |
-| 3-5 | デプロイスクリプト改善 (rsync + build + restart 一発) | **中** | なし | 小 |
-| 3-6 | rust-embed でフロントエンド埋め込み（単一バイナリ） | **低** | なし | 中 |
-| 3-7 | systemd サービスファイル作成 | **低** | なし | 小 |
+| # | タスク | 優先度 | 参照 | 見積 | 状態 |
+|---|--------|--------|------|------|------|
+| 3-1 | Operator ステータスポーリング並列化 (A1) | **高** | TODO/26 | 小 | ✅ 完了 (`client.rs`: `join_all` 化) |
+| 3-2 | start_daq.sh 改善: ヘルスチェック + サマリー (C1) | **中** | TODO/26 | 小 | ✅ 完了 (ヘルスチェック + サマリーテーブル + Operator API 状態表示) |
+| 3-3 | タイムアウト TOML 設定化 (C3) | **中** | TODO/26 | 小 | ✅ 完了 (`[operator]` に `configure/arm/start/reset_timeout_ms`) |
+| 3-4 | 設定自動生成スクリプト (A3) | **中** | TODO/26 | 中 | |
+| 3-5 | デプロイスクリプト改善 (rsync + build + restart 一発) | **中** | なし | 小 | |
+| 3-6 | rust-embed でフロントエンド埋め込み（単一バイナリ） | **低** | なし | 中 | |
+| 3-7 | systemd サービスファイル作成 | **低** | なし | 小 | |
 
 ### 優先順位
 1. A1 (並列化) — 10台で体感速度改善、コード変更小
@@ -115,24 +119,83 @@ DAQ Web UI には統合しない。Grafana + Prometheus/InfluxDB で別系統の
 ## 実装スケジュール案
 
 ### Phase 1: 基盤整備 (2月中旬)
-- [ ] 3-1: ステータス並列化 (A1)
-- [ ] 3-2: start_daq.sh 改善 (C1)
-- [ ] 3-3: タイムアウト設定化 (C3)
-- [ ] 1-1: PHA1 コンフィグテンプレート
+- [x] 3-1: ステータス並列化 (A1) — `get_all_status`/`execute_on_all` を `join_all` で並列化
+- [x] 3-2: start_daq.sh 改善 (C1) — ヘルスチェック、PID サマリーテーブル、Operator API 状態表示
+- [x] 3-3: タイムアウト設定化 (C3) — `[operator]` セクションに 4 種タイムアウト追加
+- [x] 1-1: PHA1 コンフィグテンプレート — `config/digitizers/pha1_template.json`
 - [ ] 1-2: PHA1 Settings UI パラメータ確認
+
+**発見事項:** DIG1 (PSD1/PHA1) の時間パラメータは ns→samples 変換不要。DevTree が ns を直接受け付ける (`expuom: -9`)。テスト修正済み。
 
 ### Phase 2: Event Builder 統合 (2月下旬〜3月上旬)
 - [ ] EB-1〜EB-4: Event Builder オンライン化
 - [ ] 3-4: 設定自動生成（ハードウェア確定後）
 
-### Phase 3: モニタリング + 実機テスト (3月上旬)
-- [ ] 2-1〜2-4: Grafana モニタリング
+### Phase 3: モニタリング + ELOG + 実機テスト (3月上旬)
+- [ ] 2-1: Docker インフラ整備（InfluxDB v3 Core + Grafana + ELOG の docker-compose）
+- [ ] 4-1: ELOG Docker セットアップ
+- [ ] 4-2〜4-3: ELOG Rust クライアント + TOML 設定
+- [ ] 4-4: Run Stop 自動投稿
+- [ ] 2-2: Rust → InfluxDB メトリクス書き込み
+- [ ] 2-3: Python HV exporter → InfluxDB
+- [ ] 2-4: Grafana ダッシュボード
+- [ ] 2-5〜2-6: Webhook 通知 + Grafana Alert
 - [ ] 1-3〜1-4: PHA1 実機テスト
 - [ ] EB-6: 全ファームウェア E2E テスト
 
 ### Phase 4: 運用安定化 (3月中旬 — MVP)
 - [ ] 3-5: デプロイ改善
-- [ ] 最終統合テスト（PSD1 + PSD2 + PHA1 + EB + Grafana）
+- [ ] 最終統合テスト（PSD1 + PSD2 + PHA1 + EB + Grafana + 通知）
+
+---
+
+## Goal 4: ELOG 電子ログブック統合
+
+### 方針
+PSI ELOG (https://elog.psi.ch/elog/) を Docker でセルフホスト。
+Run Stop 時にデジタイザ設定 + 統計情報を自動投稿する。
+
+### アーキテクチャ
+```
+Run Stop (Operator)
+  → 統計情報収集（Duration, Event数, エラー数）
+  → デジタイザ設定サマリ生成
+  → ELOG HTTP POST（reqwest）
+```
+
+### タスク
+
+| # | タスク | 優先度 | 見積 |
+|---|--------|--------|------|
+| 4-1 | docker-compose に ELOG サーバー追加 | **高** | 小 |
+| 4-2 | ELOG Rust クライアントモジュール実装（`reqwest` HTTP POST） | **高** | 中 |
+| 4-3 | `[elog]` セクションを TOML 設定に追加 | **高** | 小 |
+| 4-4 | Run Stop 時の自動投稿（統計情報 + デジタイザ設定） | **高** | 中 |
+| 4-5 | Operator UI に手動 ELOG 投稿ボタン（任意コメント付き） | **低** | 中 |
+
+### 設定イメージ (`config.toml`)
+```toml
+[elog]
+enabled = true
+url = "http://localhost:8080"
+logbook = "DELILA"
+author = "DELILA-DAQ"
+# write_password = ""
+```
+
+### 投稿内容（Run Stop 時）
+```
+Run #42 stopped
+
+Duration: 01:23:45
+Total events: 1,234,567
+Event rate (avg): 278 evt/s
+
+Digitizer config:
+  - dig0 (VX2730, PSD2): 64ch, 500ns gate
+  - dig1 (VX1730B, PSD1): 16ch x 5 boards
+  - dig2 (VX1730B, PHA1): 16ch
+```
 
 ---
 

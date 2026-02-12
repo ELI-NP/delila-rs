@@ -622,6 +622,7 @@ impl Psd2Decoder {
             digital_probe4,
             time_resolution,
             trigger_threshold,
+            ns_per_sample: self.config.time_step_ns,
         })
     }
 

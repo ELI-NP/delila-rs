@@ -71,7 +71,9 @@ import { TimerAlarmDialogComponent } from './timer-alarm-dialog.component';
 
         <div class="timer-buttons">
           @if (!timer.isRunning()) {
-            <button mat-raised-button color="primary" (click)="onStartTimer()">Start Timer</button>
+            <button mat-raised-button color="primary" (click)="onStartTimer()" [disabled]="isStarting()">
+              {{ isStarting() ? 'Starting...' : 'Start Timer' }}
+            </button>
           } @else {
             <button mat-raised-button color="warn" (click)="onStopTimer()">Stop Timer</button>
           }
@@ -122,6 +124,7 @@ export class TimerComponent {
   // Options - both enabled by default
   readonly startWithTimer = signal(true);
   readonly isFlashing = signal(false);
+  readonly isStarting = signal(false);
 
   // Events
   readonly timerStarted = output<void>();
@@ -141,10 +144,23 @@ export class TimerComponent {
   }
 
   onStartTimer(): void {
-    this.timer.startTimer();
     if (this.startWithTimer()) {
+      this.isStarting.set(true);
       this.timerStarted.emit();
+    } else {
+      this.timer.startTimer();
     }
+  }
+
+  /** Called by ControlPage after run successfully started */
+  confirmStarted(): void {
+    this.isStarting.set(false);
+    this.timer.startTimer();
+  }
+
+  /** Called by ControlPage if run start failed */
+  confirmFailed(): void {
+    this.isStarting.set(false);
   }
 
   onStopTimer(): void {

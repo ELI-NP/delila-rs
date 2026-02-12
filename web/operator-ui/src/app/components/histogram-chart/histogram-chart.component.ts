@@ -472,6 +472,7 @@ export class HistogramChartComponent implements OnChanges {
           barWidth: '100%',
           itemStyle: {
             color: '#1976d2',
+            borderColor: '#1976d2',
           },
           large: true,
           largeThreshold: 2000,

@@ -1,0 +1,19 @@
+# Online Event Builder Integration Test Config
+# Usage: standalone test with eb_test_sender + online_event_builder + controller
+# No Operator or other DAQ components needed.
+
+[operator]
+experiment_name = "EB_Test"
+
+[network]
+cluster_name = "eb-test"
+
+[network.event_builder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5595"
+output_dir = "./data/eb_test_events"
+coincidence_window_ns = 100.0
+slice_duration_ns = 10000000.0
+buffer_delay_ns = 30000000.0
+ch_settings_file = "/Users/aogaki/WorkSpace/ELIFANT2025/ELIFANT-Event/all_run_p91Zr/chSettings.json"
+pipeline_order = 3

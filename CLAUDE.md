@@ -1,5 +1,11 @@
 # CLAUDE.md - DELILA-Rust (Next Gen DAQ)
 
+## Absolute Rule — データ保全
+**絶対にデータを落とさない。落とすくらいならシステムを止める。**
+- ZMQ ソケットは全て HWM=0（無制限バッファ）。HWM をデフォルト(1000)に戻してはならない。
+- チャンネル（tokio mpsc, crossbeam）は unbounded またはデータを落とさない設計にすること。
+- バックプレッシャーでデータをドロップする設計は一切禁止。
+
 ## Current Focus (2026-02)
 **PSD1 ネットワーク透過テスト兼デコーダテスト中**
 - Hardware: DT5730B (SN:990, DPP-PSD, USB) on Linux (172.18.4.147)

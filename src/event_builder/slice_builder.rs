@@ -71,22 +71,34 @@ impl SliceBuilder {
 
     /// Check if a hit is a trigger
     #[inline]
-    fn is_trigger(&self, hit: &Hit) -> bool {
+    pub fn is_trigger(&self, hit: &Hit) -> bool {
         self.trigger_channels
             .contains_key(&(hit.module, hit.channel))
     }
 
     /// Get trigger priority (lower = higher priority)
     #[inline]
-    fn get_priority(&self, hit: &Hit) -> u32 {
+    pub fn get_priority(&self, hit: &Hit) -> u32 {
         self.trigger_channels
             .get(&(hit.module, hit.channel))
             .copied()
             .unwrap_or(u32::MAX)
     }
 
+    /// Get coincidence window
+    #[inline]
+    pub fn coincidence_window_ns(&self) -> f64 {
+        self.coincidence_window_ns
+    }
+
+    /// Get AC pair for a channel, if any
+    #[inline]
+    pub fn get_ac_pair(&self, module: u8, channel: u8) -> Option<&(u8, u8)> {
+        self.ac_pairs.get(&(module, channel))
+    }
+
     /// Apply time calibration to hits
-    fn apply_calibration(&self, hits: &mut [Hit]) {
+    pub fn apply_calibration(&self, hits: &mut [Hit]) {
         for hit in hits.iter_mut() {
             let offset = self.time_calibration.get_offset(hit.module, hit.channel);
             hit.timestamp_ns -= offset;

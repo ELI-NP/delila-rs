@@ -3,6 +3,9 @@
 //! Time Slice 方式: 時間軸を固定サイズのスライスに分割し、
 //! 各スライス内でコインシデンス検出を行う。
 //! CBM/FLES で実績のある方式。
+//!
+//! Note: Used internally by SliceBuilder (offline). Not exported publicly.
+#![allow(dead_code)]
 
 use super::hit::Hit;
 
