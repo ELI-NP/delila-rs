@@ -381,20 +381,24 @@ class HVController:
         n = len(channels)
         assert len(voltages) == n
 
-        # Safety: read SVMax and clamp
+        # Safety: read SVMax and clamp — fail-safe (refuse if limit unreadable)
         try:
             sv_max = self._get_float_param(slot, "SVMax", channels)
-            clamped = []
-            for i in range(n):
-                v = voltages[i]
-                if sv_max[i] > 0 and v > sv_max[i]:
-                    logger.warning("Clamping ch%d voltage %.1f -> SVMax %.1f",
-                                   channels[i], v, sv_max[i])
-                    v = sv_max[i]
-                clamped.append(max(0.0, v))
-            voltages = clamped
-        except CAENHVError:
-            voltages = [max(0.0, v) for v in voltages]
+        except CAENHVError as e:
+            raise RuntimeError(
+                f"Cannot read SVMax for slot {slot}: {e}. "
+                "Refusing to set voltage without safety limit check."
+            ) from e
+
+        clamped = []
+        for i in range(n):
+            v = voltages[i]
+            if sv_max[i] > 0 and v > sv_max[i]:
+                logger.warning("Clamping ch%d voltage %.1f -> SVMax %.1f",
+                               channels[i], v, sv_max[i])
+                v = sv_max[i]
+            clamped.append(max(0.0, v))
+        voltages = clamped
 
         ch_arr = (ctypes.c_ushort * n)(*channels)
         val_arr = (ctypes.c_float * n)(*voltages)

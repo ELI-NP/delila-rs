@@ -40,6 +40,7 @@ class GainMatcherConfig:
     pmt_alpha: float = 7.0
     min_counts: int = 1000
     hv_step_limit: float = 50.0
+    settling_time: float = 5.0  # PMT settling time after HV ramp (seconds)
 
     # Channels
     channels: list[ChannelConfig] = field(default_factory=list)
@@ -71,6 +72,7 @@ def load_config(path: str) -> GainMatcherConfig:
     cfg.pmt_alpha = matching.get("pmt_alpha", cfg.pmt_alpha)
     cfg.min_counts = matching.get("min_counts", cfg.min_counts)
     cfg.hv_step_limit = matching.get("hv_step_limit", cfg.hv_step_limit)
+    cfg.settling_time = matching.get("settling_time", cfg.settling_time)
 
     # Defaults
     defaults = raw.get("defaults", {})
@@ -99,7 +101,16 @@ def load_config(path: str) -> GainMatcherConfig:
         ))
 
     # Expand channel_ranges
-    for rng in raw.get("channel_ranges", []):
+    _RANGE_REQUIRED_KEYS = [
+        "name_prefix", "hv_slot", "hv_ch_start", "hv_ch_end",
+        "dig_module", "dig_ch_start",
+    ]
+    for idx, rng in enumerate(raw.get("channel_ranges", [])):
+        missing = [k for k in _RANGE_REQUIRED_KEYS if k not in rng]
+        if missing:
+            raise ValueError(
+                f"channel_ranges[{idx}]: missing required keys: {missing}"
+            )
         prefix = rng["name_prefix"]
         hv_slot = rng["hv_slot"]
         hv_start = rng["hv_ch_start"]

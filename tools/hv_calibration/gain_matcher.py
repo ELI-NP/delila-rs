@@ -76,9 +76,10 @@ def _probe_slot_channels(hv, slot: int) -> int:
 
 def cmd_scan(args):
     """Scan all channels: acquire histograms and auto-detect peaks."""
+    cfg = load_config(args.config) if hasattr(args, 'config') and args.config else None
     daq = DAQClient(
-        operator_url=args.operator_url,
-        monitor_url=args.monitor_url,
+        operator_url=cfg.operator_url if cfg else args.operator_url,
+        monitor_url=cfg.monitor_url if cfg else args.monitor_url,
     )
 
     # Check DAQ is running
@@ -203,6 +204,7 @@ def cmd_match(args):
                     print(f"{ch.name:>12s} | {'---':>8s} | {ch.target_position:8d} | "
                           f"{'---':>8s} | {'---':>8s} | {'---':>8s} | DAQ ERROR")
                     fit_failures += 1
+                    all_converged = False  # Fix #1: failed channels are not converged
                     continue
 
                 fit = fit_peak(hist["bins"], ch.peak_region, cfg.min_counts)
@@ -213,6 +215,16 @@ def cmd_match(args):
                           f"{'---':>8s} | {'---':>8s} | {'---':>8s} | "
                           f"FIT FAIL: {fit.message}")
                     fit_failures += 1
+                    all_converged = False  # Fix #1: failed channels are not converged
+                    continue
+
+                # Fix #3: guard against zero/negative peak position
+                if fit.peak_position <= 1.0:
+                    print(f"{ch.name:>12s} | {fit.peak_position:8.1f} | "
+                          f"{ch.target_position:8d} | {'---':>8s} | "
+                          f"{'---':>8s} | {'---':>8s} | PEAK TOO LOW")
+                    fit_failures += 1
+                    all_converged = False
                     continue
 
                 delta = fit.peak_position - ch.target_position
@@ -277,6 +289,11 @@ def cmd_match(args):
                     if not hv.wait_ramp(slot, chs):
                         print(f"WARNING: Ramp timeout on slot {slot}")
 
+                # Fix #4: PMT settling time after voltage change
+                if cfg.settling_time > 0:
+                    print(f"Waiting {cfg.settling_time}s for PMT settling...")
+                    time.sleep(cfg.settling_time)
+
         # Save final results
         _save_results(cfg, all_results, active, final_iteration,
                       all_converged, args.dry_run)
@@ -337,12 +354,16 @@ def main():
 
     # scan
     sp_scan = subparsers.add_parser("scan", help="Scan channels for peaks")
+    sp_scan.add_argument("--config", default=None,
+                         help="YAML config file (uses daq URLs from config)")
     sp_scan.add_argument("--measure-time", type=int, default=10,
                          help="Data accumulation time (seconds)")
     sp_scan.add_argument("--output", type=str, default=None,
                          help="Output YAML file path")
-    sp_scan.add_argument("--operator-url", default="http://localhost:8080")
-    sp_scan.add_argument("--monitor-url", default="http://localhost:8081")
+    sp_scan.add_argument("--operator-url", default="http://localhost:8080",
+                         help="Operator URL (overridden by --config)")
+    sp_scan.add_argument("--monitor-url", default="http://localhost:8081",
+                         help="Monitor URL (overridden by --config)")
 
     # match
     sp_match = subparsers.add_parser("match", help="Run gain matching")
