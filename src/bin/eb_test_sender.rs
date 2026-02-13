@@ -165,8 +165,7 @@ async fn main() -> anyhow::Result<()> {
 
                 let msg = Message::data(batch);
                 let bytes = msg.to_msgpack()?;
-                let zmq_msg: tmq::Multipart =
-                    vec![tmq::Message::from(bytes.as_slice())].into();
+                let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
                 socket.send(zmq_msg).await?;
 
                 sent_batches += 1;
@@ -176,11 +175,7 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 if sent_batches.is_multiple_of(1000) {
-                    info!(
-                        batches = sent_batches,
-                        hits = sent_hits,
-                        "Sending progress"
-                    );
+                    info!(batches = sent_batches, hits = sent_hits, "Sending progress");
                 }
             }
         }
@@ -221,7 +216,10 @@ async fn main() -> anyhow::Result<()> {
     println!("========================================");
     println!("  Total hits sent:    {}", sent_hits);
     println!("  Total batches:      {}", sent_batches);
-    println!("  Chunk size:         {} ms", args.chunk_size_ns / 1_000_000.0);
+    println!(
+        "  Chunk size:         {} ms",
+        args.chunk_size_ns / 1_000_000.0
+    );
     println!("========================================");
 
     // Small delay to let ZMQ flush

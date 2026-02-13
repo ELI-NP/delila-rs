@@ -562,8 +562,11 @@ impl Psd1Decoder {
             ch_header.num_samples_wave as usize * constants::waveform::SAMPLES_PER_GROUP;
 
         let mut analog_probe1 = Vec::with_capacity(total_samples);
-        let mut analog_probe2 =
-            Vec::with_capacity(if ch_header.dual_trace { total_samples } else { 0 });
+        let mut analog_probe2 = Vec::with_capacity(if ch_header.dual_trace {
+            total_samples
+        } else {
+            0
+        });
         let mut digital_probe1 = Vec::with_capacity(total_samples);
         let mut digital_probe2 = Vec::with_capacity(total_samples);
 

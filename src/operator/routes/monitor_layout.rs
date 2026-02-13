@@ -36,7 +36,10 @@ pub(super) async fn save_monitor_layout(
     match serde_json::to_string_pretty(&body) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&file_path, json) {
-                tracing::warn!("Failed to write monitor layout to {}: {e}", file_path.display());
+                tracing::warn!(
+                    "Failed to write monitor layout to {}: {e}",
+                    file_path.display()
+                );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiResponse::error(format!("Failed to save layout: {e}"))),
@@ -48,7 +51,9 @@ pub(super) async fn save_monitor_layout(
             tracing::warn!("Failed to serialize monitor layout: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::error(format!("Failed to serialize layout: {e}"))),
+                Json(ApiResponse::error(format!(
+                    "Failed to serialize layout: {e}"
+                ))),
             );
         }
     }
@@ -66,7 +71,10 @@ pub fn load_monitor_layout(config_dir: &std::path::Path) -> serde_json::Value {
                 value
             }
             Err(e) => {
-                tracing::warn!("Failed to parse monitor layout from {}: {e}", file_path.display());
+                tracing::warn!(
+                    "Failed to parse monitor layout from {}: {e}",
+                    file_path.display()
+                );
                 serde_json::json!({})
             }
         },

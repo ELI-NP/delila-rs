@@ -551,10 +551,7 @@ mod tests {
         // build_events_from_chunk assigns event_id = 0, caller is responsible for IDs
         let config = simple_config();
         let chunk = SortedChunk {
-            hits: vec![
-                make_hit(0, 0, 1000.0),
-                make_hit(0, 0, 5000.0),
-            ],
+            hits: vec![make_hit(0, 0, 1000.0), make_hit(0, 0, 5000.0)],
             core_end: 10000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -685,7 +682,7 @@ mod tests {
         let mut hits = Vec::new();
         for i in 0..20 {
             let base = (i as f64) * 10_000_000.0; // every 10ms
-            hits.push(make_hit(0, 0, base));       // trigger
+            hits.push(make_hit(0, 0, base)); // trigger
             hits.push(make_hit(1, 0, base + 100.0)); // coincident
         }
         // Shuffle to simulate network disorder
@@ -733,7 +730,8 @@ mod tests {
         use std::path::Path;
         use std::time::Instant;
 
-        let path = Path::new("/Users/aogaki/WorkSpace/ELIFANT2025/p91Zr/data/run0113_0000_p_91Zr.root");
+        let path =
+            Path::new("/Users/aogaki/WorkSpace/ELIFANT2025/p91Zr/data/run0113_0000_p_91Zr.root");
         if !path.exists() {
             eprintln!("Test data not found: {}", path.display());
             return;
@@ -851,10 +849,10 @@ mod tests {
         let config = simple_config(); // 500ns window
 
         let hits = vec![
-            make_hit(0, 0, 49_999_000.0), // just before core_end (50ms - 1µs)
-            make_hit(1, 0, 49_999_100.0), // coincident
-            make_hit(0, 0, 50_001_000.0), // just after core_end (50ms + 1µs)
-            make_hit(1, 1, 50_001_100.0), // coincident
+            make_hit(0, 0, 49_999_000.0),  // just before core_end (50ms - 1µs)
+            make_hit(1, 0, 49_999_100.0),  // coincident
+            make_hit(0, 0, 50_001_000.0),  // just after core_end (50ms + 1µs)
+            make_hit(1, 1, 50_001_100.0),  // coincident
             make_hit(0, 0, 100_000_000.0), // far future (to set time range)
         ];
 
@@ -864,13 +862,17 @@ mod tests {
 
         // The trigger at 49.999ms should be in events1 (before core_end)
         assert!(
-            events1.iter().any(|e| (e.trigger_time - 49_999_000.0).abs() < 0.01),
+            events1
+                .iter()
+                .any(|e| (e.trigger_time - 49_999_000.0).abs() < 0.01),
             "Trigger at 49.999ms should be in first chunk"
         );
 
         // The trigger at 50.001ms should NOT be in events1 (at/after core_end)
         assert!(
-            !events1.iter().any(|e| (e.trigger_time - 50_001_000.0).abs() < 0.01),
+            !events1
+                .iter()
+                .any(|e| (e.trigger_time - 50_001_000.0).abs() < 0.01),
             "Trigger at 50.001ms should NOT be in first chunk"
         );
 
@@ -878,7 +880,9 @@ mod tests {
         let chunk2 = sort_and_flush(retained).unwrap();
         let events2 = build_events_from_chunk(&chunk2, &config);
         assert!(
-            events2.iter().any(|e| (e.trigger_time - 50_001_000.0).abs() < 0.01),
+            events2
+                .iter()
+                .any(|e| (e.trigger_time - 50_001_000.0).abs() < 0.01),
             "Trigger at 50.001ms should be in flushed chunk"
         );
 

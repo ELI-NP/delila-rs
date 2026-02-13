@@ -75,8 +75,14 @@ async fn main() -> anyhow::Result<()> {
     println!();
     println!("  Subscribing to:     {}", eb_config.subscribe_address);
     println!("  Output dir:         {}", eb_config.output_dir.display());
-    println!("  Coincidence window: {} ns", eb_config.coincidence_window_ns);
-    println!("  Safe horizon:       {} ms", eb_config.safe_horizon_ns / 1_000_000.0);
+    println!(
+        "  Coincidence window: {} ns",
+        eb_config.coincidence_window_ns
+    );
+    println!(
+        "  Safe horizon:       {} ms",
+        eb_config.safe_horizon_ns / 1_000_000.0
+    );
     println!("  Workers:            {}", eb_config.n_workers);
     println!("  Writers:            {}", eb_config.n_writers);
     println!();

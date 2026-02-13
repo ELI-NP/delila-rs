@@ -57,9 +57,9 @@ use event_builder::{
     restore_version as eb_restore_version, update_ch_settings as eb_update_ch_settings,
     update_l2_settings as eb_update_l2_settings, update_time_settings as eb_update_time_settings,
 };
+use monitor_layout::{get_monitor_layout, save_monitor_layout};
 use run::{add_run_note, get_next_run_number, get_run, get_run_config_snapshot, get_run_history};
 use status::{arm, configure, get_status, reset, run_start, start, stop};
-use monitor_layout::{get_monitor_layout, save_monitor_layout};
 use tuneup::{tuneup_apply, tuneup_start, tuneup_stop};
 
 /// Application state shared across handlers
@@ -446,7 +446,10 @@ impl RouterBuilder {
             // Run config snapshots
             .route("/api/runs/:run_number/config", get(get_run_config_snapshot))
             // Monitor layout persistence
-            .route("/api/monitor/layout", get(get_monitor_layout).put(save_monitor_layout))
+            .route(
+                "/api/monitor/layout",
+                get(get_monitor_layout).put(save_monitor_layout),
+            )
             // Emulator settings routes
             .route("/api/emulator", get(get_emulator_settings))
             .route("/api/emulator", put(update_emulator_settings))

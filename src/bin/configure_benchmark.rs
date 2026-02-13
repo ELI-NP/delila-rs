@@ -29,7 +29,11 @@ fn main() {
     let t0 = Instant::now();
     let params = config.to_caen_parameters();
     let gen_time = t0.elapsed();
-    println!("[2] Parameter generation: {:?} ({} params)", gen_time, params.len());
+    println!(
+        "[2] Parameter generation: {:?} ({} params)",
+        gen_time,
+        params.len()
+    );
 
     // 3. Connect to digitizer
     let t0 = Instant::now();
@@ -88,15 +92,28 @@ fn main() {
     println!("Param generation:{:?}", gen_time);
     println!("Connect:         {:?}", connect_time);
     println!("Reset:           {:?}", reset_time);
-    println!("Apply total:     {:?} ({} params, {} ok, {} err)", total_apply, params.len(), success_count, fail_count);
+    println!(
+        "Apply total:     {:?} ({} params, {} ok, {} err)",
+        total_apply,
+        params.len(),
+        success_count,
+        fail_count
+    );
 
     // Statistics
-    let ok_timings: Vec<_> = timings.iter().filter(|(_, _, ok)| *ok).map(|(_, d, _)| *d).collect();
+    let ok_timings: Vec<_> = timings
+        .iter()
+        .filter(|(_, _, ok)| *ok)
+        .map(|(_, d, _)| *d)
+        .collect();
     if !ok_timings.is_empty() {
         let min = ok_timings.iter().min().unwrap();
         let max = ok_timings.iter().max().unwrap();
         let avg = total_apply / ok_timings.len() as u32;
-        println!("\nPer-parameter: min={:?}, max={:?}, avg={:?}", min, max, avg);
+        println!(
+            "\nPer-parameter: min={:?}, max={:?}, avg={:?}",
+            min, max, avg
+        );
     }
 
     // Top 10 slowest

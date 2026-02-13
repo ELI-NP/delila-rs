@@ -62,19 +62,14 @@ fn load_config(
         info!("Loaded configuration from {}", config_file);
         let components = build_components_from_config(&config);
         // Resolve web_ui_dir: explicit TOML value, or auto-detect
-        let web_ui_dir = config
-            .operator
-            .web_ui_dir
-            .map(PathBuf::from)
-            .or_else(|| {
-                let default_path =
-                    PathBuf::from("web/operator-ui/dist/operator-ui/browser");
-                if default_path.exists() {
-                    Some(default_path)
-                } else {
-                    None
-                }
-            });
+        let web_ui_dir = config.operator.web_ui_dir.map(PathBuf::from).or_else(|| {
+            let default_path = PathBuf::from("web/operator-ui/dist/operator-ui/browser");
+            if default_path.exists() {
+                Some(default_path)
+            } else {
+                None
+            }
+        });
         let monitor_http_port = config.network.monitor.as_ref().map(|m| m.http_port);
         let defaults = OperatorConfig::default();
         let operator_config = OperatorConfig {
@@ -82,10 +77,22 @@ fn load_config(
             experiment_name: config.operator.experiment_name,
             web_ui_dir,
             monitor_http_port,
-            configure_timeout_ms: config.operator.configure_timeout_ms.unwrap_or(defaults.configure_timeout_ms),
-            arm_timeout_ms: config.operator.arm_timeout_ms.unwrap_or(defaults.arm_timeout_ms),
-            start_timeout_ms: config.operator.start_timeout_ms.unwrap_or(defaults.start_timeout_ms),
-            reset_timeout_ms: config.operator.reset_timeout_ms.unwrap_or(defaults.reset_timeout_ms),
+            configure_timeout_ms: config
+                .operator
+                .configure_timeout_ms
+                .unwrap_or(defaults.configure_timeout_ms),
+            arm_timeout_ms: config
+                .operator
+                .arm_timeout_ms
+                .unwrap_or(defaults.arm_timeout_ms),
+            start_timeout_ms: config
+                .operator
+                .start_timeout_ms
+                .unwrap_or(defaults.start_timeout_ms),
+            reset_timeout_ms: config
+                .operator
+                .reset_timeout_ms
+                .unwrap_or(defaults.reset_timeout_ms),
         };
         // Load emulator settings from config
         let emulator_settings = if let Ok(settings) = config.settings.get_settings() {

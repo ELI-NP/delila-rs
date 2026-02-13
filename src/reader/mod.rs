@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tmq::{publish, AsZmqSocket};
 use tmq::Context;
+use tmq::{publish, AsZmqSocket};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
@@ -672,9 +672,7 @@ impl Reader {
             }
 
             // --- Connection management: periodic retry when disconnected ---
-            if connection.is_none()
-                && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN
-            {
+            if connection.is_none() && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN {
                 last_connect_attempt = Instant::now();
                 connection = try_connect_raw(&config.url, include_n_events);
             }
@@ -826,7 +824,10 @@ impl Reader {
                     continue;
                 }
 
-                match conn.endpoint.read_data(config.read_timeout_ms, &mut read_buffer) {
+                match conn
+                    .endpoint
+                    .read_data(config.read_timeout_ms, &mut read_buffer)
+                {
                     Ok(Some(raw)) => {
                         metrics
                             .bytes_read
@@ -928,9 +929,7 @@ impl Reader {
             }
 
             // --- Connection management: periodic retry when disconnected ---
-            if connection.is_none()
-                && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN
-            {
+            if connection.is_none() && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN {
                 last_connect_attempt = Instant::now();
                 connection = try_connect_opendpp(&config.url);
             }
@@ -1084,7 +1083,10 @@ impl Reader {
                     continue;
                 }
 
-                match conn.endpoint.read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer) {
+                match conn
+                    .endpoint
+                    .read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer)
+                {
                     Ok(Some(event)) => {
                         metrics
                             .bytes_read

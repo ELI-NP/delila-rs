@@ -214,7 +214,13 @@ impl OnlineEventBuilder {
             let handle = std::thread::Builder::new()
                 .name(format!("eb-worker-{}", i))
                 .spawn(move || {
-                    worker_thread(chunk_rx, writer_tx, &trigger_config, events_built, next_event_id);
+                    worker_thread(
+                        chunk_rx,
+                        writer_tx,
+                        &trigger_config,
+                        events_built,
+                        next_event_id,
+                    );
                 })?;
             worker_handles.push(handle);
         }
@@ -228,19 +234,20 @@ impl OnlineEventBuilder {
         let sorter_chunks_processed = chunks_processed.clone();
         let sorter_time_calib = time_calibration;
 
-        let sorter_handle = std::thread::Builder::new()
-            .name("eb-sorter".into())
-            .spawn(move || {
-                sorter_thread(
-                    hit_rx,
-                    chunk_tx,
-                    safe_horizon_ns,
-                    sorter_threshold,
-                    sorter_timeout,
-                    sorter_chunks_processed,
-                    sorter_time_calib,
-                );
-            })?;
+        let sorter_handle =
+            std::thread::Builder::new()
+                .name("eb-sorter".into())
+                .spawn(move || {
+                    sorter_thread(
+                        hit_rx,
+                        chunk_tx,
+                        safe_horizon_ns,
+                        sorter_threshold,
+                        sorter_timeout,
+                        sorter_chunks_processed,
+                        sorter_time_calib,
+                    );
+                })?;
 
         // --- Receiver task (tokio) ---
         let recv_hits = received_hits.clone();
@@ -386,11 +393,8 @@ async fn receiver_task(
                             received_hits.fetch_add(n, Ordering::Relaxed);
 
                             // Convert EventData → Hit
-                            let hits: Vec<Hit> = batch
-                                .events
-                                .iter()
-                                .map(Hit::from_event_data)
-                                .collect();
+                            let hits: Vec<Hit> =
+                                batch.events.iter().map(Hit::from_event_data).collect();
 
                             if hit_tx.send(SorterInput::Hits(hits)).is_err() {
                                 dropped_batches.fetch_add(1, Ordering::Relaxed);
@@ -563,7 +567,7 @@ fn writer_thread(
     use super::root_io::write_events_to_root;
 
     let run_id = 9999; // TODO: get from config/command
-    // Pre-allocate with +10% margin; clear() preserves capacity for reuse
+                       // Pre-allocate with +10% margin; clear() preserves capacity for reuse
     let mut buffer: Vec<BuiltEvent> = Vec::with_capacity(events_per_file + events_per_file / 10);
 
     while let Ok(batch) = writer_rx.recv() {
@@ -573,10 +577,7 @@ fn writer_thread(
             buffer.sort_unstable_by(|a, b| a.trigger_time.total_cmp(&b.trigger_time));
 
             let idx = file_index.fetch_add(1, Ordering::Relaxed);
-            let file_path = output_dir.join(format!(
-                "eb_run{:04}_{:04}_events.root",
-                run_id, idx
-            ));
+            let file_path = output_dir.join(format!("eb_run{:04}_{:04}_events.root", run_id, idx));
 
             match write_events_to_root(&file_path, "EventTree", &buffer) {
                 Ok(()) => {
@@ -600,10 +601,7 @@ fn writer_thread(
         buffer.sort_unstable_by(|a, b| a.trigger_time.total_cmp(&b.trigger_time));
 
         let idx = file_index.fetch_add(1, Ordering::Relaxed);
-        let file_path = output_dir.join(format!(
-            "eb_run{:04}_{:04}_events.root",
-            run_id, idx
-        ));
+        let file_path = output_dir.join(format!("eb_run{:04}_{:04}_events.root", run_id, idx));
 
         match write_events_to_root(&file_path, "EventTree", &buffer) {
             Ok(()) => {
@@ -634,7 +632,10 @@ fn writer_thread(
     while let Ok(batch) = writer_rx.recv() {
         total += batch.len() as u64;
     }
-    info!(events_received = total, "Writer thread finished (ROOT disabled, no files written)");
+    info!(
+        events_received = total,
+        "Writer thread finished (ROOT disabled, no files written)"
+    );
 }
 
 // ===========================================================================
