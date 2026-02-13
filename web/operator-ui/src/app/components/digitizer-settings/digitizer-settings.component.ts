@@ -120,7 +120,7 @@ import {
                   <div class="form-grid">
                     <mat-form-field appearance="outline">
                       <mat-label>Start Source</mat-label>
-                      <mat-select [(value)]="config.board.start_source">
+                      <mat-select panelClass="fit-content-panel" [(value)]="config.board.start_source">
                         @if (config.firmware === 'PSD2') {
                           <mat-option value="EncodedClkIn">EncodedClkIn</mat-option>
                           <mat-option value="SINlevel">SINlevel</mat-option>
@@ -139,7 +139,7 @@ import {
                     @if (config.firmware === 'PSD2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Clock Source</mat-label>
-                        <mat-select [(value)]="config.board.extra!['clocksource']">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['clocksource']">
                           <mat-option value="Internal">Internal</mat-option>
                           <mat-option value="FPClkIn">FPClkIn</mat-option>
                         </mat-select>
@@ -147,7 +147,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Output Clock</mat-label>
-                        <mat-select [(value)]="config.board.extra!['enclockoutfp']">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['enclockoutfp']">
                           <mat-option value="True">Enabled</mat-option>
                           <mat-option value="False">Disabled</mat-option>
                         </mat-select>
@@ -155,7 +155,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>SyncOut Signal</mat-label>
-                        <mat-select [(value)]="config.board.extra!['syncoutmode']">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['syncoutmode']">
                           <mat-option value="Disabled">Disabled</mat-option>
                           <mat-option value="SyncIn">SyncIn</mat-option>
                           <mat-option value="TestPulse">TestPulse</mat-option>
@@ -172,7 +172,7 @@ import {
                     } @else {
                       <mat-form-field appearance="outline">
                         <mat-label>Ext Clock</mat-label>
-                        <mat-select [(value)]="config.board.ext_clock">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.ext_clock">
                           <mat-option value="FALSE">Disabled</mat-option>
                           <mat-option value="TRUE">Enabled</mat-option>
                         </mat-select>
@@ -191,7 +191,7 @@ import {
                     @if (config.firmware === 'PSD2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Global Trigger Source</mat-label>
-                        <mat-select [(value)]="config.board.global_trigger_source">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.global_trigger_source">
                           <mat-option value="TrgIn">TrgIn</mat-option>
                           <mat-option value="P0">P0</mat-option>
                           <mat-option value="TestPulse">TestPulse</mat-option>
@@ -210,7 +210,7 @@ import {
 
                     <mat-form-field appearance="outline">
                       <mat-label>FPIO Type</mat-label>
-                      <mat-select [(value)]="config.board.io_level">
+                      <mat-select panelClass="fit-content-panel" [(value)]="config.board.io_level">
                         @if (config.firmware === 'PSD2') {
                           <mat-option value="NIM">NIM</mat-option>
                           <mat-option value="TTL">TTL</mat-option>
@@ -224,7 +224,7 @@ import {
                     @if (config.firmware === 'PSD2') {
                       <mat-form-field appearance="outline">
                         <mat-label>GPO Mode</mat-label>
-                        <mat-select [(value)]="config.board.gpio_mode">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.gpio_mode">
                           @for (opt of gpoModeOptions(config.firmware); track opt) {
                             <mat-option [value]="opt">{{ opt }}</mat-option>
                           }
@@ -235,7 +235,7 @@ import {
                     @if (config.firmware === 'PSD2') {
                       <mat-form-field appearance="outline">
                         <mat-label>TRG OUT Mode</mat-label>
-                        <mat-select [(value)]="config.board.extra!['trgoutmode']">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['trgoutmode']">
                           @for (opt of trgoutModeOptions(); track opt) {
                             <mat-option [value]="opt">{{ opt }}</mat-option>
                           }
@@ -244,7 +244,7 @@ import {
                     } @else {
                       <mat-form-field appearance="outline">
                         <mat-label>TRG OUT / GPO</mat-label>
-                        <mat-select [(value)]="config.board.gpio_mode">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.gpio_mode">
                           @for (opt of outSelectionOptions(); track opt) {
                             <mat-option [value]="opt">{{ opt }}</mat-option>
                           }
@@ -273,7 +273,7 @@ import {
                     <div class="form-grid">
                       <mat-form-field appearance="outline">
                         <mat-label>Veto Source</mat-label>
-                        <mat-select [(value)]="config.board.extra!['boardvetosource']">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['boardvetosource']">
                           <mat-option value="Disabled">Disabled</mat-option>
                           <mat-option value="SIN">SIN</mat-option>
                           <mat-option value="GPIO">GPIO</mat-option>
@@ -285,7 +285,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Veto Polarity</mat-label>
-                        <mat-select [(value)]="config.board.extra!['boardvetopolarity']">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['boardvetopolarity']">
                           <mat-option value="ActiveHigh">ActiveHigh</mat-option>
                           <mat-option value="ActiveLow">ActiveLow</mat-option>
                         </mat-select>
@@ -313,7 +313,7 @@ import {
                     @if (config.firmware !== 'PSD2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Extras</mat-label>
-                        <mat-select [(value)]="config.board.extras_enabled">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.extras_enabled">
                           <mat-option value="TRUE">Enabled</mat-option>
                           <mat-option value="FALSE">Disabled</mat-option>
                         </mat-select>
@@ -432,7 +432,7 @@ import {
                     <div class="form-grid">
                       <mat-form-field appearance="outline">
                         <mat-label>Analog Probe 1</mat-label>
-                        <mat-select [(value)]="config.board.vtrace_probe_0">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.vtrace_probe_0">
                           @for (opt of probeOptions()[0]; track opt.value) {
                             <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
                           }
@@ -441,7 +441,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Analog Probe 2</mat-label>
-                        <mat-select [(value)]="config.board.vtrace_probe_1">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.vtrace_probe_1">
                           @for (opt of probeOptions()[1]; track opt.value) {
                             <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
                           }
@@ -450,7 +450,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Digital Probe 1</mat-label>
-                        <mat-select [(value)]="config.board.vtrace_probe_2">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.vtrace_probe_2">
                           @for (opt of probeOptions()[2]; track opt.value) {
                             <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
                           }
@@ -459,7 +459,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Digital Probe 2</mat-label>
-                        <mat-select [(value)]="config.board.vtrace_probe_3">
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.vtrace_probe_3">
                           @for (opt of probeOptions()[3]; track opt.value) {
                             <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
                           }

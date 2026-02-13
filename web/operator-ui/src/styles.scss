@@ -58,3 +58,8 @@ html, body {
     padding: 0;
   }
 }
+
+// Mat-select dropdown panel: auto-fit to content width
+.fit-content-panel {
+  min-width: fit-content !important;
+}
