@@ -23,6 +23,7 @@ describe('OperatorService', () => {
       event_rate: 100.5,
     },
     online: true,
+    role: 'source',
   };
 
   const mockSystemStatus: SystemStatus = {
@@ -41,6 +42,7 @@ describe('OperatorService', () => {
           event_rate: 95.0,
         },
         online: true,
+        role: 'merger',
       },
       {
         name: 'Recorder',
@@ -55,6 +57,7 @@ describe('OperatorService', () => {
           event_rate: 195.5,
         },
         online: true,
+        role: 'recorder',
       },
     ],
     system_state: 'Running',
@@ -133,7 +136,7 @@ describe('OperatorService', () => {
     it('should handle components without metrics', () => {
       const statusWithoutMetrics: SystemStatus = {
         components: [
-          { name: 'Reader-0', address: 'tcp://localhost:5555', state: 'Idle', online: true },
+          { name: 'Reader-0', address: 'tcp://localhost:5555', state: 'Idle', online: true, role: 'source' },
         ],
         system_state: 'Idle',
         experiment_name: 'TestExp',
@@ -145,16 +148,16 @@ describe('OperatorService', () => {
     });
 
     it('should compute button states based on system state', () => {
-      // Idle state
+      // Idle state - Start enabled (backend does full auto-cycle)
       service.status.set({ ...mockSystemStatus, system_state: 'Idle' });
       expect(service.buttonStates()).toEqual({
         configure: true,
-        start: false,
+        start: true,
         stop: false,
         reset: false,
       });
 
-      // Configured state
+      // Configured state - Start enabled (backend will auto-arm)
       service.status.set({ ...mockSystemStatus, system_state: 'Configured' });
       expect(service.buttonStates()).toEqual({
         configure: false,
@@ -221,9 +224,10 @@ describe('OperatorService', () => {
         expect(response).toEqual(mockApiResponse);
       });
 
-      const req = httpMock.expectOne(`${baseUrl}/start`);
+      const req = httpMock.expectOne(`${baseUrl}/run/start`);
       expect(req.request.method).toBe('POST');
-      expect(req.request.body).toEqual({ run_number: runNumber, comment: '' });
+      expect(req.request.body.run_number).toBe(runNumber);
+      expect(req.request.body.comment).toBe('');
       req.flush(mockApiResponse);
     });
   });

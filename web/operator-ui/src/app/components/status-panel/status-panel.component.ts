@@ -19,7 +19,7 @@ import { ComponentState } from '../../models/types';
       <mat-card-content>
         <!-- Readers group (collapsible) -->
         @if (operator.sourceComponents().length > 0) {
-          <div class="group-header" (click)="readersExpanded.set(!readersExpanded())">
+          <div class="group-header" role="button" tabindex="0" (click)="readersExpanded.set(!readersExpanded())" (keydown.enter)="readersExpanded.set(!readersExpanded())" (keydown.space)="readersExpanded.set(!readersExpanded())">
             <mat-icon class="expand-icon">
               {{ readersExpanded() ? 'expand_more' : 'chevron_right' }}
             </mat-icon>

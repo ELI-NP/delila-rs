@@ -27,6 +27,7 @@ describe('App', () => {
           event_rate: 1500000,
         },
         online: true,
+        role: 'source',
       },
     ],
     system_state: 'Running',

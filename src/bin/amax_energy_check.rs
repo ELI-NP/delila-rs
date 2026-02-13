@@ -168,14 +168,16 @@ fn main() {
         if last_poll.elapsed() >= poll_interval {
             let vals: Vec<String> = poll_regs
                 .iter()
-                .map(|(addr, name)| {
-                    match handle.get_user_register(addr * 4) {
-                        Ok(v) => format!("{}={}", name, v),
-                        Err(_) => format!("{}=ERR", name),
-                    }
+                .map(|(addr, name)| match handle.get_user_register(addr * 4) {
+                    Ok(v) => format!("{}={}", name, v),
+                    Err(_) => format!("{}=ERR", name),
                 })
                 .collect();
-            println!("  [REG @{:.1}s] {}", start.elapsed().as_secs_f64(), vals.join("  "));
+            println!(
+                "  [REG @{:.1}s] {}",
+                start.elapsed().as_secs_f64(),
+                vals.join("  ")
+            );
             last_poll = std::time::Instant::now();
         }
 
@@ -277,7 +279,10 @@ fn main() {
     }
 
     // Summary
-    println!("\n=== Summary ({} events, {:.1}s) ===", total_events, elapsed);
+    println!(
+        "\n=== Summary ({} events, {:.1}s) ===",
+        total_events, elapsed
+    );
     if ratio_count > 0 {
         println!(
             "  Ratio (UW1/Energy): avg={:.3}  min={:.3}  max={:.3}",
