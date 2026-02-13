@@ -602,6 +602,9 @@ pub(super) async fn save_digitizer(
     };
     drop(configs); // Release read lock
 
+    // Ensure digitizer_id matches the TOML source_id (the HashMap key)
+    config.digitizer_id = id;
+
     // Sanitize config to remove firmware-incompatible fields before saving
     config.sanitize_for_firmware();
 
@@ -688,9 +691,16 @@ pub(super) async fn save_all_digitizers(
     let mut errors = Vec::new();
 
     for (id, config) in configs.iter() {
-        let file_path = state.config_dir.join(format!("digitizer_{}.json", id));
-        // Clone and sanitize before saving
+        // Use TOML-specified config_file path if available, otherwise fall back
+        let file_path = state
+            .components
+            .iter()
+            .find(|c| c.is_digitizer && c.source_id == Some(*id))
+            .and_then(|c| c.config_file.clone())
+            .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)));
+        // Clone, enforce ID consistency, and sanitize before saving
         let mut sanitized_config = config.clone();
+        sanitized_config.digitizer_id = *id;
         sanitized_config.sanitize_for_firmware();
         match serde_json::to_string_pretty(&sanitized_config) {
             Ok(json) => {

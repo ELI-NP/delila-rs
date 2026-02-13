@@ -309,9 +309,9 @@ pub struct RouterBuilder {
     components: Vec<ComponentConfig>,
     config: OperatorConfig,
     config_dir: PathBuf,
-    /// Specific config files to load (from TOML source configs).
+    /// (source_id, config_file_path) pairs from TOML source configs.
     /// If empty, falls back to loading all JSON files in config_dir.
-    config_files: Vec<PathBuf>,
+    config_files: Vec<(u32, PathBuf)>,
     run_repo: Option<RunRepository>,
     digitizer_repo: Option<DigitizerConfigRepository>,
     event_builder_repo: Option<EventBuilderRepository>,
@@ -358,8 +358,9 @@ impl RouterBuilder {
     }
 
     /// Set specific config files to load (from TOML source config_file fields).
+    /// Each entry pairs a TOML source_id with the JSON file path.
     /// If not set, falls back to loading all JSON files in config_dir.
-    pub fn config_files(mut self, files: Vec<PathBuf>) -> Self {
+    pub fn config_files(mut self, files: Vec<(u32, PathBuf)>) -> Self {
         self.config_files = files;
         self
     }
@@ -505,21 +506,35 @@ impl RouterBuilder {
     }
 }
 
-/// Load digitizer configurations from specific JSON files (referenced by TOML sources)
-fn load_digitizer_configs_from_files(files: &[PathBuf]) -> HashMap<u32, DigitizerConfig> {
+/// Load digitizer configurations from specific JSON files (referenced by TOML sources).
+///
+/// Each entry pairs a TOML source_id with the JSON file path.
+/// The TOML source_id is used as the HashMap key (single source of truth).
+/// If the JSON's digitizer_id differs, it is overridden to match the TOML id.
+fn load_digitizer_configs_from_files(files: &[(u32, PathBuf)]) -> HashMap<u32, DigitizerConfig> {
     let mut configs = HashMap::new();
 
-    for path in files {
+    for (source_id, path) in files {
         if let Ok(content) = std::fs::read_to_string(path) {
             match serde_json::from_str::<DigitizerConfig>(&content) {
-                Ok(config) => {
+                Ok(mut config) => {
+                    if config.digitizer_id != *source_id {
+                        tracing::warn!(
+                            "Overriding digitizer_id {} -> {} for '{}' (from {})",
+                            config.digitizer_id,
+                            source_id,
+                            config.name,
+                            path.display()
+                        );
+                        config.digitizer_id = *source_id;
+                    }
                     tracing::info!(
                         "Loaded digitizer config '{}' (id={}) from {}",
                         config.name,
-                        config.digitizer_id,
+                        source_id,
                         path.display()
                     );
-                    configs.insert(config.digitizer_id, config);
+                    configs.insert(*source_id, config);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to parse {}: {}", path.display(), e);

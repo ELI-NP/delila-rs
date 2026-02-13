@@ -55,7 +55,7 @@ fn load_config(
     Vec<ComponentConfig>,
     OperatorConfig,
     EmulatorSettings,
-    Vec<PathBuf>,
+    Vec<(u32, PathBuf)>,
 ) {
     // Try to load from config file
     if let Ok(config) = Config::load(config_file) {
@@ -93,13 +93,14 @@ fn load_config(
         } else {
             EmulatorSettings::default()
         };
-        // Extract config_file paths from digitizer sources
-        let config_files: Vec<PathBuf> = config
+        // Extract (source_id, config_file) pairs from digitizer sources
+        // TOML source id is the single source of truth for digitizer identification
+        let config_files: Vec<(u32, PathBuf)> = config
             .network
             .sources
             .iter()
             .filter(|s| s.is_digitizer())
-            .filter_map(|s| s.config_file.as_ref().map(PathBuf::from))
+            .filter_map(|s| s.config_file.as_ref().map(|f| (s.id, PathBuf::from(f))))
             .collect();
         return (components, operator_config, emulator_settings, config_files);
     }

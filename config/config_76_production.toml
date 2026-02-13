@@ -13,10 +13,20 @@ port = 9091
 
 [network]
 
-# --- PSD1 digitizers (VX1730B via CONET2/A3818) ---
+# --- PSD2 digitizer (VX2730 via Ethernet) ---
 
 [[network.sources]]
 id = 0
+name = "PSD2-57"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/psd2_production.json"
+pipeline_order = 1
+
+# --- PSD1 digitizers (VX1730B via CONET2/A3818) ---
+
+[[network.sources]]
+id = 1
 name = "PSD1-SN53"
 type = "psd1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
@@ -24,7 +34,7 @@ config_file = "config/digitizers/psd1_sn53.json"
 pipeline_order = 1
 
 [[network.sources]]
-id = 1
+id = 2
 name = "PSD1-SN56"
 type = "psd1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
@@ -32,7 +42,7 @@ config_file = "config/digitizers/psd1_sn56.json"
 pipeline_order = 1
 
 [[network.sources]]
-id = 2
+id = 3
 name = "PSD1-SN69"
 type = "psd1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=2"
@@ -40,7 +50,7 @@ config_file = "config/digitizers/psd1_sn69.json"
 pipeline_order = 1
 
 [[network.sources]]
-id = 3
+id = 4
 name = "PSD1-SN59"
 type = "psd1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
@@ -48,21 +58,11 @@ config_file = "config/digitizers/psd1_sn59.json"
 pipeline_order = 1
 
 [[network.sources]]
-id = 4
+id = 5
 name = "PSD1-SN54"
 type = "psd1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=1"
 config_file = "config/digitizers/psd1_sn54.json"
-pipeline_order = 1
-
-# --- PSD2 digitizer (VX2730 via Ethernet) ---
-
-[[network.sources]]
-id = 5
-name = "PSD2-57"
-type = "psd2"
-digitizer_url = "dig2://172.18.4.57"
-config_file = "config/digitizers/psd2_production.json"
 pipeline_order = 1
 
 # --- Pipeline components ---
