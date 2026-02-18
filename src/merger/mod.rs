@@ -366,12 +366,20 @@ impl Merger {
             .await
         });
 
-        // Spawn sender task (zero-copy: forwards raw bytes)
+        // Spawn sender task (zero-copy: forwards raw bytes, state-aware)
         let ext_state_for_send = self.ext_state.clone();
-        let sender_handle =
-            tokio::spawn(
-                async move { Self::sender_task(rx, pub_socket, ext_state_for_send).await },
-            );
+        let state_rx_for_send = self.state_rx.clone();
+        let shutdown_for_send = shutdown.resubscribe();
+        let sender_handle = tokio::spawn(async move {
+            Self::sender_task(
+                rx,
+                pub_socket,
+                ext_state_for_send,
+                state_rx_for_send,
+                shutdown_for_send,
+            )
+            .await
+        });
 
         // Wait for shutdown signal
         let _ = shutdown.recv().await;
@@ -485,23 +493,70 @@ impl Merger {
     }
 
     /// Sender task: channel → PUB (zero-copy: direct byte forwarding)
+    ///
+    /// State-aware: only forwards data when Running.
+    /// When not Running, receives from channel but discards (drains stale data).
+    /// On transition to Running, explicitly drains any remaining stale data.
     async fn sender_task(
         mut rx: mpsc::UnboundedReceiver<Bytes>,
         mut socket: publish::Publish,
         ext_state: Arc<MergerExtState>,
+        mut state_rx: watch::Receiver<ComponentState>,
+        mut shutdown: tokio::sync::broadcast::Receiver<()>,
     ) {
-        while let Some(raw_bytes) = rx.recv().await {
-            // Zero-copy: directly send raw bytes to ZMQ
-            let bytes_slice: &[u8] = raw_bytes.as_ref();
-            let msg: tmq::Multipart = vec![tmq::Message::from(bytes_slice)].into();
-            match socket.send(msg).await {
-                Ok(()) => {
-                    ext_state.atomic_stats.record_sent();
-                    trace!("Sender forwarded message");
+        loop {
+            let is_running = *state_rx.borrow() == ComponentState::Running;
+
+            tokio::select! {
+                biased;
+
+                _ = shutdown.recv() => {
+                    info!("Sender task shutting down");
+                    break;
                 }
-                Err(e) => {
-                    ext_state.atomic_stats.record_drop();
-                    warn!(error = %e, "Failed to send message (data dropped)");
+
+                _ = state_rx.changed() => {
+                    let current = *state_rx.borrow();
+                    info!(state = %current, "Sender state changed");
+                    // On transition to Running, drain any stale data from channel
+                    if current == ComponentState::Running {
+                        let mut drained = 0u64;
+                        while rx.try_recv().is_ok() {
+                            drained += 1;
+                        }
+                        if drained > 0 {
+                            info!(drained, "Drained stale data from channel on start");
+                        }
+                    }
+                    continue;
+                }
+
+                data = rx.recv() => {
+                    match data {
+                        Some(raw_bytes) => {
+                            if !is_running {
+                                continue; // discard stale data
+                            }
+                            // Zero-copy: directly send raw bytes to ZMQ
+                            let bytes_slice: &[u8] = raw_bytes.as_ref();
+                            let msg: tmq::Multipart =
+                                vec![tmq::Message::from(bytes_slice)].into();
+                            match socket.send(msg).await {
+                                Ok(()) => {
+                                    ext_state.atomic_stats.record_sent();
+                                    trace!("Sender forwarded message");
+                                }
+                                Err(e) => {
+                                    ext_state.atomic_stats.record_drop();
+                                    warn!(error = %e, "Failed to send message");
+                                }
+                            }
+                        }
+                        None => {
+                            info!("Channel closed, sender exiting");
+                            break;
+                        }
+                    }
                 }
             }
         }

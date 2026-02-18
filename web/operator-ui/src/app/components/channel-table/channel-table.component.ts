@@ -25,6 +25,8 @@ export interface ChannelParamDef {
   min?: number;
   /** Max value for number type */
   max?: number;
+  /** Step increment for number type (from DevTree). Used for on-blur snapping. */
+  step?: number;
   /** If true, parameter can be changed while DAQ is Running */
   setInRun?: boolean;
 }
@@ -99,8 +101,10 @@ export interface ChannelValueChange {
                       [value]="getDefault(param.key)"
                       [min]="param.min"
                       [max]="param.max"
+                      [step]="param.step ?? 'any'"
                       [disabled]="isDisabled(param.key)"
                       (change)="onDefaultInput(param.key, $event)"
+                      (blur)="snapValue($event, param)"
                     />
                   }
                   @case ('enum') {
@@ -141,8 +145,10 @@ export interface ChannelValueChange {
                         [value]="getChannel(ch, param.key)"
                         [min]="param.min"
                         [max]="param.max"
+                        [step]="param.step ?? 'any'"
                         [disabled]="isDisabled(param.key)"
                         (change)="onChannelInput(ch, param.key, $event)"
+                        (blur)="snapValue($event, param)"
                       />
                     }
                     @case ('enum') {
@@ -400,6 +406,20 @@ export class ChannelTableComponent {
     const input = event.target as HTMLInputElement;
     const value = input.value === '' ? undefined : Number(input.value);
     this.channelChange.emit({ channel: ch, key, value });
+  }
+
+  /** Snap a number input to the nearest valid step on blur (CoMPASS-style round-to-nearest) */
+  snapValue(event: Event, param: ChannelParamDef): void {
+    if (!param.step || param.min == null) return;
+    const el = event.target as HTMLInputElement;
+    if (el.value === '') return;
+    const value = Number(el.value);
+    if (isNaN(value)) return;
+    const snapped = Math.round((value - param.min) / param.step) * param.step + param.min;
+    const clamped = Math.min(Math.max(snapped, param.min), param.max ?? Infinity);
+    if (clamped !== value) {
+      el.value = String(clamped);
+    }
   }
 
   /** Handle select change in a channel column */

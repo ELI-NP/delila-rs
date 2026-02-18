@@ -2,6 +2,7 @@
  * Shared channel parameter definitions for digitizer settings.
  * Used by both digitizer-settings component and Tune Up mode.
  * Source: docs/compass_devtree_mapping.md
+ * Step values: docs/devtree_examples/ (DevTree increment field)
  */
 
 import { ChannelParamDef } from '../components/channel-table/channel-table.component';
@@ -16,42 +17,42 @@ import { FirmwareType } from './types';
 const PSD2_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'enabled', label: 'Enable', type: 'boolean', setInRun: true },
   { key: 'polarity', label: 'Polarity', type: 'enum', options: ['Positive', 'Negative'] },
-  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
-  { key: 'vga_gain', label: 'VGA Gain', type: 'number', unit: 'dB', min: 0, max: 29, setInRun: true },
+  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, step: 0.001, setInRun: true },
+  { key: 'vga_gain', label: 'VGA Gain', type: 'number', unit: 'dB', min: 0, max: 29, step: 1, setInRun: true },
   { key: 'baseline_avg', label: 'N Samples Baseline', type: 'enum', options: ['Fixed', 'Low', 'MediumLow', 'MediumHigh', 'High'] },
-  { key: 'fixed_baseline', label: 'Fixed Baseline', type: 'number', unit: 'ADC', min: 0, max: 16383, setInRun: true },
-  { key: 'record_length_ns', label: 'Record Length', type: 'number', unit: 'ns', min: 32, max: 16200 },
-  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 32, max: 8000, setInRun: true },
+  { key: 'fixed_baseline', label: 'Fixed Baseline', type: 'number', unit: 'ADC', min: 0, max: 16383, step: 1, setInRun: true },
+  { key: 'record_length_ns', label: 'Record Length', type: 'number', unit: 'ns', min: 32, max: 16200, step: 8 },
+  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 32, max: 8000, step: 8, setInRun: true },
   { key: 'wave_downsampling', label: 'Wave Downsampling', type: 'enum', options: ['1', '2', '4', '8'] },
 ];
 
 const PSD1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'enabled', label: 'Enable', type: 'boolean', setInRun: true },
   { key: 'polarity', label: 'Polarity', type: 'enum', options: ['POLARITY_POSITIVE', 'POLARITY_NEGATIVE'], setInRun: true },
-  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
+  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, setInRun: true },
   { key: 'input_dynamic', label: 'Input Dynamic', type: 'enum', options: ['INDYN_2_0_VPP', 'INDYN_0_5_VPP'], setInRun: true },
   { key: 'baseline_avg', label: 'N Samples Baseline', type: 'enum', options: ['BLINE_NSMEAN_FIXED', 'BLINE_NSMEAN_16', 'BLINE_NSMEAN_64', 'BLINE_NSMEAN_256', 'BLINE_NSMEAN_1024'] },
-  { key: 'fixed_baseline', label: 'Fixed Baseline', type: 'number', min: 0, max: 16383, setInRun: true },
-  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 80, max: 4032 },
+  { key: 'fixed_baseline', label: 'Fixed Baseline', type: 'number', min: 0, max: 16383, step: 1, setInRun: true },
+  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 80, max: 4032, step: 8 },
 ];
 
 const PHA1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'enabled', label: 'Enable', type: 'boolean', setInRun: true },
   { key: 'polarity', label: 'Polarity', type: 'enum', options: ['POLARITY_POSITIVE', 'POLARITY_NEGATIVE'], setInRun: true },
-  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
+  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, setInRun: true },
   { key: 'coarse_gain', label: 'Coarse Gain', type: 'enum', options: ['COARSE_GAIN_X1', 'COARSE_GAIN_X4'], setInRun: true },
   { key: 'baseline_avg', label: 'N Samples Baseline', type: 'enum', options: ['BLINE_NSMEAN_FIXED', 'BLINE_NSMEAN_16', 'BLINE_NSMEAN_64', 'BLINE_NSMEAN_256', 'BLINE_NSMEAN_1024', 'BLINE_NSMEAN_4096', 'BLINE_NSMEAN_16384'] },
-  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 128, max: 4000 },
+  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 128, max: 4000, step: 8 },
 ];
 
 // --- Trigger -----------------------------------------------------------------
 
 const PSD2_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'discriminator_mode', label: 'Discriminator', type: 'enum', options: ['LeadingEdge', 'CFD'] },
-  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'ADC', min: 1, max: 8191, setInRun: true },
-  { key: 'cfd_delay_ns', label: 'CFD Delay', type: 'number', unit: 'ns', min: 2, max: 2040 },
+  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'ADC', min: 1, max: 8191, step: 1, setInRun: true },
+  { key: 'cfd_delay_ns', label: 'CFD Delay', type: 'number', unit: 'ns', min: 2, max: 2040, step: 2 },
   { key: 'cfd_fraction', label: 'CFD Fraction', type: 'enum', options: ['25', '50', '75', '100'] },
-  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 8, max: 8000 },
+  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 8, max: 8000, step: 8 },
   { key: 'smoothing_factor', label: 'Smoothing Factor', type: 'enum', options: ['1', '2', '4', '8', '16'], setInRun: true },
   { key: 'time_filter_smoothing', label: 'Time Filter Smooth', type: 'enum', options: ['Enabled', 'Disabled'], setInRun: true },
   { key: 'event_trigger_source', label: 'Event Trigger', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'ChSelfTrigger', 'SwTrg', 'TRGIN', 'GlobalTriggerSource', 'LVDS', 'ITLA', 'ITLB'], setInRun: true },
@@ -60,11 +61,11 @@ const PSD2_TRIGGER_PARAMS: ChannelParamDef[] = [
 
 const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'discriminator_mode', label: 'Discriminator', type: 'enum', options: ['DISCR_MODE_LED', 'DISCR_MODE_CFD'], setInRun: true },
-  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, setInRun: true },
-  { key: 'cfd_delay_ns', label: 'CFD Delay', type: 'number', unit: 'ns', min: 0, max: 1020, setInRun: true },
+  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, step: 1, setInRun: true },
+  { key: 'cfd_delay_ns', label: 'CFD Delay', type: 'number', unit: 'ns', min: 0, max: 1020, step: 2, setInRun: true },
   { key: 'cfd_fraction', label: 'CFD Fraction', type: 'enum', options: ['CFD_FRACTLIST_25', 'CFD_FRACTLIST_50', 'CFD_FRACTLIST_75', 'CFD_FRACTLIST_100'], setInRun: true },
   { key: 'input_smoothing', label: 'Input Smoothing', type: 'enum', options: ['CFD_SMOOTH_EXP_1', 'CFD_SMOOTH_EXP_2', 'CFD_SMOOTH_EXP_4', 'CFD_SMOOTH_EXP_8', 'CFD_SMOOTH_EXP_16'] },
-  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 0, max: 1048560, setInRun: true },
+  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 0, max: 1048560, step: 8, setInRun: true },
   { key: 'trigger_latency', label: 'Trigger Latency', type: 'enum', options: ['TRG_LATENCY_MODE_NONE', 'TRG_LATENCY_MODE_COUPLES', 'TRG_LATENCY_MODE_ONETOALL'], setInRun: true },
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -72,10 +73,10 @@ const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
 ];
 
 const PHA1_TRIGGER_PARAMS: ChannelParamDef[] = [
-  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, setInRun: true },
-  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368, setInRun: true },
+  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, step: 1, setInRun: true },
+  { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368, step: 8, setInRun: true },
   { key: 'fast_discr_smoothing', label: 'Fast Discr Smooth', type: 'enum', options: ['RCCR2_SMTH_1', 'RCCR2_SMTH_2', 'RCCR2_SMTH_4', 'RCCR2_SMTH_8', 'RCCR2_SMTH_16', 'RCCR2_SMTH_32', 'RCCR2_SMTH_64', 'RCCR2_SMTH_128'] },
-  { key: 'input_rise_time_ns', label: 'Input Rise Time', type: 'number', unit: 'ns', min: 32, max: 4080 },
+  { key: 'input_rise_time_ns', label: 'Input Rise Time', type: 'number', unit: 'ns', min: 16, max: 2040, step: 8 },
   { key: 'trigger_latency', label: 'Trigger Latency', type: 'enum', options: ['TRG_LATENCY_MODE_NONE', 'TRG_LATENCY_MODE_COUPLES', 'TRG_LATENCY_MODE_ONETOALL'], setInRun: true },
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -86,30 +87,30 @@ const PHA1_TRIGGER_PARAMS: ChannelParamDef[] = [
 
 const PSD2_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'energy_coarse_gain', label: 'Energy Coarse Gain', type: 'enum', options: ['x1', 'x4', 'x16', 'x64', 'x256'] },
-  { key: 'gate_long_ns', label: 'Gate Long', type: 'number', unit: 'ns', min: 2, max: 8000 },
-  { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'ns', min: 2, max: 8000 },
-  { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'ns', min: 16, max: 2000 },
-  { key: 'charge_pedestal', label: 'Charge Pedestal', type: 'number', unit: 'count', min: 0, max: 1000 },
-  { key: 'short_charge_pedestal', label: 'Short Charge Ped.', type: 'number', unit: 'count', min: 0, max: 1000 },
+  { key: 'gate_long_ns', label: 'Gate Long', type: 'number', unit: 'ns', min: 2, max: 8000, step: 2 },
+  { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'ns', min: 2, max: 8000, step: 2 },
+  { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'ns', min: 16, max: 2000, step: 2 },
+  { key: 'charge_pedestal', label: 'Charge Pedestal', type: 'number', unit: 'count', min: 0, max: 1000, step: 1 },
+  { key: 'short_charge_pedestal', label: 'Short Charge Ped.', type: 'number', unit: 'count', min: 0, max: 1000, step: 1 },
   { key: 'charge_smoothing', label: 'Charge Smoothing', type: 'enum', options: ['Enabled', 'Disabled'], setInRun: true },
 ];
 
 const PSD1_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'energy_coarse_gain', label: 'Energy Coarse Gain', type: 'enum', options: ['CHARGESENS_2.5_FC_LSB_VPP', 'CHARGESENS_10_FC_LSB_VPP', 'CHARGESENS_40_FC_LSB_VPP', 'CHARGESENS_160_FC_LSB_VPP', 'CHARGESENS_640_FC_LSB_VPP', 'CHARGESENS_2560_FC_LSB_VPP'], setInRun: true },
-  { key: 'gate_long_ns', label: 'Gate Long', type: 'number', unit: 'ns', min: 8, max: 65532, setInRun: true },
-  { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'ns', min: 4, max: 4092, setInRun: true },
-  { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'ns', min: 0, max: 1020 },
+  { key: 'gate_long_ns', label: 'Gate Long', type: 'number', unit: 'ns', min: 8, max: 65532, step: 2, setInRun: true },
+  { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'ns', min: 4, max: 4092, step: 2, setInRun: true },
+  { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'ns', min: 0, max: 1020, step: 2 },
   { key: 'charge_pedestal_en', label: 'Charge Pedestal', type: 'enum', options: ['FALSE', 'TRUE'] },
 ];
 
 const PHA1_ENERGY_PARAMS: ChannelParamDef[] = [
-  { key: 'trap_rise_time_ns', label: 'Trap Rise Time', type: 'number', unit: 'ns', min: 16, max: 65520 },
-  { key: 'trap_flat_top_ns', label: 'Trap Flat Top', type: 'number', unit: 'ns', min: 16, max: 16368 },
-  { key: 'trap_pole_zero_ns', label: 'Trap Pole Zero', type: 'number', unit: 'ns', min: 16, max: 1048560 },
-  { key: 'peaking_time', label: 'Peaking Time', type: 'number', unit: '%', min: 0, max: 100, setInRun: true },
+  { key: 'trap_rise_time_ns', label: 'Trap Rise Time', type: 'number', unit: 'ns', min: 16, max: 65520, step: 8 },
+  { key: 'trap_flat_top_ns', label: 'Trap Flat Top', type: 'number', unit: 'ns', min: 8, max: 8184, step: 8 },
+  { key: 'trap_pole_zero_ns', label: 'Trap Pole Zero', type: 'number', unit: 'ns', min: 16, max: 1048560, step: 8 },
+  { key: 'peaking_time', label: 'Peaking Time', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, setInRun: true },
   { key: 'peak_nsmean', label: 'N Samples Peak', type: 'enum', options: ['PEAK_NSMEAN_1', 'PEAK_NSMEAN_4', 'PEAK_NSMEAN_16', 'PEAK_NSMEAN_64'] },
-  { key: 'peak_holdoff_ns', label: 'Peak Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368 },
-  { key: 'energy_fine_gain', label: 'Energy Fine Gain', type: 'number', min: 1.0, max: 10.0, setInRun: true },
+  { key: 'peak_holdoff_ns', label: 'Peak Holdoff', type: 'number', unit: 'ns', min: 8, max: 8184, step: 8 },
+  { key: 'energy_fine_gain', label: 'Energy Fine Gain', type: 'number', min: 1.0, max: 10.0, step: 0.01, setInRun: true },
 ];
 
 // --- Coincidence -------------------------------------------------------------
@@ -118,30 +119,30 @@ const PSD2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'enum', options: [], setInRun: true },
   { key: 'coincidence_mask', label: 'Coincidence Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
   { key: 'anti_coincidence_mask', label: 'Anti-coinc Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
-  { key: 'coincidence_window_ns', label: 'Coinc Window', type: 'number', unit: 'ns', min: 0, max: 524280, setInRun: true },
+  { key: 'coincidence_window_ns', label: 'Coinc Window', type: 'number', unit: 'ns', min: 0, max: 524280, step: 8, setInRun: true },
   { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['Disabled', 'BoardVeto', 'ADCOverSaturation', 'ADCUnderSaturation'], setInRun: true },
-  { key: 'ch_veto_width_ns', label: 'Veto Width', type: 'number', unit: 'ns', min: 0, max: 524280, setInRun: true },
+  { key: 'ch_veto_width_ns', label: 'Veto Width', type: 'number', unit: 'ns', min: 0, max: 524280, step: 8, setInRun: true },
   { key: 'event_selector', label: 'Event Selector', type: 'enum', options: ['All', 'PileUp', 'EnergySkim'], setInRun: true },
 ];
 
 const PSD1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
-  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, setInRun: true },
+  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, step: 1, setInRun: true },
   { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
-  { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, setInRun: true },
+  { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, step: 1, setInRun: true },
   { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'coinc_trgsw', label: 'Coinc TrgSW', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['VETO_SRC_DISABLED', 'VETO_SRC_COMMON', 'VETO_SRC_INDIVIDUAL', 'VETO_SRC_SATURATION'], setInRun: true },
   { key: 'pileup_rejection', label: 'Pileup Rejection', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
-  { key: 'pileup_gap', label: 'Pileup Gap', type: 'number', unit: 'LSB', min: 0, max: 4095, setInRun: true },
+  { key: 'pileup_gap', label: 'Pileup Gap', type: 'number', unit: 'LSB', min: 0, max: 4095, step: 1, setInRun: true },
   { key: 'pileup_counting_en', label: 'Pileup Counting', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
 ];
 
 const PHA1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
-  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, setInRun: true },
+  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, step: 1, setInRun: true },
   { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
-  { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, setInRun: true },
+  { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, step: 1, setInRun: true },
   { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'coinc_trgsw', label: 'Coinc TrgSW', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['VETO_SRC_DISABLED', 'VETO_SRC_COMMON', 'VETO_SRC_INDIVIDUAL', 'VETO_SRC_SATURATION'], setInRun: true },
@@ -262,9 +263,9 @@ const PHA1_PROBE_OPTIONS: ProbeOption[][] = [
     { value: 'VPROBE_TRAPCORRECTED', label: 'Trap Corrected' },
     { value: 'VPROBE_BASELINE', label: 'Baseline' },
   ],
-  // probe_2 (Digital Probe 1)
+  // probe_2 (Digital Probe 0) — PHA1: fixed Tn (trigger flag), not configurable
   [
-    { value: 'VPROBE_TRIGGER', label: 'Trigger' },
+    { value: 'VPROBE_TRIGGER', label: 'Trigger (fixed)' },
   ],
   // probe_3 (Digital Probe 2)
   [

@@ -36,6 +36,7 @@ struct Waveform {
     std::vector<uint8_t> digital_probe4;
     uint8_t time_resolution;
     uint16_t trigger_threshold;
+    double ns_per_sample;  // nanoseconds per waveform sample (0 = unknown)
 
     void clear() {
         analog_probe1.clear();
@@ -46,6 +47,7 @@ struct Waveform {
         digital_probe4.clear();
         time_resolution = 0;
         trigger_threshold = 0;
+        ns_per_sample = 0.0;
     }
 
     bool has_data() const {
@@ -113,9 +115,9 @@ double read_f64_le(std::ifstream& f) {
 //   - Event is array of 6 or 7 elements:
 //     Without waveform: [module, channel, energy, energy_short, timestamp_ns, flags]
 //     With waveform:    [module, channel, energy, energy_short, timestamp_ns, flags, waveform]
-//   - Waveform is array of 8 elements:
+//   - Waveform is array of 8 or 9 elements:
 //     [analog_probe1, analog_probe2, digital_probe1, digital_probe2,
-//      digital_probe3, digital_probe4, time_resolution, trigger_threshold]
+//      digital_probe3, digital_probe4, time_resolution, trigger_threshold, (ns_per_sample)]
 class MsgPackParser {
 public:
     MsgPackParser(const std::vector<uint8_t>& data) : data_(data), pos_(0) {}
@@ -200,9 +202,9 @@ private:
     }
 
     bool parse_waveform(Waveform& wf) {
-        // Waveform is array of 8 elements
+        // Waveform is array of 8 or 9 elements (9 if ns_per_sample is present)
         size_t wf_size;
-        if (!read_array_header(wf_size) || wf_size != 8) {
+        if (!read_array_header(wf_size) || (wf_size != 8 && wf_size != 9)) {
             std::cerr << "Warning: Unexpected waveform array size: " << wf_size << std::endl;
             return false;
         }
@@ -233,6 +235,11 @@ private:
         // trigger_threshold (u16)
         if (!read_uint(tmp)) return false;
         wf.trigger_threshold = static_cast<uint16_t>(tmp);
+
+        // ns_per_sample (f64, optional - added in later versions)
+        if (wf_size == 9) {
+            if (!read_float64(wf.ns_per_sample)) return false;
+        }
 
         return true;
     }
@@ -664,16 +671,21 @@ void read_delila(const char* filename, int max_events = -1) {
             TCanvas* c2 = new TCanvas("c2", "Waveform Example", 800, 600);
             c2->Divide(1, 2);
 
+            double ns_step = wf_event->waveform.ns_per_sample;
+            bool use_ns = (ns_step > 0.0);
+            const char* x_title = use_ns ? "Time (ns)" : "Sample";
+
             // Analog probe 1
             c2->cd(1);
             const auto& ap1 = wf_event->waveform.analog_probe1;
             if (!ap1.empty()) {
                 TGraph* g1 = new TGraph();
                 for (size_t i = 0; i < ap1.size(); i++) {
-                    g1->SetPoint(i, i, ap1[i]);
+                    double x = use_ns ? i * ns_step : i;
+                    g1->SetPoint(i, x, ap1[i]);
                 }
-                g1->SetTitle(Form("Analog Probe 1 (Mod%d/Ch%d, E=%d);Sample;ADC",
-                                  wf_event->module, wf_event->channel, wf_event->energy));
+                g1->SetTitle(Form("Analog Probe 1 (Mod%d/Ch%d, E=%d);%s;ADC",
+                                  wf_event->module, wf_event->channel, wf_event->energy, x_title));
                 g1->SetLineColor(kBlue);
                 g1->Draw("AL");
             }
@@ -684,10 +696,11 @@ void read_delila(const char* filename, int max_events = -1) {
             if (!ap2.empty()) {
                 TGraph* g2 = new TGraph();
                 for (size_t i = 0; i < ap2.size(); i++) {
-                    g2->SetPoint(i, i, ap2[i]);
+                    double x = use_ns ? i * ns_step : i;
+                    g2->SetPoint(i, x, ap2[i]);
                 }
-                g2->SetTitle(Form("Analog Probe 2 (Mod%d/Ch%d, E=%d);Sample;ADC",
-                                  wf_event->module, wf_event->channel, wf_event->energy));
+                g2->SetTitle(Form("Analog Probe 2 (Mod%d/Ch%d, E=%d);%s;ADC",
+                                  wf_event->module, wf_event->channel, wf_event->energy, x_title));
                 g2->SetLineColor(kRed);
                 g2->Draw("AL");
             }

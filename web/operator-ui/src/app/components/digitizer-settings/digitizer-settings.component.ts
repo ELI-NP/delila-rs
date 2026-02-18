@@ -91,7 +91,7 @@ import {
           mat-raised-button
           color="primary"
           (click)="applyConfig()"
-          [disabled]="!selectedConfig()"
+          [disabled]="!selectedConfig() || applying()"
           [matTooltip]="isRunning() ? 'Only SetInRun parameters will be applied' : ''"
         >
           <mat-icon>check</mat-icon>
@@ -167,7 +167,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Start Delay (ns)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.extra!['rundelay']" min="0" max="524280" />
+                        <input matInput type="number" [(ngModel)]="config.board.extra!['rundelay']" min="0" max="524280" step="8" (blur)="snapBoardValue($event, 0, 8, 524280)" />
                       </mat-form-field>
                     } @else {
                       <mat-form-field appearance="outline">
@@ -180,7 +180,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Start Delay (ns)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.start_delay" min="0" max="4080" />
+                        <input matInput type="number" [(ngModel)]="config.board.start_delay" min="0" max="4080" step="16" (blur)="snapBoardValue($event, 0, 16, 4080)" />
                       </mat-form-field>
                     }
                   </div>
@@ -293,7 +293,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Veto Width (ns)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.extra!['boardvetowidth']" min="0" />
+                        <input matInput type="number" [(ngModel)]="config.board.extra!['boardvetowidth']" min="0" step="8" (blur)="snapBoardValue($event, 0, 8)" />
                       </mat-form-field>
                     </div>
                   }
@@ -303,7 +303,7 @@ import {
                   <div class="form-grid">
                     <mat-form-field appearance="outline">
                       <mat-label>Record Length (ns)</mat-label>
-                      <input matInput type="number" [(ngModel)]="config.board.record_length" />
+                      <input matInput type="number" [(ngModel)]="config.board.record_length" min="16" step="16" (blur)="snapBoardValue($event, 16, 16)" />
                     </mat-form-field>
 
                     <mat-slide-toggle [(ngModel)]="config.board.waveforms_enabled">
@@ -326,7 +326,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Coincidence Window (ns)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.coinc_trgout" min="0" max="8184" />
+                        <input matInput type="number" [(ngModel)]="config.board.coinc_trgout" min="0" max="8184" step="8" (blur)="snapBoardValue($event, 0, 8, 8184)" />
                       </mat-form-field>
                     }
                   </div>
@@ -422,7 +422,7 @@ import {
 
                       <mat-form-field appearance="outline">
                         <mat-label>Record Length (ns)</mat-label>
-                        <input matInput type="number" [(ngModel)]="config.board.record_length" />
+                        <input matInput type="number" [(ngModel)]="config.board.record_length" min="16" step="16" (blur)="snapBoardValue($event, 16, 16)" />
                       </mat-form-field>
                     </div>
 
@@ -603,6 +603,7 @@ export class DigitizerSettingsComponent {
   readonly selectedId = this.digitizerService.selectedDigitizerId;
   readonly selectedTabIndex = this.digitizerService.selectedTabIndex;
   readonly detecting = signal(false);
+  readonly applying = signal(false);
 
   // Expanded channel data (mutable working copy)
   readonly defaultValues = signal<Record<string, unknown>>({});
@@ -777,7 +778,9 @@ export class DigitizerSettingsComponent {
 
   async applyConfig(): Promise<void> {
     const config = this.selectedConfig();
-    if (!config) return;
+    if (!config || this.applying()) return;
+
+    this.applying.set(true);
 
     // Compress flat channel values back into defaults + overrides
     const { channel_defaults, channel_overrides } =
@@ -814,6 +817,8 @@ export class DigitizerSettingsComponent {
       this.snackBar.open(message, 'Close', {
         duration: 5000,
       });
+    } finally {
+      this.applying.set(false);
     }
   }
 
@@ -840,6 +845,20 @@ export class DigitizerSettingsComponent {
     if (this.selectedId() !== null) {
       this.digitizerService.loadDigitizers();
       this.snackBar.open('Configuration reset', 'OK', { duration: 2000 });
+    }
+  }
+
+  /** Snap a board-level number input to the nearest valid step on blur */
+  snapBoardValue(event: Event, min: number, step: number, max?: number): void {
+    const el = event.target as HTMLInputElement;
+    if (el.value === '') return;
+    const value = Number(el.value);
+    if (isNaN(value)) return;
+    const snapped = Math.round((value - min) / step) * step + min;
+    const clamped = Math.min(Math.max(snapped, min), max ?? Infinity);
+    if (clamped !== value) {
+      el.value = String(clamped);
+      el.dispatchEvent(new Event('input'));
     }
   }
 }

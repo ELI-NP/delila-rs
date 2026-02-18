@@ -21,7 +21,7 @@
 //! - Channel pairing: pair * 2 + channel_flag
 //! - 47-bit timestamp: (extended_time << 31) | trigger_time_tag
 
-use super::common::{DataType, EventData, RawData, Waveform};
+use super::common::{sign_extend_14bit, DataType, EventData, RawData, Waveform};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,7 +100,6 @@ mod constants {
     }
 
     pub mod waveform {
-        pub const ANALOG_SAMPLE_MASK: u32 = 0x3FFF;
         // PHA1: DP at bit 14, Trigger flag (Tn) at bit 15
         pub const DP_SHIFT: u32 = 14;
         pub const TRIGGER_FLAG_SHIFT: u32 = 15;
@@ -589,14 +588,14 @@ impl Pha1Decoder {
             *offset += constants::WORD_SIZE;
 
             // Lower half: sample 2N
-            let s1_analog = (w & constants::waveform::ANALOG_SAMPLE_MASK) as i16;
+            let s1_analog = sign_extend_14bit(w);
             // PHA1: DP (bit 14) and Trigger flag (bit 15)
             let s1_dp = ((w >> constants::waveform::DP_SHIFT) & 1) as u8;
             let s1_tn = ((w >> constants::waveform::TRIGGER_FLAG_SHIFT) & 1) as u8;
 
             // Upper half: sample 2N+1
             let upper = w >> constants::waveform::SECOND_SAMPLE_SHIFT;
-            let s2_analog = (upper & constants::waveform::ANALOG_SAMPLE_MASK) as i16;
+            let s2_analog = sign_extend_14bit(upper);
             let s2_dp = ((upper >> constants::waveform::DP_SHIFT) & 1) as u8;
             let s2_tn = ((upper >> constants::waveform::TRIGGER_FLAG_SHIFT) & 1) as u8;
 
@@ -613,12 +612,12 @@ impl Pha1Decoder {
                 analog_probe1.push(s2_analog);
             }
 
-            // PHA1: digital_probe1 = DP, digital_probe2 = Trigger flag
-            // No duplication (1 value per raw sample)
-            digital_probe1.push(s1_dp);
-            digital_probe1.push(s2_dp);
-            digital_probe2.push(s1_tn);
-            digital_probe2.push(s2_tn);
+            // PHA1: bit14=DP (configurable, vtrace/3), bit15=Tn (fixed trigger, vtrace/2)
+            // Map Tn→digital_probe1(D0), DP→digital_probe2(D1) to match vtrace UI order
+            digital_probe1.push(s1_tn);
+            digital_probe1.push(s2_tn);
+            digital_probe2.push(s1_dp);
+            digital_probe2.push(s2_dp);
         }
 
         Waveform {

@@ -282,8 +282,9 @@ pub(super) async fn tuneup_stop(
 
 /// Apply digitizer configuration during Tune Up
 ///
-/// Performs automatic Stop → Apply → Arm → Start cycle on the target Reader.
-/// Merger and Monitor remain Running (data pauses briefly).
+/// Performs automatic Stop → Apply → Arm → Start cycle on the entire pipeline.
+/// Stops Reader + Merger + Monitor to flush all buffered data, applies new config,
+/// then restarts everything. Monitor's on_start() auto-clears histograms.
 #[utoipa::path(
     post,
     path = "/api/tuneup/apply/{id}",
@@ -312,13 +313,29 @@ pub(super) async fn tuneup_apply(
         );
     }
 
-    // Find the Reader component for this digitizer
-    let reader_comp = state
+    // Serialize Apply calls to prevent concurrent Stop→Apply→Start races
+    let _apply_guard = state.tuneup_apply_lock.lock().await;
+
+    // Build pipeline component lists: Reader + Merger + Monitor (same filter as tuneup_start)
+    let pipeline_components: Vec<_> = state
         .components
         .iter()
-        .find(|c| c.is_digitizer && c.source_id == Some(id));
+        .filter(|c| {
+            if c.is_digitizer {
+                c.source_id == Some(id)
+            } else if c.source_id.is_some() {
+                false // Skip emulators
+            } else {
+                !c.name.contains("Recorder")
+            }
+        })
+        .cloned()
+        .collect();
 
-    let reader_comp = match reader_comp {
+    let reader_comp = match pipeline_components
+        .iter()
+        .find(|c| c.is_digitizer && c.source_id == Some(id))
+    {
         Some(c) => c.clone(),
         None => {
             return (
@@ -351,32 +368,33 @@ pub(super) async fn tuneup_apply(
         }
     }
 
-    // 3. Stop Reader (wait for Configured state)
-    let reader_configs = vec![reader_comp.clone()];
-    let stop_results = state.client.stop_all(&reader_configs).await;
+    // 3. Stop entire pipeline (Reader + Merger + Monitor) to flush all buffers
+    let stop_results = state.client.stop_all(&pipeline_components).await;
     if stop_results.iter().any(|r| !r.success) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error("Failed to stop Reader for apply")),
+            Json(ApiResponse::error(
+                "Failed to stop pipeline components for apply",
+            )),
         );
     }
 
-    // Wait for Reader to reach Configured state
+    // Wait for all pipeline components to reach Configured state
     if let Err(e) = state
         .client
-        .wait_for_state(&reader_configs, ComponentState::Configured, 5000)
+        .wait_for_state(&pipeline_components, ComponentState::Configured, 5000)
         .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::error(format!(
-                "Reader did not reach Configured state: {}",
+                "Pipeline did not reach Configured state: {}",
                 e
             ))),
         );
     }
 
-    // 4. Apply config via ZMQ (all params since Reader is in Configured state)
+    // 4. Apply config via ZMQ (Reader is in Configured state)
     match state
         .client
         .send_command(
@@ -406,38 +424,45 @@ pub(super) async fn tuneup_apply(
         _ => {}
     }
 
-    // 5. Arm Reader
+    // 5. Arm entire pipeline
     if let Err(e) = state
         .client
-        .arm_all_sync(&reader_configs, state.config.arm_timeout_ms)
+        .arm_all_sync(&pipeline_components, state.config.arm_timeout_ms)
         .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::error(format!(
-                "Failed to arm Reader after apply: {}",
+                "Failed to arm pipeline after apply: {}",
                 e
             ))),
         );
     }
 
-    // 6. Start Reader
+    // 6. Start entire pipeline (downstream first: Monitor → Merger → Reader)
+    // Monitor's on_start() auto-clears histograms and drains stale data
     match state
         .client
-        .start_all_sync(&reader_configs, 0, state.config.start_timeout_ms)
+        .start_all_sync(&pipeline_components, 0, state.config.start_timeout_ms)
         .await
     {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(ApiResponse::success(format!(
-                "Configuration applied to digitizer {} (Stop→Apply→Start cycle complete)",
-                id
-            ))),
-        ),
+        Ok(_) => {
+            // Give ReadLoop time to complete hardware arm+start.
+            // ReadLoop processes state changes asynchronously (loop interval ~100ms).
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+            (
+                StatusCode::OK,
+                Json(ApiResponse::success(format!(
+                    "Configuration applied to digitizer {} (full pipeline Stop→Apply→Start)",
+                    id
+                ))),
+            )
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::error(format!(
-                "Failed to restart Reader after apply: {}",
+                "Failed to restart pipeline after apply: {}",
                 e
             ))),
         ),

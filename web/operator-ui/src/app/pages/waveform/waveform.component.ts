@@ -24,7 +24,17 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDividerModule } from '@angular/material/divider';
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
-import { Subject, Subscription, interval, takeUntil, switchMap, forkJoin, of } from 'rxjs';
+import {
+  Subject,
+  Subscription,
+  interval,
+  takeUntil,
+  switchMap,
+  forkJoin,
+  of,
+  map,
+  finalize,
+} from 'rxjs';
 import { HistogramService } from '../../services/histogram.service';
 import { OperatorService } from '../../services/operator.service';
 import { DigitizerService } from '../../services/digitizer.service';
@@ -103,22 +113,22 @@ interface ChannelChart {
 
           <div class="probe-toggles">
             <mat-checkbox [checked]="probeConfig().analog1" (change)="toggleProbe('analog1')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">A1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">A0</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().analog2" (change)="toggleProbe('analog2')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">A2</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">A1</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital1" (change)="toggleProbe('digital1')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">D1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">D0</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital2" (change)="toggleProbe('digital2')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">D2</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">D1</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital3" (change)="toggleProbe('digital3')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">D3</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">D2</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital4" (change)="toggleProbe('digital4')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">D4</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">D3</span>
             </mat-checkbox>
           </div>
 
@@ -218,7 +228,7 @@ interface ChannelChart {
                             <mat-divider></mat-divider>
                             <div class="board-waveform-row">
                               <mat-form-field appearance="outline" class="compact-field">
-                                <mat-label>Analog 1</mat-label>
+                                <mat-label>Analog 0</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_0">
                                   @for (opt of probeOptions()[0]; track opt.value) {
                                     <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
@@ -226,7 +236,7 @@ interface ChannelChart {
                                 </mat-select>
                               </mat-form-field>
                               <mat-form-field appearance="outline" class="compact-field">
-                                <mat-label>Analog 2</mat-label>
+                                <mat-label>Analog 1</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_1">
                                   @for (opt of probeOptions()[1]; track opt.value) {
                                     <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
@@ -236,7 +246,7 @@ interface ChannelChart {
                             </div>
                             <div class="board-waveform-row">
                               <mat-form-field appearance="outline" class="compact-field">
-                                <mat-label>Digital 1</mat-label>
+                                <mat-label>Digital 0</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_2">
                                   @for (opt of probeOptions()[2]; track opt.value) {
                                     <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
@@ -244,7 +254,7 @@ interface ChannelChart {
                                 </mat-select>
                               </mat-form-field>
                               <mat-form-field appearance="outline" class="compact-field">
-                                <mat-label>Digital 2</mat-label>
+                                <mat-label>Digital 1</mat-label>
                                 <mat-select [(value)]="config.board.vtrace_probe_3">
                                   @for (opt of probeOptions()[3]; track opt.value) {
                                     <mat-option [value]="opt.value">{{ opt.label }}</mat-option>
@@ -307,42 +317,42 @@ interface ChannelChart {
               (change)="toggleProbe('analog1')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">Analog 1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">Analog 0</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().analog2"
               (change)="toggleProbe('analog2')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">Analog 2</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">Analog 1</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital1"
               (change)="toggleProbe('digital1')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">Digital 1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">Digital 0</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital2"
               (change)="toggleProbe('digital2')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">Digital 2</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">Digital 1</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital3"
               (change)="toggleProbe('digital3')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">Digital 3</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">Digital 2</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital4"
               (change)="toggleProbe('digital4')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">Digital 4</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">Digital 3</span>
             </mat-checkbox>
           </div>
 
@@ -961,6 +971,8 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     if (!config) return;
 
     this.applyLoading.set(true);
+    this.stopHistogramPolling();
+    this.tuneUpHistogram.set(null);
 
     const { channel_defaults, channel_overrides } = this.digitizerService.compressConfig(
       this.defaultValues(),
@@ -973,27 +985,37 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       channel_overrides,
     };
 
-    this.operatorService.tuneupApply(config.digitizer_id, updatedConfig).subscribe({
-      next: (resp) => {
-        this.applyLoading.set(false);
-        if (resp.success) {
-          this.snackBar.open('Configuration applied', 'OK', { duration: 3000 });
-          this.tuneUpConfig.set(updatedConfig);
-          // Clear histogram for fresh data after apply
-          this.histogramService.clearHistograms().subscribe();
-          this.tuneUpHistogram.set(null);
-          this.histXRange.set('auto');
-        } else {
-          this.snackBar.open('Apply failed: ' + resp.message, 'OK', { duration: 5000 });
-        }
-      },
-      error: (err) => {
-        this.applyLoading.set(false);
-        this.snackBar.open('Apply error: ' + (err.error?.message ?? err.message), 'OK', {
-          duration: 5000,
-        });
-      },
-    });
+    this.operatorService
+      .tuneupApply(config.digitizer_id, updatedConfig)
+      .pipe(
+        switchMap((resp) => {
+          if (resp.success) {
+            this.tuneUpConfig.set(updatedConfig);
+            // Chain clear — wait for server to drain stale data + clear histograms
+            return this.histogramService.clearHistograms().pipe(map(() => resp));
+          }
+          return of(resp);
+        }),
+        finalize(() => {
+          this.applyLoading.set(false);
+          this.startHistogramPolling();
+        })
+      )
+      .subscribe({
+        next: (resp) => {
+          if (resp.success) {
+            this.snackBar.open('Configuration applied', 'OK', { duration: 3000 });
+            this.histXRange.set('auto');
+          } else {
+            this.snackBar.open('Apply failed: ' + resp.message, 'OK', { duration: 5000 });
+          }
+        },
+        error: (err) => {
+          this.snackBar.open('Apply error: ' + (err.error?.message ?? err.message), 'OK', {
+            duration: 5000,
+          });
+        },
+      });
   }
 
   onCategoryChange(category: ChannelCategory | 'all'): void {
@@ -1118,12 +1140,14 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       const series: unknown[] = [];
       const nsPerSample = wf.waveform.ns_per_sample || 0;
       const toX = nsPerSample > 0 ? (i: number) => i * nsPerSample : (i: number) => i;
+      // 14-bit sign-extended values offset to center signed probes (Delta, etc.)
+      const OFFSET_14BIT = 8191;
 
       if (config.analog1 && wf.waveform.analog_probe1.length > 0) {
         series.push({
-          name: 'Analog 1',
+          name: 'Analog 0',
           type: 'line',
-          data: wf.waveform.analog_probe1.map((v, i) => [toX(i), v]),
+          data: wf.waveform.analog_probe1.map((v, i) => [toX(i), v + OFFSET_14BIT]),
           symbol: 'none',
           lineStyle: { width: 1.5, color: this.probeColors.analog1 },
           itemStyle: { color: this.probeColors.analog1 },
@@ -1132,9 +1156,9 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
 
       if (config.analog2 && wf.waveform.analog_probe2.length > 0) {
         series.push({
-          name: 'Analog 2',
+          name: 'Analog 1',
           type: 'line',
-          data: wf.waveform.analog_probe2.map((v, i) => [toX(i), v]),
+          data: wf.waveform.analog_probe2.map((v, i) => [toX(i), v + OFFSET_14BIT]),
           symbol: 'none',
           lineStyle: { width: 1.5, color: this.probeColors.analog2 },
           itemStyle: { color: this.probeColors.analog2 },
@@ -1151,14 +1175,39 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       for (const dp of digitalProbes) {
         if (config[dp.key] && dp.data.length > 0) {
           const colorKey = dp.key as keyof typeof this.probeColors;
+          const baseColor = this.probeColors[colorKey];
+          // Extract HIGH intervals from 0/1 array with minimum visible width
+          const totalX = toX(dp.data.length - 1);
+          const minWidth = totalX * 0.005; // 0.5% of total range
+          const areas: unknown[][] = [];
+          let start: number | null = null;
+          for (let idx = 0; idx < dp.data.length; idx++) {
+            if (dp.data[idx] && start === null) {
+              start = toX(idx);
+            } else if (!dp.data[idx] && start !== null) {
+              const end = toX(idx);
+              const width = end - start;
+              areas.push([{ xAxis: start }, { xAxis: width < minWidth ? start + minWidth : end }]);
+              start = null;
+            }
+          }
+          if (start !== null) {
+            const end = toX(dp.data.length - 1);
+            const width = end - start;
+            areas.push([{ xAxis: start }, { xAxis: width < minWidth ? start + minWidth : end }]);
+          }
+          // Invisible line series with markArea for full-height transparent bands
           series.push({
-            name: `Digital ${dp.index + 1}`,
+            name: `Digital ${dp.index}`,
             type: 'line',
-            data: dp.data.map((v, i) => [toX(i), v * 10000 + dp.index * 1000]),
+            data: [],
             symbol: 'none',
-            step: 'end',
-            lineStyle: { width: 1, color: this.probeColors[colorKey] },
-            itemStyle: { color: this.probeColors[colorKey] },
+            lineStyle: { width: 0 },
+            markArea: {
+              silent: true,
+              itemStyle: { color: baseColor, opacity: 0.12 },
+              data: areas,
+            },
           });
         }
       }

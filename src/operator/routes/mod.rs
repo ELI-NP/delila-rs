@@ -87,6 +87,8 @@ pub struct AppState {
     pub tuneup_digitizer_id: RwLock<Option<u32>>,
     /// Monitor layout state (opaque JSON, persisted to file)
     pub monitor_layout: RwLock<serde_json::Value>,
+    /// Serializes tuneup_apply calls to prevent concurrent Stop→Apply→Start races
+    pub tuneup_apply_lock: tokio::sync::Mutex<()>,
 }
 
 /// Emulator runtime settings (API model)
@@ -396,6 +398,7 @@ impl RouterBuilder {
             tuneup_mode: RwLock::new(false),
             tuneup_digitizer_id: RwLock::new(None),
             monitor_layout: RwLock::new(monitor_layout),
+            tuneup_apply_lock: tokio::sync::Mutex::new(()),
         });
 
         let cors = CorsLayer::new()

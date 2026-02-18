@@ -25,6 +25,10 @@ devtree.json
 # AMax
 TrapezoidalfilterMCA_dpp_tests
 
+# Compiled binaries
+tools/delila2root/delila2root
+__pycache__/
+
 # Test output files
 *.root
 

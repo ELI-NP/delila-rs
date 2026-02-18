@@ -4,6 +4,8 @@
 
 use super::error::CaenError;
 use super::ffi;
+use super::validation::{self, ApplyConfigResult, ParamApplyResult, ParamApplyStatus};
+use std::collections::HashMap;
 use std::ffi::CString;
 
 // C wrapper for variadic CAEN_FELib_ReadData function
@@ -127,7 +129,7 @@ pub struct DeviceInfo {
 }
 
 /// Parameter metadata from DevTree
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParamInfo {
     /// Parameter name
     pub name: String,
@@ -145,6 +147,12 @@ pub struct ParamInfo {
     pub allowed_values: Vec<String>,
     /// Unit of measurement
     pub unit: Option<String>,
+    /// Step increment (e.g., "8", "2", "0.1")
+    pub increment: Option<String>,
+    /// Default value from DevTree
+    pub default_value: Option<String>,
+    /// Unit exponent (e.g., -9 for nanoseconds, 0 for base unit)
+    pub expuom: Option<i32>,
 }
 
 impl CaenHandle {
@@ -296,6 +304,9 @@ impl CaenHandle {
         let min_value = get_attr_value("minvalue");
         let max_value = get_attr_value("maxvalue");
         let unit = get_attr_value("uom").filter(|s| !s.is_empty());
+        let increment = get_attr_value("increment");
+        let default_value = get_attr_value("defaultvalue");
+        let expuom = get_attr_value("expuom").and_then(|s| s.parse::<i32>().ok());
 
         // Extract allowed values for enum types
         let mut allowed_values = Vec::new();
@@ -321,6 +332,9 @@ impl CaenHandle {
             max_value,
             allowed_values,
             unit,
+            increment,
+            default_value,
+            expuom,
         })
     }
 
@@ -742,6 +756,238 @@ impl CaenHandle {
         }
 
         Ok(applied)
+    }
+
+    /// Build a parameter cache from the DevTree.
+    ///
+    /// Fetches the device tree once and parses all parameter metadata
+    /// (min, max, increment, allowed_values, etc.) into a HashMap keyed by
+    /// parameter name. Both board-level (`/par/`) and channel-level
+    /// (`/ch/0/par/`) parameters are collected.
+    ///
+    /// # Returns
+    /// * `Ok(cache)` - HashMap mapping parameter name → ParamInfo
+    /// * `Err(...)` - If DevTree fetch or JSON parse fails
+    pub fn build_param_cache(&self) -> Result<HashMap<String, ParamInfo>, CaenError> {
+        use tracing::{debug, info, warn};
+
+        let tree_json = self.get_device_tree()?;
+        let tree: serde_json::Value = serde_json::from_str(&tree_json).map_err(|e| CaenError {
+            code: -1,
+            name: "JsonParseError".to_string(),
+            description: format!("Failed to parse DevTree JSON: {}", e),
+        })?;
+
+        let mut cache = HashMap::new();
+
+        // Collect board-level parameters from /par/
+        if let Some(par) = tree.get("par").and_then(|v| v.as_object()) {
+            for (name, node) in par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    // Skip non-parameter nodes (those without datatype)
+                    if obj.contains_key("datatype") {
+                        match Self::extract_param_info(name, node) {
+                            Ok(info) => {
+                                debug!(param = %name, "Cached board param");
+                                cache.insert(name.clone(), info);
+                            }
+                            Err(e) => {
+                                warn!(param = %name, error = %e, "Failed to parse board param");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect channel-level parameters from /ch/0/par/
+        // (metadata is identical across channels — just sample ch0)
+        if let Some(ch0_par) = tree
+            .get("ch")
+            .and_then(|ch| ch.get("0"))
+            .and_then(|ch0| ch0.get("par"))
+            .and_then(|v| v.as_object())
+        {
+            for (name, node) in ch0_par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    if obj.contains_key("datatype") && !cache.contains_key(name) {
+                        match Self::extract_param_info(name, node) {
+                            Ok(info) => {
+                                debug!(param = %name, "Cached channel param");
+                                cache.insert(name.clone(), info);
+                            }
+                            Err(e) => {
+                                warn!(param = %name, error = %e, "Failed to parse channel param");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(total = cache.len(), "Parameter cache built from DevTree");
+        Ok(cache)
+    }
+
+    /// Apply digitizer configuration with validation.
+    ///
+    /// Each parameter is validated against DevTree metadata before applying:
+    /// - Numeric values are snapped to the nearest valid step
+    /// - Values are clamped to [min, max]
+    /// - Unknown parameters (not in DevTree) are applied without validation
+    ///
+    /// This replaces `apply_config()` when a param cache is available.
+    pub fn apply_config_validated(
+        &self,
+        config: &crate::config::digitizer::DigitizerConfig,
+        param_cache: &HashMap<String, ParamInfo>,
+    ) -> Result<ApplyConfigResult, CaenError> {
+        let params = config.to_caen_parameters();
+        self.apply_params_validated(&params, param_cache)
+    }
+
+    /// Apply only SetInRun parameters with validation (safe while Running).
+    pub fn apply_config_running_validated(
+        &self,
+        config: &crate::config::digitizer::DigitizerConfig,
+        param_cache: &HashMap<String, ParamInfo>,
+    ) -> Result<ApplyConfigResult, CaenError> {
+        let params = config.to_caen_parameters_set_in_run();
+        self.apply_params_validated(&params, param_cache)
+    }
+
+    /// Internal: validate and apply a list of parameters.
+    fn apply_params_validated(
+        &self,
+        params: &[crate::config::digitizer::CaenParameter],
+        param_cache: &HashMap<String, ParamInfo>,
+    ) -> Result<ApplyConfigResult, CaenError> {
+        use tracing::{debug, info, warn};
+
+        info!("Applying {} parameters with validation", params.len());
+
+        let mut result = ApplyConfigResult {
+            total: params.len(),
+            ..Default::default()
+        };
+
+        for param in params {
+            // Extract parameter name from path (last segment after '/')
+            let param_name = param.path.rsplit('/').next().unwrap_or("");
+
+            match param_cache.get(param_name) {
+                Some(info) => {
+                    // Validate against DevTree metadata
+                    let validated = validation::validate_param(&param.value, info);
+
+                    if validated.adjusted {
+                        info!(
+                            path = %param.path,
+                            original = %param.value,
+                            adjusted = %validated.value,
+                            message = ?validated.message,
+                            "Parameter value adjusted"
+                        );
+                    }
+
+                    match self.set_value(&param.path, &validated.value) {
+                        Ok(()) => {
+                            let status = if validated.adjusted {
+                                result.adjusted += 1;
+                                ParamApplyStatus::Adjusted
+                            } else {
+                                result.ok += 1;
+                                ParamApplyStatus::Ok
+                            };
+                            debug!(path = %param.path, value = %validated.value, "Parameter set");
+                            result.details.push(ParamApplyResult {
+                                path: param.path.clone(),
+                                original_value: param.value.clone(),
+                                applied_value: validated.value,
+                                status,
+                                message: validated.message,
+                            });
+                        }
+                        Err(e) => {
+                            warn!(
+                                path = %param.path,
+                                value = %validated.value,
+                                error = %e,
+                                "Failed to set parameter"
+                            );
+                            result.failed += 1;
+                            result.details.push(ParamApplyResult {
+                                path: param.path.clone(),
+                                original_value: param.value.clone(),
+                                applied_value: validated.value,
+                                status: ParamApplyStatus::Failed,
+                                message: Some(format!("{}", e)),
+                            });
+                        }
+                    }
+                }
+                None => {
+                    // Parameter not in cache — apply without validation
+                    // (e.g., dt_ext_clock on VME, or range-expanded paths)
+                    match self.set_value(&param.path, &param.value) {
+                        Ok(()) => {
+                            debug!(path = %param.path, value = %param.value, "Parameter set (no cache)");
+                            result.ok += 1;
+                            result.details.push(ParamApplyResult {
+                                path: param.path.clone(),
+                                original_value: param.value.clone(),
+                                applied_value: param.value.clone(),
+                                status: ParamApplyStatus::Ok,
+                                message: None,
+                            });
+                        }
+                        Err(e) => {
+                            warn!(
+                                path = %param.path,
+                                value = %param.value,
+                                error = %e,
+                                "Parameter not in DevTree and set_value failed"
+                            );
+                            result.skipped += 1;
+                            result.details.push(ParamApplyResult {
+                                path: param.path.clone(),
+                                original_value: param.value.clone(),
+                                applied_value: param.value.clone(),
+                                status: ParamApplyStatus::Skipped,
+                                message: Some(format!("Not in DevTree, set_value failed: {}", e)),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(
+            total = result.total,
+            ok = result.ok,
+            adjusted = result.adjusted,
+            failed = result.failed,
+            skipped = result.skipped,
+            "Validated configuration applied"
+        );
+
+        if result.adjusted > 0 {
+            let adjusted_params: Vec<_> = result
+                .details
+                .iter()
+                .filter(|d| d.status == ParamApplyStatus::Adjusted)
+                .map(|d| format!("{}: {} → {}", d.path, d.original_value, d.applied_value))
+                .collect();
+            info!("Adjusted parameters: {:?}", adjusted_params);
+        }
+
+        Ok(result)
     }
 }
 
@@ -1173,10 +1419,15 @@ mod tests {
             max_value: Some("100".to_string()),
             allowed_values: vec![],
             unit: Some("%".to_string()),
+            increment: Some("0.1".to_string()),
+            default_value: Some("20".to_string()),
+            expuom: Some(0),
         };
         assert_eq!(info.name, "DCOffset");
         assert!(info.setinrun);
         assert_eq!(info.min_value, Some("0".to_string()));
+        assert_eq!(info.increment, Some("0.1".to_string()));
+        assert_eq!(info.expuom, Some(0));
     }
 
     #[test]
@@ -1190,6 +1441,9 @@ mod tests {
             max_value: None,
             allowed_values: vec!["Positive".to_string(), "Negative".to_string()],
             unit: None,
+            increment: None,
+            default_value: None,
+            expuom: None,
         };
         assert_eq!(info.allowed_values.len(), 2);
         assert!(!info.setinrun);
@@ -1206,21 +1460,28 @@ mod tests {
             max_value: Some("16383".to_string()),
             allowed_values: vec![],
             unit: None,
+            increment: Some("1".to_string()),
+            default_value: Some("100".to_string()),
+            expuom: Some(0),
         };
         let cloned = info.clone();
         assert_eq!(info.name, cloned.name);
         assert_eq!(info.setinrun, cloned.setinrun);
+        assert_eq!(info.increment, cloned.increment);
     }
 
     #[test]
     fn test_extract_param_info_from_json() {
-        // Simulate DevTree parameter node structure
+        // Simulate DevTree parameter node structure (DC offset with all metadata)
         let json_str = r#"{
             "accessmode": { "value": "READ_WRITE" },
             "datatype": { "value": "NUMBER" },
             "setinrun": { "value": "true" },
-            "minvalue": { "value": "0" },
-            "maxvalue": { "value": "100" },
+            "minvalue": { "value": "0.0" },
+            "maxvalue": { "value": "100.0" },
+            "increment": { "value": "0.1" },
+            "defaultvalue": { "value": "20" },
+            "expuom": { "value": "0" },
             "uom": { "value": "%" }
         }"#;
 
@@ -1230,9 +1491,35 @@ mod tests {
         assert_eq!(info.name, "DCOffset");
         assert_eq!(info.datatype, "NUMBER");
         assert!(info.setinrun);
-        assert_eq!(info.min_value, Some("0".to_string()));
-        assert_eq!(info.max_value, Some("100".to_string()));
+        assert_eq!(info.min_value, Some("0.0".to_string()));
+        assert_eq!(info.max_value, Some("100.0".to_string()));
         assert_eq!(info.unit, Some("%".to_string()));
+        assert_eq!(info.increment, Some("0.1".to_string()));
+        assert_eq!(info.default_value, Some("20".to_string()));
+        assert_eq!(info.expuom, Some(0));
+    }
+
+    #[test]
+    fn test_extract_param_info_time_param() {
+        // Simulate DevTree node for a time parameter (ch_trg_holdoff from PSD1)
+        let json_str = r#"{
+            "accessmode": { "value": "READ_WRITE" },
+            "datatype": { "value": "NUMBER" },
+            "setinrun": { "value": "true" },
+            "minvalue": { "value": "0" },
+            "maxvalue": { "value": "524280" },
+            "increment": { "value": "8" },
+            "defaultvalue": { "value": "1024" },
+            "expuom": { "value": "-9" },
+            "uom": { "value": "s" }
+        }"#;
+
+        let node: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let info = CaenHandle::extract_param_info("ch_trg_holdoff", &node).unwrap();
+
+        assert_eq!(info.increment, Some("8".to_string()));
+        assert_eq!(info.expuom, Some(-9));
+        assert_eq!(info.default_value, Some("1024".to_string()));
     }
 
     #[test]
@@ -1258,5 +1545,136 @@ mod tests {
         assert_eq!(info.allowed_values.len(), 2);
         assert!(info.allowed_values.contains(&"Positive".to_string()));
         assert!(info.allowed_values.contains(&"Negative".to_string()));
+    }
+
+    /// Test build_param_cache logic by parsing a real DevTree JSON file
+    #[test]
+    fn test_build_param_cache_from_devtree_json() {
+        // Load real DevTree JSON from docs/devtree_examples/
+        let json_str =
+            std::fs::read_to_string("docs/devtree_examples/dt5730b_psd1_sn990.json").unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let mut cache = HashMap::new();
+
+        // Collect board-level parameters from /par/
+        if let Some(par) = tree.get("par").and_then(|v| v.as_object()) {
+            for (name, node) in par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    if obj.contains_key("datatype") {
+                        if let Ok(info) = CaenHandle::extract_param_info(name, node) {
+                            cache.insert(name.clone(), info);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect channel-level parameters from /ch/0/par/
+        if let Some(ch0_par) = tree
+            .get("ch")
+            .and_then(|ch| ch.get("0"))
+            .and_then(|ch0| ch0.get("par"))
+            .and_then(|v| v.as_object())
+        {
+            for (name, node) in ch0_par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    if obj.contains_key("datatype") && !cache.contains_key(name) {
+                        if let Ok(info) = CaenHandle::extract_param_info(name, node) {
+                            cache.insert(name.clone(), info);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Verify we got a reasonable number of params
+        assert!(cache.len() > 20, "Expected >20 params, got {}", cache.len());
+
+        // Verify specific board-level params exist
+        assert!(cache.contains_key("startmode"), "Missing startmode");
+        assert!(
+            cache.contains_key("dt_ext_clock"),
+            "Missing dt_ext_clock (Desktop)"
+        );
+
+        // Verify specific channel-level params exist with correct metadata
+        let pretrg = cache.get("ch_pretrg").expect("Missing ch_pretrg");
+        assert_eq!(pretrg.datatype, "NUMBER");
+        assert_eq!(pretrg.increment.as_deref(), Some("8"));
+        assert_eq!(pretrg.min_value.as_deref(), Some("40"));
+        assert_eq!(pretrg.expuom, Some(-9));
+
+        let gate = cache.get("ch_gate").expect("Missing ch_gate");
+        assert_eq!(gate.increment.as_deref(), Some("2"));
+        assert_eq!(gate.min_value.as_deref(), Some("4"));
+
+        let holdoff = cache.get("ch_trg_holdoff").expect("Missing ch_trg_holdoff");
+        assert_eq!(holdoff.increment.as_deref(), Some("8"));
+
+        let dc_offset = cache.get("ch_dcoffset").expect("Missing ch_dcoffset");
+        assert_eq!(dc_offset.increment.as_deref(), Some("0.1"));
+        assert_eq!(dc_offset.min_value.as_deref(), Some("0.0"));
+        assert_eq!(dc_offset.max_value.as_deref(), Some("100.0"));
+    }
+
+    /// Test that param_cache correctly validates real PSD1 parameters
+    #[test]
+    fn test_param_cache_validation_integration() {
+        let json_str =
+            std::fs::read_to_string("docs/devtree_examples/dt5730b_psd1_sn990.json").unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let mut cache = HashMap::new();
+
+        // Build cache (same logic as build_param_cache)
+        if let Some(ch0_par) = tree
+            .get("ch")
+            .and_then(|ch| ch.get("0"))
+            .and_then(|ch0| ch0.get("par"))
+            .and_then(|v| v.as_object())
+        {
+            for (name, node) in ch0_par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    if obj.contains_key("datatype") {
+                        if let Ok(info) = CaenHandle::extract_param_info(name, node) {
+                            cache.insert(name.clone(), info);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate ch_pretrg: 101 → 104 (step=8, min=40)
+        let pretrg = cache.get("ch_pretrg").unwrap();
+        let result = validation::validate_param("101", pretrg);
+        assert!(result.adjusted);
+        assert_eq!(result.value, "104");
+
+        // Validate ch_gate: 301 → 302 (step=2, min=4)
+        let gate = cache.get("ch_gate").unwrap();
+        let result = validation::validate_param("301", gate);
+        assert!(result.adjusted);
+        assert_eq!(result.value, "302");
+
+        // Validate ch_dcoffset: 50.0 → 50.0 (step=0.1, exact)
+        let dc = cache.get("ch_dcoffset").unwrap();
+        let result = validation::validate_param("50.0", dc);
+        assert!(!result.adjusted);
+        assert_eq!(result.value, "50.0");
+
+        // Validate ch_dcoffset: 50.35 → 50.4 (step=0.1)
+        let result = validation::validate_param("50.35", dc);
+        assert!(result.adjusted);
+        assert_eq!(result.value, "50.4");
     }
 }

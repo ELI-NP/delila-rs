@@ -5,7 +5,7 @@
 
 [operator]
 experiment_name = "PHA1_Test"
-port = 8080
+port = 9090
 
 [network]
 # Real PHA1 digitizer (DT5730 via USB)
@@ -25,13 +25,6 @@ pipeline_order = 1
 publish = "tcp://*:5557"
 command = "tcp://*:5570"
 pipeline_order = 2
-
-# Recorder
-[network.recorder]
-subscribe = "tcp://localhost:5557"
-command = "tcp://*:5580"
-output_dir = "./data"
-pipeline_order = 3
 
 # Monitor
 [network.monitor]

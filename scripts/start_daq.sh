@@ -200,9 +200,9 @@ is_remote() {
 # Extract source IDs from config
 SOURCE_IDS=$(grep -E "^id = " "$CONFIG_FILE" | head -n $(grep -c "\[\[network.sources\]\]" "$CONFIG_FILE") | awk '{print $3}')
 
-# Extract operator port from config (default: 8080)
+# Extract operator port from config (default: 9090)
 OPERATOR_PORT=$(awk '/^\[operator\]/{in_op=1} in_op && /^port *=/{print $3; exit}' "$CONFIG_FILE")
-OPERATOR_PORT=${OPERATOR_PORT:-8080}
+OPERATOR_PORT=${OPERATOR_PORT:-9090}
 
 echo ""
 echo -e "${GREEN}Starting components...${NC}"

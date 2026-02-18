@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-12
+**Updated:** 2026-02-18
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -14,8 +14,10 @@ Claudeセッション開始時に必ず読み込まれます。
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
+| **2** | [31_parameter_validation.md](31_parameter_validation.md) | **✅ 完了** | パラメータバリデーション: DevTree-based snap_to_step + UI step属性 (Phase 1-3完了, Phase 4=将来) |
 | **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2 全Phase完了 (Phase 1-6)。PSD1/PHA1 ns変換含む |
 | **2** | — | **✅ 完了** | PHA1 Settings UI修正: FirmwareType統一 + Virtual Probe データ駆動型対応 + ボードパラメータ単位修正 |
+| **2** | [33_delila2root_converter.md](33_delila2root_converter.md) | **✅ Phase 1 完了** | delila2root: 10.4億events 2分31秒, 6.9M/s, タイムスタンプ違反0 ([設計書](../docs/plans/delila2root.md)) |
 | **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
 | - | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **参照** | Event Builder 仕様 |
 
@@ -23,12 +25,14 @@ Claudeセッション開始時に必ず読み込まれます。
 
 ## 次のセッション候補
 
-- **A:** ステータス並列化 + start_daq.sh 改善 + タイムアウト設定化 → Phase 1 基盤整備
-- **B:** ~~PHA1 コンフィグテンプレート + Settings UI パラメータ確認~~ → **完了** (2026-02-12)
+- ~~**H:** delila2root 高速化 Phase 1 実装~~ → **完了** (2026-02-18, 10.4億events 2m31s)
 - **C:** Event Builder オンラインパイプライン統合 (EB-1〜EB-4) → Phase 2
-- **D:** Grafana モニタリング (Prometheus exporter + HV exporter) → Phase 3
-- **E:** ~~PHA1 実機テスト (ハードウェア確定後)~~ → **実機検証済み** (2026-02-12, DT5730B SN:990)
+- **D:** Grafana モニタリング (InfluxDB v3 Core + Grafana) → Phase 3
 - **F:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
+- **G:** 設定自動生成スクリプト (3-4) + デプロイスクリプト改善 (3-5)
+- ~~**A:** ステータス並列化 + start_daq.sh 改善~~ → **完了** (2026-02-10)
+- ~~**B:** PHA1 コンフィグテンプレート + Settings UI~~ → **完了** (2026-02-12)
+- ~~**E:** PHA1 実機テスト~~ → **実機検証済み** (2026-02-12, DT5730B SN:990)
 
 ---
 
@@ -36,6 +40,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| [32_stop_command_timeout.md](32_stop_command_timeout.md) | 2026-02-18 | Stop タイムアウト + Tune Up Apply 全パイプライン修正 + PHA1 waveform sign_extend + Probe 0始まり + ポート9090移行 |
 | [archive/29_channel_registration.md](archive/29_channel_registration.md) | 2026-02-05 | Channel Registration: Monitor チャンネル事前登録 + 個別チャンネル名 |
 | [archive/28_tuneup_mode.md](archive/28_tuneup_mode.md) | 2026-02-05 | Tune Up Mode: Waveform + ヒストグラム + パラメータ調整 (3-panel FullHD レイアウト) |
 | [27_settings_ui_v2.md](27_settings_ui_v2.md) | 2026-02-04 | Settings UI v2: 6カテゴリ再編 + SetInRun対応 (Phase 1-4, Phase 6 残) |
@@ -76,6 +81,13 @@ Claudeセッション開始時に必ず読み込まれます。
 - Monitor Quick Create (デジタイザ選択で全チャンネルビュー自動生成)
 - Monitor レイアウト永続化 (Operator REST API + ファイル保存, 全ブラウザ共有)
 - PHA1 Settings UI修正 (FirmwareType PHA→PHA1統一 + Virtual Probe データ駆動型 + 単位修正)
+- Stop コマンドタイムアウト修正 (decode_loop yield + Recorder writer std::thread 分離)
+- Tune Up Apply スペクトラム混在修正 (Merger sender_task ステート対応 + 全パイプライン Stop→Start)
+- パラメータバリデーション (DevTree snap_to_step + UI step属性)
+- delila2root Phase 1 (POD Event + two-pointer merge, 10.4億events 2m31s, 6.9M/s)
+- PHA1 Waveform Decoder 修正 (sign_extend_14bit 符号拡張 + digital probe D0/D1 マッピング修正)
+- ROOT マクロ ns_per_sample 対応 (Waveform X軸 ns 表示)
+- Operator デフォルトポート 9090 移行 + docker mongo-express 8083
 
 ---
 

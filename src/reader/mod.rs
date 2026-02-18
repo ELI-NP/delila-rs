@@ -396,6 +396,8 @@ struct DeviceConnection {
     hw_armed: bool,
     /// Whether acquisition is running
     hw_running: bool,
+    /// Cached DevTree parameter metadata for validation (None if fetch failed)
+    param_cache: Option<std::collections::HashMap<String, caen::handle::ParamInfo>>,
 }
 
 /// Try to connect to a digitizer and configure the RAW endpoint.
@@ -405,12 +407,24 @@ fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection
         Ok(h) => match h.configure_endpoint(include_n_events) {
             Ok(ep) => {
                 info!("Connected to digitizer (RAW endpoint)");
+                // Build param cache from DevTree (best-effort)
+                let param_cache = match h.build_param_cache() {
+                    Ok(cache) => {
+                        info!(params = cache.len(), "Parameter cache built");
+                        Some(cache)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to build param cache, validation disabled");
+                        None
+                    }
+                };
                 Some(DeviceConnection {
                     handle: h,
                     endpoint: ep,
                     hw_configured: false,
                     hw_armed: false,
                     hw_running: false,
+                    param_cache,
                 })
             }
             Err(e) => {
@@ -432,12 +446,24 @@ fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
         Ok(h) => match h.configure_opendpp_endpoint(false) {
             Ok(ep) => {
                 info!("Connected to digitizer (OpenDPP endpoint)");
+                // Build param cache from DevTree (best-effort)
+                let param_cache = match h.build_param_cache() {
+                    Ok(cache) => {
+                        info!(params = cache.len(), "Parameter cache built");
+                        Some(cache)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to build param cache, validation disabled");
+                        None
+                    }
+                };
                 Some(DeviceConnection {
                     handle: h,
                     endpoint: ep,
                     hw_configured: false,
                     hw_armed: false,
                     hw_running: false,
+                    param_cache,
                 })
             }
             Err(e) => {
@@ -733,17 +759,53 @@ impl Reader {
                 if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
                     info!("Stopping digitizer acquisition");
                     let _ = conn.handle.send_command("/cmd/disarmacquisition");
-                    // Drain remaining buffered data before clearing
+
+                    // Drain remaining buffered data before clearing (with limits)
                     let mut drained = 0u64;
+                    let drain_start = Instant::now();
+                    const MAX_DRAIN_EVENTS: u64 = 1000;
+                    const MAX_DRAIN_TIME: Duration = Duration::from_secs(1);
                     while let Ok(Some(raw)) = conn.endpoint.read_data(100, &mut read_buffer) {
                         drained += 1;
                         let decoder_raw = decoder::RawData::from(raw);
                         let _ = tx.try_send(ReadLoopOutput::Raw(decoder_raw));
+                        if drained >= MAX_DRAIN_EVENTS
+                            || drain_start.elapsed() > MAX_DRAIN_TIME
+                        {
+                            warn!(drained, "Drain limit reached, clearing remaining");
+                            break;
+                        }
                     }
                     if drained > 0 {
                         info!(drained, "Drained remaining data after stop");
                     }
-                    let _ = tx.try_send(ReadLoopOutput::Stop);
+
+                    // Send Stop signal with retry to guarantee EOS delivery
+                    let stop_deadline = Instant::now() + Duration::from_secs(3);
+                    let mut stop_signal = ReadLoopOutput::Stop;
+                    loop {
+                        match tx.try_send(stop_signal) {
+                            Ok(()) => {
+                                info!("Stop signal sent to decode pipeline");
+                                break;
+                            }
+                            Err(mpsc::error::TrySendError::Full(returned)) => {
+                                if Instant::now() > stop_deadline {
+                                    error!(
+                                        "Failed to send Stop signal: channel full for 3s"
+                                    );
+                                    break;
+                                }
+                                stop_signal = returned;
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                warn!("Decode channel closed, Stop signal not needed");
+                                break;
+                            }
+                        }
+                    }
+
                     let _ = conn.handle.send_command("/cmd/cleardata");
                     conn.hw_armed = false;
                     conn.hw_running = false;
@@ -788,10 +850,18 @@ impl Reader {
                             last_connect_attempt = Instant::now();
                         }
                         let result = match connection.as_ref() {
-                            Some(conn) => conn
-                                .handle
-                                .apply_config(&dig_config)
-                                .map_err(|e| format!("Failed to apply config: {}", e)),
+                            Some(conn) => {
+                                if let Some(ref cache) = conn.param_cache {
+                                    conn.handle
+                                        .apply_config_validated(&dig_config, cache)
+                                        .map(|r| r.ok + r.adjusted)
+                                        .map_err(|e| format!("Failed to apply config: {}", e))
+                                } else {
+                                    conn.handle
+                                        .apply_config(&dig_config)
+                                        .map_err(|e| format!("Failed to apply config: {}", e))
+                                }
+                            }
                             None => Err("Not connected to digitizer".to_string()),
                         };
                         let _ = response_tx.send(result);
@@ -801,10 +871,20 @@ impl Reader {
                         response_tx,
                     } => {
                         let result = match connection.as_ref() {
-                            Some(conn) => conn
-                                .handle
-                                .apply_config_running(&dig_config)
-                                .map_err(|e| format!("Failed to apply SetInRun config: {}", e)),
+                            Some(conn) => {
+                                if let Some(ref cache) = conn.param_cache {
+                                    conn.handle
+                                        .apply_config_running_validated(&dig_config, cache)
+                                        .map(|r| r.ok + r.adjusted)
+                                        .map_err(|e| {
+                                            format!("Failed to apply SetInRun config: {}", e)
+                                        })
+                                } else {
+                                    conn.handle.apply_config_running(&dig_config).map_err(|e| {
+                                        format!("Failed to apply SetInRun config: {}", e)
+                                    })
+                                }
+                            }
                             None => Err("Not connected to digitizer".to_string()),
                         };
                         let _ = response_tx.send(result);
@@ -1047,10 +1127,18 @@ impl Reader {
                             last_connect_attempt = Instant::now();
                         }
                         let result = match connection.as_ref() {
-                            Some(conn) => conn
-                                .handle
-                                .apply_config(&dig_config)
-                                .map_err(|e| format!("Failed to apply config: {}", e)),
+                            Some(conn) => {
+                                if let Some(ref cache) = conn.param_cache {
+                                    conn.handle
+                                        .apply_config_validated(&dig_config, cache)
+                                        .map(|r| r.ok + r.adjusted)
+                                        .map_err(|e| format!("Failed to apply config: {}", e))
+                                } else {
+                                    conn.handle
+                                        .apply_config(&dig_config)
+                                        .map_err(|e| format!("Failed to apply config: {}", e))
+                                }
+                            }
                             None => Err("Not connected to digitizer".to_string()),
                         };
                         let _ = response_tx.send(result);
@@ -1060,10 +1148,20 @@ impl Reader {
                         response_tx,
                     } => {
                         let result = match connection.as_ref() {
-                            Some(conn) => conn
-                                .handle
-                                .apply_config_running(&dig_config)
-                                .map_err(|e| format!("Failed to apply SetInRun config: {}", e)),
+                            Some(conn) => {
+                                if let Some(ref cache) = conn.param_cache {
+                                    conn.handle
+                                        .apply_config_running_validated(&dig_config, cache)
+                                        .map(|r| r.ok + r.adjusted)
+                                        .map_err(|e| {
+                                            format!("Failed to apply SetInRun config: {}", e)
+                                        })
+                                } else {
+                                    conn.handle.apply_config_running(&dig_config).map_err(|e| {
+                                        format!("Failed to apply SetInRun config: {}", e)
+                                    })
+                                }
+                            }
                             None => Err("Not connected to digitizer".to_string()),
                         };
                         let _ = response_tx.send(result);
@@ -1387,6 +1485,12 @@ impl Reader {
                             break;
                         }
                     }
+
+                    // Yield to tokio scheduler after processing each message.
+                    // Without this, the decode loop can monopolize the tokio worker
+                    // thread under high data rates (all futures resolve immediately),
+                    // starving command_task and causing Stop command timeouts.
+                    tokio::task::yield_now().await;
                 }
             }
         }

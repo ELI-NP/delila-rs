@@ -1,8 +1,8 @@
 # PHA1 Decoder Specification
 
-**Document Version:** 1.0
-**Last Updated:** 2026-01-29
-**Status:** Draft
+**Document Version:** 1.1
+**Last Updated:** 2026-02-18
+**Status:** 実機検証済み (DT5730B, Serial: 990)
 **Hardware Target:** DT5730 (DPP-PHA1, 8/16ch, 14-bit, 500 MS/s)
 
 ---
@@ -297,20 +297,30 @@ Upper half (bits [31:16]) = Sample 2N+1
 
 | Field | Bits | Mask | Description |
 |-------|------|------|-------------|
-| Analog Sample 1 | [13:0] | `0x3FFF` | 14-bit analog value (sample 2N) |
-| DP (s1) | [14] | `0x1 << 14` | **Digital Probe for sample 2N** |
-| Tn (s1) | [15] | `0x1 << 15` | **Trigger Flag for sample 2N** |
-| Analog Sample 2 | [29:16] | `0x3FFF << 16` | 14-bit analog value (sample 2N+1) |
+| Analog Sample 1 | [13:0] | `0x3FFF` | **14-bit 2の補数** analog value (sample 2N) |
+| DP (s1) | [14] | `0x1 << 14` | **Digital Probe for sample 2N** (configurable, vtrace/3) |
+| Tn (s1) | [15] | `0x1 << 15` | **Trigger Flag for sample 2N** (fixed, vtrace/2) |
+| Analog Sample 2 | [29:16] | `0x3FFF << 16` | **14-bit 2の補数** analog value (sample 2N+1) |
 | DP (s2) | [30] | `0x1 << 30` | **Digital Probe for sample 2N+1** |
 | Tn (s2) | [31] | `0x1 << 31` | **Trigger Flag for sample 2N+1** |
 
-### 6.2 PSD1 vs PHA1 Waveform 比較
+### 6.2 Analog Sample 符号処理
+
+**PHA1 は 14-bit 2の補数（符号あり）。PSD1 は 14-bit 符号なし。**
+
+- PHA1: `sign_extend_14bit(value)` → `i16` 範囲 [-8192, +8191]
+  - 負パルス入力 → 負の波形値として表示される
+  - 実装: `((value << 18) as i32 >> 18) as i16` (算術右シフトで符号拡張)
+- PSD1: `(value & 0x3FFF) as i16` → 常に正値 [0, 16383]
+  - 上位ビットが0なので符号拡張不要
+
+### 6.3 PSD1 vs PHA1 Waveform 比較
 
 | Bit | PSD1 | PHA1 |
 |-----|------|------|
-| [13:0] | Analog | Analog |
-| [14] | DP1 | **DP (Digital Probe)** |
-| [15] | DP2 | **Tn (Trigger Flag)** |
+| [13:0] | Analog (符号なし) | **Analog (2の補数、符号拡張必要)** |
+| [14] | DP1 | **DP (configurable, vtrace/3)** |
+| [15] | DP2 | **Tn (fixed trigger, vtrace/2)** |
 
 ### 6.3 Total Waveform Words
 
@@ -392,8 +402,9 @@ final_timestamp_ns = timestamp_ns + fine_time_ns
 | **Analog Probes** | 2 × 2-bit (AP1, AP2) | 1 × 2-bit AP | 2 AP |
 | **Energy/Charge output** | `energy[14:0]` | `charge_long[31:16]` + `charge_short[14:0]` | `energy[15:0]` + `energy_short[25:16]` |
 | **Extra field** | `extra[25:16]` (10-bit) | N/A | N/A |
-| **Waveform bit[14]** | DP | DP1 | DP1 |
-| **Waveform bit[15]** | Tn (Trigger) | DP2 | DP2 |
+| **Waveform analog** | **14-bit 2の補数** | 14-bit 符号なし | 14-bit 符号あり |
+| **Waveform bit[14]** | DP → D1 | DP1 | DP1 |
+| **Waveform bit[15]** | Tn → D0 (Trigger) | DP2 | DP2 |
 | **Fine time** | 10-bit | 10-bit | 10-bit |
 | **Time step** | 2 ns | 2 ns | 8 ns |
 
@@ -422,15 +433,21 @@ pub struct EventData {
 
 ```rust
 pub struct Waveform {
-    pub analog_probe1: Vec<i16>,   // ← 14-bit analog
-    pub analog_probe2: Vec<i16>,   // ← DT=1 の場合のみ
-    pub digital_probe1: Vec<u8>,   // ← DP (single probe)
-    pub digital_probe2: Vec<u8>,   // ← Tn (Trigger flag) ※PSD1のDP2とは異なる
+    pub analog_probe1: Vec<i16>,   // ← 14-bit 2の補数 (sign_extend_14bit)
+    pub analog_probe2: Vec<i16>,   // ← DT=1 の場合のみ (同上)
+    pub digital_probe1: Vec<u8>,   // ← Tn (Trigger flag, fixed, vtrace/2) = D0
+    pub digital_probe2: Vec<u8>,   // ← DP (configurable, vtrace/3) = D1
     pub digital_probe3: Vec<u8>,   // ← 未使用 (empty)
     pub digital_probe4: Vec<u8>,   // ← 未使用 (empty)
     pub time_resolution: u8,       // ← 0
     pub trigger_threshold: u16,    // ← 0
 }
+```
+
+**Digital Probe マッピング:**
+- `digital_probe1` (D0) = bit15 Tn (trigger flag, 固定)
+- `digital_probe2` (D1) = bit14 DP (configurable digital probe)
+- vtrace UI の表示順序 (D0=Trigger, D1=DP) と一致させるため、ビット位置と逆順にマッピング
 ```
 
 ---
@@ -457,19 +474,20 @@ pub struct Waveform {
 
 ### A.1 PSD1 との差分ポイント
 
-- [ ] Dual Channel Header Word 1 の解析変更
-  - [ ] `EE` → Energy Enable (bit 30)
-  - [ ] `E2` → Extras2 Enable (bit 28)
-  - [ ] `DP` → 4-bit single digital probe (bits 19:16)
-  - [ ] `AP1`, `AP2` → 2×2-bit analog probes (bits 23:22, 21:20)
-  - [ ] Size mask → [30:0] (31-bit)
-- [ ] Energy Word 解析 (PSD1 の decode_charge_word を変更)
-  - [ ] `energy[14:0]` 抽出
-  - [ ] `pileup[15]` 抽出
-  - [ ] `extra[25:16]` 抽出
-- [ ] Waveform 解析
-  - [ ] bit[14] = DP (digital probe)
-  - [ ] bit[15] = Tn (trigger flag)
-- [ ] EventData マッピング
-  - [ ] `energy` ← energy
-  - [ ] `energy_short` ← extra_data
+- [x] Dual Channel Header Word 1 の解析変更
+  - [x] `EE` → Energy Enable (bit 30)
+  - [x] `E2` → Extras2 Enable (bit 28)
+  - [x] `DP` → 4-bit single digital probe (bits 19:16)
+  - [x] `AP1`, `AP2` → 2×2-bit analog probes (bits 23:22, 21:20)
+  - [x] Size mask → [30:0] (31-bit)
+- [x] Energy Word 解析 (PSD1 の decode_charge_word を変更)
+  - [x] `energy[14:0]` 抽出
+  - [x] `pileup[15]` 抽出
+  - [x] `extra[25:16]` 抽出
+- [x] Waveform 解析
+  - [x] bit[14] = DP → digital_probe2 (D1, configurable)
+  - [x] bit[15] = Tn → digital_probe1 (D0, fixed trigger)
+  - [x] **14-bit 2の補数 → sign_extend_14bit()** (PSD1は符号なし)
+- [x] EventData マッピング
+  - [x] `energy` ← energy
+  - [x] `energy_short` ← extra_data

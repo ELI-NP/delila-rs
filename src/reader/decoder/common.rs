@@ -80,6 +80,14 @@ pub struct Waveform {
     pub ns_per_sample: f64,
 }
 
+/// Sign-extend a 14-bit two's complement value to i16.
+/// Uses arithmetic shift: left-shift bit 13 to sign position, then right-shift back.
+/// Upper bits beyond bit 13 are masked off.
+#[inline]
+pub fn sign_extend_14bit(value: u32) -> i16 {
+    ((value << 18) as i32 >> 18) as i16
+}
+
 /// Event data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventData {
@@ -145,5 +153,30 @@ impl Default for EventData {
 impl std::fmt::Display for EventData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.display())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sign_extend_14bit() {
+        // Zero
+        assert_eq!(sign_extend_14bit(0x0000), 0);
+        // Maximum positive (bit 13 = 0)
+        assert_eq!(sign_extend_14bit(0x1FFF), 8191);
+        // Minimum negative (bit 13 = 1, rest 0)
+        assert_eq!(sign_extend_14bit(0x2000), -8192);
+        // -1 (all 14 bits set)
+        assert_eq!(sign_extend_14bit(0x3FFF), -1);
+        // -2
+        assert_eq!(sign_extend_14bit(0x3FFE), -2);
+        // Small positive
+        assert_eq!(sign_extend_14bit(0x0001), 1);
+        assert_eq!(sign_extend_14bit(0x0064), 100);
+        // Upper bits beyond 14 are masked off
+        assert_eq!(sign_extend_14bit(0xFFFF_C001), 1); // only lower 14 bits matter
+        assert_eq!(sign_extend_14bit(0x4000), 0); // bit 14 set, but masked to 14 bits → 0
     }
 }

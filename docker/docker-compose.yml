@@ -23,7 +23,7 @@ services:
     container_name: delila_mongo_express
     restart: unless-stopped
     ports:
-      - "8082:8081"  # 8081 is used by Monitor
+      - "8083:8081"  # 8081=Monitor, 8082=eLog
     environment:
       ME_CONFIG_MONGODB_ADMINUSERNAME: delila
       ME_CONFIG_MONGODB_ADMINPASSWORD: delila_pass

@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use thiserror::Error;
 use tmq::{subscribe, AsZmqSocket, Context};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::common::{
@@ -471,7 +471,7 @@ impl FileWriter {
 struct RecorderCommandExt {
     stats: Arc<AtomicStats>,
     rate_tracker: Arc<RateTracker>,
-    writer_tx: mpsc::UnboundedSender<WriterCommand>,
+    writer_tx: std::sync::mpsc::Sender<WriterCommand>,
 }
 
 impl CommandHandlerExt for RecorderCommandExt {
@@ -582,8 +582,8 @@ impl Recorder {
         &mut self,
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), RecorderError> {
-        // Create channel: Receiver → Writer
-        let (writer_tx, writer_rx) = mpsc::unbounded_channel::<WriterCommand>();
+        // Create channel: Receiver → Writer (std::sync::mpsc for dedicated writer thread)
+        let (writer_tx, writer_rx) = std::sync::mpsc::channel::<WriterCommand>();
 
         // Create ZMQ SUB socket
         let context = Context::new();
@@ -601,13 +601,16 @@ impl Recorder {
             "Recorder connected to upstream (RCVHWM=0)"
         );
 
-        // === Spawn Writer Task ===
+        // === Spawn Writer Thread (dedicated OS thread for blocking file I/O) ===
         let writer_config = self.config.clone();
         let writer_stats = self.stats.clone();
         let writer_state_rx = self.state_rx.clone();
-        let writer_handle = tokio::spawn(async move {
-            Self::writer_task(writer_rx, writer_config, writer_stats, writer_state_rx).await
-        });
+        let writer_handle = std::thread::Builder::new()
+            .name("recorder-writer".to_string())
+            .spawn(move || {
+                Self::writer_task_blocking(writer_rx, writer_config, writer_stats, writer_state_rx)
+            })
+            .expect("Failed to spawn recorder-writer thread");
 
         // === Spawn Receiver Task ===
         let receiver_stats = self.stats.clone();
@@ -684,9 +687,11 @@ impl Recorder {
 
         // Shutdown tasks
         let _ = writer_tx.send(WriterCommand::Shutdown);
+        drop(writer_tx);
 
         let _ = receiver_handle.await;
-        let _ = writer_handle.await;
+        // Writer is a std::thread — use spawn_blocking to avoid blocking tokio
+        let _ = tokio::task::spawn_blocking(move || writer_handle.join()).await;
         let _ = cmd_handle.await;
 
         let stats = self.stats.snapshot();
@@ -708,7 +713,7 @@ impl Recorder {
     /// When not Running, data is discarded immediately.
     async fn receiver_task(
         mut socket: subscribe::Subscribe,
-        tx: mpsc::UnboundedSender<WriterCommand>,
+        tx: std::sync::mpsc::Sender<WriterCommand>,
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
         stats: Arc<AtomicStats>,
         mut state_rx: watch::Receiver<ComponentState>,
@@ -781,95 +786,100 @@ impl Recorder {
         }
     }
 
-    /// Writer task: Handles file I/O
-    async fn writer_task(
-        mut rx: mpsc::UnboundedReceiver<WriterCommand>,
+    /// Writer task: Handles file I/O on a dedicated OS thread.
+    /// Runs blocking file I/O without affecting the tokio runtime.
+    fn writer_task_blocking(
+        rx: std::sync::mpsc::Receiver<WriterCommand>,
         config: RecorderConfig,
         stats: Arc<AtomicStats>,
-        mut state_rx: watch::Receiver<ComponentState>,
+        state_rx: watch::Receiver<ComponentState>,
     ) {
         let mut writer = FileWriter::new(config, stats);
         let mut eos_received = false;
+        let mut last_state = *state_rx.borrow();
 
         loop {
-            tokio::select! {
-                biased;
-
-                cmd = rx.recv() => {
-                    match cmd {
-                        Some(WriterCommand::WriteBatch(batch)) => {
-                            if let Err(e) = writer.write_batch(batch) {
-                                warn!(error = %e, "Failed to write batch");
-                            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(cmd) => match cmd {
+                    WriterCommand::WriteBatch(batch) => {
+                        if let Err(e) = writer.write_batch(batch) {
+                            warn!(error = %e, "Failed to write batch");
                         }
-                        Some(WriterCommand::EndOfStream { source_id }) => {
-                            info!(source_id, "Writer received EOS - closing file");
-                            if let Err(e) = writer.end_run() {
-                                warn!(error = %e, "Failed to close file on EOS");
-                            }
-                            eos_received = true;
+                    }
+                    WriterCommand::EndOfStream { source_id } => {
+                        info!(source_id, "Writer received EOS - closing file");
+                        if let Err(e) = writer.end_run() {
+                            warn!(error = %e, "Failed to close file on EOS");
                         }
-                        Some(WriterCommand::NewRun(run_config)) => {
-                            writer.new_run(run_config);
-                            eos_received = false;
-                            info!("Writer configured for new run");
-                        }
-                        Some(WriterCommand::DrainAndStart { run_number }) => {
-                            // Drain any stale batches from previous run
-                            let mut drained = 0u64;
-                            while let Ok(cmd) = rx.try_recv() {
-                                match cmd {
-                                    WriterCommand::WriteBatch(_) => drained += 1,
-                                    WriterCommand::EndOfStream { .. } => { /* discard */ }
-                                    // Re-queue important commands (shouldn't happen, but be safe)
-                                    other => {
-                                        warn!("Unexpected command during drain: {:?}", std::mem::discriminant(&other));
-                                    }
+                        eos_received = true;
+                    }
+                    WriterCommand::NewRun(run_config) => {
+                        writer.new_run(run_config);
+                        eos_received = false;
+                        info!("Writer configured for new run");
+                    }
+                    WriterCommand::DrainAndStart { run_number } => {
+                        // Drain any stale batches from previous run
+                        let mut drained = 0u64;
+                        while let Ok(cmd) = rx.try_recv() {
+                            match cmd {
+                                WriterCommand::WriteBatch(_) => drained += 1,
+                                WriterCommand::EndOfStream { .. } => { /* discard */ }
+                                other => {
+                                    warn!(
+                                        "Unexpected command during drain: {:?}",
+                                        std::mem::discriminant(&other)
+                                    );
                                 }
                             }
-                            if drained > 0 {
-                                info!(drained, "Drained stale batches from previous run");
-                            }
+                        }
+                        if drained > 0 {
+                            info!(drained, "Drained stale batches from previous run");
+                        }
 
-                            writer.start_run(run_number);
-                            info!(run_number, "Writer started - recording enabled");
+                        writer.start_run(run_number);
+                        info!(run_number, "Writer started - recording enabled");
+                    }
+                    WriterCommand::CloseFile => {
+                        if let Err(e) = writer.end_run() {
+                            warn!(error = %e, "Failed to close file");
                         }
-                        Some(WriterCommand::CloseFile) => {
+                    }
+                    WriterCommand::Shutdown => {
+                        if let Err(e) = writer.close_file() {
+                            warn!(error = %e, "Failed to close file on shutdown");
+                        }
+                        break;
+                    }
+                },
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Check for state changes (replaces tokio state_rx.changed())
+                    let current = *state_rx.borrow();
+                    if current != last_state {
+                        debug!(state = %current, "Writer state changed");
+
+                        // Close file when stopping (if not already closed by EOS)
+                        if (current == ComponentState::Configured
+                            || current == ComponentState::Idle)
+                            && !eos_received
+                        {
+                            info!("State changed to {} - closing file", current);
                             if let Err(e) = writer.end_run() {
-                                warn!(error = %e, "Failed to close file");
+                                warn!(error = %e, "Failed to close file on state change");
                             }
                         }
-                        Some(WriterCommand::Shutdown) => {
-                            if let Err(e) = writer.close_file() {
-                                warn!(error = %e, "Failed to close file on shutdown");
-                            }
-                            break;
+
+                        // Reset EOS flag when starting new run
+                        if current == ComponentState::Running {
+                            eos_received = false;
                         }
-                        None => {
-                            info!("Writer channel closed");
-                            break;
-                        }
+
+                        last_state = current;
                     }
                 }
-
-                _ = state_rx.changed() => {
-                    let current = *state_rx.borrow();
-                    debug!(state = %current, "Writer state changed");
-
-                    // Close file when stopping (if not already closed by EOS)
-                    if (current == ComponentState::Configured || current == ComponentState::Idle)
-                        && !eos_received
-                    {
-                        info!("State changed to {} - closing file", current);
-                        if let Err(e) = writer.end_run() {
-                            warn!(error = %e, "Failed to close file on state change");
-                        }
-                    }
-
-                    // Reset EOS flag when starting new run
-                    if current == ComponentState::Running {
-                        eos_received = false;
-                    }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    info!("Writer channel disconnected");
+                    break;
                 }
             }
         }
