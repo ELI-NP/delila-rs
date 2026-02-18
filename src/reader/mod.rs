@@ -747,8 +747,10 @@ impl Reader {
                 // Arm needed?
                 if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
                     if conn.auto_config_failed {
-                        warn!("Cannot arm: auto-configure from JSON failed and no valid \
-                            config received from Operator. Run Detect or fix the JSON config.");
+                        warn!(
+                            "Cannot arm: auto-configure from JSON failed and no valid \
+                            config received from Operator. Run Detect or fix the JSON config."
+                        );
                     } else {
                         if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
                             error!(error = %e, "Failed to arm digitizer");
@@ -779,9 +781,7 @@ impl Reader {
                         drained += 1;
                         let decoder_raw = decoder::RawData::from(raw);
                         let _ = tx.try_send(ReadLoopOutput::Raw(decoder_raw));
-                        if drained >= MAX_DRAIN_EVENTS
-                            || drain_start.elapsed() > MAX_DRAIN_TIME
-                        {
+                        if drained >= MAX_DRAIN_EVENTS || drain_start.elapsed() > MAX_DRAIN_TIME {
                             warn!(drained, "Drain limit reached, clearing remaining");
                             break;
                         }
@@ -801,9 +801,7 @@ impl Reader {
                             }
                             Err(mpsc::error::TrySendError::Full(returned)) => {
                                 if Instant::now() > stop_deadline {
-                                    error!(
-                                        "Failed to send Stop signal: channel full for 3s"
-                                    );
+                                    error!("Failed to send Stop signal: channel full for 3s");
                                     break;
                                 }
                                 stop_signal = returned;
@@ -1070,8 +1068,10 @@ impl Reader {
                 // Arm needed?
                 if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
                     if conn.auto_config_failed {
-                        warn!("Cannot arm: auto-configure from JSON failed and no valid \
-                            config received from Operator. Run Detect or fix the JSON config.");
+                        warn!(
+                            "Cannot arm: auto-configure from JSON failed and no valid \
+                            config received from Operator. Run Detect or fix the JSON config."
+                        );
                     } else {
                         if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
                             error!(error = %e, "Failed to arm digitizer");

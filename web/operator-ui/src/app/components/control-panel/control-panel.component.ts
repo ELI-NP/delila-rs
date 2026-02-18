@@ -9,7 +9,10 @@ import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatIconModule } from '@angular/material/icon';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatDialog } from '@angular/material/dialog';
 import { OperatorService } from '../../services/operator.service';
+import { DigitizerService } from '../../services/digitizer.service';
+import { WaveformWarningDialogComponent } from './waveform-warning-dialog.component';
 
 @Component({
   selector: 'app-control-panel',
@@ -279,6 +282,8 @@ import { OperatorService } from '../../services/operator.service';
 export class ControlPanelComponent {
   readonly operator = inject(OperatorService);
   private readonly snackBar = inject(MatSnackBar);
+  private readonly dialog = inject(MatDialog);
+  private readonly digitizerService = inject(DigitizerService);
 
   // Edit mode state
   private editMode = signal(false);
@@ -319,6 +324,9 @@ export class ControlPanelComponent {
   });
 
   constructor() {
+    // Ensure digitizer configs are loaded for waveform warning check
+    this.digitizerService.loadDigitizers();
+
     // Sync comment with server state
     effect(() => {
       const runInfo = this.operator.runInfo();
@@ -438,6 +446,25 @@ export class ControlPanelComponent {
   }
 
   onStart(): void {
+    // Check if any digitizer has waveform recording enabled
+    const wfDigitizers = this.digitizerService
+      .digitizers()
+      .filter((d) => d.board.waveforms_enabled === true)
+      .map((d) => d.name);
+
+    if (wfDigitizers.length > 0) {
+      const dialogRef = this.dialog.open(WaveformWarningDialogComponent, {
+        data: { digitizerNames: wfDigitizers },
+      });
+      dialogRef.afterClosed().subscribe((confirmed) => {
+        if (confirmed) this.doStart();
+      });
+      return;
+    }
+    this.doStart();
+  }
+
+  private doStart(): void {
     const runNumber = this.displayRunNumber();
     const expName = this.expName();
     const comment = this.comment;

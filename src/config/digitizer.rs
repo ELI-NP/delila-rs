@@ -512,6 +512,21 @@ impl DigitizerConfig {
         Ok(())
     }
 
+    /// Override start source to software trigger.
+    /// Used in Tune Up mode where external trigger signals are unavailable.
+    pub fn force_software_trigger(&mut self) {
+        let sw_value = match self.firmware {
+            FirmwareType::PSD1 | FirmwareType::PHA1 => "START_MODE_SW",
+            FirmwareType::PSD2 | FirmwareType::AMax => "SWcmd",
+        };
+        self.board.start_source = Some(sw_value.to_string());
+        // SyncConfig.start_source takes priority over BoardConfig in to_caen_parameters(),
+        // so we must override both to ensure software trigger.
+        if let Some(ref mut sync) = self.sync {
+            sync.start_source = Some(sw_value.to_string());
+        }
+    }
+
     /// Sanitize configuration by removing fields that don't apply to this firmware.
     ///
     /// This should be called before saving to ensure the config file doesn't contain
@@ -1944,10 +1959,63 @@ mod tests {
         config.channel_defaults.enabled = Some("TRUE".to_string());
         let params = config.to_caen_parameters();
         assert!(
-            params
-                .iter()
-                .any(|p| p.path.starts_with("/ch/0..15/par/")),
+            params.iter().any(|p| p.path.starts_with("/ch/0..15/par/")),
             "16ch config should use /ch/0..15/ range"
         );
+    }
+
+    #[test]
+    fn test_force_software_trigger_psd2() {
+        let mut config = DigitizerConfig::new(0, "Test PSD2", FirmwareType::PSD2);
+        config.board.start_source = Some("SINlevel".to_string());
+        config.sync = Some(SyncConfig {
+            start_source: Some("SINlevel".to_string()),
+            ..Default::default()
+        });
+        config.force_software_trigger();
+        assert_eq!(config.board.start_source, Some("SWcmd".to_string()));
+        assert_eq!(
+            config.sync.as_ref().and_then(|s| s.start_source.as_deref()),
+            Some("SWcmd")
+        );
+        let params = config.to_caen_parameters();
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/startsource" && p.value == "SWcmd"),
+            "PSD2 should use SWcmd after force_software_trigger"
+        );
+    }
+
+    #[test]
+    fn test_force_software_trigger_psd1() {
+        let mut config = DigitizerConfig::new(0, "Test PSD1", FirmwareType::PSD1);
+        config.board.start_source = Some("START_MODE_S_IN".to_string());
+        config.force_software_trigger();
+        assert_eq!(config.board.start_source, Some("START_MODE_SW".to_string()));
+        let params = config.to_caen_parameters();
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/par/startmode" && p.value == "START_MODE_SW"),
+            "PSD1 should use START_MODE_SW after force_software_trigger"
+        );
+    }
+
+    #[test]
+    fn test_force_software_trigger_no_sync() {
+        let mut config = DigitizerConfig::new(0, "Test PSD2", FirmwareType::PSD2);
+        config.board.start_source = Some("SINlevel".to_string());
+        config.force_software_trigger();
+        assert_eq!(config.board.start_source, Some("SWcmd".to_string()));
+        assert!(config.sync.is_none());
+    }
+
+    #[test]
+    fn test_force_software_trigger_amax() {
+        let mut config = DigitizerConfig::new(0, "Test AMax", FirmwareType::AMax);
+        config.board.start_source = Some("P0".to_string());
+        config.force_software_trigger();
+        assert_eq!(config.board.start_source, Some("SWcmd".to_string()));
     }
 }

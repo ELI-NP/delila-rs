@@ -213,14 +213,11 @@ pub(super) async fn detect_digitizers(
                     // Auto-save corrected config to disk (best-effort)
                     // This persists hardware-detected num_channels, serial, model
                     if let Some(ref cfg) = config {
-                        let file_path = comp
-                            .config_file
-                            .clone()
-                            .unwrap_or_else(|| {
-                                state
-                                    .config_dir
-                                    .join(format!("digitizer_{}.json", source_id))
-                            });
+                        let file_path = comp.config_file.clone().unwrap_or_else(|| {
+                            state
+                                .config_dir
+                                .join(format!("digitizer_{}.json", source_id))
+                        });
                         if let Some(parent) = file_path.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }

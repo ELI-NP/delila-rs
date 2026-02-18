@@ -22,6 +22,7 @@ import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatInputModule } from '@angular/material/input';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDividerModule } from '@angular/material/divider';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
 import {
@@ -85,6 +86,7 @@ interface ChannelChart {
     MatProgressSpinnerModule,
     MatSnackBarModule,
     MatDividerModule,
+    MatTooltipModule,
     NgxEchartsDirective,
     ChannelTableComponent,
     HistogramChartComponent,
@@ -132,6 +134,27 @@ interface ChannelChart {
             </mat-checkbox>
           </div>
 
+          <div class="accumulate-controls">
+            <mat-slide-toggle
+              [checked]="accumulateEnabled()"
+              (change)="onAccumulateToggle($event.checked)"
+              color="primary"
+            >Acc</mat-slide-toggle>
+            @if (accumulateEnabled()) {
+              <mat-form-field appearance="outline" class="accumulate-count">
+                <mat-label>N</mat-label>
+                <input matInput type="number"
+                  [ngModel]="accumulateMax()"
+                  (ngModelChange)="accumulateMax.set($event)"
+                  min="2" max="100" />
+              </mat-form-field>
+              <span class="accumulate-info">{{ waveformHistory().length }}/{{ accumulateMax() }}</span>
+              <button mat-icon-button (click)="clearAccumulation()" matTooltip="Clear accumulated waveforms">
+                <mat-icon>delete_sweep</mat-icon>
+              </button>
+            }
+          </div>
+
           <span class="spacer"></span>
 
           <button mat-stroked-button color="warn" (click)="onStopTuneUp()" [disabled]="tuneUpLoading()">
@@ -149,15 +172,11 @@ interface ChannelChart {
                   <span class="channel-label">{{ chart.label }}</span>
                   <span class="channel-info">E: {{ chart.energy }} | S: {{ chart.samples }}</span>
                 </div>
-                <div class="tuneup-chart-fill">
-                  <div echarts [options]="tuneUpWfOptions()" [merge]="tuneUpWfMerge()" class="waveform-chart"></div>
-                </div>
-              } @else {
-                <div class="no-data compact">
-                  <mat-icon>show_chart</mat-icon>
-                  <p>No waveform data</p>
-                </div>
               }
+              <!-- Chart always in DOM to preserve zoom state across Apply -->
+              <div class="tuneup-chart-fill">
+                <div echarts [options]="tuneUpWfOptions()" (chartInit)="onTuneUpWfChartInit($event)" class="waveform-chart"></div>
+              </div>
             </div>
 
             <div class="tuneup-histogram-panel">
@@ -485,6 +504,23 @@ interface ChannelChart {
       height: 36px;
     }
 
+    .accumulate-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .accumulate-count {
+      width: 70px;
+    }
+    .accumulate-count .mat-mdc-form-field-subscript-wrapper {
+      display: none;
+    }
+    .accumulate-info {
+      font-size: 12px;
+      color: #666;
+      white-space: nowrap;
+    }
+
     .spacer {
       flex: 1;
     }
@@ -738,10 +774,10 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly probeColors = {
     analog1: '#1565c0',
     analog2: '#e65100',
-    digital1: '#2e7d32',
+    digital1: '#00897b',
     digital2: '#c62828',
     digital3: '#6a1b9a',
-    digital4: '#00838f',
+    digital4: '#5c6bc0',
   };
 
   readonly channelCharts = computed<ChannelChart[]>(() => this.buildChannelCharts());
@@ -766,12 +802,18 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly selectedCategory = signal<ChannelCategory | 'all'>('all');
   readonly tuneUpHistogram = signal<Histogram1D | null>(null);
 
-  // Tune Up waveform chart: options + merge pattern (preserves zoom across polls)
+  // Waveform Accumulation State
+  readonly accumulateEnabled = signal(false);
+  readonly accumulateMax = signal(20);
+  readonly waveformHistory = signal<LatestWaveform[]>([]);
+  /** ECharts instance for Tune Up waveform — used for replaceMerge to preserve zoom */
+  private tuneUpWfChart: any = null;
+
+  // Tune Up waveform chart: options (re-init only on channel change)
   readonly tuneUpWfOptions = computed<EChartsCoreOption>(() => {
     this.selectedChannels(); // re-init chart when channel changes
     return this.buildTuneUpWfInitOptions();
   });
-  readonly tuneUpWfMerge = signal<EChartsCoreOption>({});
 
   /** In Tune Up mode, only show channels belonging to the target digitizer */
   readonly tuneUpChannels = computed(() => {
@@ -848,21 +890,24 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     });
   });
 
-  // Update Tune Up waveform merge options when data arrives (preserves zoom)
+  // Update Tune Up waveform via replaceMerge (replaces series, preserves zoom/dataZoom)
   private readonly tuneUpWfEffect = effect(() => {
     const charts = this.channelCharts();
     const isTuneUp = this.isTuneUp();
     untracked(() => {
-      if (!isTuneUp || charts.length === 0) return;
+      if (!isTuneUp || charts.length === 0 || !this.tuneUpWfChart) return;
       const chart = charts[0];
       const useTime = chart.nsPerSample > 0;
-      this.tuneUpWfMerge.set({
-        series: (chart.options as Record<string, unknown>)['series'],
-        xAxis: {
-          name: useTime ? 'Time (ns)' : 'Sample',
-          max: useTime ? chart.samples * chart.nsPerSample : (chart.samples || undefined),
+      this.tuneUpWfChart.setOption(
+        {
+          series: (chart.options as Record<string, unknown>)['series'],
+          xAxis: {
+            name: useTime ? 'Time (ns)' : 'Sample',
+            max: useTime ? chart.samples * chart.nsPerSample : (chart.samples || undefined),
+          },
         },
-      });
+        { replaceMerge: ['series'] }
+      );
     });
   });
 
@@ -905,7 +950,24 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
 
   onTuneUpChannelSelect(value: string): void {
     this.selectedChannels.set([value]);
+    this.waveformHistory.set([]);
     this.fetchWaveforms().subscribe();
+  }
+
+  clearAccumulation(): void {
+    this.waveformHistory.set([]);
+    // Next poll will rebuild channelCharts → tuneUpWfEffect uses replaceMerge to clear old series
+  }
+
+  onAccumulateToggle(enabled: boolean): void {
+    this.accumulateEnabled.set(enabled);
+    if (!enabled) {
+      this.waveformHistory.set([]);
+    }
+  }
+
+  onTuneUpWfChartInit(chart: any): void {
+    this.tuneUpWfChart = chart;
   }
 
   toggleProbe(probe: keyof ProbeConfig): void {
@@ -973,6 +1035,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.applyLoading.set(true);
     this.stopHistogramPolling();
     this.tuneUpHistogram.set(null);
+    this.waveformHistory.set([]);
 
     const { channel_defaults, channel_overrides } = this.digitizerService.compressConfig(
       this.defaultValues(),
@@ -1005,7 +1068,6 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         next: (resp) => {
           if (resp.success) {
             this.snackBar.open('Configuration applied', 'OK', { duration: 3000 });
-            this.histXRange.set('auto');
           } else {
             this.snackBar.open('Apply failed: ' + resp.message, 'OK', { duration: 5000 });
           }
@@ -1118,6 +1180,27 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       switchMap((results) => {
         const waveforms = results.filter((wf): wf is LatestWaveform => wf !== null);
         this.waveforms.set(waveforms);
+
+        // Accumulate waveforms in Tune Up mode (FIFO buffer)
+        if (this.isTuneUp() && this.accumulateEnabled() && waveforms.length > 0) {
+          const max = this.accumulateMax();
+          const currentHistory = this.waveformHistory();
+          // Only append waveforms with new timestamps (deduplicate)
+          const newWaveforms = waveforms.filter(
+            (wf) =>
+              !currentHistory.some(
+                (h) =>
+                  h.module_id === wf.module_id &&
+                  h.channel_id === wf.channel_id &&
+                  h.timestamp_ns === wf.timestamp_ns,
+              ),
+          );
+          if (newWaveforms.length > 0) {
+            const history = [...currentHistory, ...newWaveforms];
+            this.waveformHistory.set(history.length > max ? history.slice(history.length - max) : history);
+          }
+        }
+
         this.isLoading.set(false);
         return of(null);
       })
@@ -1131,6 +1214,8 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   private buildChannelCharts(): ChannelChart[] {
     const waveforms = this.waveforms();
     const config = this.probeConfig();
+    const isAccumulating = this.isTuneUp() && this.accumulateEnabled();
+    const history = isAccumulating ? this.waveformHistory() : [];
 
     return waveforms.map((wf) => {
       const channelInfo = this.availableChannels().find(
@@ -1143,6 +1228,42 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       // 14-bit sign-extended values offset to center signed probes (Delta, etc.)
       const OFFSET_14BIT = 8191;
 
+      // Render accumulated history traces first (older = more transparent, analog only)
+      if (isAccumulating && history.length > 0) {
+        const channelHistory = history.filter(
+          (h) =>
+            h.module_id === wf.module_id &&
+            h.channel_id === wf.channel_id &&
+            h.timestamp_ns !== wf.timestamp_ns,
+        );
+        channelHistory.forEach((hw, idx) => {
+          const opacity = 0.1 + (0.3 * idx) / Math.max(channelHistory.length - 1, 1);
+          const hNs = hw.waveform.ns_per_sample || 0;
+          const hToX = hNs > 0 ? (i: number) => i * hNs : (i: number) => i;
+          if (config.analog1 && hw.waveform.analog_probe1.length > 0) {
+            series.push({
+              type: 'line',
+              data: hw.waveform.analog_probe1.map((v, i) => [hToX(i), v + OFFSET_14BIT]),
+              symbol: 'none',
+              lineStyle: { width: 1, color: this.probeColors.analog1, opacity },
+              itemStyle: { color: this.probeColors.analog1 },
+              silent: true,
+            });
+          }
+          if (config.analog2 && hw.waveform.analog_probe2.length > 0) {
+            series.push({
+              type: 'line',
+              data: hw.waveform.analog_probe2.map((v, i) => [hToX(i), v + OFFSET_14BIT]),
+              symbol: 'none',
+              lineStyle: { width: 1, color: this.probeColors.analog2, opacity },
+              itemStyle: { color: this.probeColors.analog2 },
+              silent: true,
+            });
+          }
+        });
+      }
+
+      // Latest waveform (full opacity)
       if (config.analog1 && wf.waveform.analog_probe1.length > 0) {
         series.push({
           name: 'Analog 0',
@@ -1203,9 +1324,10 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
             data: [],
             symbol: 'none',
             lineStyle: { width: 0 },
+            itemStyle: { color: baseColor },
             markArea: {
               silent: true,
-              itemStyle: { color: baseColor, opacity: 0.12 },
+              itemStyle: { color: baseColor, opacity: 0.15 },
               data: areas,
             },
           });

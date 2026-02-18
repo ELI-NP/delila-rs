@@ -12,7 +12,6 @@ port = 9090
 id = 0
 name = "psd1-dt5730"
 type = "psd1"
-host = "172.18.4.147"
 bind = "tcp://*:5555"
 command = "tcp://*:5560"
 digitizer_url = "dig1://caen.internal/usb?link_num=0"

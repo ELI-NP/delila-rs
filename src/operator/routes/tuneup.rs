@@ -156,11 +156,16 @@ pub(super) async fn tuneup_start(
                     name = %comp.name,
                     "Pushing digitizer config to Reader (Tune Up)"
                 );
+                // Force software trigger for Tune Up (original config in state is unchanged)
+                let mut tuneup_config = config.clone();
+                tuneup_config.force_software_trigger();
+                tracing::info!(digitizer_id, "Forcing software trigger for Tune Up mode");
+
                 match state
                     .client
                     .send_command(
                         &comp.address,
-                        &Command::ApplyDigitizerConfig(Box::new(config.clone())),
+                        &Command::ApplyDigitizerConfig(Box::new(tuneup_config)),
                     )
                     .await
                 {
@@ -399,11 +404,14 @@ pub(super) async fn tuneup_apply(
     }
 
     // 4. Apply config via ZMQ (Reader is in Configured state)
+    // Force software trigger for Tune Up (user's original config already saved at step 1)
+    let mut tuneup_config = config;
+    tuneup_config.force_software_trigger();
     match state
         .client
         .send_command(
             &reader_comp.address,
-            &Command::ApplyDigitizerConfig(Box::new(config)),
+            &Command::ApplyDigitizerConfig(Box::new(tuneup_config)),
         )
         .await
     {
