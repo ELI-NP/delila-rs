@@ -210,6 +210,34 @@ pub(super) async fn detect_digitizers(
                         configs.insert(source_id, cfg.clone());
                     }
 
+                    // Auto-save corrected config to disk (best-effort)
+                    // This persists hardware-detected num_channels, serial, model
+                    if let Some(ref cfg) = config {
+                        let file_path = comp
+                            .config_file
+                            .clone()
+                            .unwrap_or_else(|| {
+                                state
+                                    .config_dir
+                                    .join(format!("digitizer_{}.json", source_id))
+                            });
+                        if let Some(parent) = file_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Ok(json) = serde_json::to_string_pretty(cfg) {
+                            if let Err(e) = std::fs::write(&file_path, &json) {
+                                tracing::warn!("Failed to auto-save config after Detect: {}", e);
+                            } else {
+                                tracing::info!(
+                                    source_id,
+                                    path = %file_path.display(),
+                                    num_channels = cfg.num_channels,
+                                    "Auto-saved config after Detect"
+                                );
+                            }
+                        }
+                    }
+
                     detected.push(DetectedDigitizer {
                         component_name: comp.name.clone(),
                         source_id,

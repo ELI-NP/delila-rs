@@ -4,7 +4,7 @@
   "firmware": "PSD1",
   "serial_number": "990",
   "model": "DT5730B",
-  "num_channels": 16,
+  "num_channels": 8,
   "is_master": false,
   "board": {
     "start_source": "START_MODE_SW",

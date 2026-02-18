@@ -4,6 +4,7 @@
 
 [operator]
 experiment_name = "EB_Test"
+port = 9090
 
 [network]
 cluster_name = "eb-test"

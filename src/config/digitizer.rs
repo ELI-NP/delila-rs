@@ -1920,4 +1920,34 @@ mod tests {
             "PSD2 should have globaltriggersource"
         );
     }
+
+    #[test]
+    fn test_channel_range_8ch_psd1() {
+        let mut config = DigitizerConfig::new(0, "DT5730B", FirmwareType::PSD1);
+        config.num_channels = 8;
+        config.channel_defaults.enabled = Some("TRUE".to_string());
+        let params = config.to_caen_parameters();
+        assert!(
+            params.iter().any(|p| p.path.starts_with("/ch/0..7/par/")),
+            "8ch config should use /ch/0..7/ range"
+        );
+        assert!(
+            !params.iter().any(|p| p.path.starts_with("/ch/0..15/par/")),
+            "8ch config must not use /ch/0..15/ range"
+        );
+    }
+
+    #[test]
+    fn test_channel_range_16ch_psd1() {
+        let mut config = DigitizerConfig::new(0, "VX1730B", FirmwareType::PSD1);
+        config.num_channels = 16;
+        config.channel_defaults.enabled = Some("TRUE".to_string());
+        let params = config.to_caen_parameters();
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path.starts_with("/ch/0..15/par/")),
+            "16ch config should use /ch/0..15/ range"
+        );
+    }
 }

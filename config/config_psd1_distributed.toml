@@ -11,6 +11,7 @@
 
 [operator]
 experiment_name = "PSD1_Test"
+port = 9090
 
 [network]
 # Remote PSD1 Reader on 172.18.4.147 (DT5730B via USB)

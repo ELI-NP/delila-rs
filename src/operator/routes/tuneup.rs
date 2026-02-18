@@ -172,6 +172,7 @@ pub(super) async fn tuneup_start(
                         );
                     }
                     Ok(resp) => {
+                        let _ = state.client.reset_all(&filtered).await;
                         *state.tuneup_mode.write().await = false;
                         *state.tuneup_digitizer_id.write().await = None;
                         return (
@@ -183,6 +184,7 @@ pub(super) async fn tuneup_start(
                         );
                     }
                     Err(e) => {
+                        let _ = state.client.reset_all(&filtered).await;
                         *state.tuneup_mode.write().await = false;
                         *state.tuneup_digitizer_id.write().await = None;
                         return (
@@ -216,6 +218,7 @@ pub(super) async fn tuneup_start(
         .arm_all_sync(&filtered, state.config.arm_timeout_ms)
         .await
     {
+        let _ = state.client.reset_all(&filtered).await;
         *state.tuneup_mode.write().await = false;
         *state.tuneup_digitizer_id.write().await = None;
         return (
@@ -236,6 +239,7 @@ pub(super) async fn tuneup_start(
             (StatusCode::OK, Json(response))
         }
         Err(e) => {
+            let _ = state.client.reset_all(&filtered).await;
             *state.tuneup_mode.write().await = false;
             *state.tuneup_digitizer_id.write().await = None;
             (

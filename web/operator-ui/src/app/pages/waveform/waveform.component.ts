@@ -1256,7 +1256,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       yAxis: {
         type: 'value',
         name: 'ADC',
-        ...(yMode === 'fixed' ? { min: -20000, max: 20000 } : {}),
+        ...(yMode === 'fixed' ? { min: -30000, max: 30000 } : {}),
         axisLabel: {
           formatter: (value: number) => {
             if (Math.abs(value) >= 1000) {
@@ -1316,7 +1316,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         type: 'value',
         name: 'ADC',
         min: 0,
-        max: 20000,
+        max: 30000,
         axisLabel: {
           formatter: (value: number) => {
             if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'k';

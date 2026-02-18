@@ -396,6 +396,8 @@ struct DeviceConnection {
     hw_armed: bool,
     /// Whether acquisition is running
     hw_running: bool,
+    /// Auto-configure from JSON file failed — block Arm until Operator sends valid config
+    auto_config_failed: bool,
     /// Cached DevTree parameter metadata for validation (None if fetch failed)
     param_cache: Option<std::collections::HashMap<String, caen::handle::ParamInfo>>,
 }
@@ -424,6 +426,7 @@ fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection
                     hw_configured: false,
                     hw_armed: false,
                     hw_running: false,
+                    auto_config_failed: false,
                     param_cache,
                 })
             }
@@ -463,6 +466,7 @@ fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
                     hw_configured: false,
                     hw_armed: false,
                     hw_running: false,
+                    auto_config_failed: false,
                     param_cache,
                 })
             }
@@ -722,9 +726,10 @@ impl Reader {
                                     conn.hw_configured = true;
                                 }
                                 Err(e) => {
-                                    error!(error = %e, "Failed to apply config, dropping connection");
-                                    connection = None;
-                                    continue;
+                                    warn!(error = %e, "Auto-configure from JSON failed — \
+                                        awaiting Operator ApplyDigitizerConfig");
+                                    conn.hw_configured = true;
+                                    conn.auto_config_failed = true;
                                 }
                             },
                             Err(e) => {
@@ -741,10 +746,15 @@ impl Reader {
 
                 // Arm needed?
                 if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
-                    if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
-                        error!(error = %e, "Failed to arm digitizer");
+                    if conn.auto_config_failed {
+                        warn!("Cannot arm: auto-configure from JSON failed and no valid \
+                            config received from Operator. Run Detect or fix the JSON config.");
+                    } else {
+                        if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
+                            error!(error = %e, "Failed to arm digitizer");
+                        }
+                        conn.hw_armed = true;
                     }
-                    conn.hw_armed = true;
                 }
 
                 // Start needed?
@@ -819,6 +829,7 @@ impl Reader {
                     conn.hw_armed = false;
                     conn.hw_running = false;
                     conn.hw_configured = false;
+                    conn.auto_config_failed = false;
                 }
             }
 
@@ -864,6 +875,11 @@ impl Reader {
                             }
                             None => Err("Not connected to digitizer".to_string()),
                         };
+                        if result.is_ok() {
+                            if let Some(ref mut conn) = connection {
+                                conn.auto_config_failed = false;
+                            }
+                        }
                         let _ = response_tx.send(result);
                     }
                     ReadLoopRequest::ApplyConfigRunning {
@@ -1033,9 +1049,10 @@ impl Reader {
                                     conn.hw_configured = true;
                                 }
                                 Err(e) => {
-                                    error!(error = %e, "Failed to apply config, dropping connection");
-                                    connection = None;
-                                    continue;
+                                    warn!(error = %e, "Auto-configure from JSON failed — \
+                                        awaiting Operator ApplyDigitizerConfig");
+                                    conn.hw_configured = true;
+                                    conn.auto_config_failed = true;
                                 }
                             },
                             Err(e) => {
@@ -1052,10 +1069,15 @@ impl Reader {
 
                 // Arm needed?
                 if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
-                    if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
-                        error!(error = %e, "Failed to arm digitizer");
+                    if conn.auto_config_failed {
+                        warn!("Cannot arm: auto-configure from JSON failed and no valid \
+                            config received from Operator. Run Detect or fix the JSON config.");
+                    } else {
+                        if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
+                            error!(error = %e, "Failed to arm digitizer");
+                        }
+                        conn.hw_armed = true;
                     }
-                    conn.hw_armed = true;
                 }
 
                 // Start needed?
@@ -1096,6 +1118,7 @@ impl Reader {
                     conn.hw_armed = false;
                     conn.hw_running = false;
                     conn.hw_configured = false;
+                    conn.auto_config_failed = false;
                 }
             }
 
@@ -1141,6 +1164,11 @@ impl Reader {
                             }
                             None => Err("Not connected to digitizer".to_string()),
                         };
+                        if result.is_ok() {
+                            if let Some(ref mut conn) = connection {
+                                conn.auto_config_failed = false;
+                            }
+                        }
                         let _ = response_tx.send(result);
                     }
                     ReadLoopRequest::ApplyConfigRunning {

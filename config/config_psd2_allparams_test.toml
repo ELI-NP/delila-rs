@@ -3,6 +3,7 @@
 
 [operator]
 experiment_name = "PSD2_AllParams_Test"
+port = 9090
 
 [network]
 [[network.sources]]

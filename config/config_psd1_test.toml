@@ -4,6 +4,7 @@
 
 [operator]
 experiment_name = "PSD1_Test"
+port = 9090
 
 [network]
 # Real PSD1 digitizer (DT5730 via USB)

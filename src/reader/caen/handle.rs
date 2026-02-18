@@ -649,23 +649,42 @@ impl CaenHandle {
         })
     }
 
-    /// Apply digitizer configuration
+    /// Validate that config num_channels does not exceed hardware channel count.
+    fn validate_num_channels(&self, config_num_ch: u8) -> Result<(), CaenError> {
+        let hw_num_ch: u32 = self
+            .get_value("/par/NumCh")
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or(0);
+        let config_num_ch = config_num_ch as u32;
+
+        if hw_num_ch > 0 && config_num_ch > hw_num_ch {
+            return Err(CaenError {
+                code: -1,
+                name: "NumChannelsMismatch".to_string(),
+                description: format!(
+                    "Config num_channels={} exceeds hardware NumCh={}. \
+                     Fix the JSON config or run Detect to auto-correct.",
+                    config_num_ch, hw_num_ch
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Apply digitizer configuration.
     ///
     /// Applies all parameters from DigitizerConfig to the device.
     /// Parameters are applied in order: board-level first, then channel defaults,
     /// then channel-specific overrides.
-    ///
-    /// # Arguments
-    /// * `config` - DigitizerConfig to apply
-    ///
-    /// # Returns
-    /// * `Ok(applied_count)` - Number of parameters successfully applied
-    /// * `Err(...)` - Error if a critical parameter fails
     pub fn apply_config(
         &self,
         config: &crate::config::digitizer::DigitizerConfig,
     ) -> Result<usize, CaenError> {
         use tracing::{debug, info, warn};
+
+        // Validate num_channels against hardware
+        self.validate_num_channels(config.num_channels)?;
 
         let params = config.to_caen_parameters();
         info!("Applying {} parameters to digitizer", params.len());
@@ -694,12 +713,26 @@ impl CaenHandle {
         info!(applied, errors = errors.len(), "Configuration applied");
 
         // Return error if any critical parameters failed
-        // For now, we just warn and continue
         if !errors.is_empty() {
             warn!(
                 "Some parameters failed to apply: {:?}",
                 errors.iter().map(|(p, _)| p).collect::<Vec<_>>()
             );
+        }
+
+        // Defense in depth: detect if ALL channel parameters failed
+        let ch_params: Vec<_> = params.iter().filter(|p| p.path.contains("/ch/")).collect();
+        let ch_errors = errors.iter().filter(|(p, _)| p.contains("/ch/")).count();
+        if !ch_params.is_empty() && ch_errors == ch_params.len() {
+            return Err(CaenError {
+                code: -1,
+                name: "AllChannelParamsFailed".to_string(),
+                description: format!(
+                    "All {} channel parameters failed. \
+                     Likely num_channels mismatch. Run Detect to update.",
+                    ch_errors
+                ),
+            });
         }
 
         Ok(applied)
@@ -848,6 +881,9 @@ impl CaenHandle {
         config: &crate::config::digitizer::DigitizerConfig,
         param_cache: &HashMap<String, ParamInfo>,
     ) -> Result<ApplyConfigResult, CaenError> {
+        // Validate num_channels against hardware
+        self.validate_num_channels(config.num_channels)?;
+
         let params = config.to_caen_parameters();
         self.apply_params_validated(&params, param_cache)
     }
@@ -985,6 +1021,35 @@ impl CaenHandle {
                 .map(|d| format!("{}: {} → {}", d.path, d.original_value, d.applied_value))
                 .collect();
             info!("Adjusted parameters: {:?}", adjusted_params);
+        }
+
+        // Defense in depth: detect if ALL channel parameters failed
+        let ch_total = result
+            .details
+            .iter()
+            .filter(|d| d.path.contains("/ch/"))
+            .count();
+        let ch_failed = result
+            .details
+            .iter()
+            .filter(|d| {
+                d.path.contains("/ch/")
+                    && matches!(
+                        d.status,
+                        ParamApplyStatus::Failed | ParamApplyStatus::Skipped
+                    )
+            })
+            .count();
+        if ch_total > 0 && ch_failed == ch_total {
+            return Err(CaenError {
+                code: -1,
+                name: "AllChannelParamsFailed".to_string(),
+                description: format!(
+                    "All {} channel parameters failed. \
+                     Likely num_channels mismatch. Run Detect to update.",
+                    ch_failed
+                ),
+            });
         }
 
         Ok(result)

@@ -10,6 +10,7 @@
 
 [operator]
 experiment_name = "DELILA_Combined"
+port = 9090
 
 [network]
 
