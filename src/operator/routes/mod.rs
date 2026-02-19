@@ -379,6 +379,16 @@ impl RouterBuilder {
             load_digitizer_configs_from_files(&self.config_files)
         };
 
+        tracing::info!(
+            "Loaded {} digitizer config(s) at startup",
+            digitizer_configs.len()
+        );
+        if digitizer_configs.is_empty() {
+            tracing::warn!(
+                "No digitizer configs loaded — config snapshots will not be created on run start"
+            );
+        }
+
         // Extract web_ui_dir before moving config into AppState
         let web_ui_dir = self.config.web_ui_dir.clone();
 

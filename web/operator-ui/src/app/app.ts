@@ -87,6 +87,15 @@ import { HistogramService } from './services/histogram.service';
       >
         Settings
       </a>
+      <a
+        mat-tab-link
+        routerLink="/runs"
+        routerLinkActive
+        #rla5="routerLinkActive"
+        [active]="rla5.isActive"
+      >
+        Runs
+      </a>
     </nav>
 
     <mat-tab-nav-panel #tabPanel class="tab-content">

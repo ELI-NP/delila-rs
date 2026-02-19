@@ -15,9 +15,92 @@
 //! - DevTree JSON provides valid choices dynamically
 //! - Different firmware versions may have different valid values
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use utoipa::ToSchema;
+
+/// Serde helper: serialize/deserialize HashMap with numeric keys as string keys.
+/// Required for BSON compatibility (MongoDB requires string document keys).
+/// JSON format is unchanged (serde_json already uses string keys for numeric HashMap keys).
+mod string_key_map {
+    use super::*;
+
+    pub fn serialize<K, V, S>(map: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        K: std::fmt::Display + Eq + std::hash::Hash,
+        V: Serialize,
+        S: Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut ser_map = serializer.serialize_map(Some(map.len()))?;
+        for (k, v) in map {
+            ser_map.serialize_entry(&k.to_string(), v)?;
+        }
+        ser_map.end()
+    }
+
+    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
+    where
+        K: std::str::FromStr + Eq + std::hash::Hash,
+        K::Err: std::fmt::Display,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let string_map: HashMap<String, V> = HashMap::deserialize(deserializer)?;
+        string_map
+            .into_iter()
+            .map(|(k, v)| {
+                K::from_str(&k)
+                    .map(|k| (k, v))
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect()
+    }
+}
+
+/// Serde helper: same as string_key_map but for Option<HashMap<...>>
+mod opt_string_key_map {
+    use super::*;
+
+    pub fn serialize<K, V, S>(
+        opt: &Option<HashMap<K, V>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        K: std::fmt::Display + Eq + std::hash::Hash,
+        V: Serialize,
+        S: Serializer,
+    {
+        match opt {
+            Some(map) => string_key_map::serialize(map, serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<Option<HashMap<K, V>>, D::Error>
+    where
+        K: std::str::FromStr + Eq + std::hash::Hash,
+        K::Err: std::fmt::Display,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let opt: Option<HashMap<String, V>> = Option::deserialize(deserializer)?;
+        match opt {
+            Some(string_map) => {
+                let map = string_map
+                    .into_iter()
+                    .map(|(k, v)| {
+                        K::from_str(&k)
+                            .map(|k| (k, v))
+                            .map_err(serde::de::Error::custom)
+                    })
+                    .collect::<Result<HashMap<K, V>, _>>()?;
+                Ok(Some(map))
+            }
+            None => Ok(None),
+        }
+    }
+}
 
 /// Time step in ns for PSD1/PHA1 (500 MS/s → 1 sample = 2 ns).
 /// Used to convert ns config values to samples before writing to DevTree.
@@ -69,12 +152,22 @@ pub struct DigitizerConfig {
     pub channel_defaults: ChannelConfig,
 
     /// Per-channel overrides (sparse - only channels that differ from defaults)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "string_key_map::serialize",
+        deserialize_with = "string_key_map::deserialize"
+    )]
     pub channel_overrides: HashMap<u8, ChannelConfig>,
 
     /// Optional per-channel display names (key = channel index, value = name).
     /// Channels without entries default to "{digitizer_name}/Ch{n}".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "opt_string_key_map::serialize",
+        deserialize_with = "opt_string_key_map::deserialize"
+    )]
     pub channel_names: Option<HashMap<u32, String>>,
 }
 

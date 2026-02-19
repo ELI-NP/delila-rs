@@ -22,4 +22,9 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pages/settings/settings.component').then((m) => m.SettingsPageComponent),
   },
+  {
+    path: 'runs',
+    loadComponent: () =>
+      import('./pages/runs/runs.component').then((m) => m.RunsPageComponent),
+  },
 ];

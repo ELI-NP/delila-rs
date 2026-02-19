@@ -311,6 +311,13 @@ pub(super) async fn start(
                 {
                     tracing::warn!("Failed to create config snapshot: {}", e);
                 }
+            } else {
+                tracing::warn!(
+                    run_number,
+                    "digitizer_configs is empty — config snapshot skipped. \
+                     Check that config_file paths in TOML are correct and \
+                     operator is started from the project root."
+                );
             }
         } else {
             // No MongoDB, just track in memory
@@ -675,6 +682,13 @@ pub(super) async fn run_start(
                     {
                         tracing::warn!("Failed to create config snapshot: {}", e);
                     }
+                } else {
+                    tracing::warn!(
+                        run_number,
+                        "digitizer_configs is empty — config snapshot skipped. \
+                         Check that config_file paths in TOML are correct and \
+                         operator is started from the project root."
+                    );
                 }
             }
 
