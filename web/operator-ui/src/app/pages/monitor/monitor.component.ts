@@ -341,8 +341,13 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
         // Update the cell with any changes from the dialog
         const updatedCells = [...tab.cells];
         updatedCells[cellIndex] = result.cell;
+        const updatedTab = { ...tab, cells: updatedCells };
+        // Track last modified cell if range was changed in dialog
+        if (result.cell.isLocked) {
+          updatedTab.lastModifiedCellIndex = cellIndex;
+        }
         this.viewTabs.update((tabs) =>
-          tabs.map((t) => (t.id === tab.id ? { ...t, cells: updatedCells } : t))
+          tabs.map((t) => (t.id === tab.id ? updatedTab : t))
         );
         this.saveState();
       }

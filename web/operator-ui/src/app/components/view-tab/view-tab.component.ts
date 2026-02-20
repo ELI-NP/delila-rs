@@ -29,7 +29,7 @@ import { ViewTab, Histogram1D } from '../../models/histogram.types';
           mat-stroked-button
           (click)="onApplyRangeToAll()"
           [disabled]="!hasLockedCell()"
-          title="Apply the range from the first locked cell to all cells"
+          title="Apply the range from the last zoomed cell to all cells"
         >
           <mat-icon>content_copy</mat-icon>
           Apply Range to All
@@ -275,7 +275,7 @@ export class ViewTabComponent implements OnInit, OnDestroy {
       yRange: event.yRange,
       isLocked: true,
     };
-    this.tabChange.emit({ ...this.tab, cells });
+    this.tabChange.emit({ ...this.tab, cells, lastModifiedCellIndex: index });
   }
 
   onCellDoubleClick(index: number): void {
@@ -305,17 +305,20 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   }
 
   onApplyRangeToAll(): void {
-    // Find the first locked cell
-    const lockedCell = this.tab.cells.find((cell) => cell.isLocked);
-    if (!lockedCell) return;
+    // Use the last zoomed cell as reference, fallback to first locked cell
+    const refIndex = this.tab.lastModifiedCellIndex;
+    const refCell = refIndex != null
+      ? this.tab.cells[refIndex]
+      : this.tab.cells.find((cell) => cell.isLocked);
+    if (!refCell?.isLocked) return;
 
-    // Apply its range to all non-empty cells
+    // Apply its range to all non-empty cells in this tab
     const cells = this.tab.cells.map((cell) => {
       if (cell.isEmpty) return cell;
       return {
         ...cell,
-        xRange: lockedCell.xRange,
-        yRange: lockedCell.yRange,
+        xRange: refCell.xRange,
+        yRange: refCell.yRange,
         isLocked: true,
       };
     });
@@ -332,7 +335,7 @@ export class ViewTabComponent implements OnInit, OnDestroy {
       isLocked: false,
     }));
 
-    this.tabChange.emit({ ...this.tab, cells });
+    this.tabChange.emit({ ...this.tab, cells, lastModifiedCellIndex: undefined });
   }
 
   async onSaveImage(): Promise<void> {

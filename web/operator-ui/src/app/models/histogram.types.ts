@@ -104,6 +104,7 @@ export interface ViewTab {
   gridCols: number;
   xAxisLabel: XAxisLabel;
   cells: ViewCell[];
+  lastModifiedCellIndex?: number;
 }
 
 // View cell - has runtime state for display
