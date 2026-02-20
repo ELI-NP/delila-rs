@@ -35,20 +35,36 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load(&args.monitor.common.config_file)?;
     info!(config_file = %args.monitor.common.config_file, "Loaded configuration");
 
-    let (subscribe_addr, http_port) = if let Some(ref monitor) = config.network.monitor {
-        (monitor.subscribe.clone(), monitor.http_port)
-    } else {
-        ("tcp://localhost:5557".to_string(), 8081)
-    };
+    let mut monitor_config = MonitorConfig::default();
+
+    if let Some(ref monitor) = config.network.monitor {
+        monitor_config.subscribe_address = monitor.subscribe.clone();
+        monitor_config.http_port = monitor.http_port;
+        // PSD histogram config from TOML
+        monitor_config.psd_histogram_config = HistogramConfig {
+            num_bins: monitor.psd_bins,
+            min_value: monitor.psd_min,
+            max_value: monitor.psd_max,
+        };
+        monitor_config.psd2d_x_config = HistogramConfig {
+            num_bins: monitor.psd2d_x_bins,
+            min_value: 0.0,
+            max_value: 65536.0,
+        };
+        monitor_config.psd2d_y_config = HistogramConfig {
+            num_bins: monitor.psd2d_y_bins,
+            min_value: monitor.psd_min,
+            max_value: monitor.psd_max,
+        };
+    }
 
     // CLI overrides config file
-    let monitor_config = MonitorConfig {
-        subscribe_address: args.monitor.address.unwrap_or(subscribe_addr),
-        command_address: "tcp://*:5590".to_string(),
-        http_port: args.monitor.port.unwrap_or(http_port),
-        histogram_config: HistogramConfig::default(),
-        channel_capacity: 1000,
-    };
+    if let Some(addr) = args.monitor.address {
+        monitor_config.subscribe_address = addr;
+    }
+    if let Some(port) = args.monitor.port {
+        monitor_config.http_port = port;
+    }
 
     // Setup shutdown handling
     let (_shutdown_tx, shutdown_rx) =

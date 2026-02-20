@@ -1,7 +1,7 @@
 # Energy Calibration & PSD 表示設計書
 
 **Created:** 2026-02-19
-**Status:** 設計完了・レビュー待ち
+**Status:** Phase 1-2 完了 (2026-02-20), Phase 3 スキップ, Phase 4-5 未着手
 **GitHub Issue:** #7
 **Reviewed:** Gemini 協議済み (2026-02-19)
 
@@ -288,27 +288,29 @@ interface PeakCandidate {
 
 ## 5. 実装フェーズ
 
-### Phase 1: PSD バックエンド (1D + 2D ヒストグラム)
-- [ ] `Histogram2D` 構造体 + `fill(x, y)` メソッド
-- [ ] `MonitorState` に `psd_histograms` + `psd2d_histograms` 追加
-- [ ] PSD config を TOML から読み込み
-- [ ] `process_event()` に PSD 計算ロジック追加
-- [ ] チャンネル登録時に PSD/2D ヒストグラムも作成
-- [ ] REST API: `?type=psd` + `/histograms2d/` エンドポイント
-- [ ] gzip 圧縮有効化 (tower-http)
+### Phase 1: PSD バックエンド (1D + 2D ヒストグラム) — **完了** (2026-02-20)
+- [x] `Histogram2D` 構造体 + `fill(x, y)` メソッド
+- [x] `MonitorState` に `psd_histograms` + `psd2d_histograms` 追加
+- [x] PSD config を TOML から読み込み
+- [x] `process_event()` に PSD 計算ロジック追加
+- [x] チャンネル登録時に PSD/2D ヒストグラムも作成
+- [x] REST API: `?type=psd` + `/histograms2d/` エンドポイント
+- [x] gzip 圧縮 — 既に `CompressionLayer` で有効化済み
 
-### Phase 2: PSD フロントエンド (1D + 2D 表示)
-- [ ] HistogramService に type パラメータ + 2D fetch 追加 (表示中チャンネルのみ)
-- [ ] 2D heatmap コンポーネント (ECharts heatmap + log カラースケール)
-- [ ] Monitor: Setup Tab に histogram type 選択追加 (Energy / PSD / 2D PSD)
-- [ ] Monitor: 1D PSD ヒストグラム表示
-- [ ] **Tune Up: 上段右パネルの表示切り替え (Energy 1D ↔ PSD 2D)**
+### Phase 2: PSD フロントエンド (1D + 2D 表示) — **完了** (2026-02-20)
+- [x] HistogramService に `fetchPsdHistogram()` + `fetchHistogram2d()` 追加
+- [x] 2D heatmap コンポーネント (ECharts heatmap + viridis カラースケール + log 対応)
+- [ ] Monitor: Setup Tab に histogram type 選択追加 — 将来タスク
+- [ ] Monitor: 1D PSD ヒストグラム表示 — 将来タスク
+- [x] **Tune Up: 上段右パネルの表示切り替え (Energy 1D ↔ PSD 2D)**
 
-### Phase 3: ゲート機能
-- [ ] 多角形ゲート描画 UI (クリック → 頂点追加 → ダブルクリックで閉じる)
-- [ ] ゲート内カウント計算 (point-in-polygon)
-- [ ] ゲートパラメータ保存/読み込み
-- [ ] ゲート頂点のドラッグ移動
+### Phase 3: ゲート機能 — **スキップ**
+> 3月 MVP では不要。ゲート弁別は Event Builder 側で実装する方が適切。必要になった時点で再検討する。
+
+- ~~多角形ゲート描画 UI~~
+- ~~ゲート内カウント計算 (point-in-polygon)~~
+- ~~ゲートパラメータ保存/読み込み~~
+- ~~ゲート頂点のドラッグ移動~~
 
 ### Phase 4: Energy Calibration (バックエンド)
 - [ ] `config/calibration.json` スキーマ定義

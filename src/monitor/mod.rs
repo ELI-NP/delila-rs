@@ -45,8 +45,14 @@ pub struct MonitorConfig {
     pub command_address: String,
     /// HTTP server port
     pub http_port: u16,
-    /// Default histogram configuration
+    /// Default histogram configuration (Energy 1D)
     pub histogram_config: HistogramConfig,
+    /// PSD 1D histogram configuration
+    pub psd_histogram_config: HistogramConfig,
+    /// PSD 2D X axis (Energy) configuration
+    pub psd2d_x_config: HistogramConfig,
+    /// PSD 2D Y axis (PSD ratio) configuration
+    pub psd2d_y_config: HistogramConfig,
     /// Internal channel capacity
     pub channel_capacity: usize,
 }
@@ -58,6 +64,21 @@ impl Default for MonitorConfig {
             command_address: "tcp://*:5590".to_string(),
             http_port: 8081,
             histogram_config: HistogramConfig::default(),
+            psd_histogram_config: HistogramConfig {
+                num_bins: 200,
+                min_value: -0.2,
+                max_value: 1.2,
+            },
+            psd2d_x_config: HistogramConfig {
+                num_bins: 512,
+                min_value: 0.0,
+                max_value: 65536.0,
+            },
+            psd2d_y_config: HistogramConfig {
+                num_bins: 200,
+                min_value: -0.2,
+                max_value: 1.2,
+            },
             channel_capacity: 1000,
         }
     }
@@ -158,6 +179,73 @@ impl Histogram1D {
     }
 }
 
+/// 2D Histogram for Energy vs PSD scatter plots
+#[derive(Debug, Clone, Serialize)]
+pub struct Histogram2D {
+    pub module_id: u32,
+    pub channel_id: u32,
+    pub x_config: HistogramConfig,
+    pub y_config: HistogramConfig,
+    /// Flat array: bins[y * x_bins + x]
+    pub bins: Vec<u64>,
+    pub total_counts: u64,
+    pub overflow: u64,
+}
+
+impl Histogram2D {
+    /// Create a new 2D histogram with the given X and Y configurations
+    pub fn new(module_id: u32, channel_id: u32, x_config: HistogramConfig, y_config: HistogramConfig) -> Self {
+        let total_bins = x_config.num_bins as usize * y_config.num_bins as usize;
+        Self {
+            module_id,
+            channel_id,
+            x_config,
+            y_config,
+            bins: vec![0u64; total_bins],
+            total_counts: 0,
+            overflow: 0,
+        }
+    }
+
+    /// Fill the 2D histogram with (x, y) values
+    pub fn fill(&mut self, x: f32, y: f32) {
+        self.total_counts += 1;
+
+        // X axis bounds check
+        if x < self.x_config.min_value || x >= self.x_config.max_value {
+            self.overflow += 1;
+            return;
+        }
+        // Y axis bounds check
+        if y < self.y_config.min_value || y >= self.y_config.max_value {
+            self.overflow += 1;
+            return;
+        }
+
+        let x_range = self.x_config.max_value - self.x_config.min_value;
+        let x_bin_width = x_range / self.x_config.num_bins as f32;
+        let x_bin = ((x - self.x_config.min_value) / x_bin_width) as usize;
+
+        let y_range = self.y_config.max_value - self.y_config.min_value;
+        let y_bin_width = y_range / self.y_config.num_bins as f32;
+        let y_bin = ((y - self.y_config.min_value) / y_bin_width) as usize;
+
+        let idx = y_bin * self.x_config.num_bins as usize + x_bin;
+        if idx < self.bins.len() {
+            self.bins[idx] += 1;
+        } else {
+            self.overflow += 1;
+        }
+    }
+
+    /// Clear the 2D histogram
+    pub fn clear(&mut self) {
+        self.bins.fill(0);
+        self.total_counts = 0;
+        self.overflow = 0;
+    }
+}
+
 /// Key for identifying a channel histogram
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ChannelKey {
@@ -188,10 +276,15 @@ pub struct LatestWaveform {
 #[derive(Debug, Default)]
 pub struct MonitorState {
     pub histograms: HashMap<ChannelKey, Histogram1D>,
+    pub psd_histograms: HashMap<ChannelKey, Histogram1D>,
+    pub psd2d_histograms: HashMap<ChannelKey, Histogram2D>,
     pub latest_waveforms: HashMap<ChannelKey, LatestWaveform>,
     pub total_events: u64,
     pub start_time: Option<Instant>,
     pub histogram_config: HistogramConfig,
+    pub psd_histogram_config: HistogramConfig,
+    pub psd2d_x_config: HistogramConfig,
+    pub psd2d_y_config: HistogramConfig,
     /// Pre-registered channels from Operator (preserved across Clear, cleared on Reset)
     pub registered_channels: Vec<ChannelRegistration>,
     /// Channel display names lookup (built from registered_channels)
@@ -199,13 +292,18 @@ pub struct MonitorState {
 }
 
 impl MonitorState {
-    pub fn new(config: HistogramConfig) -> Self {
+    pub fn new(config: &MonitorConfig) -> Self {
         Self {
             histograms: HashMap::new(),
+            psd_histograms: HashMap::new(),
+            psd2d_histograms: HashMap::new(),
             latest_waveforms: HashMap::new(),
             total_events: 0,
             start_time: None,
-            histogram_config: config,
+            histogram_config: config.histogram_config,
+            psd_histogram_config: config.psd_histogram_config,
+            psd2d_x_config: config.psd2d_x_config,
+            psd2d_y_config: config.psd2d_y_config,
             registered_channels: Vec::new(),
             channel_names: HashMap::new(),
         }
@@ -217,6 +315,7 @@ impl MonitorState {
 
         let key = ChannelKey::new(event.module as u32, event.channel as u32);
 
+        // 1. Energy 1D histogram (existing)
         let histogram = self.histograms.entry(key).or_insert_with(|| {
             Histogram1D::new(
                 event.module as u32,
@@ -224,11 +323,35 @@ impl MonitorState {
                 self.histogram_config,
             )
         });
-
-        // Fill with energy (long gate)
         histogram.fill(event.energy as f32);
 
-        // Store latest waveform if present (move, not clone)
+        // 2. PSD calculation (only when energy > 0 to avoid division by zero)
+        if event.energy > 0 {
+            let psd = (event.energy as f32 - event.energy_short as f32) / event.energy as f32;
+
+            // 2a. 1D PSD histogram
+            let psd_hist = self.psd_histograms.entry(key).or_insert_with(|| {
+                Histogram1D::new(
+                    event.module as u32,
+                    event.channel as u32,
+                    self.psd_histogram_config,
+                )
+            });
+            psd_hist.fill(psd);
+
+            // 2b. 2D Energy vs PSD histogram
+            let psd2d = self.psd2d_histograms.entry(key).or_insert_with(|| {
+                Histogram2D::new(
+                    event.module as u32,
+                    event.channel as u32,
+                    self.psd2d_x_config,
+                    self.psd2d_y_config,
+                )
+            });
+            psd2d.fill(event.energy as f32, psd);
+        }
+
+        // 3. Store latest waveform if present (move, not clone)
         if let Some(wf) = event.waveform {
             self.latest_waveforms.insert(
                 key,
@@ -254,6 +377,8 @@ impl MonitorState {
     /// Re-creates empty histograms for registered channels.
     pub fn clear(&mut self) {
         self.histograms.clear();
+        self.psd_histograms.clear();
+        self.psd2d_histograms.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
         // Re-create empty histograms for registered channels
@@ -263,6 +388,8 @@ impl MonitorState {
     /// Full reset: clear everything including registered channels.
     pub fn reset(&mut self) {
         self.histograms.clear();
+        self.psd_histograms.clear();
+        self.psd2d_histograms.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
         self.registered_channels.clear();
@@ -282,12 +409,18 @@ impl MonitorState {
         self.ensure_registered_histograms();
     }
 
-    /// Ensure all registered channels have a histogram entry.
+    /// Ensure all registered channels have histogram entries (Energy, PSD 1D, PSD 2D).
     fn ensure_registered_histograms(&mut self) {
         for ch in &self.registered_channels {
             let key = ChannelKey::new(ch.module_id, ch.channel_id);
             self.histograms.entry(key).or_insert_with(|| {
                 Histogram1D::new(ch.module_id, ch.channel_id, self.histogram_config)
+            });
+            self.psd_histograms.entry(key).or_insert_with(|| {
+                Histogram1D::new(ch.module_id, ch.channel_id, self.psd_histogram_config)
+            });
+            self.psd2d_histograms.entry(key).or_insert_with(|| {
+                Histogram2D::new(ch.module_id, ch.channel_id, self.psd2d_x_config, self.psd2d_y_config)
             });
         }
     }
@@ -439,6 +572,10 @@ enum HistogramMessage {
     GetListSummary(oneshot::Sender<HistogramListSummary>),
     /// Get specific histogram
     GetHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
+    /// Get PSD 1D histogram for a channel
+    GetPsdHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
+    /// Get PSD 2D histogram for a channel
+    GetPsd2dHistogram(ChannelKey, oneshot::Sender<Option<Histogram2D>>),
     /// Get latest waveform for a channel
     GetWaveform(ChannelKey, oneshot::Sender<Option<LatestWaveform>>),
     /// List all available waveforms (union of actual waveforms + registered channels)
@@ -526,16 +663,50 @@ async fn list_histograms(State(state): State<AppState>) -> Json<HistogramListRes
     }
 }
 
-/// GET /api/histograms/:module/:channel - Get specific histogram
+/// Query parameters for histogram endpoint
+#[derive(Debug, Deserialize)]
+struct HistogramQuery {
+    /// Histogram type: "energy" (default) or "psd"
+    #[serde(default = "default_histogram_type")]
+    r#type: String,
+}
+
+fn default_histogram_type() -> String {
+    "energy".to_string()
+}
+
+/// GET /api/histograms/:module/:channel?type=energy|psd - Get specific histogram
 async fn get_histogram(
     State(state): State<AppState>,
     axum::extract::Path((module_id, channel_id)): axum::extract::Path<(u32, u32)>,
+    axum::extract::Query(query): axum::extract::Query<HistogramQuery>,
 ) -> Result<Json<Histogram1D>, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    let key = ChannelKey::new(module_id, channel_id);
+
+    let msg = match query.r#type.as_str() {
+        "psd" => HistogramMessage::GetPsdHistogram(key, tx),
+        _ => HistogramMessage::GetHistogram(key, tx),
+    };
+    let _ = state.histogram_tx.send(msg);
+
+    match rx.await {
+        Ok(Some(hist)) => Ok(Json(hist)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// GET /api/histograms2d/:module/:channel - Get 2D Energy vs PSD histogram
+async fn get_histogram2d(
+    State(state): State<AppState>,
+    axum::extract::Path((module_id, channel_id)): axum::extract::Path<(u32, u32)>,
+) -> Result<Json<Histogram2D>, StatusCode> {
     let (tx, rx) = oneshot::channel();
     let key = ChannelKey::new(module_id, channel_id);
     let _ = state
         .histogram_tx
-        .send(HistogramMessage::GetHistogram(key, tx));
+        .send(HistogramMessage::GetPsd2dHistogram(key, tx));
 
     match rx.await {
         Ok(Some(hist)) => Ok(Json(hist)),
@@ -673,6 +844,7 @@ pub fn create_router(state: AppState) -> Router {
             "/api/histograms/clear",
             axum::routing::post(clear_histograms),
         )
+        .route("/api/histograms2d/:module_id/:channel_id", get(get_histogram2d))
         .route("/api/waveforms", get(list_waveforms))
         .route("/api/waveforms/:module_id/:channel_id", get(get_waveform))
         .layer(cors)
@@ -864,10 +1036,10 @@ impl Monitor {
         });
 
         // Spawn histogram task
-        let histogram_config = self.config.histogram_config;
+        let monitor_config_for_hist = self.config.clone();
         let atomic_stats_for_hist = self.atomic_stats.clone();
         let hist_handle = tokio::spawn(async move {
-            Self::histogram_task(hist_rx, data_rx, histogram_config, atomic_stats_for_hist).await
+            Self::histogram_task(hist_rx, data_rx, monitor_config_for_hist, atomic_stats_for_hist).await
         });
 
         info!(state = %self.state(), "Monitor ready, waiting for commands");
@@ -983,10 +1155,10 @@ impl Monitor {
     async fn histogram_task(
         mut cmd_rx: mpsc::UnboundedReceiver<HistogramMessage>,
         mut data_rx: mpsc::UnboundedReceiver<EventDataBatch>,
-        histogram_config: HistogramConfig,
+        monitor_config: MonitorConfig,
         atomic_stats: Arc<AtomicStats>,
     ) {
-        let mut state = MonitorState::new(histogram_config);
+        let mut state = MonitorState::new(&monitor_config);
 
         loop {
             tokio::select! {
@@ -1018,6 +1190,12 @@ impl Monitor {
                         }
                         Some(HistogramMessage::GetHistogram(key, tx)) => {
                             let _ = tx.send(state.histograms.get(&key).cloned());
+                        }
+                        Some(HistogramMessage::GetPsdHistogram(key, tx)) => {
+                            let _ = tx.send(state.psd_histograms.get(&key).cloned());
+                        }
+                        Some(HistogramMessage::GetPsd2dHistogram(key, tx)) => {
+                            let _ = tx.send(state.psd2d_histograms.get(&key).cloned());
                         }
                         Some(HistogramMessage::GetWaveform(key, tx)) => {
                             let _ = tx.send(state.latest_waveforms.get(&key).cloned());
@@ -1172,7 +1350,8 @@ mod tests {
 
     #[test]
     fn test_monitor_state_process_event() {
-        let mut state = MonitorState::new(HistogramConfig::default());
+        let config = MonitorConfig::default();
+        let mut state = MonitorState::new(&config);
 
         let event = EventData {
             module: 0,
@@ -1192,6 +1371,83 @@ mod tests {
         let key = ChannelKey::new(0, 5);
         let hist = state.histograms.get(&key).unwrap();
         assert_eq!(hist.total_counts, 1);
+    }
+
+    #[test]
+    fn test_psd_histogram_fill() {
+        let config = MonitorConfig::default();
+        let mut state = MonitorState::new(&config);
+
+        // Event with energy=1000, energy_short=300 → PSD = (1000-300)/1000 = 0.7
+        let event = EventData {
+            module: 0,
+            channel: 0,
+            energy: 1000,
+            energy_short: 300,
+            timestamp_ns: 0.0,
+            flags: 0,
+            waveform: None,
+        };
+        state.process_event(event);
+
+        let key = ChannelKey::new(0, 0);
+
+        // 1D PSD histogram should have 1 entry
+        let psd_hist = state.psd_histograms.get(&key).unwrap();
+        assert_eq!(psd_hist.total_counts, 1);
+
+        // 2D histogram should have 1 entry
+        let psd2d = state.psd2d_histograms.get(&key).unwrap();
+        assert_eq!(psd2d.total_counts, 1);
+    }
+
+    #[test]
+    fn test_psd_skipped_for_zero_energy() {
+        let config = MonitorConfig::default();
+        let mut state = MonitorState::new(&config);
+
+        // Event with energy=0 → PSD calculation skipped
+        let event = EventData {
+            module: 0,
+            channel: 0,
+            energy: 0,
+            energy_short: 0,
+            timestamp_ns: 0.0,
+            flags: 0,
+            waveform: None,
+        };
+        state.process_event(event);
+
+        let key = ChannelKey::new(0, 0);
+
+        // Energy histogram should still have the event
+        assert_eq!(state.histograms.get(&key).unwrap().total_counts, 1);
+
+        // PSD histograms should NOT have any entries (lazy created, so not present)
+        assert!(state.psd_histograms.get(&key).is_none());
+        assert!(state.psd2d_histograms.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_histogram2d_fill() {
+        let x_config = HistogramConfig { num_bins: 10, min_value: 0.0, max_value: 100.0 };
+        let y_config = HistogramConfig { num_bins: 5, min_value: 0.0, max_value: 1.0 };
+        let mut hist = Histogram2D::new(0, 0, x_config, y_config);
+
+        hist.fill(50.0, 0.5); // x_bin=5, y_bin=2 → idx = 2*10+5 = 25
+        assert_eq!(hist.total_counts, 1);
+        assert_eq!(hist.bins[25], 1);
+        assert_eq!(hist.overflow, 0);
+
+        // Overflow: x out of range
+        hist.fill(100.0, 0.5);
+        assert_eq!(hist.total_counts, 2);
+        assert_eq!(hist.overflow, 1);
+
+        // Overflow: y out of range
+        hist.fill(50.0, 1.5);
+        assert_eq!(hist.total_counts, 3);
+        assert_eq!(hist.overflow, 2);
     }
 
     #[test]

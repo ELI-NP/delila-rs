@@ -34,12 +34,13 @@ import {
   forkJoin,
   of,
   map,
+  tap,
   finalize,
 } from 'rxjs';
 import { HistogramService } from '../../services/histogram.service';
 import { OperatorService } from '../../services/operator.service';
 import { DigitizerService } from '../../services/digitizer.service';
-import { WaveformChannelInfo, LatestWaveform, Histogram1D } from '../../models/histogram.types';
+import { WaveformChannelInfo, LatestWaveform, Histogram1D, Histogram2D } from '../../models/histogram.types';
 import { DigitizerConfig } from '../../models/types';
 import {
   ChannelTableComponent,
@@ -48,6 +49,7 @@ import {
 } from '../../components/channel-table/channel-table.component';
 import { getCategoryParams, getAllChannelParams, getProbeOptions, ChannelCategory, ProbeOption } from '../../models/channel-params';
 import { HistogramChartComponent, RangeChangeEvent } from '../../components/histogram-chart/histogram-chart.component';
+import { HeatmapChartComponent } from '../../components/heatmap-chart/heatmap-chart.component';
 
 interface ProbeConfig {
   analog1: boolean;
@@ -90,6 +92,7 @@ interface ChannelChart {
     NgxEchartsDirective,
     ChannelTableComponent,
     HistogramChartComponent,
+    HeatmapChartComponent,
   ],
   template: `
     <div class="waveform-page">
@@ -204,9 +207,19 @@ interface ChannelChart {
 
             <div class="tuneup-histogram-panel">
               <div class="panel-header">
-                ChargeLong
-                @if (tuneUpHistogram(); as hist) {
+                <mat-button-toggle-group
+                  [value]="tuneUpDisplayMode()"
+                  (change)="onDisplayModeChange($event.value)"
+                  class="display-mode-toggle"
+                >
+                  <mat-button-toggle value="energy">Energy</mat-button-toggle>
+                  <mat-button-toggle value="psd2d">PSD 2D</mat-button-toggle>
+                </mat-button-toggle-group>
+                @if (tuneUpDisplayMode() === 'energy' && tuneUpHistogram(); as hist) {
                   <span class="hist-counts">{{ hist.total_counts | number }} counts</span>
+                }
+                @if (tuneUpDisplayMode() === 'psd2d' && tuneUpHistogram2d(); as hist2d) {
+                  <span class="hist-counts">{{ hist2d.total_counts | number }} counts</span>
                 }
                 <span class="spacer"></span>
                 <mat-checkbox
@@ -215,12 +228,19 @@ interface ChannelChart {
                   color="primary"
                 >Log</mat-checkbox>
               </div>
-              <app-histogram-chart
-                [histogram]="tuneUpHistogram()"
-                [logScale]="histLogScale()"
-                [xRange]="histXRange()"
-                (rangeChange)="onHistRangeChange($event)"
-              />
+              @if (tuneUpDisplayMode() === 'energy') {
+                <app-histogram-chart
+                  [histogram]="tuneUpHistogram()"
+                  [logScale]="histLogScale()"
+                  [xRange]="histXRange()"
+                  (rangeChange)="onHistRangeChange($event)"
+                />
+              } @else {
+                <app-heatmap-chart
+                  [histogram]="tuneUpHistogram2d()"
+                  [logScale]="histLogScale()"
+                />
+              }
             </div>
           </div>
 
@@ -460,7 +480,8 @@ interface ChannelChart {
                 <div class="chart-container">
                   <div
                     echarts
-                    [options]="chart.options"
+                    [options]="normalBaseOptions()"
+                    [merge]="chart.options"
                     class="waveform-chart"
                   ></div>
                 </div>
@@ -706,6 +727,16 @@ interface ChannelChart {
       font-size: 13px;
     }
 
+    .display-mode-toggle {
+      height: 28px;
+    }
+
+    .display-mode-toggle .mat-button-toggle-label-content {
+      line-height: 28px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
     .hist-counts {
       font-weight: 400;
       color: #666;
@@ -831,6 +862,38 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
 
   readonly channelCharts = computed<ChannelChart[]>(() => this.buildChannelCharts());
 
+  // Normal mode base options: stable reference between polls, re-inits on user action
+  readonly normalBaseOptions = computed<EChartsCoreOption>(() => {
+    this.selectedChannels();
+    this.probeConfig();
+    const yMode = this.yAxisMode();
+    return {
+      animation: false,
+      grid: { left: 60, right: 50, top: 40, bottom: 50 },
+      legend: { show: true, top: 5, type: 'scroll' },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+      xAxis: { type: 'value', nameLocation: 'middle', nameGap: 25, min: 0 },
+      yAxis: {
+        type: 'value',
+        name: 'ADC',
+        ...(yMode === 'fixed' ? { min: -30000, max: 30000 } : {}),
+        axisLabel: {
+          formatter: (value: number) => {
+            if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'k';
+            return value.toString();
+          },
+        },
+      },
+      dataZoom: [
+        { type: 'inside', xAxisIndex: 0, yAxisIndex: [], zoomOnMouseWheel: 'shift', moveOnMouseMove: true, filterMode: 'none' },
+        { type: 'inside', xAxisIndex: [], yAxisIndex: 0, zoomOnMouseWheel: 'ctrl', moveOnMouseMove: false, filterMode: 'none' },
+        { type: 'slider', xAxisIndex: 0, height: 20, bottom: 5, filterMode: 'none' },
+        { type: 'slider', yAxisIndex: 0, width: 20, right: 5, filterMode: 'none' },
+      ],
+      series: [],
+    };
+  });
+
   // ===========================================================================
   // Normal Mode State
   // ===========================================================================
@@ -850,6 +913,9 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly channelValues = signal<Record<string, unknown>[]>([]);
   readonly selectedCategory = signal<ChannelCategory | 'all'>('all');
   readonly tuneUpHistogram = signal<Histogram1D | null>(null);
+  readonly tuneUpHistogram2d = signal<Histogram2D | null>(null);
+  /** Display mode for the right panel: 'energy' = 1D histogram, 'psd2d' = 2D heatmap */
+  readonly tuneUpDisplayMode = signal<'energy' | 'psd2d'>('energy');
 
   // Waveform Accumulation State
   readonly accumulateEnabled = signal(false);
@@ -939,6 +1005,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         this.defaultValues.set({});
         this.channelValues.set([]);
         this.tuneUpHistogram.set(null);
+        this.tuneUpHistogram2d.set(null);
         this.stopHistogramPolling();
       }
     });
@@ -1109,6 +1176,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.applyLoading.set(true);
     this.stopHistogramPolling();
     this.tuneUpHistogram.set(null);
+    this.tuneUpHistogram2d.set(null);
     this.waveformHistory.set([]);
     this.triggerMode.set('running');
 
@@ -1187,6 +1255,23 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.histXRange.set(event.xRange);
   }
 
+  onDisplayModeChange(mode: 'energy' | 'psd2d'): void {
+    this.tuneUpDisplayMode.set(mode);
+    // Trigger immediate fetch for the new mode
+    const selected = this.selectedChannels();
+    if (selected.length === 0) return;
+    const [moduleId, channelId] = selected[0].split(':').map(Number);
+    if (mode === 'psd2d') {
+      this.histogramService.fetchHistogram2d(moduleId, channelId).subscribe((hist) => {
+        if (hist) this.tuneUpHistogram2d.set(hist);
+      });
+    } else {
+      this.histogramService.fetchHistogram(moduleId, channelId).subscribe((hist) => {
+        if (hist) this.tuneUpHistogram.set(hist);
+      });
+    }
+  }
+
   // ===========================================================================
   // Tune Up Helpers
   // ===========================================================================
@@ -1209,6 +1294,12 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           const selected = this.selectedChannels();
           if (selected.length === 0) return of(null);
           const [moduleId, channelId] = selected[0].split(':').map(Number);
+          if (this.tuneUpDisplayMode() === 'psd2d') {
+            return this.histogramService.fetchHistogram2d(moduleId, channelId).pipe(
+              tap((hist: Histogram2D | null) => { if (hist) this.tuneUpHistogram2d.set(hist); }),
+              map(() => null as Histogram1D | null),
+            );
+          }
           return this.histogramService.fetchHistogram(moduleId, channelId);
         })
       )
@@ -1485,6 +1576,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           yAxisIndex: [],
           zoomOnMouseWheel: 'shift',
           moveOnMouseMove: true,
+          filterMode: 'none',
         },
         {
           type: 'inside',
@@ -1492,18 +1584,21 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           yAxisIndex: 0,
           zoomOnMouseWheel: 'ctrl',
           moveOnMouseMove: false,
+          filterMode: 'none',
         },
         {
           type: 'slider',
           xAxisIndex: 0,
           height: 20,
           bottom: 5,
+          filterMode: 'none',
         },
         {
           type: 'slider',
           yAxisIndex: 0,
           width: 20,
           right: 5,
+          filterMode: 'none',
         },
       ],
       series,
@@ -1537,10 +1632,10 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         },
       },
       dataZoom: [
-        { type: 'inside', xAxisIndex: 0, yAxisIndex: [], zoomOnMouseWheel: 'shift', moveOnMouseMove: true },
-        { type: 'inside', xAxisIndex: [], yAxisIndex: 0, zoomOnMouseWheel: 'ctrl', moveOnMouseMove: false },
-        { type: 'slider', xAxisIndex: 0, height: 20, bottom: 5 },
-        { type: 'slider', yAxisIndex: 0, width: 20, right: 5 },
+        { type: 'inside', xAxisIndex: 0, yAxisIndex: [], zoomOnMouseWheel: 'shift', moveOnMouseMove: true, filterMode: 'none' },
+        { type: 'inside', xAxisIndex: [], yAxisIndex: 0, zoomOnMouseWheel: 'ctrl', moveOnMouseMove: false, filterMode: 'none' },
+        { type: 'slider', xAxisIndex: 0, height: 20, bottom: 5, filterMode: 'none' },
+        { type: 'slider', yAxisIndex: 0, width: 20, right: 5, filterMode: 'none' },
       ],
       series: [],
     };

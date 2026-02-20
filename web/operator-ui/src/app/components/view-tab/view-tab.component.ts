@@ -7,41 +7,45 @@ import {
   OnDestroy,
   inject,
   signal,
+  computed,
   ViewChildren,
   QueryList,
 } from '@angular/core';
-import { interval, Subject, takeUntil, switchMap, forkJoin, of } from 'rxjs';
+import { interval, Subject, takeUntil, switchMap, forkJoin, of, tap, catchError } from 'rxjs';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/histogram-chart.component';
+import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
 import { HistogramService } from '../../services/histogram.service';
-import { ViewTab, Histogram1D } from '../../models/histogram.types';
+import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types';
 
 @Component({
   selector: 'app-view-tab',
   standalone: true,
-  imports: [HistogramChartComponent, MatButtonModule, MatIconModule],
+  imports: [HistogramChartComponent, HeatmapChartComponent, MatButtonModule, MatIconModule],
   template: `
     <div class="view-container">
       <!-- Toolbar -->
       <div class="view-toolbar">
-        <button
-          mat-stroked-button
-          (click)="onApplyRangeToAll()"
-          [disabled]="!hasLockedCell()"
-          title="Apply the range from the last zoomed cell to all cells"
-        >
-          <mat-icon>content_copy</mat-icon>
-          Apply Range to All
-        </button>
-        <button
-          mat-stroked-button
-          (click)="onResetAllRanges()"
-          [disabled]="!hasLockedCell()"
-        >
-          <mat-icon>restart_alt</mat-icon>
-          Reset All
-        </button>
+        @if (histType() !== 'psd2d') {
+          <button
+            mat-stroked-button
+            (click)="onApplyRangeToAll()"
+            [disabled]="!hasLockedCell()"
+            title="Apply the range from the last zoomed cell to all cells"
+          >
+            <mat-icon>content_copy</mat-icon>
+            Apply Range to All
+          </button>
+          <button
+            mat-stroked-button
+            (click)="onResetAllRanges()"
+            [disabled]="!hasLockedCell()"
+          >
+            <mat-icon>restart_alt</mat-icon>
+            Reset All
+          </button>
+        }
         <button
           mat-stroked-button
           (click)="onToggleLogScale()"
@@ -60,9 +64,11 @@ import { ViewTab, Histogram1D } from '../../models/histogram.types';
           <mat-icon>save_alt</mat-icon>
           {{ isSaving() ? 'Saving...' : 'Save Image' }}
         </button>
-        <span class="toolbar-hint">
-          Drag to select range, Ctrl+Scroll for X-axis zoom
-        </span>
+        @if (histType() !== 'psd2d') {
+          <span class="toolbar-hint">
+            Drag to select range, Ctrl+Scroll for X-axis zoom
+          </span>
+        }
       </div>
 
       <!-- Grid -->
@@ -85,16 +91,23 @@ import { ViewTab, Histogram1D } from '../../models/histogram.types';
                 }
               </div>
               <div class="chart-wrapper">
-                <app-histogram-chart
-                  #chartRef
-                  [histogram]="histograms()[i] ?? null"
-                  [xRange]="cell.xRange"
-                  [yRange]="cell.yRange"
-                  [showDataZoom]="true"
-                  [logScale]="cell.logScale ?? false"
-                  [xAxisLabel]="tab.xAxisLabel"
-                  (rangeChange)="onRangeChange(i, $event)"
-                ></app-histogram-chart>
+                @if (histType() !== 'psd2d') {
+                  <app-histogram-chart
+                    #chartRef
+                    [histogram]="histograms()[i] ?? null"
+                    [xRange]="cell.xRange"
+                    [yRange]="cell.yRange"
+                    [showDataZoom]="true"
+                    [logScale]="cell.logScale ?? false"
+                    [xAxisLabel]="tab.xAxisLabel"
+                    (rangeChange)="onRangeChange(i, $event)"
+                  ></app-histogram-chart>
+                } @else {
+                  <app-heatmap-chart
+                    [histogram]="histograms2d()[i] ?? null"
+                    [logScale]="cell.logScale ?? true"
+                  ></app-heatmap-chart>
+                }
               </div>
               <button class="expand-button" (click)="onExpandClick(i)" title="Expand">
                 <span class="expand-icon">&#x26F6;</span>
@@ -229,26 +242,42 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   private readonly refreshInterval = 1000;
 
   readonly histograms = signal<(Histogram1D | null)[]>([]);
+  readonly histograms2d = signal<(Histogram2D | null)[]>([]);
   readonly isSaving = signal(false);
+  readonly histType = computed(() => this.tab.histogramType ?? 'energy');
 
   ngOnInit(): void {
-    // Initialize histogram array
-    this.histograms.set(new Array(this.tab.cells.length).fill(null));
+    const cellCount = this.tab.cells.length;
+    this.histograms.set(new Array(cellCount).fill(null));
+    this.histograms2d.set(new Array(cellCount).fill(null));
 
-    // Start auto-refresh
-    interval(this.refreshInterval)
-      .pipe(
-        takeUntil(this.destroy$),
-        switchMap(() => this.fetchAllHistograms())
-      )
-      .subscribe((results) => {
+    if (this.histType() === 'psd2d') {
+      // Poll 2D histograms
+      interval(this.refreshInterval)
+        .pipe(
+          takeUntil(this.destroy$),
+          switchMap(() => this.fetchAll2d())
+        )
+        .subscribe((results) => {
+          this.histograms2d.set(results);
+        });
+      this.fetchAll2d().subscribe((results) => {
+        this.histograms2d.set(results);
+      });
+    } else {
+      // Poll 1D histograms (energy or psd)
+      interval(this.refreshInterval)
+        .pipe(
+          takeUntil(this.destroy$),
+          switchMap(() => this.fetchAll1d())
+        )
+        .subscribe((results) => {
+          this.histograms.set(results);
+        });
+      this.fetchAll1d().subscribe((results) => {
         this.histograms.set(results);
       });
-
-    // Initial fetch
-    this.fetchAllHistograms().subscribe((results) => {
-      this.histograms.set(results);
-    });
+    }
   }
 
   ngOnDestroy(): void {
@@ -256,14 +285,25 @@ export class ViewTabComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
   }
 
-  private fetchAllHistograms() {
+  private fetchAll1d() {
+    const isPsd = this.histType() === 'psd';
     const requests = this.tab.cells.map((cell) => {
-      if (cell.isEmpty) {
-        return of(null);
+      if (cell.isEmpty) return of(null);
+      if (isPsd) {
+        return this.histogramService.fetchPsdHistogram(cell.sourceId, cell.channelId);
       }
       return this.histogramService.fetchAndCacheHistogram(cell.sourceId, cell.channelId);
     });
+    return forkJoin(requests);
+  }
 
+  private fetchAll2d() {
+    const requests = this.tab.cells.map((cell) => {
+      if (cell.isEmpty) return of(null);
+      return this.histogramService.fetchHistogram2d(cell.sourceId, cell.channelId).pipe(
+        catchError(() => of(null))
+      );
+    });
     return forkJoin(requests);
   }
 

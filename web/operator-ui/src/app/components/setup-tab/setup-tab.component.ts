@@ -14,6 +14,7 @@ import {
   SetupCell,
   ChannelSummary,
   XAxisLabel,
+  HistogramType,
   createDefaultSetupCell,
 } from '../../models/histogram.types';
 
@@ -99,17 +100,31 @@ import {
           />
         </mat-form-field>
 
-        <mat-form-field appearance="outline" class="axis-label-select">
-          <mat-label>X-Axis</mat-label>
+        <mat-form-field appearance="outline" class="histogram-type-select">
+          <mat-label>Type</mat-label>
           <mat-select
-            [value]="config.xAxisLabel"
-            (selectionChange)="onXAxisLabelChange($event.value)"
+            [value]="config.histogramType"
+            (selectionChange)="onHistogramTypeChange($event.value)"
           >
-            <mat-option value="Channel">Channel</mat-option>
-            <mat-option value="keV">keV</mat-option>
-            <mat-option value="MeV">MeV</mat-option>
+            <mat-option value="energy">Energy</mat-option>
+            <mat-option value="psd">PSD</mat-option>
+            <mat-option value="psd2d">PSD 2D</mat-option>
           </mat-select>
         </mat-form-field>
+
+        @if (config.histogramType !== 'psd2d') {
+          <mat-form-field appearance="outline" class="axis-label-select">
+            <mat-label>X-Axis</mat-label>
+            <mat-select
+              [value]="config.xAxisLabel"
+              (selectionChange)="onXAxisLabelChange($event.value)"
+            >
+              <mat-option value="Channel">Channel</mat-option>
+              <mat-option value="keV">keV</mat-option>
+              <mat-option value="MeV">MeV</mat-option>
+            </mat-select>
+          </mat-form-field>
+        }
 
         <button
           mat-raised-button
@@ -194,6 +209,10 @@ import {
 
     .size-input {
       width: 80px;
+    }
+
+    .histogram-type-select {
+      width: 120px;
     }
 
     .axis-label-select {
@@ -286,6 +305,10 @@ export class SetupTabComponent {
     this.updateGridSize(this.config.gridRows, cols);
   }
 
+  onHistogramTypeChange(value: HistogramType): void {
+    this.emitConfigChange({ histogramType: value });
+  }
+
   onXAxisLabelChange(value: XAxisLabel): void {
     this.emitConfigChange({ xAxisLabel: value });
   }
@@ -368,6 +391,7 @@ export class SetupTabComponent {
         gridRows: rows,
         gridCols: cols,
         xAxisLabel: 'Channel',
+        histogramType: this.config.histogramType,
         cells,
       });
     }

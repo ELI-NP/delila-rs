@@ -5,14 +5,16 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { interval, Subject, takeUntil, switchMap } from 'rxjs';
 import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/histogram-chart.component';
+import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
 import { HistogramService } from '../../services/histogram.service';
 import { FittingService } from '../../services/fitting.service';
-import { ViewCell, ViewCellFitResult, Histogram1D, XAxisLabel } from '../../models/histogram.types';
+import { ViewCell, ViewCellFitResult, Histogram1D, Histogram2D, XAxisLabel, HistogramType } from '../../models/histogram.types';
 
 export interface ExpandDialogData {
   cell: ViewCell;
   cellIndex: number;
   xAxisLabel: XAxisLabel;
+  histogramType: HistogramType;
 }
 
 export interface ExpandDialogResult {
@@ -28,6 +30,7 @@ export interface ExpandDialogResult {
     MatButtonModule,
     MatIconModule,
     HistogramChartComponent,
+    HeatmapChartComponent,
   ],
   template: `
     <div class="expand-dialog">
@@ -36,32 +39,34 @@ export interface ExpandDialogResult {
           Source {{ data.cell.sourceId }} / Channel {{ data.cell.channelId }}
         </span>
         <div class="header-actions">
-          <button
-            mat-stroked-button
-            (click)="onFit()"
-            [disabled]="!canFit()"
-            title="Fit Gaussian to selected range"
-          >
-            <mat-icon>ssid_chart</mat-icon>
-            Fit
-          </button>
-          <button
-            mat-stroked-button
-            (click)="onClearFit()"
-            [disabled]="!hasFitResult()"
-          >
-            <mat-icon>clear</mat-icon>
-            Clear Fit
-          </button>
-          <span class="separator"></span>
-          <button
-            mat-stroked-button
-            (click)="onResetRange()"
-            [disabled]="!isLocked()"
-          >
-            <mat-icon>restart_alt</mat-icon>
-            Reset Range
-          </button>
+          @if (data.histogramType !== 'psd2d') {
+            <button
+              mat-stroked-button
+              (click)="onFit()"
+              [disabled]="!canFit()"
+              title="Fit Gaussian to selected range"
+            >
+              <mat-icon>ssid_chart</mat-icon>
+              Fit
+            </button>
+            <button
+              mat-stroked-button
+              (click)="onClearFit()"
+              [disabled]="!hasFitResult()"
+            >
+              <mat-icon>clear</mat-icon>
+              Clear Fit
+            </button>
+            <span class="separator"></span>
+            <button
+              mat-stroked-button
+              (click)="onResetRange()"
+              [disabled]="!isLocked()"
+            >
+              <mat-icon>restart_alt</mat-icon>
+              Reset Range
+            </button>
+          }
           <button
             mat-stroked-button
             (click)="onToggleLogScale()"
@@ -78,29 +83,45 @@ export interface ExpandDialogResult {
 
       <div class="main-content">
         <div class="chart-container">
-          <app-histogram-chart
-            [histogram]="histogram()"
-            [xRange]="cell().xRange"
-            [yRange]="cell().yRange"
-            [showDataZoom]="true"
-            [logScale]="cell().logScale ?? false"
-            [xAxisLabel]="data.xAxisLabel"
-            [fitResult]="cell().fitResult ?? null"
-            (rangeChange)="onRangeChange($event)"
-          ></app-histogram-chart>
+          @if (data.histogramType !== 'psd2d') {
+            <app-histogram-chart
+              [histogram]="histogram()"
+              [xRange]="cell().xRange"
+              [yRange]="cell().yRange"
+              [showDataZoom]="true"
+              [logScale]="cell().logScale ?? false"
+              [xAxisLabel]="data.xAxisLabel"
+              [fitResult]="cell().fitResult ?? null"
+              (rangeChange)="onRangeChange($event)"
+            ></app-histogram-chart>
+          } @else {
+            <app-heatmap-chart
+              [histogram]="histogram2d()"
+              [logScale]="cell().logScale ?? true"
+            ></app-heatmap-chart>
+          }
         </div>
       </div>
 
       <div class="dialog-footer">
         <div class="stats">
-          @if (histogram(); as hist) {
-            <span>Total: {{ hist.total_counts | number }}</span>
-            <span>Underflow: {{ hist.underflow | number }}</span>
-            <span>Overflow: {{ hist.overflow | number }}</span>
+          @if (data.histogramType !== 'psd2d') {
+            @if (histogram(); as hist) {
+              <span>Total: {{ hist.total_counts | number }}</span>
+              <span>Underflow: {{ hist.underflow | number }}</span>
+              <span>Overflow: {{ hist.overflow | number }}</span>
+            }
+          } @else {
+            @if (histogram2d(); as hist) {
+              <span>Total: {{ hist.total_counts | number }}</span>
+              <span>Overflow: {{ hist.overflow | number }}</span>
+            }
           }
         </div>
         <div class="hint">
-          @if (!isLocked()) {
+          @if (data.histogramType === 'psd2d') {
+            Energy vs PSD 2D heatmap
+          } @else if (!isLocked()) {
             Drag to select fit range, Ctrl+Scroll for X-axis zoom
           } @else {
             Range selected. Click "Fit" to perform Gaussian fit.
@@ -194,6 +215,7 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
 
   readonly cell: ReturnType<typeof signal<ViewCell>>;
   readonly histogram = signal<Histogram1D | null>(null);
+  readonly histogram2d = signal<Histogram2D | null>(null);
 
   readonly fitResult = computed(() => this.cell().fitResult);
   readonly chi2PerNdf = computed(() => {
@@ -210,29 +232,41 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    // Start auto-refresh
-    interval(this.refreshInterval)
-      .pipe(
-        takeUntil(this.destroy$),
-        switchMap(() =>
-          this.histogramService.fetchAndCacheHistogram(
-            this.data.cell.sourceId,
-            this.data.cell.channelId
-          )
-        )
-      )
-      .subscribe((hist) => {
-        if (hist) {
-          this.histogram.set(hist);
-        }
-      });
+    const { sourceId, channelId } = this.data.cell;
+    const type = this.data.histogramType;
 
-    // Initial fetch
-    this.histogramService
-      .fetchAndCacheHistogram(this.data.cell.sourceId, this.data.cell.channelId)
-      .subscribe((hist) => {
+    if (type === 'psd2d') {
+      // Poll 2D histogram
+      interval(this.refreshInterval)
+        .pipe(
+          takeUntil(this.destroy$),
+          switchMap(() => this.histogramService.fetchHistogram2d(sourceId, channelId))
+        )
+        .subscribe((hist) => {
+          if (hist) this.histogram2d.set(hist);
+        });
+      this.histogramService.fetchHistogram2d(sourceId, channelId)
+        .subscribe((hist) => {
+          if (hist) this.histogram2d.set(hist);
+        });
+    } else {
+      // Poll 1D histogram (energy or psd)
+      const fetch$ = type === 'psd'
+        ? () => this.histogramService.fetchPsdHistogram(sourceId, channelId)
+        : () => this.histogramService.fetchAndCacheHistogram(sourceId, channelId);
+
+      interval(this.refreshInterval)
+        .pipe(
+          takeUntil(this.destroy$),
+          switchMap(() => fetch$())
+        )
+        .subscribe((hist) => {
+          if (hist) this.histogram.set(hist);
+        });
+      fetch$().subscribe((hist) => {
         if (hist) this.histogram.set(hist);
       });
+    }
   }
 
   ngOnDestroy(): void {

@@ -29,6 +29,17 @@ export interface Histogram1D {
   underflow: number;
 }
 
+// 2D Histogram data (Energy vs PSD)
+export interface Histogram2D {
+  module_id: number;
+  channel_id: number;
+  x_config: HistogramConfig;
+  y_config: HistogramConfig;
+  bins: number[]; // flat array: bins[y * x_bins + x]
+  total_counts: number;
+  overflow: number;
+}
+
 // Channel summary for list response
 export interface ChannelSummary {
   module_id: number;
@@ -81,12 +92,16 @@ export interface MonitorState {
 // X-axis label type
 export type XAxisLabel = 'Channel' | 'keV' | 'MeV';
 
+// Histogram type for tab-level selection
+export type HistogramType = 'energy' | 'psd' | 'psd2d';
+
 // Setup tab configuration (template for creating views)
 export interface SetupConfig {
   name: string;
   gridRows: number;
   gridCols: number;
   xAxisLabel: XAxisLabel;
+  histogramType: HistogramType;
   cells: SetupCell[];
 }
 
@@ -103,6 +118,7 @@ export interface ViewTab {
   gridRows: number;
   gridCols: number;
   xAxisLabel: XAxisLabel;
+  histogramType?: HistogramType; // optional for backward compat (default: 'energy')
   cells: ViewCell[];
   lastModifiedCellIndex?: number;
 }
@@ -185,6 +201,7 @@ export function createDefaultSetupConfig(): SetupConfig {
     gridRows: 2,
     gridCols: 2,
     xAxisLabel: 'Channel',
+    histogramType: 'energy',
     cells: Array(4)
       .fill(null)
       .map(() => createDefaultSetupCell()),
@@ -212,6 +229,7 @@ export function createViewTabFromSetup(setup: SetupConfig): ViewTab | null {
     gridRows: rows,
     gridCols: cols,
     xAxisLabel: setup.xAxisLabel,
+    histogramType: setup.histogramType,
     cells: setup.cells.map((cell) => ({
       sourceId: cell.sourceId ?? 0,
       channelId: cell.channelId ?? 0,

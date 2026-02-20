@@ -490,7 +490,30 @@ pub struct MonitorNetworkConfig {
     /// Pipeline order for Start/Stop sequencing (default: 3)
     #[serde(default = "default_sink_pipeline_order")]
     pub pipeline_order: u32,
+
+    /// PSD 1D histogram: number of bins (default: 200)
+    #[serde(default = "default_psd_bins")]
+    pub psd_bins: u32,
+    /// PSD 1D histogram: minimum value (default: -0.2)
+    #[serde(default = "default_psd_min")]
+    pub psd_min: f32,
+    /// PSD 1D histogram: maximum value (default: 1.2)
+    #[serde(default = "default_psd_max")]
+    pub psd_max: f32,
+
+    /// PSD 2D histogram: X axis (Energy) bins (default: 512)
+    #[serde(default = "default_psd2d_x_bins")]
+    pub psd2d_x_bins: u32,
+    /// PSD 2D histogram: Y axis (PSD) bins (default: 200)
+    #[serde(default = "default_psd2d_y_bins")]
+    pub psd2d_y_bins: u32,
 }
+
+fn default_psd_bins() -> u32 { 200 }
+fn default_psd_min() -> f32 { -0.2 }
+fn default_psd_max() -> f32 { 1.2 }
+fn default_psd2d_x_bins() -> u32 { 512 }
+fn default_psd2d_y_bins() -> u32 { 200 }
 
 fn default_http_port() -> u16 {
     8081

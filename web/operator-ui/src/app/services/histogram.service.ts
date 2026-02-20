@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, interval, switchMap, catchError, of, tap, Subject, takeUntil } from 'rxjs';
 import {
   Histogram1D,
+  Histogram2D,
   HistogramListResponse,
   MonitorStatusResponse,
   ChannelSummary,
@@ -132,6 +133,22 @@ export class HistogramService {
     if (!url) return of(null);
     return this.http
       .get<Histogram1D>(`${url}/histograms/${moduleId}/${channelId}`)
+      .pipe(catchError(() => of(null)));
+  }
+
+  fetchPsdHistogram(moduleId: number, channelId: number): Observable<Histogram1D | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http
+      .get<Histogram1D>(`${url}/histograms/${moduleId}/${channelId}`, { params: { type: 'psd' } })
+      .pipe(catchError(() => of(null)));
+  }
+
+  fetchHistogram2d(moduleId: number, channelId: number): Observable<Histogram2D | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http
+      .get<Histogram2D>(`${url}/histograms2d/${moduleId}/${channelId}`)
       .pipe(catchError(() => of(null)));
   }
 
