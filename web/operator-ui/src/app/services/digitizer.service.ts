@@ -193,12 +193,20 @@ export class DigitizerService {
       return { success: true, message: 'Mock: Would apply to hardware' };
     }
 
-    return await firstValueFrom(
+    const result = await firstValueFrom(
       this.http.post<ApiResponse>(
         `${this.apiUrl}/${config.digitizer_id}/apply`,
         config
       )
     );
+
+    // Refresh digitizers cache from backend to reflect applied config
+    // (backend may also modify values via validation/clamping)
+    if (result.success) {
+      await this.loadDigitizers();
+    }
+
+    return result;
   }
 
   /**

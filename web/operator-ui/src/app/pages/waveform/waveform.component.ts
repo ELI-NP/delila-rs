@@ -134,6 +134,29 @@ interface ChannelChart {
             </mat-checkbox>
           </div>
 
+          <div class="trigger-controls">
+            <button mat-stroked-button
+              [class.active]="triggerMode() === 'running'"
+              (click)="onTriggerRun()"
+              matTooltip="Continuous update">
+              <mat-icon>play_arrow</mat-icon>
+              Run
+            </button>
+            <button mat-stroked-button
+              [class.active]="triggerMode() !== 'running'"
+              (click)="onTriggerSingle()"
+              matTooltip="Capture next waveform and hold">
+              <mat-icon>skip_next</mat-icon>
+              Single
+            </button>
+            @if (triggerMode() === 'armed') {
+              <span class="trigger-status armed">ARMED</span>
+            }
+            @if (triggerMode() === 'held') {
+              <span class="trigger-status held">HOLD</span>
+            }
+          </div>
+
           <div class="accumulate-controls">
             <mat-slide-toggle
               [checked]="accumulateEnabled()"
@@ -202,7 +225,7 @@ interface ChannelChart {
           </div>
 
           <!-- Bottom row: Parameter Table -->
-          <div class="tuneup-bottom-row">
+          <div class="tuneup-bottom-row" (keydown.enter)="onTuneUpEnterKey($event)">
             <div class="param-controls">
               <mat-button-toggle-group
                 [value]="selectedCategory()"
@@ -502,6 +525,32 @@ interface ChannelChart {
 
     .y-axis-toggle {
       height: 36px;
+    }
+
+    .trigger-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-right: 8px;
+    }
+    .trigger-controls button.active {
+      background-color: rgba(25, 118, 210, 0.12);
+      border-color: #1976d2;
+    }
+    .trigger-status {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-left: 4px;
+    }
+    .trigger-status.armed {
+      background-color: #fff3e0;
+      color: #e65100;
+    }
+    .trigger-status.held {
+      background-color: #e8f5e9;
+      color: #2e7d32;
     }
 
     .accumulate-controls {
@@ -806,6 +855,11 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly accumulateEnabled = signal(false);
   readonly accumulateMax = signal(20);
   readonly waveformHistory = signal<LatestWaveform[]>([]);
+
+  // Single Shot State (oscilloscope-style trigger mode)
+  readonly triggerMode = signal<'running' | 'armed' | 'held'>('running');
+  private lastArmedTimestamp: number | null = null;
+
   /** ECharts instance for Tune Up waveform — used for replaceMerge to preserve zoom */
   private tuneUpWfChart: any = null;
 
@@ -951,6 +1005,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   onTuneUpChannelSelect(value: string): void {
     this.selectedChannels.set([value]);
     this.waveformHistory.set([]);
+    this.triggerMode.set('running');
     this.fetchWaveforms().subscribe();
   }
 
@@ -963,6 +1018,17 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.accumulateEnabled.set(enabled);
     if (!enabled) {
       this.waveformHistory.set([]);
+    }
+  }
+
+  onTriggerRun(): void {
+    this.triggerMode.set('running');
+  }
+
+  onTriggerSingle(): void {
+    if (this.triggerMode() === 'running' || this.triggerMode() === 'held') {
+      this.lastArmedTimestamp = this.waveforms()[0]?.timestamp_ns ?? null;
+      this.triggerMode.set('armed');
     }
   }
 
@@ -1028,6 +1094,14 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  onTuneUpEnterKey(event: Event): void {
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'INPUT') {
+      (target as HTMLInputElement).blur(); // commit value via change+blur handlers
+      this.onApplyTuneUp();
+    }
+  }
+
   onApplyTuneUp(): void {
     const config = this.tuneUpConfig();
     if (!config) return;
@@ -1036,6 +1110,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.stopHistogramPolling();
     this.tuneUpHistogram.set(null);
     this.waveformHistory.set([]);
+    this.triggerMode.set('running');
 
     const { channel_defaults, channel_overrides } = this.digitizerService.compressConfig(
       this.defaultValues(),
@@ -1054,6 +1129,8 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         switchMap((resp) => {
           if (resp.success) {
             this.tuneUpConfig.set(updatedConfig);
+            // Refresh global digitizers cache so Settings page shows updated values
+            this.digitizerService.loadDigitizers();
             // Chain clear — wait for server to drain stale data + clear histograms
             return this.histogramService.clearHistograms().pipe(map(() => resp));
           }
@@ -1163,6 +1240,11 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   }
 
   private fetchWaveforms() {
+    // Single Shot: held state — skip fetch, keep current waveform
+    if (this.isTuneUp() && this.triggerMode() === 'held') {
+      return of(null);
+    }
+
     const selected = this.selectedChannels();
     if (selected.length === 0) {
       this.waveforms.set([]);
@@ -1180,6 +1262,14 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       switchMap((results) => {
         const waveforms = results.filter((wf): wf is LatestWaveform => wf !== null);
         this.waveforms.set(waveforms);
+
+        // Single Shot: armed state — capture on new timestamp
+        if (this.isTuneUp() && this.triggerMode() === 'armed' && waveforms.length > 0) {
+          const latestTs = waveforms[0].timestamp_ns;
+          if (latestTs !== this.lastArmedTimestamp) {
+            this.triggerMode.set('held');
+          }
+        }
 
         // Accumulate waveforms in Tune Up mode (FIFO buffer)
         if (this.isTuneUp() && this.accumulateEnabled() && waveforms.length > 0) {

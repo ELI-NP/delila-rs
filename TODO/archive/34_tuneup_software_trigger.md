@@ -1,8 +1,9 @@
 # Issue #3: Tune Up時にソフトウェアトリガーを強制する
 
 **GitHub Issue:** #3
-**Status: 📋 計画中**
+**Status: ✅ 完了**
 **Updated:** 2026-02-18
+**Completed:** 2026-02-18 (commit a1603bd)
 
 ## 目的
 

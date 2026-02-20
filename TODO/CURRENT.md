@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-18
+**Updated:** 2026-02-19
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -13,13 +13,8 @@ Claudeセッション開始時に必ず読み込まれます。
 |----------|------|--------|---------|
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
+| **2** | [37_grafana_monitoring.md](37_grafana_monitoring.md) | **📋 計画完了** | Grafana モニタリング: InfluxDB v3 Core + チャンネル別レート ([設計書](../docs/plans/grafana_monitoring.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
-| **2** | [34_tuneup_software_trigger.md](34_tuneup_software_trigger.md) | **📋 計画中** | GitHub #3: Tune Up時にソフトウェアトリガー強制 |
-| **2** | [35_waveform_recording_warning.md](35_waveform_recording_warning.md) | **📋 計画中** | GitHub #2: Run Start時にWaveform有効の警告表示 (MatDialog) |
-| **3** | [36_accumulated_waveform.md](36_accumulated_waveform.md) | **📋 計画中** | GitHub #4: Tune Up Waveform積算表示 (overlay + FIFO) |
-| **2** | [31_parameter_validation.md](31_parameter_validation.md) | **✅ 完了** | パラメータバリデーション: DevTree-based snap_to_step + UI step属性 (Phase 1-3完了, Phase 4=将来) |
-| **2** | [27_settings_ui_v2.md](27_settings_ui_v2.md) | **✅ 完了** | Settings UI v2 全Phase完了 (Phase 1-6)。PSD1/PHA1 ns変換含む |
-| **2** | — | **✅ 完了** | PHA1 Settings UI修正: FirmwareType統一 + Virtual Probe データ駆動型対応 + ボードパラメータ単位修正 |
 | **2** | [33_delila2root_converter.md](33_delila2root_converter.md) | **✅ Phase 1 完了** | delila2root: 10.4億events 2分31秒, 6.9M/s, タイムスタンプ違反0 ([設計書](../docs/plans/delila2root.md)) |
 | **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
 | - | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **参照** | Event Builder 仕様 |
@@ -28,25 +23,26 @@ Claudeセッション開始時に必ず読み込まれます。
 
 ## 次のセッション候補
 
-- ~~**H:** delila2root 高速化 Phase 1 実装~~ → **完了** (2026-02-18, 10.4億events 2m31s)
+- **A:** Energy Calibration + PSD 表示 (GitHub #7) → **設計完了** (2026-02-19, [設計書](../docs/plans/energy_calibration_psd.md)) — Phase 1 から開始
+- **B:** x743 統合 (GitHub #6) → **設計完了** ([設計書](../docs/plans/x743_integration.md))
 - **C:** Event Builder オンラインパイプライン統合 (EB-1〜EB-4) → Phase 2
-- **D:** Grafana モニタリング (InfluxDB v3 Core + Grafana) → Phase 3
-- **F:** フロントパネル信号伝搬の実機検証 (TrgOut/SyncOut/GPIO)
+- **D:** Grafana モニタリング (InfluxDB v3 Core + Grafana) → **計画完了** (2026-02-19, [設計書](../docs/plans/grafana_monitoring.md) + [TODO](37_grafana_monitoring.md))
 - **G:** 設定自動生成スクリプト (3-4) + デプロイスクリプト改善 (3-5)
-- ~~**A:** ステータス並列化 + start_daq.sh 改善~~ → **完了** (2026-02-10)
-- ~~**B:** PHA1 コンフィグテンプレート + Settings UI~~ → **完了** (2026-02-12)
-- ~~**E:** PHA1 実機テスト~~ → **実機検証済み** (2026-02-12, DT5730B SN:990)
 
 ---
 
-## Recently Completed (archived)
+## Recently Completed
 
 | File | Completed | Summary |
 |------|-----------|---------|
-| [32_stop_command_timeout.md](32_stop_command_timeout.md) | 2026-02-18 | Stop タイムアウト + Tune Up Apply 全パイプライン修正 + PHA1 waveform sign_extend + Probe 0始まり + ポート9090移行 |
+| — | 2026-02-19 | GitHub #5: Run History ビューワー (アコーディオン + config snapshot) + BSON HashMap キー修正 |
+| [archive/34_tuneup_software_trigger.md](archive/34_tuneup_software_trigger.md) | 2026-02-18 | GitHub #3: Tune Up時にソフトウェアトリガー強制 (clone-and-modify パターン) |
+| [archive/35_waveform_recording_warning.md](archive/35_waveform_recording_warning.md) | 2026-02-18 | GitHub #2: Run Start時にWaveform有効の警告 MatDialog |
+| [archive/36_accumulated_waveform.md](archive/36_accumulated_waveform.md) | 2026-02-18 | GitHub #4: Tune Up Waveform積算表示 (FIFO + replaceMerge でズーム保持) |
+| [archive/32_stop_command_timeout.md](archive/32_stop_command_timeout.md) | 2026-02-18 | Stop タイムアウト + Tune Up Apply 全パイプライン修正 + PHA1 waveform sign_extend + Probe 0始まり + ポート9090移行 |
 | [archive/29_channel_registration.md](archive/29_channel_registration.md) | 2026-02-05 | Channel Registration: Monitor チャンネル事前登録 + 個別チャンネル名 |
 | [archive/28_tuneup_mode.md](archive/28_tuneup_mode.md) | 2026-02-05 | Tune Up Mode: Waveform + ヒストグラム + パラメータ調整 (3-panel FullHD レイアウト) |
-| [27_settings_ui_v2.md](27_settings_ui_v2.md) | 2026-02-04 | Settings UI v2: 6カテゴリ再編 + SetInRun対応 (Phase 1-4, Phase 6 残) |
+| [archive/27_settings_ui_v2.md](archive/27_settings_ui_v2.md) | 2026-02-04 | Settings UI v2: 6カテゴリ再編 + SetInRun対応 (Phase 1-6) |
 | [archive/25_apply_digitizer_via_zmq.md](archive/25_apply_digitizer_via_zmq.md) | 2026-02-04 | Apply Digitizer Config via ZMQ — Idle/Configured で全適用 + Running で SetInRun のみ適用 |
 | [archive/19_settings_ui.md](archive/19_settings_ui.md) | 2026-02-03 | Phase 6: デジタイザ設定 UI (Detect, チャンネルテーブル, Apply/Save) |
 
@@ -91,13 +87,19 @@ Claudeセッション開始時に必ず読み込まれます。
 - PHA1 Waveform Decoder 修正 (sign_extend_14bit 符号拡張 + digital probe D0/D1 マッピング修正)
 - ROOT マクロ ns_per_sample 対応 (Waveform X軸 ns 表示)
 - Operator デフォルトポート 9090 移行 + docker mongo-express 8083
+- Tune Up ソフトウェアトリガー強制 (clone-and-modify, SyncConfig 両方上書き)
+- Run Start Waveform Recording 警告 (MatDialog, DigitizerService チェック)
+- Tune Up Waveform 積算表示 (FIFO バッファ + timestamp 重複検出 + ECharts replaceMerge)
+- Run History ビューワー (Runs タブ, アコーディオン展開, config snapshot 表示)
+- BSON config snapshot 修正 (HashMap<u8/u32> キーの string 変換 serde モジュール)
+- Config snapshot 診断ログ追加 (起動時ロード数 + 空時 warn)
 
 ---
 
 ## Archived
 
-| Directory | Contents |
-|-----------|----------|
+| Directory/File | Contents |
+|----------------|----------|
 | `archive/phase1_basic_pipeline/` | 基本パイプライン設計 |
 | `archive/phase1_components/` | CLIリファクタリング、CAEN FFI、Monitor、Merger |
 | `archive/phase1_control_system/` | コントロールシステム設計 |
@@ -110,11 +112,19 @@ Claudeセッション開始時に必ず読み込まれます。
 | `archive/15_digitizer_implementation.md` | デジタイザ実装 Phase 1-5 |
 | `archive/16_linux_migration_checklist.md` | Linux移行チェックリスト |
 | `archive/23_event_builder_implementation.md` | Event Builder L1 実装 (Time Slice 方式) |
-| `archive/19_settings_ui.md` | デジタイザ設定 UI Phase 6 (Detect, チャンネルテーブル, Apply/Save) |
-| `archive/22_amax_decoder_implementation.md` | AMax デコーダ (Cancelled: OpenDPP で十分) |
+| `archive/19_settings_ui.md` | デジタイザ設定 UI Phase 6 |
+| `archive/22_amax_decoder_implementation.md` | AMax デコーダ (Cancelled) |
 | `archive/25_apply_digitizer_via_zmq.md` | Apply Digitizer Config via ZMQ |
+| `archive/27_settings_ui_v2.md` | Settings UI v2 (Phase 1-6) |
 | `archive/28_tuneup_mode.md` | Tune Up Mode 実装 |
+| `archive/28_psd1_pha1_parameter_overhaul.md` | PSD1/PHA1 パラメータ整理 |
 | `archive/29_channel_registration.md` | Channel Registration + チャンネル名 |
+| `archive/29_psd1_waveform_debug.md` | PSD1 Waveform デバッグ |
+| `archive/31_parameter_validation.md` | パラメータバリデーション (Phase 1-3) |
+| `archive/32_stop_command_timeout.md` | Stop タイムアウト修正 |
+| `archive/34_tuneup_software_trigger.md` | Tune Up ソフトウェアトリガー |
+| `archive/35_waveform_recording_warning.md` | Waveform Recording 警告 |
+| `archive/36_accumulated_waveform.md` | 積算 Waveform 表示 |
 
 ---
 

@@ -363,7 +363,7 @@ pub(super) async fn tuneup_apply(
         configs.insert(id, config.clone());
     }
 
-    // 2. Save to disk (best-effort)
+    // 2. Save to disk (best-effort, sanitized)
     let file_path = reader_comp
         .config_file
         .clone()
@@ -371,7 +371,9 @@ pub(super) async fn tuneup_apply(
     if let Some(parent) = file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_string_pretty(&config) {
+    let mut config_for_disk = config.clone();
+    config_for_disk.sanitize_for_firmware();
+    if let Ok(json) = serde_json::to_string_pretty(&config_for_disk) {
         if let Err(e) = std::fs::write(&file_path, &json) {
             tracing::warn!("Failed to save config to disk: {}", e);
         }

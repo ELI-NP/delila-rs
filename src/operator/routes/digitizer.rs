@@ -532,7 +532,7 @@ pub(super) async fn apply_digitizer_config(
         configs.insert(id, config.clone());
     }
 
-    // 3. Save to disk (best-effort)
+    // 3. Save to disk (best-effort, sanitized)
     // Use config_file path from TOML if available (same file Reader loads on Configure),
     // otherwise fall back to digitizer_{id}.json in config_dir.
     let file_path = reader_comp
@@ -542,7 +542,9 @@ pub(super) async fn apply_digitizer_config(
     if let Some(parent) = file_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match serde_json::to_string_pretty(&config) {
+    let mut config_for_disk = config.clone();
+    config_for_disk.sanitize_for_firmware();
+    match serde_json::to_string_pretty(&config_for_disk) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&file_path, json) {
                 tracing::warn!("Failed to save config to disk: {}", e);

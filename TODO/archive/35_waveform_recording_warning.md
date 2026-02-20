@@ -1,8 +1,9 @@
 # Issue #2: Run Start時にWaveform Recording警告
 
 **GitHub Issue:** #2
-**Status: 📋 計画中**
+**Status: ✅ 完了**
 **Updated:** 2026-02-18
+**Completed:** 2026-02-18 (commit a1603bd)
 
 ## 目的
 

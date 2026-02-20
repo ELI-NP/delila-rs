@@ -45,7 +45,7 @@ import {
     ChannelTableComponent,
   ],
   template: `
-    <div class="digitizer-settings">
+    <div class="digitizer-settings" (keydown.enter)="onEnterKey($event)">
       <!-- Header: Digitizer selector + firmware badge + action buttons -->
       <div class="header-row">
         <mat-form-field appearance="outline" class="digitizer-select">
@@ -96,15 +96,6 @@ import {
         >
           <mat-icon>check</mat-icon>
           {{ isRunning() ? 'Apply (Runtime)' : 'Apply' }}
-        </button>
-        <button
-          mat-raised-button
-          color="accent"
-          (click)="saveConfig()"
-          [disabled]="!selectedConfig()"
-        >
-          <mat-icon>save</mat-icon>
-          Save
         </button>
       </div>
 
@@ -776,6 +767,14 @@ export class DigitizerSettingsComponent {
     }
   }
 
+  onEnterKey(event: Event): void {
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'INPUT') {
+      (target as HTMLInputElement).blur(); // commit value via change+blur handlers
+      this.applyConfig();
+    }
+  }
+
   async applyConfig(): Promise<void> {
     const config = this.selectedConfig();
     if (!config || this.applying()) return;
@@ -819,25 +818,6 @@ export class DigitizerSettingsComponent {
       });
     } finally {
       this.applying.set(false);
-    }
-  }
-
-  async saveConfig(): Promise<void> {
-    const config = this.selectedConfig();
-    if (!config) return;
-
-    // First apply (compress & send), then save to disk
-    await this.applyConfig();
-
-    try {
-      await this.digitizerService.saveDigitizer(config.digitizer_id);
-      this.snackBar.open('Configuration saved to disk', 'OK', {
-        duration: 3000,
-      });
-    } catch {
-      this.snackBar.open('Failed to save configuration', 'Close', {
-        duration: 5000,
-      });
     }
   }
 
