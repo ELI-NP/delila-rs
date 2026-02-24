@@ -1,5 +1,5 @@
 {
-  "digitizer_id": 2,
+  "digitizer_id": 3,
   "name": "PSD1-SN69",
   "firmware": "PSD1",
   "serial_number": "69",
@@ -7,14 +7,14 @@
   "num_channels": 16,
   "is_master": false,
   "board": {
-    "start_source": "START_MODE_SW",
-    "gpio_mode": "OUT_PROPAGATION_RUN",
+    "start_source": "START_MODE_S_IN",
+    "gpio_mode": "OUT_PROPAGATION_SYNCIN",
     "record_length": 1000,
     "waveforms_enabled": false,
     "vtrace_probe_0": "VPROBE_INPUT",
     "vtrace_probe_1": "VPROBE_CFD",
     "vtrace_probe_2": "VPROBE_GATE",
-    "vtrace_probe_3": "VPROBE_TRIGGER",
+    "vtrace_probe_3": "VPROBE_GATESHORT",
     "io_level": "FPIOTYPE_NIM",
     "ext_clock": "FALSE",
     "extras_enabled": "TRUE",
@@ -24,13 +24,13 @@
   "channel_defaults": {
     "enabled": "True",
     "polarity": "POLARITY_NEGATIVE",
-    "dc_offset": 50.0,
+    "dc_offset": 10.0,
     "baseline_avg": "BLINE_NSMEAN_16",
     "pre_trigger_ns": 256,
     "input_dynamic": "INDYN_2_0_VPP",
     "discriminator_mode": "DISCR_MODE_CFD",
-    "trigger_threshold": 500,
-    "cfd_delay_ns": 6,
+    "trigger_threshold": 20,
+    "cfd_delay_ns": 8,
     "cfd_fraction": "CFD_FRACTLIST_50",
     "trigger_holdoff_ns": 1024,
     "input_smoothing": "CFD_SMOOTH_EXP_1",
@@ -38,13 +38,23 @@
     "global_trigger_gen": "FALSE",
     "trigger_out_propagate": "FALSE",
     "energy_coarse_gain": "CHARGESENS_10_FC_LSB_VPP",
-    "gate_long_ns": 128,
-    "gate_short_ns": 100,
-    "gate_pre_ns": 32,
+    "gate_long_ns": 256,
+    "gate_short_ns": 45,
+    "gate_pre_ns": 70,
     "charge_pedestal_en": "FALSE",
     "coincidence_mode": "TRIGGER_MODE_NORMAL",
     "ch_veto_source": "VETO_SRC_DISABLED",
     "pileup_rejection": "FALSE",
-    "trigger_latency": "TRG_LATENCY_MODE_NONE"
+    "trigger_latency": "TRG_LATENCY_MODE_NONE",
+    "extra": {
+      "ch_extras_opt": "EXTRAS_OPT_TT48_FLAGS_FINETT"
+    }
+  },
+  "channel_overrides": {
+    "1": {
+      "energy_coarse_gain": "CHARGESENS_2.5_FC_LSB_VPP",
+      "gate_short_ns": 30,
+      "gate_pre_ns": 65
+    }
   }
 }

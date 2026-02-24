@@ -509,11 +509,21 @@ pub struct MonitorNetworkConfig {
     pub psd2d_y_bins: u32,
 }
 
-fn default_psd_bins() -> u32 { 200 }
-fn default_psd_min() -> f32 { -0.2 }
-fn default_psd_max() -> f32 { 1.2 }
-fn default_psd2d_x_bins() -> u32 { 512 }
-fn default_psd2d_y_bins() -> u32 { 200 }
+fn default_psd_bins() -> u32 {
+    200
+}
+fn default_psd_min() -> f32 {
+    -0.2
+}
+fn default_psd_max() -> f32 {
+    1.2
+}
+fn default_psd2d_x_bins() -> u32 {
+    512
+}
+fn default_psd2d_y_bins() -> u32 {
+    200
+}
 
 fn default_http_port() -> u16 {
     8081

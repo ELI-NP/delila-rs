@@ -454,7 +454,6 @@ pub(super) async fn tuneup_apply(
     }
 
     // 6. Start entire pipeline (downstream first: Monitor → Merger → Reader)
-    // Monitor's on_start() auto-clears histograms and drains stale data
     match state
         .client
         .start_all_sync(&pipeline_components, 0, state.config.start_timeout_ms)

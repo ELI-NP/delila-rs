@@ -203,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Send EOS
     if args.send_eos {
-        let eos = Message::eos(0);
+        let eos = Message::eos(0, 0);
         let bytes = eos.to_msgpack()?;
         let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
         socket.send(zmq_msg).await?;

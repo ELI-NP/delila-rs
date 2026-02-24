@@ -62,10 +62,7 @@ mod string_key_map {
 mod opt_string_key_map {
     use super::*;
 
-    pub fn serialize<K, V, S>(
-        opt: &Option<HashMap<K, V>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<K, V, S>(opt: &Option<HashMap<K, V>>, serializer: S) -> Result<S::Ok, S::Error>
     where
         K: std::fmt::Display + Eq + std::hash::Hash,
         V: Serialize,

@@ -1,5 +1,5 @@
 {
-  "digitizer_id": 5,
+  "digitizer_id": 0,
   "name": "PSD2-57",
   "firmware": "PSD2",
   "serial_number": "52621",
@@ -8,16 +8,179 @@
   "is_master": false,
   "board": {
     "start_source": "SWcmd",
-    "waveforms_enabled": false
+    "gpio_mode": "Run",
+    "test_pulse_period": 0,
+    "test_pulse_width": 0,
+    "global_trigger_source": "TrgIn",
+    "waveforms_enabled": false,
+    "io_level": "NIM",
+    "extra": {
+      "clocksource": "Internal",
+      "enclockoutfp": "True",
+      "boardvetowidth": 0,
+      "trgoutmode": "Run",
+      "boardvetosource": "Disabled",
+      "boardvetopolarity": "ActiveHigh",
+      "syncoutmode": "Run"
+    }
   },
   "channel_defaults": {
     "enabled": "True",
     "polarity": "Negative",
-    "dc_offset": 50.0,
-    "trigger_threshold": 100,
+    "dc_offset": 10.0,
+    "vga_gain": 0,
+    "baseline_avg": "MediumLow",
+    "record_length_ns": 1024,
+    "pre_trigger_ns": 256,
+    "wave_downsampling": "1",
+    "discriminator_mode": "CFD",
+    "trigger_threshold": 20,
+    "cfd_delay_ns": 24,
+    "cfd_fraction": "75",
+    "trigger_holdoff_ns": 1024,
+    "smoothing_factor": "1",
+    "time_filter_smoothing": "Disabled",
     "event_trigger_source": "ChSelfTrigger",
     "wave_trigger_source": "Disabled",
+    "energy_coarse_gain": "x64",
     "gate_long_ns": 400,
-    "gate_short_ns": 100
+    "gate_short_ns": 100,
+    "gate_pre_ns": 128,
+    "charge_smoothing": "Disabled",
+    "coincidence_mask": "Disabled",
+    "anti_coincidence_mask": "Disabled",
+    "coincidence_window_ns": 0,
+    "ch_veto_source": "Disabled",
+    "ch_veto_width_ns": 0,
+    "event_selector": "All",
+    "wave_saving": "Always",
+    "analog_probe_0": "ADCInput",
+    "analog_probe_1": "CFDFilter",
+    "digital_probe_0": "LongGate",
+    "digital_probe_1": "ShortGate",
+    "digital_probe_2": "Trigger",
+    "digital_probe_3": "CFDFilterArmed"
+  },
+  "channel_overrides": {
+    "16": {
+      "trigger_threshold": 17
+    },
+    "21": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "25": {
+      "trigger_threshold": 17
+    },
+    "8": {
+      "trigger_threshold": 16
+    },
+    "7": {
+      "trigger_threshold": 16,
+      "cfd_delay_ns": 16
+    },
+    "24": {
+      "trigger_threshold": 17
+    },
+    "3": {
+      "trigger_threshold": 14,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "0": {
+      "trigger_threshold": 13,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "5": {
+      "trigger_threshold": 16
+    },
+    "15": {
+      "trigger_threshold": 16,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "23": {
+      "trigger_threshold": 17
+    },
+    "17": {
+      "trigger_threshold": 16
+    },
+    "2": {
+      "trigger_threshold": 16
+    },
+    "20": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "4": {
+      "trigger_threshold": 16
+    },
+    "30": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "28": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "12": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "19": {
+      "trigger_threshold": 16
+    },
+    "1": {
+      "trigger_threshold": 16
+    },
+    "14": {
+      "trigger_threshold": 17,
+      "energy_coarse_gain": "x256"
+    },
+    "13": {
+      "trigger_threshold": 17,
+      "energy_coarse_gain": "x256"
+    },
+    "27": {
+      "trigger_threshold": 17
+    },
+    "31": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "6": {
+      "trigger_threshold": 14,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "10": {
+      "trigger_threshold": 16
+    },
+    "9": {
+      "trigger_threshold": 16
+    },
+    "29": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    },
+    "26": {
+      "trigger_threshold": 17
+    },
+    "18": {
+      "trigger_threshold": 16
+    },
+    "22": {
+      "trigger_threshold": 15,
+      "cfd_delay_ns": 16,
+      "cfd_fraction": "50"
+    }
   }
 }

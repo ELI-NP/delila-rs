@@ -4,7 +4,7 @@
   "firmware": "PSD1",
   "serial_number": "990",
   "model": "DT5730B",
-  "num_channels": 8,
+  "num_channels": 16,
   "is_master": false,
   "board": {
     "start_source": "START_MODE_SW",
@@ -45,6 +45,9 @@
     "coincidence_mode": "TRIGGER_MODE_NORMAL",
     "ch_veto_source": "VETO_SRC_DISABLED",
     "pileup_rejection": "FALSE",
-    "trigger_latency": "TRG_LATENCY_MODE_NONE"
+    "trigger_latency": "TRG_LATENCY_MODE_NONE",
+    "extra": {
+      "ch_extras_opt": "EXTRAS_OPT_TT48_FLAGS_FINETT"
+    }
   }
 }

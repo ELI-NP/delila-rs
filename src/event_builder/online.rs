@@ -400,7 +400,7 @@ async fn receiver_task(
                                 dropped_batches.fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                        Ok(Message::EndOfStream { source_id }) => {
+                        Ok(Message::EndOfStream { source_id, .. }) => {
                             info!(source_id, "Received EOS");
                             let _ = hit_tx.send(SorterInput::Eos);
                             break;

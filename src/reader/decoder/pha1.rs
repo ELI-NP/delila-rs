@@ -1492,10 +1492,11 @@ mod tests {
 
         // No duplication: 1 value per raw sample
         // Word 0: s1(dp=1,tn=0), s2(dp=0,tn=1)
-        assert_eq!(wf.digital_probe1[0], 1); // s1 dp
-        assert_eq!(wf.digital_probe1[1], 0); // s2 dp
-        assert_eq!(wf.digital_probe2[0], 0); // s1 trigger
-        assert_eq!(wf.digital_probe2[1], 1); // s2 trigger
+        // digital_probe1 = Tn (trigger), digital_probe2 = DP (configurable)
+        assert_eq!(wf.digital_probe1[0], 0); // s1 trigger
+        assert_eq!(wf.digital_probe1[1], 1); // s2 trigger
+        assert_eq!(wf.digital_probe2[0], 1); // s1 dp
+        assert_eq!(wf.digital_probe2[1], 0); // s2 dp
     }
 
     #[test]

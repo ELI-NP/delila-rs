@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-19
+**Updated:** 2026-02-23
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -11,7 +11,11 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
+| **1** | [41_start_stop_restructure.md](41_start_stop_restructure.md) | **🔧 実装中** | Start/Stop フロー再構成: Stop時Close + Arm統合 + DIG1タイムスタンプリセット ([設計書](../docs/plans/start_stop_restructure.md)) |
+| **1** | [40_decode_loop_parallelization.md](40_decode_loop_parallelization.md) | **✅ 完了** | DecodeLoop 並列化: Worker Pool + ReorderBuffer ([設計書](../docs/plans/decode_loop_parallelization.md)) |
+| **1** | [39_cross_run_eos_fix.md](39_cross_run_eos_fix.md) | **✅ 完了** | Cross-Run EOS 汚染修正: run_number タグ + stale EOS フィルタ ([設計書](../docs/plans/cross_run_eos_fix.md)) |
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
+| **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **📋 計画完了** | EB 統一: SliceBuilder→chunk_builder + mimalloc 導入 (Gemini レビュー済) |
 | **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
 | **2** | [37_grafana_monitoring.md](37_grafana_monitoring.md) | **📋 計画完了** | Grafana モニタリング: InfluxDB v3 Core + チャンネル別レート ([設計書](../docs/plans/grafana_monitoring.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
@@ -35,6 +39,8 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| [40_decode_loop_parallelization.md](40_decode_loop_parallelization.md) | 2026-02-23 | DecodeLoop 並列化: 4 Workers (crossbeam) + ReorderBuffer, PSD2 2.2M→7.0M events/10s (3.2x), Stop→EOS 49s→<1ms |
+| [39_cross_run_eos_fix.md](39_cross_run_eos_fix.md) | 2026-02-23 | Cross-Run EOS 汚染修正: run_number タグ + stale EOS フィルタ |
 | — | 2026-02-19 | GitHub #5: Run History ビューワー (アコーディオン + config snapshot) + BSON HashMap キー修正 |
 | [archive/34_tuneup_software_trigger.md](archive/34_tuneup_software_trigger.md) | 2026-02-18 | GitHub #3: Tune Up時にソフトウェアトリガー強制 (clone-and-modify パターン) |
 | [archive/35_waveform_recording_warning.md](archive/35_waveform_recording_warning.md) | 2026-02-18 | GitHub #2: Run Start時にWaveform有効の警告 MatDialog |
@@ -93,6 +99,8 @@ Claudeセッション開始時に必ず読み込まれます。
 - Run History ビューワー (Runs タブ, アコーディオン展開, config snapshot 表示)
 - BSON config snapshot 修正 (HashMap<u8/u32> キーの string 変換 serde モジュール)
 - Config snapshot 診断ログ追加 (起動時ロード数 + 空時 warn)
+- Cross-Run EOS 汚染修正 (run_number タグ + stale EOS フィルタ)
+- DecodeLoop 並列化 (4 Workers crossbeam, PSD2 3.2x改善, 全FW統一パス)
 
 ---
 

@@ -569,7 +569,7 @@ impl Emulator {
                     "Published batch"
                 );
             }
-            Message::EndOfStream { source_id } => {
+            Message::EndOfStream { source_id, .. } => {
                 info!(source_id = source_id, "Published EOS");
             }
             Message::Heartbeat(hb) => {
@@ -586,7 +586,7 @@ impl Emulator {
 
     /// Send EOS (End Of Stream) signal
     async fn send_eos(&mut self) -> Result<(), EmulatorError> {
-        let eos = Message::eos(self.config.source_id);
+        let eos = Message::eos(self.config.source_id, 0);
         self.publish_message(&eos).await
     }
 
@@ -888,9 +888,9 @@ mod tests {
 
     #[test]
     fn test_message_eos_creation() {
-        let msg = Message::eos(42);
+        let msg = Message::eos(42, 0);
         match msg {
-            Message::EndOfStream { source_id } => {
+            Message::EndOfStream { source_id, .. } => {
                 assert_eq!(source_id, 42);
             }
             _ => panic!("Expected EndOfStream message"),

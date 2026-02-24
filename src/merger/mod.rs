@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use bytes::Bytes;
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
 use thiserror::Error;
@@ -299,7 +298,8 @@ impl Merger {
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), MergerError> {
         // Use unbounded channel - if memory grows, it indicates downstream bottleneck
-        let (tx, rx) = mpsc::unbounded_channel::<Bytes>();
+        // Pass tmq::Multipart directly to avoid copy in receiver + sender (zero-copy)
+        let (tx, rx) = mpsc::unbounded_channel::<tmq::Multipart>();
 
         let context = Context::new();
 
@@ -411,7 +411,7 @@ impl Merger {
     /// When not Running, data is discarded immediately.
     async fn receiver_task(
         mut socket: subscribe::Subscribe,
-        tx: mpsc::UnboundedSender<Bytes>,
+        tx: mpsc::UnboundedSender<tmq::Multipart>,
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
         ext_state: Arc<MergerExtState>,
         mut state_rx: watch::Receiver<ComponentState>,
@@ -443,15 +443,11 @@ impl Merger {
                                 continue;
                             }
 
-                            if let Some(data) = multipart.into_iter().next() {
-                                // Zero-copy: convert to Bytes (reference counted)
-                                let raw_bytes: Bytes = Bytes::copy_from_slice(&data);
-
-                                // Lightweight header parsing (no full deserialization)
-                                match MessageHeader::parse(&raw_bytes) {
+                            // Lightweight header parsing from the first frame (no copy)
+                            if let Some(data) = multipart.0.front() {
+                                match MessageHeader::parse(data) {
                                     Some(MessageHeader::Data { source_id, sequence_number }) => {
                                         ext_state.atomic_stats.record_received();
-                                        // Update per-source sequence tracking
                                         ext_state.source_stats
                                             .entry(source_id)
                                             .or_default()
@@ -470,14 +466,16 @@ impl Merger {
                                         continue;
                                     }
                                 }
-
-                                // Send raw bytes (unbounded channel never blocks)
-                                if tx.send(raw_bytes).is_err() {
-                                    info!("Channel closed, receiver exiting");
-                                    break;
-                                }
-                                trace!("Receiver forwarded message");
+                            } else {
+                                continue;
                             }
+
+                            // Pass original Multipart directly — zero copy
+                            if tx.send(multipart).is_err() {
+                                info!("Channel closed, receiver exiting");
+                                break;
+                            }
+                            trace!("Receiver forwarded message");
                         }
                         Some(Err(e)) => {
                             warn!(error = %e, "ZMQ receive error");
@@ -498,7 +496,7 @@ impl Merger {
     /// When not Running, receives from channel but discards (drains stale data).
     /// On transition to Running, explicitly drains any remaining stale data.
     async fn sender_task(
-        mut rx: mpsc::UnboundedReceiver<Bytes>,
+        mut rx: mpsc::UnboundedReceiver<tmq::Multipart>,
         mut socket: publish::Publish,
         ext_state: Arc<MergerExtState>,
         mut state_rx: watch::Receiver<ComponentState>,
@@ -533,15 +531,12 @@ impl Merger {
 
                 data = rx.recv() => {
                     match data {
-                        Some(raw_bytes) => {
+                        Some(multipart) => {
                             if !is_running {
                                 continue; // discard stale data
                             }
-                            // Zero-copy: directly send raw bytes to ZMQ
-                            let bytes_slice: &[u8] = raw_bytes.as_ref();
-                            let msg: tmq::Multipart =
-                                vec![tmq::Message::from(bytes_slice)].into();
-                            match socket.send(msg).await {
+                            // True zero-copy: forward original ZMQ Multipart directly
+                            match socket.send(multipart).await {
                                 Ok(()) => {
                                     ext_state.atomic_stats.record_sent();
                                     trace!("Sender forwarded message");

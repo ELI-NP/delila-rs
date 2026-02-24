@@ -644,7 +644,7 @@ impl Reader {
                     .batches_published
                     .fetch_add(1, Ordering::Relaxed);
             }
-            Message::EndOfStream { source_id } => {
+            Message::EndOfStream { source_id, .. } => {
                 info!(source_id = source_id, "Published EOS");
             }
             Message::Heartbeat(hb) => {
@@ -661,7 +661,7 @@ impl Reader {
 
     /// Send EOS (End Of Stream) signal
     async fn send_eos(&mut self) -> Result<(), ReaderError> {
-        let eos = Message::eos(self.config.source_id);
+        let eos = Message::eos(self.config.source_id, 0);
         self.publish_message(&eos).await
     }
 
@@ -1432,7 +1432,7 @@ impl Reader {
                                 }
                                 DataType::Stop => {
                                     info!("Received STOP signal from digitizer");
-                                    let eos = Message::eos(config.source_id);
+                                    let eos = Message::eos(config.source_id, 0);
                                     match eos.to_msgpack() {
                                         Ok(bytes) => {
                                             let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
@@ -1494,7 +1494,7 @@ impl Reader {
 
                         Some(ReadLoopOutput::Stop) => {
                             info!("Received STOP signal from ReadLoop");
-                            let eos = Message::eos(config.source_id);
+                            let eos = Message::eos(config.source_id, 0);
                             match eos.to_msgpack() {
                                 Ok(bytes) => {
                                     let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();

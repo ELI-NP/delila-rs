@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
                                     debug!(n, seq = batch.sequence_number, "Forwarded batch");
                                     encoded
                                 }
-                                Ok(Message::EndOfStream { source_id }) => {
+                                Ok(Message::EndOfStream { source_id, .. }) => {
                                     info!(source_id, "Forwarding EndOfStream");
                                     encode_control(MSG_EOS)
                                 }

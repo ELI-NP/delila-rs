@@ -86,14 +86,9 @@ interface RunHistoryItem {
             <td mat-cell *matCellDef="let run">{{ formatDuration(run.duration_secs) }}</td>
           </ng-container>
 
-          <ng-container matColumnDef="events">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header="stats.total_events">Events</th>
-            <td mat-cell *matCellDef="let run" class="numeric-cell">{{ formatCount(run.stats.total_events) }}</td>
-          </ng-container>
-
-          <ng-container matColumnDef="bytes">
-            <th mat-header-cell *matHeaderCellDef mat-sort-header="stats.total_bytes">Bytes</th>
-            <td mat-cell *matCellDef="let run" class="numeric-cell">{{ formatBytes(run.stats.total_bytes) }}</td>
+          <ng-container matColumnDef="end_time">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>End</th>
+            <td mat-cell *matCellDef="let run">{{ run.end_time ? formatTime(run.end_time) : '—' }}</td>
           </ng-container>
 
           <!-- Expanded detail column -->
@@ -371,7 +366,7 @@ export class RunsPageComponent implements OnInit {
   readonly selectedConfigIdx = signal(0);
   readonly sortState = signal<Sort>({ active: 'run_number', direction: 'desc' });
 
-  displayedColumns = ['run_number', 'comment', 'start_time', 'duration', 'events', 'bytes'];
+  displayedColumns = ['run_number', 'comment', 'start_time', 'end_time', 'duration'];
 
   selectedConfig = () => {
     const snapshot = this.configSnapshot();
@@ -389,9 +384,8 @@ export class RunsPageComponent implements OnInit {
       switch (sort.active) {
         case 'run_number': return (a.run_number - b.run_number) * dir;
         case 'start_time': return (a.start_time - b.start_time) * dir;
+        case 'end_time': return ((a.end_time ?? 0) - (b.end_time ?? 0)) * dir;
         case 'duration_secs': return ((a.duration_secs ?? 0) - (b.duration_secs ?? 0)) * dir;
-        case 'stats.total_events': return (a.stats.total_events - b.stats.total_events) * dir;
-        case 'stats.total_bytes': return (a.stats.total_bytes - b.stats.total_bytes) * dir;
         default: return 0;
       }
     });

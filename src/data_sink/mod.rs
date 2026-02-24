@@ -435,7 +435,7 @@ impl DataSink {
                                             break;
                                         }
                                     }
-                                    Ok(Message::EndOfStream { source_id }) => {
+                                    Ok(Message::EndOfStream { source_id, .. }) => {
                                         atomic_stats.record_eos();
                                         info!(source_id = source_id, "Received EOS from upstream");
                                         if tx.send(ProcessorMessage::Eos { source_id }).is_err() {

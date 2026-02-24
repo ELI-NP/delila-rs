@@ -40,7 +40,7 @@ use tracing::{debug, info, warn};
 
 use crate::common::{
     handle_command, run_command_task, CommandHandlerExt, ComponentSharedState, ComponentState,
-    EventDataBatch, Message, RunConfig,
+    Message, MessageHeader, RunConfig,
 };
 
 /// Recorder configuration
@@ -196,10 +196,15 @@ impl RateTracker {
 
 /// Commands for writer task
 enum WriterCommand {
-    /// Write a batch of raw data
-    WriteBatch(EventDataBatch),
+    /// Write a batch as pre-serialized MsgPack bytes (zero-copy hot path)
+    WriteRawBatch {
+        /// Raw MsgPack bytes of EventDataBatch (ready to write to file)
+        data: Vec<u8>,
+        /// Number of events in this batch (extracted from header)
+        event_count: u64,
+    },
     /// End of stream - close current file
-    EndOfStream { source_id: u32 },
+    EndOfStream { source_id: u32, run_number: u32 },
     /// Configure for a new run
     NewRun(RunConfig),
     /// Drain pending batches and start recording with the run number
@@ -372,14 +377,16 @@ impl FileWriter {
         false
     }
 
-    fn write_batch(&mut self, batch: EventDataBatch) -> Result<(), RecorderError> {
-        if batch.events.is_empty() {
+    /// Write pre-serialized MsgPack bytes directly to file (zero-copy hot path).
+    /// The `data` is already a valid EventDataBatch MsgPack — no re-serialization needed.
+    fn write_raw_batch(&mut self, data: &[u8], event_count: u64) -> Result<(), RecorderError> {
+        if event_count == 0 {
             return Ok(());
         }
 
         // Don't write if run is not active
         if !self.run_active {
-            debug!("Ignoring write_batch: run not active");
+            debug!("Ignoring write_raw_batch: run not active");
             return Ok(());
         }
 
@@ -393,23 +400,15 @@ impl FileWriter {
             self.open_new_file()?;
         }
 
-        // Update timestamp range for footer
-        if let (Some(first), Some(last)) = (batch.events.first(), batch.events.last()) {
-            self.footer
-                .update_timestamp_range(first.timestamp_ns, last.timestamp_ns);
-        }
-
-        let event_count = batch.events.len() as u64;
-        let data = batch.to_msgpack()?;
         let len_bytes = (data.len() as u32).to_le_bytes();
 
         if let Some(ref mut writer) = self.writer {
             writer.write_all(&len_bytes)?;
-            writer.write_all(&data)?;
+            writer.write_all(data)?;
 
             // Update checksum with data block (length prefix + data)
             self.checksum.update(&len_bytes);
-            self.checksum.update(&data);
+            self.checksum.update(data);
 
             let bytes_written = 4 + data.len() as u64;
             self.current_file_size += bytes_written;
@@ -707,10 +706,59 @@ impl Recorder {
         Ok(())
     }
 
-    /// Receiver task: ZMQ SUB → Writer channel (non-blocking)
+    /// Message::Data MsgPack wrapper size: 0x81 + 0xa4 + "Data" = 6 bytes.
+    /// Everything after this offset is the raw EventDataBatch bytes.
+    const DATA_WRAPPER_SIZE: usize = 6;
+
+    /// Extract event count from raw EventDataBatch MsgPack bytes.
+    /// Format: fixarray(4) [source_id, seq, timestamp, events_array]
+    /// We skip the first 3 uint fields and read the events array header.
+    fn extract_event_count(batch_bytes: &[u8]) -> u64 {
+        // Parse outer array header
+        let mut pos: usize = match batch_bytes.first() {
+            Some(b) if (0x90..=0x9f).contains(b) => 1,
+            Some(0xdc) if batch_bytes.len() >= 3 => 3,
+            Some(0xdd) if batch_bytes.len() >= 5 => 5,
+            _ => return 0,
+        };
+
+        // Skip 3 uint fields (source_id, sequence_number, timestamp)
+        for _ in 0..3 {
+            let skip = match batch_bytes.get(pos) {
+                Some(b) if *b <= 0x7f => 1, // positive fixint
+                Some(0xcc) => 2,            // uint8
+                Some(0xcd) => 3,            // uint16
+                Some(0xce) => 5,            // uint32
+                Some(0xcf) => 9,            // uint64
+                _ => return 0,
+            };
+            pos += skip;
+        }
+
+        // Read events array header for count
+        match batch_bytes.get(pos) {
+            Some(b) if (0x90..=0x9f).contains(b) => (b & 0x0f) as u64,
+            Some(0xdc) if batch_bytes.len() >= pos + 3 => {
+                u16::from_be_bytes([batch_bytes[pos + 1], batch_bytes[pos + 2]]) as u64
+            }
+            Some(0xdd) if batch_bytes.len() >= pos + 5 => u32::from_be_bytes([
+                batch_bytes[pos + 1],
+                batch_bytes[pos + 2],
+                batch_bytes[pos + 3],
+                batch_bytes[pos + 4],
+            ]) as u64,
+            _ => 0,
+        }
+    }
+
+    /// Receiver task: ZMQ SUB → Writer channel (non-blocking, zero-copy)
     ///
     /// IMPORTANT: Always drains ZMQ socket to prevent internal buffer growth.
     /// When not Running, data is discarded immediately.
+    ///
+    /// Hot path uses lightweight header parsing instead of full deserialization:
+    /// - Data messages: extract batch bytes (skip 6-byte Message wrapper) + event count
+    /// - EOS: full deserialize (rare, once per source per run)
     async fn receiver_task(
         mut socket: subscribe::Subscribe,
         tx: std::sync::mpsc::Sender<WriterCommand>,
@@ -746,29 +794,45 @@ impl Recorder {
                             }
 
                             if let Some(data) = multipart.into_iter().next() {
-                                match Message::from_msgpack(&data) {
-                                    Ok(Message::Data(batch)) => {
-                                        stats.received_batches.fetch_add(1, Ordering::Relaxed);
-                                        stats.received_events.fetch_add(batch.events.len() as u64, Ordering::Relaxed);
+                                // Use lightweight header parsing for message type detection
+                                match MessageHeader::parse(&data) {
+                                    Some(MessageHeader::Data { .. }) => {
+                                        // Extract raw EventDataBatch bytes (skip Message wrapper)
+                                        if data.len() <= Self::DATA_WRAPPER_SIZE {
+                                            continue;
+                                        }
+                                        let batch_bytes = &data[Self::DATA_WRAPPER_SIZE..];
+                                        let event_count = Self::extract_event_count(batch_bytes);
 
-                                        // Send directly to writer
-                                        if tx.send(WriterCommand::WriteBatch(batch)).is_err() {
+                                        stats.received_batches.fetch_add(1, Ordering::Relaxed);
+                                        stats.received_events.fetch_add(event_count, Ordering::Relaxed);
+
+                                        // Pass raw bytes to writer (no deserialize/reserialize)
+                                        if tx.send(WriterCommand::WriteRawBatch {
+                                            data: batch_bytes.to_vec(),
+                                            event_count,
+                                        }).is_err() {
                                             info!("Channel closed, receiver exiting");
                                             break;
                                         }
                                     }
-                                    Ok(Message::EndOfStream { source_id }) => {
-                                        info!(source_id, "Received EOS - closing file");
-                                        if tx.send(WriterCommand::EndOfStream { source_id }).is_err() {
+                                    Some(MessageHeader::EndOfStream { source_id }) => {
+                                        // EOS is rare — full deserialize to get run_number
+                                        let run_number = match Message::from_msgpack(&data) {
+                                            Ok(Message::EndOfStream { run_number, .. }) => run_number,
+                                            _ => 0,
+                                        };
+                                        info!(source_id, run_number, "Received EOS");
+                                        if tx.send(WriterCommand::EndOfStream { source_id, run_number }).is_err() {
                                             info!("Channel closed, receiver exiting");
                                             break;
                                         }
                                     }
-                                    Ok(Message::Heartbeat(hb)) => {
-                                        debug!(source_id = hb.source_id, "Received heartbeat");
+                                    Some(MessageHeader::Heartbeat { source_id }) => {
+                                        debug!(source_id, "Received heartbeat");
                                     }
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to deserialize message");
+                                    None => {
+                                        warn!("Failed to parse message header");
                                     }
                                 }
                             }
@@ -796,22 +860,35 @@ impl Recorder {
     ) {
         let mut writer = FileWriter::new(config, stats);
         let mut eos_received = false;
+        let mut current_run_number: u32 = 0;
         let mut last_state = *state_rx.borrow();
 
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(cmd) => match cmd {
-                    WriterCommand::WriteBatch(batch) => {
-                        if let Err(e) = writer.write_batch(batch) {
+                    WriterCommand::WriteRawBatch { data, event_count } => {
+                        if let Err(e) = writer.write_raw_batch(&data, event_count) {
                             warn!(error = %e, "Failed to write batch");
                         }
                     }
-                    WriterCommand::EndOfStream { source_id } => {
-                        info!(source_id, "Writer received EOS - closing file");
-                        if let Err(e) = writer.end_run() {
-                            warn!(error = %e, "Failed to close file on EOS");
+                    WriterCommand::EndOfStream {
+                        source_id,
+                        run_number,
+                    } => {
+                        if run_number != current_run_number {
+                            warn!(
+                                source_id,
+                                eos_run = run_number,
+                                current_run = current_run_number,
+                                "IGNORING stale EOS from previous run"
+                            );
+                        } else {
+                            info!(source_id, run_number, "Writer received EOS - closing file");
+                            if let Err(e) = writer.end_run() {
+                                warn!(error = %e, "Failed to close file on EOS");
+                            }
+                            eos_received = true;
                         }
-                        eos_received = true;
                     }
                     WriterCommand::NewRun(run_config) => {
                         writer.new_run(run_config);
@@ -823,7 +900,7 @@ impl Recorder {
                         let mut drained = 0u64;
                         while let Ok(cmd) = rx.try_recv() {
                             match cmd {
-                                WriterCommand::WriteBatch(_) => drained += 1,
+                                WriterCommand::WriteRawBatch { .. } => drained += 1,
                                 WriterCommand::EndOfStream { .. } => { /* discard */ }
                                 other => {
                                     warn!(
@@ -837,6 +914,8 @@ impl Recorder {
                             info!(drained, "Drained stale batches from previous run");
                         }
 
+                        current_run_number = run_number;
+                        eos_received = false;
                         writer.start_run(run_number);
                         info!(run_number, "Writer started - recording enabled");
                     }

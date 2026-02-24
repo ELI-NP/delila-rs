@@ -33,7 +33,7 @@ use tracing::{debug, info, warn};
 use crate::common::{
     handle_command, run_command_task, ChannelRegistration, Command, CommandHandlerExt,
     CommandResponse, ComponentSharedState, ComponentState, EventData, EventDataBatch, Message,
-    Waveform,
+    MessageHeader, Waveform,
 };
 
 /// Monitor configuration
@@ -194,7 +194,12 @@ pub struct Histogram2D {
 
 impl Histogram2D {
     /// Create a new 2D histogram with the given X and Y configurations
-    pub fn new(module_id: u32, channel_id: u32, x_config: HistogramConfig, y_config: HistogramConfig) -> Self {
+    pub fn new(
+        module_id: u32,
+        channel_id: u32,
+        x_config: HistogramConfig,
+        y_config: HistogramConfig,
+    ) -> Self {
         let total_bins = x_config.num_bins as usize * y_config.num_bins as usize;
         Self {
             module_id,
@@ -420,7 +425,12 @@ impl MonitorState {
                 Histogram1D::new(ch.module_id, ch.channel_id, self.psd_histogram_config)
             });
             self.psd2d_histograms.entry(key).or_insert_with(|| {
-                Histogram2D::new(ch.module_id, ch.channel_id, self.psd2d_x_config, self.psd2d_y_config)
+                Histogram2D::new(
+                    ch.module_id,
+                    ch.channel_id,
+                    self.psd2d_x_config,
+                    self.psd2d_y_config,
+                )
             });
         }
     }
@@ -515,7 +525,6 @@ impl AtomicStats {
     }
 
     #[inline]
-    #[allow(dead_code)] // Reserved for future bounded channel debugging
     fn record_drop(&self) {
         self.dropped_batches.fetch_add(1, Ordering::Relaxed);
     }
@@ -844,7 +853,10 @@ pub fn create_router(state: AppState) -> Router {
             "/api/histograms/clear",
             axum::routing::post(clear_histograms),
         )
-        .route("/api/histograms2d/:module_id/:channel_id", get(get_histogram2d))
+        .route(
+            "/api/histograms2d/:module_id/:channel_id",
+            get(get_histogram2d),
+        )
         .route("/api/waveforms", get(list_waveforms))
         .route("/api/waveforms/:module_id/:channel_id", get(get_waveform))
         .layer(cors)
@@ -939,9 +951,12 @@ impl Monitor {
 
     /// Run the monitor
     pub async fn run(&mut self, mut shutdown: broadcast::Receiver<()>) -> Result<(), MonitorError> {
-        // Create channels (unbounded - memory growth indicates bottleneck)
+        // Create channels
         let (hist_tx, hist_rx) = mpsc::unbounded_channel::<HistogramMessage>();
-        let (data_tx, data_rx) = mpsc::unbounded_channel::<EventDataBatch>();
+        // Bounded data channel: Monitor is display-only, skip batches when full
+        // to prevent unbounded memory growth at high data rates.
+        let data_channel_capacity = self.config.channel_capacity;
+        let (data_tx, data_rx) = mpsc::channel::<EventDataBatch>(data_channel_capacity);
 
         // Create ZMQ SUB socket
         let context = Context::new();
@@ -1039,7 +1054,13 @@ impl Monitor {
         let monitor_config_for_hist = self.config.clone();
         let atomic_stats_for_hist = self.atomic_stats.clone();
         let hist_handle = tokio::spawn(async move {
-            Self::histogram_task(hist_rx, data_rx, monitor_config_for_hist, atomic_stats_for_hist).await
+            Self::histogram_task(
+                hist_rx,
+                data_rx,
+                monitor_config_for_hist,
+                atomic_stats_for_hist,
+            )
+            .await
         });
 
         info!(state = %self.state(), "Monitor ready, waiting for commands");
@@ -1065,13 +1086,14 @@ impl Monitor {
         Ok(())
     }
 
-    /// Receiver task: ZMQ SUB → channel (non-blocking)
+    /// Receiver task: ZMQ SUB → bounded channel (non-blocking)
     ///
     /// IMPORTANT: Always drains ZMQ socket to prevent internal buffer growth.
     /// When not Running, data is discarded immediately.
+    /// When Running but channel full, batches are skipped (Monitor is display-only).
     async fn receiver_task(
         mut socket: subscribe::Subscribe,
-        tx: mpsc::UnboundedSender<EventDataBatch>,
+        tx: mpsc::Sender<EventDataBatch>,
         mut shutdown: broadcast::Receiver<()>,
         atomic_stats: Arc<AtomicStats>,
         mut state_rx: watch::Receiver<ComponentState>,
@@ -1104,36 +1126,54 @@ impl Monitor {
                             }
 
                             if let Some(data) = multipart.into_iter().next() {
-                                match Message::from_msgpack(&data) {
-                                    Ok(Message::Data(batch)) => {
+                                // Lightweight header parse first (no allocation)
+                                match MessageHeader::parse(&data) {
+                                    Some(MessageHeader::Data { .. }) => {
                                         atomic_stats.record_received();
-                                        debug!(
-                                            seq = batch.sequence_number,
-                                            events = batch.len(),
-                                            source = batch.source_id,
-                                            "Received batch"
-                                        );
 
-                                        // Non-blocking send to histogram task (unbounded)
-                                        if tx.send(batch).is_err() {
-                                            info!("Histogram channel closed, exiting");
-                                            break;
+                                        // Skip expensive deserialization if channel is full.
+                                        // Monitor is display-only: dropping batches is acceptable.
+                                        if tx.capacity() == 0 {
+                                            atomic_stats.record_drop();
+                                            continue;
+                                        }
+
+                                        // Only deserialize when histogram task can accept data
+                                        match Message::from_msgpack(&data) {
+                                            Ok(Message::Data(batch)) => {
+                                                // try_send is still needed (race between
+                                                // capacity check and send)
+                                                match tx.try_send(batch) {
+                                                    Ok(()) => {}
+                                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                                        atomic_stats.record_drop();
+                                                    }
+                                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                                        info!("Histogram channel closed, exiting");
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                warn!("Header said Data but deserialization failed");
+                                            }
                                         }
                                     }
-                                    Ok(Message::EndOfStream { source_id }) => {
-                                        let (recv, proc, _) = atomic_stats.snapshot();
+                                    Some(MessageHeader::EndOfStream { source_id }) => {
+                                        let (recv, proc, dropped) = atomic_stats.snapshot();
                                         info!(
                                             source_id,
                                             received_batches = recv,
                                             processed_batches = proc,
+                                            dropped_batches = dropped,
                                             "Received EOS - data stream complete"
                                         );
                                     }
-                                    Ok(Message::Heartbeat(hb)) => {
-                                        debug!(source_id = hb.source_id, "Received heartbeat");
+                                    Some(MessageHeader::Heartbeat { source_id }) => {
+                                        debug!(source_id, "Received heartbeat");
                                     }
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to deserialize message");
+                                    None => {
+                                        warn!("Failed to parse message header");
                                     }
                                 }
                             }
@@ -1154,7 +1194,7 @@ impl Monitor {
     /// Histogram task: owns MonitorState, processes batches and HTTP queries
     async fn histogram_task(
         mut cmd_rx: mpsc::UnboundedReceiver<HistogramMessage>,
-        mut data_rx: mpsc::UnboundedReceiver<EventDataBatch>,
+        mut data_rx: mpsc::Receiver<EventDataBatch>,
         monitor_config: MonitorConfig,
         atomic_stats: Arc<AtomicStats>,
     ) {
@@ -1430,8 +1470,16 @@ mod tests {
 
     #[test]
     fn test_histogram2d_fill() {
-        let x_config = HistogramConfig { num_bins: 10, min_value: 0.0, max_value: 100.0 };
-        let y_config = HistogramConfig { num_bins: 5, min_value: 0.0, max_value: 1.0 };
+        let x_config = HistogramConfig {
+            num_bins: 10,
+            min_value: 0.0,
+            max_value: 100.0,
+        };
+        let y_config = HistogramConfig {
+            num_bins: 5,
+            min_value: 0.0,
+            max_value: 1.0,
+        };
         let mut hist = Histogram2D::new(0, 0, x_config, y_config);
 
         hist.fill(50.0, 0.5); // x_bin=5, y_bin=2 → idx = 2*10+5 = 25

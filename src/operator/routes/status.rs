@@ -246,7 +246,7 @@ pub(super) async fn start(
         }
     }
 
-    // Now start with the run number (sequential: wait for each component to reach Running)
+    // Start with the run number
     let start_result = state
         .client
         .start_all_sync(&state.components, run_number, state.config.start_timeout_ms)
@@ -358,48 +358,51 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
 
     let response = ApiResponse::success("Stop command sent").with_results(results);
 
-    let status = if response.success {
-        // Record run end in MongoDB
-        if let (Some(ref repo), Some(run_info)) = (&state.run_repo, current_run) {
-            // Get final stats from components
-            let components = state.client.get_all_status(&state.components).await;
-            let total_events: i64 = components
-                .iter()
-                .filter_map(|c| c.metrics.as_ref())
-                .map(|m| m.events_processed as i64)
-                .sum();
-            let total_bytes: i64 = components
-                .iter()
-                .filter_map(|c| c.metrics.as_ref())
-                .map(|m| m.bytes_transferred as i64)
-                .sum();
-            let average_rate = if run_info.elapsed_secs > 0 {
-                total_events as f64 / run_info.elapsed_secs as f64
-            } else {
-                0.0
-            };
+    // Always record run end and clear current_run, even if some components
+    // failed to stop. Stop is best-effort — partial failure must not leave
+    // the UI thinking the run is still active.
+    if let (Some(ref repo), Some(run_info)) = (&state.run_repo, current_run) {
+        // Get final stats from components
+        let components = state.client.get_all_status(&state.components).await;
+        let total_events: i64 = components
+            .iter()
+            .filter_map(|c| c.metrics.as_ref())
+            .map(|m| m.events_processed as i64)
+            .sum();
+        let total_bytes: i64 = components
+            .iter()
+            .filter_map(|c| c.metrics.as_ref())
+            .map(|m| m.bytes_transferred as i64)
+            .sum();
+        let average_rate = if run_info.elapsed_secs > 0 {
+            total_events as f64 / run_info.elapsed_secs as f64
+        } else {
+            0.0
+        };
 
-            let stats = RunStats {
-                total_events,
-                total_bytes,
-                average_rate,
-            };
+        let stats = RunStats {
+            total_events,
+            total_bytes,
+            average_rate,
+        };
 
-            if let Err(e) = repo
-                .end_run(
-                    run_info.run_number,
-                    &run_info.exp_name,
-                    RunStatus::Completed,
-                    stats,
-                )
-                .await
-            {
-                tracing::warn!("Failed to record run end in MongoDB: {}", e);
-            }
+        if let Err(e) = repo
+            .end_run(
+                run_info.run_number,
+                &run_info.exp_name,
+                RunStatus::Completed,
+                stats,
+            )
+            .await
+        {
+            tracing::warn!("Failed to record run end in MongoDB: {}", e);
         }
+    }
 
-        // Clear current run
-        *state.current_run.write().await = None;
+    // Always clear current run
+    *state.current_run.write().await = None;
+
+    let status = if response.success {
         StatusCode::OK
     } else {
         StatusCode::BAD_REQUEST

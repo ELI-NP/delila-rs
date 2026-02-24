@@ -302,7 +302,7 @@ pub enum Message {
     /// Event data batch
     Data(EventDataBatch),
     /// End of stream signal - source is shutting down
-    EndOfStream { source_id: u32 },
+    EndOfStream { source_id: u32, run_number: u32 },
     /// Heartbeat for liveness detection
     Heartbeat(Heartbeat),
 }
@@ -314,8 +314,11 @@ impl Message {
     }
 
     /// Create an EOS message
-    pub fn eos(source_id: u32) -> Self {
-        Self::EndOfStream { source_id }
+    pub fn eos(source_id: u32, run_number: u32) -> Self {
+        Self::EndOfStream {
+            source_id,
+            run_number,
+        }
     }
 
     /// Check if this is an EOS message
@@ -327,7 +330,7 @@ impl Message {
     pub fn source_id(&self) -> u32 {
         match self {
             Self::Data(batch) => batch.source_id,
-            Self::EndOfStream { source_id } => *source_id,
+            Self::EndOfStream { source_id, .. } => *source_id,
             Self::Heartbeat(hb) => hb.source_id,
         }
     }
@@ -656,7 +659,7 @@ mod tests {
 
     #[test]
     fn message_eos_roundtrip() {
-        let msg = Message::eos(99);
+        let msg = Message::eos(99, 42);
 
         assert!(msg.is_eos());
         assert_eq!(msg.source_id(), 99);
@@ -666,6 +669,9 @@ mod tests {
 
         assert!(decoded.is_eos());
         assert_eq!(decoded.source_id(), 99);
+        if let Message::EndOfStream { run_number, .. } = decoded {
+            assert_eq!(run_number, 42);
+        }
     }
 
     #[test]
@@ -705,7 +711,7 @@ mod tests {
 
     #[test]
     fn message_header_parse_eos() {
-        let msg = Message::eos(99);
+        let msg = Message::eos(99, 0);
         let bytes = msg.to_msgpack().unwrap();
 
         println!("EOS bytes: {:02x?}", &bytes);

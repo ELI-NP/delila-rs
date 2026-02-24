@@ -57,7 +57,7 @@ impl ComponentState {
             (Idle, Configured)       // Configure
             | (Configured, Armed)    // Arm
             | (Armed, Running)       // Start
-            | (Running, Configured)  // Stop (return to Configured for quick restart)
+            | (Running, Configured)  // Stop
             // Reset from any state
             | (Configured, Idle)
             | (Armed, Idle)
@@ -456,10 +456,11 @@ mod tests {
         assert!(Armed.can_transition_to(Error));
         assert!(Configured.can_transition_to(Error));
 
+        // Direct Configured → Running (skip Arm)
         // Invalid transitions
-        assert!(!Idle.can_transition_to(Running)); // Must go through Configured, Armed
+        assert!(!Configured.can_transition_to(Running)); // Must go through Armed
+        assert!(!Idle.can_transition_to(Running)); // Must go through Configured
         assert!(!Idle.can_transition_to(Armed));
-        assert!(!Configured.can_transition_to(Running)); // Must Arm first
         assert!(!Error.can_transition_to(Running)); // Must Reset first
     }
 
@@ -471,6 +472,7 @@ mod tests {
         assert!(!Idle.valid_commands().contains(&"Start"));
 
         assert!(Configured.valid_commands().contains(&"Arm"));
+        assert!(!Configured.valid_commands().contains(&"Start"));
         assert!(Configured.valid_commands().contains(&"Reset"));
 
         assert!(Armed.valid_commands().contains(&"Start"));
