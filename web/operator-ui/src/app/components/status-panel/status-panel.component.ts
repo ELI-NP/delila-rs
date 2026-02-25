@@ -50,6 +50,14 @@ import { ComponentState } from '../../models/types';
                         @if (component.metrics.bytes_transferred > 0) {
                           · {{ formatBytes(component.metrics.bytes_transferred) }}
                         }
+                        @if (component.metrics.trigger_loss_count && component.metrics.trigger_loss_count > 0) {
+                          <span class="trigger-loss">
+                            · LOSS: {{ formatEvents(component.metrics.trigger_loss_count) }}
+                            @if (component.metrics.trigger_loss_rate && component.metrics.trigger_loss_rate > 0.01) {
+                              ({{ component.metrics.trigger_loss_rate.toFixed(2) }}%)
+                            }
+                          </span>
+                        }
                       </span>
                     }
                   </span>
@@ -146,6 +154,10 @@ import { ComponentState } from '../../models/types';
     .metrics-inline {
       color: #666;
       font-size: 0.85em;
+    }
+    .trigger-loss {
+      color: #ff9800;
+      font-weight: 500;
     }
   `,
 })

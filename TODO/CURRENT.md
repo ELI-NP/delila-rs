@@ -11,7 +11,6 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **1** | [41_start_stop_restructure.md](41_start_stop_restructure.md) | **🔧 実装中** | Start/Stop フロー再構成: Stop時Close + Arm統合 + DIG1タイムスタンプリセット ([設計書](../docs/plans/start_stop_restructure.md)) |
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **📋 計画完了** | EB 統一: SliceBuilder→chunk_builder + mimalloc 導入 (Gemini レビュー済) |
 | **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) — ROOT出力: oxyroot Vec events + file-per-batch確定 ([bench](../docs/plans/oxyroot_benchmark_results.md)) |
@@ -30,6 +29,7 @@ Claudeセッション開始時に必ず読み込まれます。
 - **C:** Event Builder オンラインパイプライン統合 (EB-1〜EB-4) → Phase 2
 - **D:** Grafana モニタリング (InfluxDB v3 Core + Grafana) → **計画完了** (2026-02-19, [設計書](../docs/plans/grafana_monitoring.md) + [TODO](37_grafana_monitoring.md))
 - **G:** 設定自動生成スクリプト (3-4) + デプロイスクリプト改善 (3-5)
+- **H:** ~~トリガーロス・ビジー検出~~ — **✅ COMPLETED** (2026-02-25, [TODO](43_trigger_loss_detection.md) + [設計書](../docs/plans/trigger_loss_detection.md)) — 本番 Run 156 で検証済: DIG1 フラグカウント + DIG2 5sポーリング + フロントエンド表示
 
 ---
 
@@ -37,6 +37,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| [43_trigger_loss_detection.md](43_trigger_loss_detection.md) | 2026-02-25 | トリガーロス検出: DIG1 EXTRAS フラグ + DIG2 カウンタポーリング, 本番 Run 156 (6台, 3.81M eve/s) で検証済 |
 | — | 2026-02-25 | oxyroot ベンチマーク: Vec events 0.79M events/s, 実運用300k/sに対して2.6xマージン, file-per-batch確定 ([結果](../docs/plans/oxyroot_benchmark_results.md)) |
 | — | 2026-02-25 | ReadLoop transient error retry: 30s timeout + 10ms interval, 5MHz 6modules 10min検証済, DIG1 ch_extras_opt コード強制 |
 | [archive/42_a3818_driver_patch.md](archive/42_a3818_driver_patch.md) | 2026-02-24 | A3818 ドライバパッチ v1.6.12-delila1: バッファオーバーフロー防止 (1MB→16MB) + off-by-one + セマフォバグ + PCIe障害検出、76にデプロイ済 |
@@ -49,6 +50,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | File | Reason |
 |------|--------|
 | [archive/22_amax_decoder_implementation.md](archive/22_amax_decoder_implementation.md) | FELib OpenDPP エンドポイントから直接イベント取得で十分。デコーダ不要 |
+| [archive/41_start_stop_restructure.md](archive/41_start_stop_restructure.md) | DIG1 タイムスタンプリセット問題は別原因が判明。Start/Stop フロー再構成は不要 |
 
 ---
 
@@ -131,6 +133,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | `archive/36_accumulated_waveform.md` | 積算 Waveform 表示 |
 | `archive/39_cross_run_eos_fix.md` | Cross-Run EOS 汚染修正 |
 | `archive/40_decode_loop_parallelization.md` | DecodeLoop 並列化 |
+| `archive/41_start_stop_restructure.md` | Start/Stop フロー再構成 (Cancelled) |
 | `archive/42_a3818_driver_patch.md` | A3818 ドライバパッチ v1.6.12-delila1 |
 
 ---

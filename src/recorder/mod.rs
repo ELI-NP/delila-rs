@@ -526,6 +526,8 @@ impl CommandHandlerExt for RecorderCommandExt {
             queue_max: 0,
             event_rate: self.rate_tracker.get_rate(),
             data_rate: 0.0,
+            trigger_loss_count: 0,
+            trigger_loss_rate: 0.0,
         })
     }
 }

@@ -31,6 +31,8 @@ export interface ComponentMetrics {
   queue_size: number;
   queue_max: number;
   event_rate: number;
+  trigger_loss_count?: number;
+  trigger_loss_rate?: number;
 }
 
 // Status of a single component

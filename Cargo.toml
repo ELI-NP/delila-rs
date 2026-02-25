@@ -189,6 +189,14 @@ name = "oxyroot_bench"
 path = "src/bin/oxyroot_bench.rs"
 required-features = ["root"]
 
+[[bin]]
+name = "trigger_loss_test"
+path = "src/bin/trigger_loss_test.rs"
+
+[[bin]]
+name = "trigger_loss_test_dig2"
+path = "src/bin/trigger_loss_test_dig2.rs"
+
 [[example]]
 name = "test_oxyroot"
 required-features = ["root"]

@@ -219,6 +219,12 @@ pub struct ReaderMetrics {
     pub batches_published: AtomicU64,
     /// Current decode queue length (approximate)
     pub queue_length: AtomicU64,
+    /// Cumulative trigger loss count (DIG1: flag-based estimate, DIG2: counter-based exact)
+    pub trigger_loss_count: AtomicU64,
+    /// Events with trigger_lost flag set (DIG1 only)
+    pub trigger_lost_flag_events: AtomicU64,
+    /// Events with n_lost_trigger flag set (DIG1 only)
+    pub n_lost_trigger_flag_events: AtomicU64,
 }
 
 /// Rate tracker for 1-second interval rate calculation
@@ -316,7 +322,13 @@ impl CommandHandlerExt for ReaderCommandExt {
         let events = self.metrics.events_decoded.load(Ordering::Relaxed);
         let bytes = self.metrics.bytes_read.load(Ordering::Relaxed);
         let queue = self.metrics.queue_length.load(Ordering::Relaxed);
+        let trigger_loss = self.metrics.trigger_loss_count.load(Ordering::Relaxed);
         self.rate_tracker.update(events);
+        let loss_rate = if events > 0 {
+            (trigger_loss as f64 / (events as f64 + trigger_loss as f64)) * 100.0
+        } else {
+            0.0
+        };
         Some(crate::common::ComponentMetrics {
             events_processed: events,
             bytes_transferred: bytes,
@@ -324,11 +336,22 @@ impl CommandHandlerExt for ReaderCommandExt {
             queue_max: 0,
             event_rate: self.rate_tracker.get_rate(),
             data_rate: 0.0,
+            trigger_loss_count: trigger_loss,
+            trigger_loss_rate: loss_rate,
         })
     }
 
     fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
         self.rate_tracker.reset();
+        self.metrics
+            .trigger_loss_count
+            .store(0, Ordering::Relaxed);
+        self.metrics
+            .trigger_lost_flag_events
+            .store(0, Ordering::Relaxed);
+        self.metrics
+            .n_lost_trigger_flag_events
+            .store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -400,6 +423,8 @@ struct DeviceConnection {
     auto_config_failed: bool,
     /// Cached DevTree parameter metadata for validation (None if fetch failed)
     param_cache: Option<std::collections::HashMap<String, caen::handle::ParamInfo>>,
+    /// Enabled channel indices (for DIG2 counter polling)
+    enabled_channels: Vec<u8>,
 }
 
 /// Try to connect to a digitizer and configure the RAW endpoint.
@@ -428,6 +453,7 @@ fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection
                     hw_running: false,
                     auto_config_failed: false,
                     param_cache,
+                    enabled_channels: Vec::new(),
                 })
             }
             Err(e) => {
@@ -468,6 +494,7 @@ fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
                     hw_running: false,
                     auto_config_failed: false,
                     param_cache,
+                    enabled_channels: Vec::new(),
                 })
             }
             Err(e) => {
@@ -479,6 +506,155 @@ fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
             warn!(error = %e, "Failed to connect to digitizer");
             None
         }
+    }
+}
+
+/// Extract enabled channel indices from a DigitizerConfig.
+fn get_enabled_channels_from_config(
+    config: &crate::config::digitizer::DigitizerConfig,
+) -> Vec<u8> {
+    let default_enabled = config
+        .channel_defaults
+        .enabled
+        .as_deref()
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    let mut enabled = Vec::new();
+    for ch in 0..config.num_channels {
+        let ch_enabled = config
+            .channel_overrides
+            .get(&ch)
+            .and_then(|c| c.enabled.as_deref())
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(default_enabled);
+        if ch_enabled {
+            enabled.push(ch);
+        }
+    }
+    enabled
+}
+
+/// 24-bit counter wraparound-aware difference (for DIG2 FPGA counters).
+fn wrapping_diff_24bit(current: u64, prev: u64) -> u64 {
+    if current >= prev {
+        current - prev
+    } else {
+        current + 0x100_0000 - prev
+    }
+}
+
+/// DIG2 trigger counter polling state (tracks across poll intervals for wraparound handling).
+struct Dig2PollState {
+    prev_trigger: Vec<u64>,
+    prev_saved: Vec<u64>,
+    accumulated_lost: u64,
+    accumulated_trigger: u64,
+    initialized: bool,
+}
+
+impl Dig2PollState {
+    fn new() -> Self {
+        Self {
+            prev_trigger: Vec::new(),
+            prev_saved: Vec::new(),
+            accumulated_lost: 0,
+            accumulated_trigger: 0,
+            initialized: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.prev_trigger.clear();
+        self.prev_saved.clear();
+        self.accumulated_lost = 0;
+        self.accumulated_trigger = 0;
+        self.initialized = false;
+    }
+}
+
+/// Poll DIG2 trigger counters and update metrics.
+/// Must only be called for DIG2 firmware during Running state.
+fn poll_dig2_counters(
+    conn: &DeviceConnection,
+    poll: &mut Dig2PollState,
+    metrics: &ReaderMetrics,
+    last_warn: &mut Instant,
+) {
+    if conn.enabled_channels.is_empty() {
+        return;
+    }
+
+    // Initialize prev vectors if needed
+    if !poll.initialized {
+        let n = conn.enabled_channels.len();
+        poll.prev_trigger = vec![0; n];
+        poll.prev_saved = vec![0; n];
+        // Read initial baseline values
+        for (i, &ch) in conn.enabled_channels.iter().enumerate() {
+            // ChRealtimeMonitor must be read first to latch FPGA counters
+            let _ = conn
+                .handle
+                .get_value(&format!("/ch/{}/par/ChRealtimeMonitor", ch));
+            poll.prev_trigger[i] = conn
+                .handle
+                .get_value(&format!("/ch/{}/par/ChTriggerCnt", ch))
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            poll.prev_saved[i] = conn
+                .handle
+                .get_value(&format!("/ch/{}/par/ChSavedEventCnt", ch))
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+        }
+        poll.initialized = true;
+        return;
+    }
+
+    for (i, &ch) in conn.enabled_channels.iter().enumerate() {
+        // ChRealtimeMonitor must be read first to latch FPGA counters
+        let _ = conn
+            .handle
+            .get_value(&format!("/ch/{}/par/ChRealtimeMonitor", ch));
+        let trigger = conn
+            .handle
+            .get_value(&format!("/ch/{}/par/ChTriggerCnt", ch))
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let saved = conn
+            .handle
+            .get_value(&format!("/ch/{}/par/ChSavedEventCnt", ch))
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let delta_trigger = wrapping_diff_24bit(trigger, poll.prev_trigger[i]);
+        let delta_saved = wrapping_diff_24bit(saved, poll.prev_saved[i]);
+        poll.accumulated_trigger += delta_trigger;
+        poll.accumulated_lost += delta_trigger.saturating_sub(delta_saved);
+
+        poll.prev_trigger[i] = trigger;
+        poll.prev_saved[i] = saved;
+    }
+
+    metrics
+        .trigger_loss_count
+        .store(poll.accumulated_lost, Ordering::Relaxed);
+
+    if poll.accumulated_lost > 0 && last_warn.elapsed() >= Duration::from_secs(10) {
+        let rate = if poll.accumulated_trigger > 0 {
+            poll.accumulated_lost as f64 / poll.accumulated_trigger as f64 * 100.0
+        } else {
+            0.0
+        };
+        warn!(
+            total_trigger = poll.accumulated_trigger,
+            total_lost = poll.accumulated_lost,
+            loss_rate_pct = format!("{:.2}", rate),
+            "Trigger loss detected (DIG2 counters)"
+        );
+        *last_warn = Instant::now();
     }
 }
 
@@ -593,8 +769,39 @@ impl Reader {
         &self.metrics
     }
 
+    /// Remap DIG1 (PSD1/PHA1) raw hardware flags to common flag constants.
+    ///
+    /// Raw decoder flags come from EXTRAS word bits[15:10] shifted to bits[5:0],
+    /// plus pileup at bit[15] from the charge/energy word.
+    fn remap_dig1_flags(raw: u32) -> u64 {
+        use crate::common::flags::*;
+        let mut out: u64 = 0;
+        if raw & (1 << 15) != 0 {
+            out |= FLAG_PILEUP;
+        } // Pileup from charge word
+        if raw & (1 << 5) != 0 {
+            out |= FLAG_TRIGGER_LOST;
+        } // EXTRAS bit[15]
+        if raw & (1 << 4) != 0 {
+            out |= FLAG_OVER_RANGE;
+        } // EXTRAS bit[14]
+        if raw & (1 << 3) != 0 {
+            out |= FLAG_1024_TRIGGER;
+        } // EXTRAS bit[13]
+        if raw & (1 << 2) != 0 {
+            out |= FLAG_N_LOST_TRIGGER;
+        } // EXTRAS bit[12]
+        out
+    }
+
     /// Convert EventData to CommonEventData (consumes event, zero-copy for waveforms)
-    fn convert_event(event: EventData) -> CommonEventData {
+    fn convert_event(event: EventData, firmware: FirmwareType) -> CommonEventData {
+        let flags = if firmware.is_dig1() {
+            Self::remap_dig1_flags(event.flags)
+        } else {
+            event.flags as u64
+        };
+
         if let Some(wf) = event.waveform {
             CommonEventData::with_waveform(
                 event.module,
@@ -602,7 +809,7 @@ impl Reader {
                 event.energy,
                 event.energy_short,
                 event.timestamp_ns,
-                event.flags as u64,
+                flags,
                 CommonWaveform {
                     analog_probe1: wf.analog_probe1,   // move, not clone
                     analog_probe2: wf.analog_probe2,   // move
@@ -622,7 +829,7 @@ impl Reader {
                 event.energy,
                 event.energy_short,
                 event.timestamp_ns,
-                event.flags as u64,
+                flags,
             )
         }
     }
@@ -701,6 +908,12 @@ impl Reader {
         let mut read_error_since: Option<Instant> = None;
         const READ_ERROR_TIMEOUT: Duration = Duration::from_secs(30);
 
+        // DIG2 trigger counter polling state
+        let mut dig2_poll = Dig2PollState::new();
+        let mut last_dig2_poll = Instant::now();
+        let mut last_dig2_warn = Instant::now();
+        const DIG2_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
         loop {
             // Check shutdown flag
             if shutdown.load(Ordering::Relaxed) {
@@ -772,6 +985,8 @@ impl Reader {
                         error!(error = %e, "Failed to start acquisition");
                     }
                     conn.hw_running = true;
+                    // Reset DIG2 poll state for new run
+                    dig2_poll.reset();
                 }
 
                 // Stop needed? (target dropped below Running)
@@ -883,6 +1098,8 @@ impl Reader {
                         if result.is_ok() {
                             if let Some(ref mut conn) = connection {
                                 conn.auto_config_failed = false;
+                                conn.enabled_channels =
+                                    get_enabled_channels_from_config(&dig_config);
                             }
                         }
                         let _ = response_tx.send(result);
@@ -1023,6 +1240,23 @@ impl Reader {
             } else {
                 // Running but no connection — wait for reconnect at loop top
                 std::thread::sleep(Duration::from_millis(100));
+            }
+
+            // DIG2: Periodic trigger counter polling (separate borrow scope)
+            if !config.firmware.is_dig1()
+                && last_dig2_poll.elapsed() >= DIG2_POLL_INTERVAL
+            {
+                if let Some(ref conn) = connection {
+                    if conn.hw_running {
+                        poll_dig2_counters(
+                            conn,
+                            &mut dig2_poll,
+                            &metrics,
+                            &mut last_dig2_warn,
+                        );
+                    }
+                }
+                last_dig2_poll = Instant::now();
             }
         }
 
@@ -1217,6 +1451,8 @@ impl Reader {
                         if result.is_ok() {
                             if let Some(ref mut conn) = connection {
                                 conn.auto_config_failed = false;
+                                conn.enabled_channels =
+                                    get_enabled_channels_from_config(&dig_config);
                             }
                         }
                         let _ = response_tx.send(result);
@@ -1423,6 +1659,10 @@ impl Reader {
         // Reusable Vec for decoded events (avoids allocation per-batch)
         let mut events_buffer: Vec<decoder::EventData> = Vec::with_capacity(1024);
 
+        // Rate-limited trigger loss warning (DIG1)
+        let mut last_trigger_loss_warn = Instant::now();
+        let mut last_trigger_loss_logged: u64 = 0;
+
         // Heartbeat ticker
         let use_heartbeat = config.heartbeat_interval_ms > 0;
         let mut heartbeat_ticker =
@@ -1484,11 +1724,52 @@ impl Reader {
                                     );
 
                                     for event in events_buffer.drain(..) {
-                                        batch.push(Self::convert_event(event));
+                                        let common_event =
+                                            Self::convert_event(event, config.firmware);
+                                        // Count trigger loss flags (DIG1 only)
+                                        if config.firmware.is_dig1() {
+                                            if common_event.has_trigger_lost() {
+                                                metrics
+                                                    .trigger_lost_flag_events
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                            }
+                                            if (common_event.flags
+                                                & crate::common::flags::FLAG_N_LOST_TRIGGER)
+                                                != 0
+                                            {
+                                                metrics
+                                                    .n_lost_trigger_flag_events
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                // Each N_LOST flag ≈ 1024 lost triggers
+                                                metrics
+                                                    .trigger_loss_count
+                                                    .fetch_add(1024, Ordering::Relaxed);
+                                            }
+                                        }
+                                        batch.push(common_event);
                                     }
 
                                     // Update metrics
                                     metrics.events_decoded.fetch_add(n_events as u64, Ordering::Relaxed);
+
+                                    // Rate-limited trigger loss warning (DIG1)
+                                    if config.firmware.is_dig1() {
+                                        let lost = metrics.trigger_loss_count.load(Ordering::Relaxed);
+                                        if lost > last_trigger_loss_logged
+                                            && last_trigger_loss_warn.elapsed() >= Duration::from_secs(10)
+                                        {
+                                            let flag_events = metrics.trigger_lost_flag_events.load(Ordering::Relaxed);
+                                            let n_lost_events = metrics.n_lost_trigger_flag_events.load(Ordering::Relaxed);
+                                            warn!(
+                                                estimated_lost = lost,
+                                                trigger_lost_flags = flag_events,
+                                                n_lost_flags = n_lost_events,
+                                                "Trigger loss detected (DIG1 EXTRAS flags)"
+                                            );
+                                            last_trigger_loss_warn = Instant::now();
+                                            last_trigger_loss_logged = lost;
+                                        }
+                                    }
 
                                     // Publish
                                     let msg = Message::data(batch);
@@ -1545,7 +1826,7 @@ impl Reader {
                                 sequence_number,
                                 1,
                             );
-                            batch.push(Self::convert_event(event_data));
+                            batch.push(Self::convert_event(event_data, config.firmware));
 
                             // Update metrics
                             metrics.events_decoded.fetch_add(1, Ordering::Relaxed);
@@ -1790,7 +2071,7 @@ mod tests {
             waveform: None,
         };
 
-        let minimal = Reader::convert_event(event);
+        let minimal = Reader::convert_event(event, FirmwareType::PSD2);
         // CommonEventData is packed, so we need to copy values before comparing
         let module = minimal.module;
         let channel = minimal.channel;
@@ -1896,7 +2177,7 @@ mod tests {
             waveform: Some(wf),
         };
 
-        let converted = Reader::convert_event(event);
+        let converted = Reader::convert_event(event, FirmwareType::PSD2);
         assert!(converted.waveform.is_some(), "Waveform should be preserved");
         let cwf = converted.waveform.unwrap();
         assert_eq!(cwf.analog_probe1, vec![100, 200, -300]);

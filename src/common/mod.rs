@@ -79,6 +79,12 @@ pub struct ComponentMetrics {
     pub event_rate: f64,
     /// Bytes per second
     pub data_rate: f64,
+    /// Cumulative trigger loss count (DIG1: estimated from flags, DIG2: exact from counters)
+    #[serde(default)]
+    pub trigger_loss_count: u64,
+    /// Trigger loss rate as percentage (0.0 - 100.0)
+    #[serde(default)]
+    pub trigger_loss_rate: f64,
 }
 
 /// Flag bit definitions for event status
