@@ -45,10 +45,7 @@
     "coincidence_mode": "TRIGGER_MODE_NORMAL",
     "ch_veto_source": "VETO_SRC_DISABLED",
     "pileup_rejection": "FALSE",
-    "trigger_latency": "TRG_LATENCY_MODE_NONE",
-    "extra": {
-      "ch_extras_opt": "EXTRAS_OPT_TT48_FLAGS_FINETT"
-    }
+    "trigger_latency": "TRG_LATENCY_MODE_NONE"
   },
   "channel_overrides": {
     "6": {

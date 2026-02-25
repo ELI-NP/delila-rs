@@ -1,0 +1,1204 @@
+{
+  "setupConfig": {
+    "name": "",
+    "gridRows": 4,
+    "gridCols": 4,
+    "xAxisLabel": "Channel",
+    "cells": [
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      }
+    ]
+  },
+  "viewTabs": [
+    {
+      "id": "25b61fce-cdc6-4459-8cfc-6283e70280d0",
+      "name": "PSD2-57 Ch0-15",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 0,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "efe5c94d-dcf9-4df7-88c9-dff537634ac1",
+      "name": "PSD2-57 Ch16-31",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 0,
+          "channelId": 16,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 17,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 18,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 19,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 20,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 21,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 22,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 23,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 24,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 25,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 26,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 27,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 28,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 29,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 30,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 31,
+          "xRange": {
+            "min": 10682.477581073352,
+            "max": 14578.217911673682
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        }
+      ],
+      "lastModifiedCellIndex": 0
+    },
+    {
+      "id": "81db028e-d468-4798-99f7-0ea962e8a697",
+      "name": "PSD1-SN53",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 1,
+          "channelId": 0,
+          "xRange": {
+            "min": 0,
+            "max": 26476.79298604515
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 1,
+          "xRange": {
+            "min": 0,
+            "max": 24515.54906115292
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ],
+      "lastModifiedCellIndex": 1
+    },
+    {
+      "id": "3b83d646-382c-402c-81c7-b646c22d6c8b",
+      "name": "PSD1-SN56",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 2,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "292761bd-f521-4188-9bfd-8551e61bae47",
+      "name": "PSD1-SN69",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 3,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "60d2be44-53ae-48eb-8bec-e1d8eec06170",
+      "name": "PSD1-SN59",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 4,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "b061b35e-acfe-47bb-83e6-791b39e1c5fb",
+      "name": "PSD1-SN54",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "cells": [
+        {
+          "sourceId": 5,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    }
+  ],
+  "activeTabId": "efe5c94d-dcf9-4df7-88c9-dff537634ac1"
+}

@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-23
+**Updated:** 2026-02-24
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -12,8 +12,6 @@ Claudeセッション開始時に必ず読み込まれます。
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
 | **1** | [41_start_stop_restructure.md](41_start_stop_restructure.md) | **🔧 実装中** | Start/Stop フロー再構成: Stop時Close + Arm統合 + DIG1タイムスタンプリセット ([設計書](../docs/plans/start_stop_restructure.md)) |
-| **1** | [40_decode_loop_parallelization.md](40_decode_loop_parallelization.md) | **✅ 完了** | DecodeLoop 並列化: Worker Pool + ReorderBuffer ([設計書](../docs/plans/decode_loop_parallelization.md)) |
-| **1** | [39_cross_run_eos_fix.md](39_cross_run_eos_fix.md) | **✅ 完了** | Cross-Run EOS 汚染修正: run_number タグ + stale EOS フィルタ ([設計書](../docs/plans/cross_run_eos_fix.md)) |
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **📋 計画完了** | EB 統一: SliceBuilder→chunk_builder + mimalloc 導入 (Gemini レビュー済) |
 | **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
@@ -39,18 +37,10 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
-| [40_decode_loop_parallelization.md](40_decode_loop_parallelization.md) | 2026-02-23 | DecodeLoop 並列化: 4 Workers (crossbeam) + ReorderBuffer, PSD2 2.2M→7.0M events/10s (3.2x), Stop→EOS 49s→<1ms |
-| [39_cross_run_eos_fix.md](39_cross_run_eos_fix.md) | 2026-02-23 | Cross-Run EOS 汚染修正: run_number タグ + stale EOS フィルタ |
+| [archive/42_a3818_driver_patch.md](archive/42_a3818_driver_patch.md) | 2026-02-24 | A3818 ドライバパッチ v1.6.12-delila1: バッファオーバーフロー防止 (1MB→16MB) + off-by-one + セマフォバグ + PCIe障害検出、76にデプロイ済 |
+| [archive/40_decode_loop_parallelization.md](archive/40_decode_loop_parallelization.md) | 2026-02-23 | DecodeLoop 並列化: 4 Workers (crossbeam) + ReorderBuffer, PSD2 2.2M→7.0M events/10s (3.2x), Stop→EOS 49s→<1ms |
+| [archive/39_cross_run_eos_fix.md](archive/39_cross_run_eos_fix.md) | 2026-02-23 | Cross-Run EOS 汚染修正: run_number タグ + stale EOS フィルタ |
 | — | 2026-02-19 | GitHub #5: Run History ビューワー (アコーディオン + config snapshot) + BSON HashMap キー修正 |
-| [archive/34_tuneup_software_trigger.md](archive/34_tuneup_software_trigger.md) | 2026-02-18 | GitHub #3: Tune Up時にソフトウェアトリガー強制 (clone-and-modify パターン) |
-| [archive/35_waveform_recording_warning.md](archive/35_waveform_recording_warning.md) | 2026-02-18 | GitHub #2: Run Start時にWaveform有効の警告 MatDialog |
-| [archive/36_accumulated_waveform.md](archive/36_accumulated_waveform.md) | 2026-02-18 | GitHub #4: Tune Up Waveform積算表示 (FIFO + replaceMerge でズーム保持) |
-| [archive/32_stop_command_timeout.md](archive/32_stop_command_timeout.md) | 2026-02-18 | Stop タイムアウト + Tune Up Apply 全パイプライン修正 + PHA1 waveform sign_extend + Probe 0始まり + ポート9090移行 |
-| [archive/29_channel_registration.md](archive/29_channel_registration.md) | 2026-02-05 | Channel Registration: Monitor チャンネル事前登録 + 個別チャンネル名 |
-| [archive/28_tuneup_mode.md](archive/28_tuneup_mode.md) | 2026-02-05 | Tune Up Mode: Waveform + ヒストグラム + パラメータ調整 (3-panel FullHD レイアウト) |
-| [archive/27_settings_ui_v2.md](archive/27_settings_ui_v2.md) | 2026-02-04 | Settings UI v2: 6カテゴリ再編 + SetInRun対応 (Phase 1-6) |
-| [archive/25_apply_digitizer_via_zmq.md](archive/25_apply_digitizer_via_zmq.md) | 2026-02-04 | Apply Digitizer Config via ZMQ — Idle/Configured で全適用 + Running で SetInRun のみ適用 |
-| [archive/19_settings_ui.md](archive/19_settings_ui.md) | 2026-02-03 | Phase 6: デジタイザ設定 UI (Detect, チャンネルテーブル, Apply/Save) |
 
 ## Cancelled (archived)
 
@@ -101,6 +91,7 @@ Claudeセッション開始時に必ず読み込まれます。
 - Config snapshot 診断ログ追加 (起動時ロード数 + 空時 warn)
 - Cross-Run EOS 汚染修正 (run_number タグ + stale EOS フィルタ)
 - DecodeLoop 並列化 (4 Workers crossbeam, PSD2 3.2x改善, 全FW統一パス)
+- A3818 ドライバパッチ v1.6.12-delila1 (バッファオーバーフロー+off-by-one+セマフォ+PCIe障害, 76デプロイ済)
 
 ---
 
@@ -133,6 +124,9 @@ Claudeセッション開始時に必ず読み込まれます。
 | `archive/34_tuneup_software_trigger.md` | Tune Up ソフトウェアトリガー |
 | `archive/35_waveform_recording_warning.md` | Waveform Recording 警告 |
 | `archive/36_accumulated_waveform.md` | 積算 Waveform 表示 |
+| `archive/39_cross_run_eos_fix.md` | Cross-Run EOS 汚染修正 |
+| `archive/40_decode_loop_parallelization.md` | DecodeLoop 並列化 |
+| `archive/42_a3818_driver_patch.md` | A3818 ドライバパッチ v1.6.12-delila1 |
 
 ---
 

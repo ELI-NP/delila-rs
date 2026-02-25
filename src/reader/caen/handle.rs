@@ -735,6 +735,34 @@ impl CaenHandle {
             });
         }
 
+        // Force ch_extras_opt for DIG1 firmware (PSD1/PHA1).
+        // The decoder depends on the specific EXTRAS word bit layout,
+        // so this must not be user-configurable.
+        if config.firmware.is_dig1() {
+            let extras_value = match config.firmware {
+                crate::config::digitizer::FirmwareType::PSD1 => "EXTRAS_OPT_TT48_FLAGS_FINETT",
+                crate::config::digitizer::FirmwareType::PHA1 => "EXTRAS_OPT_TT48_FINETT",
+                _ => unreachable!(),
+            };
+            for ch in 0..config.num_channels {
+                let path = format!("/ch/{}/par/ch_extras_opt", ch);
+                match self.set_value(&path, extras_value) {
+                    Ok(()) => {
+                        debug!(path = %path, value = extras_value, "Forced ch_extras_opt");
+                    }
+                    Err(e) => {
+                        warn!(path = %path, error = %e, "Failed to force ch_extras_opt");
+                    }
+                }
+            }
+            info!(
+                firmware = ?config.firmware,
+                value = extras_value,
+                channels = config.num_channels,
+                "Forced ch_extras_opt for 48-bit extended timestamps"
+            );
+        }
+
         Ok(applied)
     }
 

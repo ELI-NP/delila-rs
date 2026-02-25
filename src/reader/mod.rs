@@ -674,6 +674,7 @@ impl Reader {
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
         state_rx: watch::Receiver<ComponentState>,
+        state_tx: watch::Sender<ComponentState>,
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
@@ -693,6 +694,12 @@ impl Reader {
             buffer_size = config.buffer_size,
             "ReadLoop buffer allocated"
         );
+
+        // Track consecutive read errors for retry logic.
+        // Optical link transients (e.g. A3818 RX timeout) are recoverable —
+        // the digitizer keeps buffering data internally.
+        let mut read_error_since: Option<Instant> = None;
+        const READ_ERROR_TIMEOUT: Duration = Duration::from_secs(30);
 
         loop {
             // Check shutdown flag
@@ -923,6 +930,12 @@ impl Reader {
                     .read_data(config.read_timeout_ms, &mut read_buffer)
                 {
                     Ok(Some(raw)) => {
+                        if let Some(since) = read_error_since.take() {
+                            info!(
+                                elapsed_ms = since.elapsed().as_millis() as u64,
+                                "Read recovered after transient error"
+                            );
+                        }
                         metrics
                             .bytes_read
                             .fetch_add(raw.size as u64, Ordering::Relaxed);
@@ -959,7 +972,14 @@ impl Reader {
                         }
                     }
                     Ok(None) => {
-                        // Timeout - no data available, continue polling
+                        // Timeout - no data available, continue polling.
+                        // Also clears error state: read_data call succeeded.
+                        if let Some(since) = read_error_since.take() {
+                            info!(
+                                elapsed_ms = since.elapsed().as_millis() as u64,
+                                "Read recovered (timeout) after transient error"
+                            );
+                        }
                     }
                     Err(e) => {
                         if e.code == caen::error::codes::STOP {
@@ -970,9 +990,34 @@ impl Reader {
                             info!("Received STOP signal from digitizer, waiting for state change");
                             continue;
                         }
-                        // Non-timeout read error: drop connection for reconnect
-                        error!(error = %e, code = e.code, "Read error, dropping connection");
-                        connection = None;
+                        if target_state == ComponentState::Running {
+                            // Transient error during acquisition — retry instead of
+                            // dropping connection. The digitizer continues buffering
+                            // data internally; we just need to wait for the optical
+                            // link / driver to recover.
+                            if read_error_since.is_none() {
+                                read_error_since = Some(Instant::now());
+                                warn!(error = %e, code = e.code,
+                                    "Read error during acquisition, will retry for {:?}",
+                                    READ_ERROR_TIMEOUT);
+                            }
+                            if read_error_since.unwrap().elapsed() > READ_ERROR_TIMEOUT {
+                                error!(
+                                    timeout_secs = READ_ERROR_TIMEOUT.as_secs(),
+                                    error = %e, code = e.code,
+                                    "Read errors persisting, transitioning to Error"
+                                );
+                                let _ = state_tx.send(ComponentState::Error);
+                                connection = None;
+                                read_error_since = None;
+                            } else {
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                        } else {
+                            // Not running — safe to reconnect
+                            error!(error = %e, code = e.code, "Read error, dropping connection");
+                            connection = None;
+                        }
                     }
                 }
             } else {
@@ -1002,6 +1047,7 @@ impl Reader {
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
         state_rx: watch::Receiver<ComponentState>,
+        state_tx: watch::Sender<ComponentState>,
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
@@ -1014,6 +1060,10 @@ impl Reader {
 
         // Buffer for user info words
         let mut user_info_buffer = [0u64; 16];
+
+        // Track consecutive read errors for retry logic (same as RAW loop)
+        let mut read_error_since: Option<Instant> = None;
+        const READ_ERROR_TIMEOUT: Duration = Duration::from_secs(30);
 
         loop {
             // Check shutdown flag
@@ -1214,6 +1264,12 @@ impl Reader {
                     .read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer)
                 {
                     Ok(Some(event)) => {
+                        if let Some(since) = read_error_since.take() {
+                            info!(
+                                elapsed_ms = since.elapsed().as_millis() as u64,
+                                "Read recovered (OpenDPP) after transient error"
+                            );
+                        }
                         metrics
                             .bytes_read
                             .fetch_add(event.event_size as u64, Ordering::Relaxed);
@@ -1253,7 +1309,13 @@ impl Reader {
                         }
                     }
                     Ok(None) => {
-                        // Timeout - no data available, continue polling
+                        // Timeout - no data available, continue polling.
+                        if let Some(since) = read_error_since.take() {
+                            info!(
+                                elapsed_ms = since.elapsed().as_millis() as u64,
+                                "Read recovered (OpenDPP, timeout) after transient error"
+                            );
+                        }
                     }
                     Err(e) => {
                         if e.code == caen::error::codes::STOP {
@@ -1264,9 +1326,31 @@ impl Reader {
                             info!("Received STOP signal from digitizer, waiting for state change");
                             continue;
                         }
-                        // Non-timeout read error: drop connection for reconnect
-                        error!(error = %e, code = e.code, "Read error (OpenDPP), dropping connection");
-                        connection = None;
+                        if target_state == ComponentState::Running {
+                            // Transient error — retry (same logic as RAW loop)
+                            if read_error_since.is_none() {
+                                read_error_since = Some(Instant::now());
+                                warn!(error = %e, code = e.code,
+                                    "Read error during acquisition (OpenDPP), will retry for {:?}",
+                                    READ_ERROR_TIMEOUT);
+                            }
+                            if read_error_since.unwrap().elapsed() > READ_ERROR_TIMEOUT {
+                                error!(
+                                    timeout_secs = READ_ERROR_TIMEOUT.as_secs(),
+                                    error = %e, code = e.code,
+                                    "Read errors persisting (OpenDPP), transitioning to Error"
+                                );
+                                let _ = state_tx.send(ComponentState::Error);
+                                connection = None;
+                                read_error_since = None;
+                            } else {
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                        } else {
+                            // Not running — safe to reconnect
+                            error!(error = %e, code = e.code, "Read error (OpenDPP), dropping connection");
+                            connection = None;
+                        }
                     }
                 }
             } else {
@@ -1593,6 +1677,7 @@ impl Reader {
         let read_metrics = self.metrics.clone();
         let use_opendpp = self.config.firmware == FirmwareType::AMax;
 
+        let read_state_tx = self.state_tx.clone();
         let read_handle = tokio::task::spawn_blocking(move || {
             if use_opendpp {
                 info!("Using OpenDPP endpoint for AMax firmware");
@@ -1600,6 +1685,7 @@ impl Reader {
                     read_config,
                     data_tx,
                     read_state_rx,
+                    read_state_tx,
                     read_metrics,
                     read_shutdown_clone,
                     request_rx,
@@ -1610,6 +1696,7 @@ impl Reader {
                     read_config,
                     data_tx,
                     read_state_rx,
+                    read_state_tx,
                     read_metrics,
                     read_shutdown_clone,
                     request_rx,
