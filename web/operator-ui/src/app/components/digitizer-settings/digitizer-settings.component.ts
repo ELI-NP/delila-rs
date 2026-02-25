@@ -45,7 +45,7 @@ import {
     ChannelTableComponent,
   ],
   template: `
-    <div class="digitizer-settings" (keydown.enter)="onEnterKey($event)">
+    <div class="digitizer-settings" tabindex="0" (keydown.enter)="onEnterKey($event)">
       <!-- Header: Digitizer selector + firmware badge + action buttons -->
       <div class="header-row">
         <mat-form-field appearance="outline" class="digitizer-select">

@@ -11,7 +11,7 @@ import {
   ViewChildren,
   QueryList,
 } from '@angular/core';
-import { interval, Subject, takeUntil, switchMap, forkJoin, of, tap, catchError } from 'rxjs';
+import { interval, Subject, takeUntil, switchMap, forkJoin, of, catchError } from 'rxjs';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/histogram-chart.component';

@@ -24,7 +24,7 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { NgxEchartsDirective } from 'ngx-echarts';
-import type { EChartsCoreOption } from 'echarts/core';
+import type { EChartsCoreOption, ECharts } from 'echarts/core';
 import {
   Subject,
   Subscription,
@@ -245,7 +245,7 @@ interface ChannelChart {
           </div>
 
           <!-- Bottom row: Parameter Table -->
-          <div class="tuneup-bottom-row" (keydown.enter)="onTuneUpEnterKey($event)">
+          <div class="tuneup-bottom-row" tabindex="0" (keydown.enter)="onTuneUpEnterKey($event)">
             <div class="param-controls">
               <mat-button-toggle-group
                 [value]="selectedCategory()"
@@ -927,7 +927,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   private lastArmedTimestamp: number | null = null;
 
   /** ECharts instance for Tune Up waveform — used for replaceMerge to preserve zoom */
-  private tuneUpWfChart: any = null;
+  private tuneUpWfChart: ECharts | null = null;
 
   // Tune Up waveform chart: options (re-init only on channel change)
   readonly tuneUpWfOptions = computed<EChartsCoreOption>(() => {
@@ -1099,7 +1099,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  onTuneUpWfChartInit(chart: any): void {
+  onTuneUpWfChartInit(chart: ECharts): void {
     this.tuneUpWfChart = chart;
   }
 

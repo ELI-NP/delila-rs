@@ -148,7 +148,9 @@ interface RunHistoryItem {
                         @for (cfg of configSnapshot()!; track cfg.digitizer_id) {
                           <a mat-tab-link
                              [active]="selectedConfigIdx() === $index"
-                             (click)="selectedConfigIdx.set($index)">
+                             (click)="selectedConfigIdx.set($index)"
+                             (keydown.enter)="selectedConfigIdx.set($index)"
+                             tabindex="0">
                             {{ cfg.name }}
                           </a>
                         }

@@ -1464,8 +1464,8 @@ mod tests {
         assert_eq!(state.histograms.get(&key).unwrap().total_counts, 1);
 
         // PSD histograms should NOT have any entries (lazy created, so not present)
-        assert!(state.psd_histograms.get(&key).is_none());
-        assert!(state.psd2d_histograms.get(&key).is_none());
+        assert!(!state.psd_histograms.contains_key(&key));
+        assert!(!state.psd2d_histograms.contains_key(&key));
     }
 
     #[test]

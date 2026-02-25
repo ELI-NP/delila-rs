@@ -53,7 +53,7 @@ export class HeatmapChartComponent implements OnChanges {
       animation: false,
       tooltip: {
         trigger: 'item',
-        formatter: (params: any) => {
+        formatter: (params: { value?: number[] }) => {
           if (!params.value) return '';
           const [x, y, count] = params.value;
           return `Energy: ${x}<br>PSD: ${y.toFixed(3)}<br>Counts: ${count}`;
@@ -189,7 +189,7 @@ export class HeatmapChartComponent implements OnChanges {
           : undefined,
       },
       tooltip: {
-        formatter: (params: any) => {
+        formatter: (params: { value?: number[] }) => {
           if (!params.value) return '';
           const [xi, yi, rawVal] = params.value;
           const count = useLog ? Math.round(Math.pow(10, rawVal)) : rawVal;
