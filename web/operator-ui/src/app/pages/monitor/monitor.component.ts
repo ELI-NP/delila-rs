@@ -89,13 +89,15 @@ const STORAGE_KEY = 'delila-monitor-state';
             (createView)="onCreateView($event)"
             (quickCreate)="onQuickCreate($event)"
           ></app-setup-tab>
-        } @else if (activeViewTab(); as tab) {
-          <!-- View tab content -->
-          <app-view-tab
-            [tab]="tab"
-            (tabChange)="onViewTabChange($event)"
-            (cellExpand)="onCellExpand($event)"
-          ></app-view-tab>
+        } @else {
+          <!-- View tab content: @for track forces recreation on tab switch -->
+          @for (tab of activeViewTabArray(); track tab.id) {
+            <app-view-tab
+              [tab]="tab"
+              (tabChange)="onViewTabChange($event)"
+              (cellExpand)="onCellExpand($event)"
+            ></app-view-tab>
+          }
         }
       </div>
     </div>
@@ -204,6 +206,12 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
     const id = this.activeTabId();
     if (id === null) return null;
     return this.viewTabs().find((t) => t.id === id) ?? null;
+  });
+
+  // Single-element array for @for track — forces component recreation on tab switch
+  readonly activeViewTabArray = computed(() => {
+    const tab = this.activeViewTab();
+    return tab ? [tab] : [];
   });
 
   ngOnInit(): void {
