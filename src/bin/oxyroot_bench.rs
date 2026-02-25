@@ -132,7 +132,10 @@ fn bench_file_per_batch(dir: &Path, total_events: usize, batch_size: usize) {
     println!("  Time:       {:>12.3} s", elapsed.as_secs_f64());
     println!("  Rate:       {:>12.1} events/s", rate);
     println!("  Rate:       {:>12.2} M events/s", rate / 1e6);
-    println!("  Total size: {:>12.1} MB", total_bytes as f64 / 1_048_576.0);
+    println!(
+        "  Total size: {:>12.1} MB",
+        total_bytes as f64 / 1_048_576.0
+    );
     println!("  Throughput: {:>12.1} MB/s", mb_per_s);
     println!();
 }
@@ -351,7 +354,10 @@ fn bench_hit_per_row_batched(dir: &Path, total_events: usize, batch_size: usize)
     println!("  Time:       {:>12.3} s", elapsed.as_secs_f64());
     println!("  Rate:       {:>12.2} M events/s", event_rate / 1e6);
     println!("  Rate:       {:>12.2} M hits/s", hit_rate / 1e6);
-    println!("  Total size: {:>12.1} MB", total_bytes as f64 / 1_048_576.0);
+    println!(
+        "  Total size: {:>12.1} MB",
+        total_bytes as f64 / 1_048_576.0
+    );
     println!("  Throughput: {:>12.1} MB/s", mb_per_s);
     println!();
 }
@@ -449,7 +455,11 @@ fn main() {
     println!(
         "  Write 1000 hits → read back {} hits: {}",
         read_back.len(),
-        if read_back.len() == 1000 { "OK" } else { "FAIL" }
+        if read_back.len() == 1000 {
+            "OK"
+        } else {
+            "FAIL"
+        }
     );
     // Check first and last timestamp
     println!(
