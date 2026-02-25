@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-24
+**Updated:** 2026-02-25
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -14,7 +14,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | **1** | [41_start_stop_restructure.md](41_start_stop_restructure.md) | **🔧 実装中** | Start/Stop フロー再構成: Stop時Close + Arm統合 + DIG1タイムスタンプリセット ([設計書](../docs/plans/start_stop_restructure.md)) |
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **📋 計画完了** | EB 統一: SliceBuilder→chunk_builder + mimalloc 導入 (Gemini レビュー済) |
-| **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) |
+| **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) — ROOT出力: oxyroot Vec events + file-per-batch確定 ([bench](../docs/plans/oxyroot_benchmark_results.md)) |
 | **2** | [37_grafana_monitoring.md](37_grafana_monitoring.md) | **📋 計画完了** | Grafana モニタリング: InfluxDB v3 Core + チャンネル別レート ([設計書](../docs/plans/grafana_monitoring.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
 | **2** | [33_delila2root_converter.md](33_delila2root_converter.md) | **✅ Phase 1 完了** | delila2root: 10.4億events 2分31秒, 6.9M/s, タイムスタンプ違反0 ([設計書](../docs/plans/delila2root.md)) |
@@ -37,6 +37,8 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| — | 2026-02-25 | oxyroot ベンチマーク: Vec events 0.79M events/s, 実運用300k/sに対して2.6xマージン, file-per-batch確定 ([結果](../docs/plans/oxyroot_benchmark_results.md)) |
+| — | 2026-02-25 | ReadLoop transient error retry: 30s timeout + 10ms interval, 5MHz 6modules 10min検証済, DIG1 ch_extras_opt コード強制 |
 | [archive/42_a3818_driver_patch.md](archive/42_a3818_driver_patch.md) | 2026-02-24 | A3818 ドライバパッチ v1.6.12-delila1: バッファオーバーフロー防止 (1MB→16MB) + off-by-one + セマフォバグ + PCIe障害検出、76にデプロイ済 |
 | [archive/40_decode_loop_parallelization.md](archive/40_decode_loop_parallelization.md) | 2026-02-23 | DecodeLoop 並列化: 4 Workers (crossbeam) + ReorderBuffer, PSD2 2.2M→7.0M events/10s (3.2x), Stop→EOS 49s→<1ms |
 | [archive/39_cross_run_eos_fix.md](archive/39_cross_run_eos_fix.md) | 2026-02-23 | Cross-Run EOS 汚染修正: run_number タグ + stale EOS フィルタ |
@@ -92,6 +94,9 @@ Claudeセッション開始時に必ず読み込まれます。
 - Cross-Run EOS 汚染修正 (run_number タグ + stale EOS フィルタ)
 - DecodeLoop 並列化 (4 Workers crossbeam, PSD2 3.2x改善, 全FW統一パス)
 - A3818 ドライバパッチ v1.6.12-delila1 (バッファオーバーフロー+off-by-one+セマフォ+PCIe障害, 76デプロイ済)
+- ReadLoop transient error retry (30s timeout, 10ms interval, 5MHz×6modules 10min検証, 20回リカバリ全成功)
+- DIG1 ch_extras_opt コード強制 (PSD1/PHA1 の 48-bit timestamp を JSON 設定に依存せず handle.rs で保証)
+- oxyroot ROOT 出力ベンチマーク (Vec events 0.79M/s, file-per-batch確定, Stop <130ms)
 
 ---
 

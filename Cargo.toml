@@ -184,6 +184,11 @@ path = "src/bin/node_agent.rs"
 name = "psd1_timing_test"
 path = "src/bin/psd1_timing_test.rs"
 
+[[bin]]
+name = "oxyroot_bench"
+path = "src/bin/oxyroot_bench.rs"
+required-features = ["root"]
+
 [[example]]
 name = "test_oxyroot"
 required-features = ["root"]

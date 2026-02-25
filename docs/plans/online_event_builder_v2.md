@@ -109,10 +109,30 @@ chunk_tx.send(chunk);
 ## 依存追加
 - `crossbeam-channel`
 
+## ROOT 出力ベンチマーク結果 (2026-02-25)
+
+oxyroot v0.1.25 のパフォーマンステストを実施。
+詳細: [oxyroot_benchmark_results.md](oxyroot_benchmark_results.md)
+
+### 確定事項
+
+- **出力形式:** Vec events + file-per-batch (100k events/file)
+- **スループット:** 0.79 M events/s (1 writer), 実運用 300k events/s に対して 2.6x マージン
+- **Writers:** 1-2 で十分 (4 は不要)
+- **Stop 遅延:** ~127ms (最後のバッチ flush のみ)
+- **バッチサイズ感度:** 10k-1M で一定。デフォルト 100k で問題なし
+- **クラッシュ耐性:** raw .delila は常に保存、オフライン EB で再現可能のため問題なし
+
+### 却下した代替案
+
+- ROOT クレート自作 → 非現実的
+- C++ ROOT FFI → CMake 地獄、oxyroot で十分
+- Hit-per-row flat → Vec events より遅い (0.44 vs 0.79 M events/s)
+
 ## Gemini 合意事項
 - sort_unstable_by + total_cmp で十分
 - Safe Horizon = 50ms
-- Single Writer (ROOT TTree 非スレッドセーフ)
+- Single Writer (ROOT TTree 非スレッドセーフ) → **1-2 Writers に変更 (bench結果)**
 - Worker × 4
 - メモリリサイクルは将来最適化
 - f64 timestamp は ~104日まで精度保証
