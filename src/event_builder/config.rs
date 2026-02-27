@@ -156,6 +156,7 @@ pub struct TimeCalibration {
 }
 
 // Custom serialization for JSON compatibility
+// Keys are zero-padded ("00_01") and sorted by (module, channel)
 impl Serialize for TimeCalibration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -165,13 +166,14 @@ impl Serialize for TimeCalibration {
         struct CalibJson {
             ref_module: u8,
             ref_channel: u8,
-            offsets: HashMap<String, f64>,
+            offsets: std::collections::BTreeMap<String, f64>,
         }
 
-        let string_offsets: HashMap<String, f64> = self
+        // Zero-padded keys ensure BTreeMap lexicographic order = numeric order
+        let string_offsets: std::collections::BTreeMap<String, f64> = self
             .offsets
             .iter()
-            .map(|((m, c), v)| (format!("{}_{}", m, c), *v))
+            .map(|((m, c), v)| (format!("{:02}_{:02}", m, c), *v))
             .collect();
 
         let json = CalibJson {
