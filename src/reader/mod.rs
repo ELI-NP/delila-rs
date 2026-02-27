@@ -343,9 +343,7 @@ impl CommandHandlerExt for ReaderCommandExt {
 
     fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
         self.rate_tracker.reset();
-        self.metrics
-            .trigger_loss_count
-            .store(0, Ordering::Relaxed);
+        self.metrics.trigger_loss_count.store(0, Ordering::Relaxed);
         self.metrics
             .trigger_lost_flag_events
             .store(0, Ordering::Relaxed);
@@ -510,9 +508,7 @@ fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
 }
 
 /// Extract enabled channel indices from a DigitizerConfig.
-fn get_enabled_channels_from_config(
-    config: &crate::config::digitizer::DigitizerConfig,
-) -> Vec<u8> {
+fn get_enabled_channels_from_config(config: &crate::config::digitizer::DigitizerConfig) -> Vec<u8> {
     let default_enabled = config
         .channel_defaults
         .enabled
@@ -964,6 +960,18 @@ impl Reader {
                     }
                 }
 
+                // ADC calibration needed? (DIG1 only, before Arm)
+                if target_rank >= state_rank(ComponentState::Armed)
+                    && conn.hw_configured
+                    && !conn.hw_armed
+                    && config.firmware.is_dig1()
+                {
+                    match conn.handle.send_command("/cmd/calibrateadc") {
+                        Ok(()) => info!("ADC calibration completed"),
+                        Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
+                    }
+                }
+
                 // Arm needed?
                 if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
                     if conn.auto_config_failed {
@@ -1243,17 +1251,10 @@ impl Reader {
             }
 
             // DIG2: Periodic trigger counter polling (separate borrow scope)
-            if !config.firmware.is_dig1()
-                && last_dig2_poll.elapsed() >= DIG2_POLL_INTERVAL
-            {
+            if !config.firmware.is_dig1() && last_dig2_poll.elapsed() >= DIG2_POLL_INTERVAL {
                 if let Some(ref conn) = connection {
                     if conn.hw_running {
-                        poll_dig2_counters(
-                            conn,
-                            &mut dig2_poll,
-                            &metrics,
-                            &mut last_dig2_warn,
-                        );
+                        poll_dig2_counters(conn, &mut dig2_poll, &metrics, &mut last_dig2_warn);
                     }
                 }
                 last_dig2_poll = Instant::now();
@@ -1346,6 +1347,18 @@ impl Reader {
                     } else {
                         info!("No config_file specified, using current digitizer settings");
                         conn.hw_configured = true;
+                    }
+                }
+
+                // ADC calibration needed? (DIG1 only, before Arm)
+                if target_rank >= state_rank(ComponentState::Armed)
+                    && conn.hw_configured
+                    && !conn.hw_armed
+                    && config.firmware.is_dig1()
+                {
+                    match conn.handle.send_command("/cmd/calibrateadc") {
+                        Ok(()) => info!("ADC calibration completed"),
+                        Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
                     }
                 }
 

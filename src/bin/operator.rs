@@ -128,6 +128,7 @@ fn load_config(
             source_id: Some(0),
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         },
         ComponentConfig {
             name: "Emulator 1".to_string(),
@@ -137,6 +138,7 @@ fn load_config(
             source_id: Some(1),
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         },
         ComponentConfig {
             name: "Merger".to_string(),
@@ -146,6 +148,7 @@ fn load_config(
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         },
         ComponentConfig {
             name: "Recorder".to_string(),
@@ -155,6 +158,7 @@ fn load_config(
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         },
         ComponentConfig {
             name: "Monitor".to_string(),
@@ -164,6 +168,7 @@ fn load_config(
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         },
     ];
     (
@@ -195,6 +200,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             source_id: Some(source.id),
             is_digitizer: source.is_digitizer(),
             config_file: source.config_file.as_ref().map(PathBuf::from),
+            source_type: Some(source.source_type.clone()),
         });
     }
 
@@ -213,6 +219,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         });
     }
 
@@ -231,6 +238,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         });
     }
 
@@ -249,6 +257,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         });
     }
 
@@ -267,6 +276,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         });
     }
 

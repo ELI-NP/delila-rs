@@ -179,8 +179,13 @@ pub(super) async fn detect_digitizers(
                             }
                             config = Some(c);
                         } else {
-                            // Create a default config from detected hardware info
-                            let firmware = firmware_from_device_info(&data);
+                            // Create a default config from TOML source_type (authoritative)
+                            // or fall back to hardware detection
+                            let firmware = comp
+                                .source_type
+                                .as_ref()
+                                .and_then(|st| st.to_firmware_type())
+                                .unwrap_or_else(|| firmware_from_device_info(&data));
                             let num_ch = data
                                 .get("num_channels")
                                 .and_then(|v| v.as_u64())
@@ -274,17 +279,35 @@ pub(super) async fn detect_digitizers(
     )
 }
 
-/// Map firmware_type string from device_info to FirmwareType enum
+/// Map firmware_type + model from device_info to FirmwareType enum.
+///
+/// DIG1 (VX1730/DT5730/VX1725/DT5725) uses hyphens: `DPP-PSD`, `DPP-PHA`
+/// DIG2 (VX2730/VX2740) uses underscores: `DPP_PSD`, `DPP_OPEN`
 fn firmware_from_device_info(device_info: &serde_json::Value) -> FirmwareType {
     let fw = device_info
         .get("firmware_type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let model = device_info
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // DIG1 firmware strings use hyphens
     match fw {
-        "DPP_PSD" => FirmwareType::PSD2, // VX2730 uses PSD2
-        "DPP_PHA" => FirmwareType::PHA1,
+        "DPP-PSD" => FirmwareType::PSD1,
+        "DPP-PHA" => FirmwareType::PHA1,
+        // DIG2 firmware strings use underscores
+        "DPP_PSD" => FirmwareType::PSD2,
         "DPP_OPEN" => FirmwareType::AMax,
-        _ => FirmwareType::PSD2, // Default to PSD2 for unknown
+        // Fallback: use model name to guess generation
+        _ => {
+            if model.contains("1730") || model.contains("1725") || model.contains("5730") || model.contains("5725") {
+                FirmwareType::PSD1 // DIG1 device, assume PSD
+            } else {
+                FirmwareType::PSD2 // DIG2 device or unknown
+            }
+        }
     }
 }
 

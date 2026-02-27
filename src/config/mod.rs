@@ -216,6 +216,19 @@ pub enum SourceType {
     AMax,
 }
 
+impl SourceType {
+    /// Convert to FirmwareType (returns None for non-digitizer types like Emulator/Zle)
+    pub fn to_firmware_type(&self) -> Option<FirmwareType> {
+        match self {
+            SourceType::Psd1 => Some(FirmwareType::PSD1),
+            SourceType::Psd2 => Some(FirmwareType::PSD2),
+            SourceType::Pha1 => Some(FirmwareType::PHA1),
+            SourceType::AMax => Some(FirmwareType::AMax),
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for SourceType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

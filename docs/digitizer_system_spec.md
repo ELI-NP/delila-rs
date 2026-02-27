@@ -334,6 +334,12 @@ User clicks [Start]
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
+│ Step 0.5: ADC Calibration (DIG1 only)                   │
+│   - /cmd/calibrateadc を Configure後・Arm前に実行       │
+│   - x725, x730, x751 でサポート (setinrun=false)        │
+│   - DIG2 にはこのコマンドがないためスキップ             │
+│   - 失敗は warn ログのみ（non-fatal）                   │
+├─────────────────────────────────────────────────────────┤
 │ Step 1: Arm Phase                                       │
 │   - PSD2: Arm ALL digitizers (parallel)                 │
 │   - PSD1: Skip (auto-starts on Arm)                     │
@@ -348,6 +354,11 @@ User clicks [Start]
     ▼
 State → Running
 ```
+
+**ADC キャリブレーション:** DIG1 (DT5730B等) では温度変化等で ADC のオフセット・ゲインが
+ドリフトするため、毎回 Arm 前に `/cmd/calibrateadc` を実行して補正する。
+Run Start、Tune Up Start、Tune Up Apply の全パスで自動実行される。
+実装: `src/reader/mod.rs` の ReadLoop 状態同期（RAW / OpenDPP 両方）。
 
 **クロック同期:** 全デジタイザはマスタークロックを共有（外部クロック配信）
 
@@ -586,7 +597,9 @@ interface DigitizerStatus {
 
 ---
 
-## Appendix A: FELib Commands (VX2730 DPP-PSD)
+## Appendix A: FELib Commands
+
+### A.1 DIG2 (VX2730 DPP-PSD)
 
 Path: `/cmd/<CommandName>`
 
@@ -602,6 +615,22 @@ Path: `/cmd/<CommandName>`
 | SendSWTrigger | DIG | Yes | ソフトウェアトリガー送信 |
 | SendChSWTrigger | CH | Yes | チャンネル別ソフトウェアトリガー |
 | ReloadCalibration | DIG | Yes | キャリブレーションを再読込 |
+
+### A.2 DIG1 (DT5730B / VX1730 DPP-PSD, DPP-PHA)
+
+Path: `/cmd/<commandname>` (小文字)
+
+| Command | SetInRun | Description |
+|---------|----------|-------------|
+| reset | No | ボードをリセット |
+| cleardata | No | メモリからデータをクリア |
+| armacquisition | No | 取得をアーム（PSD1 START_MODE_SW では arm=start） |
+| disarmacquisition | Yes | 取得をディスアーム |
+| sendswtrigger | Yes | ソフトウェアトリガー送信 |
+| **calibrateadc** | **No** | **ADC キャリブレーション（x725/x730/x751 対応）** |
+
+**注意:** DIG1 には `swstartacquisition` / `swstopacquisition` がない。
+`START_MODE_SW` では `armacquisition` が start を兼ねる。
 
 ---
 

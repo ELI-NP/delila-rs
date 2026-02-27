@@ -240,6 +240,9 @@ pub struct ComponentConfig {
     /// Path to the digitizer config JSON file (from TOML `config_file` field).
     /// Used by Apply to save config to the correct location that Reader loads on Configure.
     pub config_file: Option<PathBuf>,
+    /// Source type from TOML config (PSD1, PSD2, PHA1, AMax, etc.)
+    /// Used to determine correct FirmwareType when auto-generating digitizer configs.
+    pub source_type: Option<crate::config::SourceType>,
 }
 
 /// Operator configuration with timeouts
@@ -503,6 +506,7 @@ mod tests {
             source_id: None,
             is_digitizer: false,
             config_file: None,
+            source_type: None,
         };
         assert_eq!(config.name, "Merger");
         assert!(config.address.contains("5570"));
@@ -520,6 +524,7 @@ mod tests {
             source_id: Some(0),
             is_digitizer: true,
             config_file: None,
+            source_type: Some(crate::config::SourceType::Psd2),
         };
         assert_eq!(config.name, "PSD2-Master");
         assert!(config.is_master);
