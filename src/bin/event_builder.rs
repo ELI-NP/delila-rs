@@ -1,14 +1,14 @@
 //! Event Builder CLI
 //!
-//! Time Slice 方式のイベントビルダー CLI。
-//! 並列処理可能で、メモリ効率が良い。
+//! Offline event builder using chunk_builder + unified pipeline.
+//! .delila ファイルを直接読み込み、ROOT イベントファイルを出力。
 //!
 //! Usage:
-//!   # Time calibration
-//!   event_builder time-calib -i input.root -o time_calib.json --ref-module 0 --ref-channel 0
+//!   # Time calibration (.delila input)
+//!   event_builder time-calib -i data/*.delila -o timeSettings.json --ref-module 0 --ref-channel 0
 //!
-//!   # Event building (Time Slice method)
-//!   event_builder build -i input.root -o events.root -T time_calib.json --trigger 0:0
+//!   # Event building (.delila input → ROOT output)
+//!   event_builder build -i data/*.delila -o ./output/ -c chSettings.json -T timeSettings.json --trigger 0:0
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -20,7 +20,7 @@ use tracing::{info, warn};
 
 #[cfg(feature = "root")]
 use delila_rs::event_builder::{
-    read_hits_from_root, write_events_to_root, SliceBuilder, TimeCalibration, TimeCalibrator,
+    write_time_histograms_to_root, Hit, TimeCalibration, TimeCalibrator,
 };
 
 #[cfg(not(feature = "root"))]
@@ -45,8 +45,8 @@ struct Cli {
 enum Commands {
     /// Run time calibration to measure channel time offsets
     TimeCalib {
-        /// Input ROOT file(s)
-        #[arg(short, long, required = true)]
+        /// Input .delila file(s)
+        #[arg(short, long, required = true, num_args = 1..)]
         input: Vec<PathBuf>,
 
         /// Output JSON file for time calibration
@@ -69,23 +69,31 @@ enum Commands {
         #[arg(long, default_value = "1000")]
         min_entries: u64,
 
-        /// Input tree name
-        #[arg(long, default_value = "ELIADE_Tree")]
-        tree_name: String,
-
         /// Maximum events to process (0 = all)
         #[arg(long, default_value = "0")]
         max_events: usize,
+
+        /// Output ROOT file for time histograms (for visual inspection)
+        #[arg(long, default_value = "timeAlignment.root")]
+        hist_output: PathBuf,
+
+        /// Reference trigger energy minimum (ADC units, 16-bit)
+        #[arg(long, default_value = "0")]
+        ref_energy_min: u16,
+
+        /// Reference trigger energy maximum (ADC units, 16-bit)
+        #[arg(long, default_value = "65535")]
+        ref_energy_max: u16,
     },
 
-    /// Build events using Time Slice method (parallel processing)
+    /// Build events from .delila files using unified pipeline
     Build {
-        /// Input ROOT file(s)
-        #[arg(short, long, required = true)]
+        /// Input .delila file(s)
+        #[arg(short, long, required = true, num_args = 1..)]
         input: Vec<PathBuf>,
 
-        /// Output ROOT file
-        #[arg(short, long, default_value = "events.root")]
+        /// Output directory for ROOT event files
+        #[arg(short, long, default_value = ".")]
         output: PathBuf,
 
         /// Channel settings JSON file
@@ -100,21 +108,25 @@ enum Commands {
         #[arg(long, default_value = "500")]
         window: f64,
 
-        /// Time slice duration [ns] (default: 10 ms)
-        #[arg(long, default_value = "10000000")]
-        slice_duration: f64,
-
-        /// Input tree name
-        #[arg(long, default_value = "ELIADE_Tree")]
-        tree_name: String,
-
         /// Output tree name
-        #[arg(long, default_value = "events")]
+        #[arg(long, default_value = "EventTree")]
         output_tree: String,
 
-        /// Maximum hits to process (0 = all)
+        /// Run ID for output file naming
         #[arg(long, default_value = "0")]
-        max_hits: usize,
+        run_id: u32,
+
+        /// Number of worker threads
+        #[arg(long, default_value = "4")]
+        workers: usize,
+
+        /// Number of writer threads
+        #[arg(long, default_value = "2")]
+        writers: usize,
+
+        /// Events per ROOT file before rotation
+        #[arg(long, default_value = "100000")]
+        events_per_file: usize,
 
         /// Trigger channels (module:channel), can be repeated
         #[arg(long)]
@@ -142,8 +154,10 @@ fn main() -> Result<()> {
             ref_channel,
             window,
             min_entries,
-            tree_name,
             max_events,
+            hist_output,
+            ref_energy_min,
+            ref_energy_max,
         } => {
             run_time_calibration(
                 &input,
@@ -152,8 +166,10 @@ fn main() -> Result<()> {
                 ref_channel,
                 window,
                 min_entries,
-                &tree_name,
                 max_events,
+                &hist_output,
+                ref_energy_min,
+                ref_energy_max,
             )?;
         }
         Commands::Build {
@@ -162,10 +178,11 @@ fn main() -> Result<()> {
             config,
             time_calib,
             window,
-            slice_duration,
-            tree_name,
             output_tree,
-            max_hits,
+            run_id,
+            workers,
+            writers,
+            events_per_file,
             trigger,
         } => {
             run_event_building(
@@ -174,10 +191,11 @@ fn main() -> Result<()> {
                 config.as_deref(),
                 time_calib.as_deref(),
                 window,
-                slice_duration,
-                &tree_name,
                 &output_tree,
-                max_hits,
+                run_id,
+                workers,
+                writers,
+                events_per_file,
                 &trigger,
             )?;
         }
@@ -195,20 +213,26 @@ fn run_time_calibration(
     ref_channel: u8,
     window: f64,
     min_entries: u64,
-    tree_name: &str,
     max_events: usize,
+    hist_output: &std::path::Path,
+    ref_energy_min: u16,
+    ref_energy_max: u16,
 ) -> Result<()> {
+    use delila_rs::recorder::DataFileReader;
+    use std::io::BufReader;
+
+    let energy_gate = if ref_energy_min == 0 && ref_energy_max == u16::MAX {
+        "all".to_string()
+    } else {
+        format!("{}-{}", ref_energy_min, ref_energy_max)
+    };
     info!(
-        "Running time calibration: ref=({}, {}), window={}ns, {} files (parallel)",
-        ref_module,
-        ref_channel,
-        window,
-        input_files.len()
+        "Running time calibration: ref=({}, {}), window={}ns, energy={}, {} .delila files (parallel)",
+        ref_module, ref_channel, window, energy_gate, input_files.len()
     );
 
     let total_hits = Arc::new(AtomicUsize::new(0));
     let files_processed = Arc::new(AtomicUsize::new(0));
-    let tree_name = tree_name.to_string();
 
     // Process files in parallel
     let calibrators: Vec<TimeCalibrator> = input_files
@@ -219,26 +243,75 @@ fn run_time_calibration(
                 return None;
             }
 
-            let hits = match read_hits_from_root(path, &tree_name) {
-                Ok(h) => h,
+            // Read .delila file → Vec<Hit>
+            let file = match std::fs::File::open(path) {
+                Ok(f) => f,
                 Err(e) => {
-                    warn!("Failed to read {}: {:?}", path.display(), e);
+                    warn!("Failed to open {}: {:?}", path.display(), e);
+                    return None;
+                }
+            };
+            let buf_reader = BufReader::new(file);
+            let mut reader = match DataFileReader::new(buf_reader) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Failed to parse {}: {:?}", path.display(), e);
                     return None;
                 }
             };
 
+            // Phase 2: Streaming trigger-index with stateful scanner
+            // 1. Separate triggers (f64 only) and detector hits (by block)
+            let mut trigger_times: Vec<f64> = Vec::new();
+            let mut det_blocks: Vec<Vec<Hit>> = Vec::new();
+            let mut hit_count: usize = 0;
+
+            for block_result in reader.data_blocks() {
+                match block_result {
+                    Ok(batch) => {
+                        let mut block_hits = Vec::new();
+                        for event in &batch.events {
+                            let hit = Hit::from_event_data(event);
+                            hit_count += 1;
+                            if hit.module == ref_module
+                                && hit.channel == ref_channel
+                                && hit.energy >= ref_energy_min
+                                && hit.energy <= ref_energy_max
+                            {
+                                trigger_times.push(hit.timestamp_ns);
+                            } else if hit.module != ref_module
+                                || hit.channel != ref_channel
+                            {
+                                block_hits.push(hit);
+                            }
+                        }
+                        if !block_hits.is_empty() {
+                            det_blocks.push(block_hits);
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            // Sort only triggers: O(t log t) where t << n
+            trigger_times.sort_unstable_by(|a, b| a.total_cmp(b));
+
+            // Process each block with stateful scanner: amortized O(n)
             let mut calibrator = TimeCalibrator::new(ref_module, ref_channel, window);
-            // ROOT files are time-sorted, use optimized O(n) algorithm
-            calibrator.process_hits_sorted(&hits);
+            calibrator.set_ref_energy_range(ref_energy_min, ref_energy_max);
+            for block in &det_blocks {
+                calibrator.process_block_with_sorted_triggers(&trigger_times, block);
+            }
 
             let n = files_processed.fetch_add(1, Ordering::Relaxed) + 1;
-            let total = total_hits.fetch_add(hits.len(), Ordering::Relaxed) + hits.len();
+            let total = total_hits.fetch_add(hit_count, Ordering::Relaxed) + hit_count;
             info!(
-                "  [{}/{}] {}: {} hits (total: {})",
+                "  [{}/{}] {}: {} hits, {} triggers (total: {})",
                 n,
                 input_files.len(),
                 path.file_name().unwrap_or_default().to_string_lossy(),
-                hits.len(),
+                hit_count,
+                trigger_times.len(),
                 total
             );
 
@@ -261,10 +334,12 @@ fn run_time_calibration(
 
     // Report statistics
     let n_histograms = calibrator.channels().count();
-    let n_offsets = calib.offsets().len();
+    let n_valid = calib.offsets().values().filter(|v| **v != 0.0).count();
     info!(
-        "Calibration complete: {} channels with histograms, {} with valid offsets",
-        n_histograms, n_offsets
+        "Calibration complete: {} channels total, {} with valid offsets, {} set to 0",
+        n_histograms,
+        n_valid,
+        n_histograms - n_valid
     );
 
     // Save calibration
@@ -273,6 +348,15 @@ fn run_time_calibration(
         .with_context(|| format!("Failed to write {}", output.display()))?;
 
     info!("Saved calibration to: {}", output.display());
+
+    // Write time alignment histograms to ROOT file (for visual inspection)
+    write_time_histograms_to_root(hist_output, "TimeAlignment", &calibrator)
+        .with_context(|| format!("Failed to write histograms to {}", hist_output.display()))?;
+    info!(
+        "Saved time alignment histograms to: {} ({} channels)",
+        hist_output.display(),
+        n_histograms
+    );
 
     // Print summary (top 20 channels by entries)
     let mut channel_stats: Vec<_> = calibrator
@@ -299,64 +383,76 @@ fn run_time_calibration(
 #[allow(clippy::too_many_arguments)]
 fn run_event_building(
     input_files: &[PathBuf],
-    output: &std::path::Path,
+    output_dir: &std::path::Path,
     config: Option<&std::path::Path>,
     time_calib: Option<&std::path::Path>,
     window: f64,
-    slice_duration: f64,
-    tree_name: &str,
     output_tree: &str,
-    max_hits: usize,
+    run_id: u32,
+    n_workers: usize,
+    n_writers: usize,
+    events_per_file: usize,
     trigger_args: &[String],
 ) -> Result<()> {
+    use delila_rs::event_builder::chunk_builder::TriggerConfig;
+    use delila_rs::event_builder::pipeline::{EventBuilderPipeline, PipelineConfig};
+    use delila_rs::event_builder::{load_channel_config, DelilaFileHitSource};
+    use std::collections::{HashMap, HashSet};
+
     info!(
-        "Building events (Time Slice): window={}ns, slice_duration={}ns ({:.1}ms)",
+        "Building events: window={}ns, {} input files, {} workers, {} writers",
         window,
-        slice_duration,
-        slice_duration / 1_000_000.0
+        input_files.len(),
+        n_workers,
+        n_writers,
     );
 
-    // Create SliceBuilder with slice duration and coincidence window
-    let mut builder = SliceBuilder::new(slice_duration, window);
-
-    // Load channel config if provided (for AC pairs and triggers)
-    let mut config_triggers: Vec<(u8, u8)> = Vec::new();
-    if let Some(config_path) = config {
-        let config = delila_rs::event_builder::load_channel_config(config_path)
+    // Build TriggerConfig
+    let trigger_config = if let Some(config_path) = config {
+        // Load from channel settings JSON
+        let ch_config = load_channel_config(config_path)
             .with_context(|| format!("Failed to load config: {}", config_path.display()))?;
 
-        // Configure AC pairs and collect triggers from settings
-        let mut ac_count = 0;
-        for group in &config {
-            for ch in group {
-                // AC pairs
-                if ch.has_ac && ch.ac_module != 128 {
-                    builder.add_ac_pair(ch.module, ch.channel, ch.ac_module, ch.ac_channel);
-                    ac_count += 1;
-                }
-                // Triggers (IsEventTrigger=true)
-                if ch.is_event_trigger {
-                    config_triggers.push((ch.module, ch.channel));
+        let mut tc = TriggerConfig::from_channel_config(&ch_config, window);
+        info!(
+            "Loaded channel config from: {} ({} triggers, {} AC pairs)",
+            config_path.display(),
+            tc.triggers.len(),
+            tc.ac_pairs.len()
+        );
+
+        // Override triggers from CLI if provided
+        if !trigger_args.is_empty() {
+            tc.triggers.clear();
+            tc.priorities.clear();
+            for (priority, trig) in trigger_args.iter().enumerate() {
+                let parts: Vec<&str> = trig.split(':').collect();
+                if parts.len() == 2 {
+                    let module: u8 = parts[0].parse().context("Invalid trigger module")?;
+                    let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
+                    tc.triggers.insert((module, channel));
+                    tc.priorities.insert((module, channel), priority as u32);
+                    info!(
+                        "CLI trigger override: ({}, {}) priority {}",
+                        module, channel, priority
+                    );
+                } else {
+                    warn!("Invalid trigger format: {} (expected module:channel)", trig);
                 }
             }
         }
-        info!(
-            "Loaded channel config from: {} ({} AC pairs, {} triggers)",
-            config_path.display(),
-            ac_count,
-            config_triggers.len()
-        );
-    }
-
-    // Use command-line triggers if provided, otherwise use config triggers
-    if !trigger_args.is_empty() {
-        // Parse trigger arguments from command line
+        tc
+    } else {
+        // Build from CLI --trigger args only
+        let mut triggers = HashSet::new();
+        let mut priorities = HashMap::new();
         for (priority, trig) in trigger_args.iter().enumerate() {
             let parts: Vec<&str> = trig.split(':').collect();
             if parts.len() == 2 {
                 let module: u8 = parts[0].parse().context("Invalid trigger module")?;
                 let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
-                builder.add_trigger(module, channel, priority as u32);
+                triggers.insert((module, channel));
+                priorities.insert((module, channel), priority as u32);
                 info!(
                     "Added trigger: ({}, {}) priority {}",
                     module, channel, priority
@@ -365,77 +461,59 @@ fn run_event_building(
                 warn!("Invalid trigger format: {} (expected module:channel)", trig);
             }
         }
-    } else if !config_triggers.is_empty() {
-        // Use triggers from config file
-        for (priority, (module, channel)) in config_triggers.iter().enumerate() {
-            builder.add_trigger(*module, *channel, priority as u32);
-        }
-        info!(
-            "Using {} triggers from config (IsEventTrigger=true)",
-            config_triggers.len()
-        );
-    } else {
-        warn!("No triggers specified! Use --trigger or provide config with IsEventTrigger=true");
-    }
 
-    // Load time calibration if provided
-    if let Some(calib_path) = time_calib {
+        if triggers.is_empty() {
+            warn!("No triggers specified! Use --trigger or -c config with IsEventTrigger=true");
+        }
+
+        TriggerConfig {
+            triggers,
+            priorities,
+            ac_pairs: HashMap::new(),
+            coincidence_window_ns: window,
+        }
+    };
+
+    // Load time calibration
+    let time_calibration = if let Some(calib_path) = time_calib {
         let calib = TimeCalibration::from_json_file(calib_path).with_context(|| {
             format!("Failed to load time calibration: {}", calib_path.display())
         })?;
-        builder.set_time_calibration(calib);
         info!("Loaded time calibration from: {}", calib_path.display());
-    }
+        calib
+    } else {
+        TimeCalibration::new(0, 0)
+    };
 
-    // Read all hits from all input files
-    let mut all_hits = Vec::new();
+    // Ensure output directory exists
+    std::fs::create_dir_all(output_dir)
+        .with_context(|| format!("Failed to create output dir: {}", output_dir.display()))?;
 
-    for path in input_files {
-        info!("Reading: {}", path.display());
+    // Create pipeline
+    let pipeline_config = PipelineConfig {
+        safe_horizon_ns: 50_000_000.0, // 50ms
+        n_workers,
+        n_writers,
+        events_per_file,
+        sorter_threshold: 500_000,
+        sorter_timeout: std::time::Duration::from_millis(500),
+        output_dir: output_dir.to_path_buf(),
+        run_id,
+        output_tree: output_tree.to_string(),
+    };
 
-        let hits = read_hits_from_root(path, tree_name)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
+    let pipeline = EventBuilderPipeline::new(pipeline_config, trigger_config, time_calibration);
 
-        info!(
-            "  Read {} hits from {}",
-            hits.len(),
-            path.file_name().unwrap_or_default().to_string_lossy()
-        );
-        all_hits.extend(hits);
+    // Create source from .delila files
+    let source = DelilaFileHitSource::new(input_files.to_vec());
 
-        // Check max_hits limit
-        if max_hits > 0 && all_hits.len() >= max_hits {
-            all_hits.truncate(max_hits);
-            info!("Reached max_hits limit: {}", max_hits);
-            break;
-        }
-    }
+    // Run pipeline (blocking)
+    let stats = pipeline.run(source);
 
-    info!("Total hits to process: {}", all_hits.len());
-
-    // Build events using Time Slice method (parallel processing)
-    let events = builder.build_events(all_hits);
-
-    // Get statistics
-    let stats = builder.stats();
     info!(
-        "Built {} events using {} trigger channel(s)",
-        events.len(),
-        stats.n_triggers
+        "Event building complete: {} hits → {} events in {} files",
+        stats.received_hits, stats.events_built, stats.files_written
     );
-
-    // Write output
-    write_events_to_root(output, output_tree, &events)
-        .with_context(|| format!("Failed to write {}", output.display()))?;
-
-    info!("Wrote {} events to: {}", events.len(), output.display());
-
-    // Print statistics
-    if !events.is_empty() {
-        let total_mult: usize = events.iter().map(|e| e.multiplicity()).sum();
-        let avg_mult = total_mult as f64 / events.len() as f64;
-        info!("Average multiplicity: {:.2}", avg_mult);
-    }
 
     Ok(())
 }
