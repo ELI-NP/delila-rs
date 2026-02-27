@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-02-25
+**Updated:** 2026-02-26
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -12,8 +12,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
-| **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **📋 計画完了** | EB 統一: SliceBuilder→chunk_builder + mimalloc 導入 (Gemini レビュー済) |
-| **1** | — | **🔧 実装中** | Online Event Builder v2: チャンク＋Safe Horizon 方式で全面書き直し ([設計書](../docs/plans/online_event_builder_v2.md)) — ROOT出力: oxyroot Vec events + file-per-batch確定 ([bench](../docs/plans/oxyroot_benchmark_results.md)) |
+| **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **🔧 Phase 0-3 完了** | EB 統一パイプライン: Phase 0-3 完了 (source.rs, pipeline.rs, CLI rewrite)。Phase 4 (Online 移行) + Phase 5 (レガシー削除) が残り ([計画](../.claude/plans/fuzzy-twirling-journal.md)) |
 | **2** | [37_grafana_monitoring.md](37_grafana_monitoring.md) | **📋 計画完了** | Grafana モニタリング: InfluxDB v3 Core + チャンネル別レート ([設計書](../docs/plans/grafana_monitoring.md)) |
 | **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング (A1, A3, C3 が MVP 候補) |
 | **2** | [33_delila2root_converter.md](33_delila2root_converter.md) | **✅ Phase 1 完了** | delila2root: 10.4億events 2分31秒, 6.9M/s, タイムスタンプ違反0 ([設計書](../docs/plans/delila2root.md)) |
@@ -26,7 +25,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 - **A:** Energy Calibration + PSD 表示 (GitHub #7) → **設計完了** (2026-02-19, [設計書](../docs/plans/energy_calibration_psd.md)) — Phase 1 から開始
 - **B:** x743 統合 (GitHub #6) → **設計完了** ([設計書](../docs/plans/x743_integration.md))
-- **C:** Event Builder オンラインパイプライン統合 (EB-1〜EB-4) → Phase 2
+- **C:** Event Builder 統一パイプライン Phase 4-5: Online EB 移行 + レガシー削除 → [TODO](event-builder/38_eb_unification_mimalloc.md)
 - **D:** Grafana モニタリング (InfluxDB v3 Core + Grafana) → **計画完了** (2026-02-19, [設計書](../docs/plans/grafana_monitoring.md) + [TODO](37_grafana_monitoring.md))
 - **G:** 設定自動生成スクリプト (3-4) + デプロイスクリプト改善 (3-5)
 - **H:** ~~トリガーロス・ビジー検出~~ — **✅ COMPLETED** (2026-02-25, [TODO](43_trigger_loss_detection.md) + [設計書](../docs/plans/trigger_loss_detection.md)) — 本番 Run 156 で検証済: DIG1 フラグカウント + DIG2 5sポーリング + フロントエンド表示
@@ -37,6 +36,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | 2026-02-26 | EB 統一パイプライン Phase 0-3: HitSource trait + pipeline.rs + DelilaFileHitSource + Offline CLI rewrite (.delila 直接入力) + time alignment histogram 出力 |
 | [43_trigger_loss_detection.md](43_trigger_loss_detection.md) | 2026-02-25 | トリガーロス検出: DIG1 EXTRAS フラグ + DIG2 カウンタポーリング, 本番 Run 156 (6台, 3.81M eve/s) で検証済 |
 | — | 2026-02-25 | oxyroot ベンチマーク: Vec events 0.79M events/s, 実運用300k/sに対して2.6xマージン, file-per-batch確定 ([結果](../docs/plans/oxyroot_benchmark_results.md)) |
 | — | 2026-02-25 | ReadLoop transient error retry: 30s timeout + 10ms interval, 5MHz 6modules 10min検証済, DIG1 ch_extras_opt コード強制 |
@@ -99,6 +99,7 @@ Claudeセッション開始時に必ず読み込まれます。
 - ReadLoop transient error retry (30s timeout, 10ms interval, 5MHz×6modules 10min検証, 20回リカバリ全成功)
 - DIG1 ch_extras_opt コード強制 (PSD1/PHA1 の 48-bit timestamp を JSON 設定に依存せず handle.rs で保証)
 - oxyroot ROOT 出力ベンチマーク (Vec events 0.79M/s, file-per-batch確定, Stop <130ms)
+- EB 統一パイプライン Phase 0-3 (HitSource trait, pipeline.rs, source.rs, .delila直接入力CLI, time alignment histogram)
 
 ---
 
