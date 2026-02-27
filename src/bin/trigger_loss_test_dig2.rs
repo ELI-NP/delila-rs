@@ -38,10 +38,7 @@ struct PhaseStats {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!(
-            "Usage: {} <URL> <CONFIG_JSON> [options]",
-            args[0]
-        );
+        eprintln!("Usage: {} <URL> <CONFIG_JSON> [options]", args[0]);
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --phase1-secs N         Phase 1 duration (default: 10)");
@@ -203,10 +200,7 @@ fn stop_acquisition(handle: &CaenHandle, endpoint: &EndpointHandle) {
 
 /// Read FPGA counters for enabled channels.
 /// IMPORTANT: ChRealtimeMonitor must be read FIRST — this latches all other counters.
-fn read_channel_counters(
-    handle: &CaenHandle,
-    enabled_channels: &[u8],
-) -> Vec<ChannelCounters> {
+fn read_channel_counters(handle: &CaenHandle, enabled_channels: &[u8]) -> Vec<ChannelCounters> {
     let mut counters = Vec::with_capacity(enabled_channels.len());
     for &ch in enabled_channels {
         let mut c = ChannelCounters::default();
@@ -308,7 +302,10 @@ fn print_phase_stats(label: &str, stats: &PhaseStats, enabled_channels: &[u8]) {
         "  Total bytes:  {:.1} MB",
         stats.total_bytes_read as f64 / 1_000_000.0
     );
-    println!("  Events read:  {} (from n_events)", stats.total_events_read);
+    println!(
+        "  Events read:  {} (from n_events)",
+        stats.total_events_read
+    );
 
     println!(
         "\n  {:<4} {:>12} {:>12} {:>12} {:>14} {:>14}",

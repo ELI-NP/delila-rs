@@ -95,7 +95,9 @@ static double read_f64_le(std::ifstream& f) {
 // ============================================================================
 class MsgPackParser {
    public:
-    MsgPackParser(const std::vector<uint8_t>& data) : data_(data), pos_(0) {}
+    MsgPackParser(const std::vector<uint8_t>& data,
+                  uint16_t energy_min = 0)
+        : data_(data), pos_(0), energy_min_(energy_min) {}
 
     bool parse_batch(std::vector<Event>& events) {
         size_t batch_size;
@@ -131,6 +133,18 @@ class MsgPackParser {
         if (!read_float64(ts)) return false;
         if (!read_uint(fl)) return false;
 
+        // Skip waveform data if present (Phase 1: non-waveform only)
+        // Must skip before early return to keep parser position correct
+        if (ev_size == 7) {
+            if (!skip_value()) return false;
+        }
+
+        // Energy threshold filter — reject before push_back to avoid
+        // allocating, sorting, and merging events we'll discard anyway
+        if (static_cast<uint16_t>(e) < energy_min_) {
+            return true;
+        }
+
         Event ev;
         ev.timestamp_ns = ts;
         ev.flags = fl;
@@ -140,10 +154,6 @@ class MsgPackParser {
         ev.channel = static_cast<uint8_t>(ch);
         events.push_back(ev);
 
-        // Skip waveform data if present (Phase 1: non-waveform only)
-        if (ev_size == 7) {
-            if (!skip_value()) return false;
-        }
         return true;
     }
 
@@ -295,6 +305,7 @@ class MsgPackParser {
 
     const std::vector<uint8_t>& data_;
     size_t pos_;
+    uint16_t energy_min_;
 };
 
 // ============================================================================
@@ -331,8 +342,10 @@ static bool read_file_info(const std::string& path, FileInfo& info) {
 }
 
 /// Read all events from a .delila file into a vector (no sorting here)
+/// Events with energy < energy_min are discarded at parse time.
 static bool read_events_from_file(const std::string& path,
-                                  std::vector<Event>& events) {
+                                  std::vector<Event>& events,
+                                  uint16_t energy_min = 0) {
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) {
         std::cerr << "Error: Cannot open " << path << std::endl;
@@ -364,7 +377,7 @@ static bool read_events_from_file(const std::string& path,
         f.read(reinterpret_cast<char*>(block_data.data()), block_len);
         if (!f.good()) break;
 
-        MsgPackParser parser(block_data);
+        MsgPackParser parser(block_data, energy_min);
         if (!parser.parse_batch(events)) {
             std::cerr << "Warning: Failed to parse block " << block_count
                       << " in " << path << std::endl;
@@ -455,9 +468,10 @@ static void print_usage(const char* prog) {
                  "<file1.delila> [file2.delila ...]"
               << std::endl;
     std::cout << "\nOptions:" << std::endl;
-    std::cout << "  -o <file>       Output ROOT file (required)" << std::endl;
-    std::cout << "  --tree <name>   TTree name (default: delila)" << std::endl;
-    std::cout << "  -h, --help      Show this help" << std::endl;
+    std::cout << "  -o <file>         Output ROOT file (required)" << std::endl;
+    std::cout << "  --tree <name>     TTree name (default: delila)" << std::endl;
+    std::cout << "  --energy-min <n>  Discard events with energy < n (default: 0 = no filter)" << std::endl;
+    std::cout << "  -h, --help        Show this help" << std::endl;
 }
 
 // ============================================================================
@@ -468,6 +482,7 @@ int main(int argc, char* argv[]) {
 
     std::string output_file;
     std::string tree_name = "delila";
+    uint16_t energy_min = 0;
     std::vector<std::string> input_files;
 
     for (int i = 1; i < argc; i++) {
@@ -476,6 +491,8 @@ int main(int argc, char* argv[]) {
             output_file = argv[++i];
         } else if (arg == "--tree" && i + 1 < argc) {
             tree_name = argv[++i];
+        } else if (arg == "--energy-min" && i + 1 < argc) {
+            energy_min = static_cast<uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
             return 0;
@@ -532,6 +549,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Memory per file: ~"
               << (file_infos[0].total_events * sizeof(Event) / 1024 / 1024)
               << " MB (" << sizeof(Event) << " bytes/event)" << std::endl;
+    if (energy_min > 0) {
+        std::cout << "Energy filter: energy >= " << energy_min << std::endl;
+    }
 
     // ========================================================================
     // Phase 2: Set up ROOT output with LZ4 compression
@@ -575,7 +595,7 @@ int main(int argc, char* argv[]) {
         // (a) Read all events from this file
         std::vector<Event> file_events;
         file_events.reserve(finfo.total_events);
-        if (!read_events_from_file(finfo.path, file_events)) {
+        if (!read_events_from_file(finfo.path, file_events, energy_min)) {
             std::cerr << "\nError reading " << finfo.path << std::endl;
             continue;
         }
@@ -623,14 +643,22 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\nDone." << std::endl;
     std::cout << "  Events: " << total_written << " / "
-              << total_events_expected << " expected" << std::endl;
+              << total_events_expected << " in files" << std::endl;
+    if (energy_min > 0) {
+        uint64_t filtered = total_events_expected - total_written;
+        double pct = total_events_expected > 0
+            ? filtered * 100.0 / total_events_expected : 0.0;
+        std::cout << "  Filtered: " << filtered << " events removed"
+                  << " (" << pct << "% below energy " << energy_min << ")"
+                  << std::endl;
+    }
     std::cout << "  Output: " << output_file << std::endl;
     std::cout << "  Time:   " << elapsed << " s" << std::endl;
     std::cout << "  Rate:   "
               << (total_written / 1e6 / elapsed) << " M events/s"
               << std::endl;
 
-    if (total_written != total_events_expected) {
+    if (energy_min == 0 && total_written != total_events_expected) {
         std::cerr << "WARNING: Event count mismatch!" << std::endl;
         return 1;
     }
