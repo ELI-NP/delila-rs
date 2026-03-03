@@ -10,103 +10,108 @@
 //   Data blocks: [u32_le(len) + msgpack(batch)]...
 //   Footer: "DLEND002" + 56 bytes metadata (64 bytes total)
 
-#include <TFile.h>
-#include <TTree.h>
-#include <TH1F.h>
 #include <TCanvas.h>
+#include <TFile.h>
 #include <TGraph.h>
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <cstring>
+#include <TH1F.h>
+#include <TTree.h>
+
 #include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <vector>
 
 // File format constants
-const char* FILE_MAGIC = "DELILA02";
-const char* FOOTER_MAGIC = "DLEND002";
+const char *FILE_MAGIC = "DELILA02";
+const char *FOOTER_MAGIC = "DLEND002";
 const size_t FOOTER_SIZE = 64;
 
 // Waveform data structure
 struct Waveform {
-    std::vector<int16_t> analog_probe1;
-    std::vector<int16_t> analog_probe2;
-    std::vector<uint8_t> digital_probe1;
-    std::vector<uint8_t> digital_probe2;
-    std::vector<uint8_t> digital_probe3;
-    std::vector<uint8_t> digital_probe4;
-    uint8_t time_resolution;
-    uint16_t trigger_threshold;
-    double ns_per_sample;  // nanoseconds per waveform sample (0 = unknown)
+  std::vector<int16_t> analog_probe1;
+  std::vector<int16_t> analog_probe2;
+  std::vector<uint8_t> digital_probe1;
+  std::vector<uint8_t> digital_probe2;
+  std::vector<uint8_t> digital_probe3;
+  std::vector<uint8_t> digital_probe4;
+  uint8_t time_resolution;
+  uint16_t trigger_threshold;
+  double ns_per_sample;  // nanoseconds per waveform sample (0 = unknown)
 
-    void clear() {
-        analog_probe1.clear();
-        analog_probe2.clear();
-        digital_probe1.clear();
-        digital_probe2.clear();
-        digital_probe3.clear();
-        digital_probe4.clear();
-        time_resolution = 0;
-        trigger_threshold = 0;
-        ns_per_sample = 0.0;
-    }
+  void clear()
+  {
+    analog_probe1.clear();
+    analog_probe2.clear();
+    digital_probe1.clear();
+    digital_probe2.clear();
+    digital_probe3.clear();
+    digital_probe4.clear();
+    time_resolution = 0;
+    trigger_threshold = 0;
+    ns_per_sample = 0.0;
+  }
 
-    bool has_data() const {
-        return !analog_probe1.empty() || !analog_probe2.empty();
-    }
+  bool has_data() const
+  {
+    return !analog_probe1.empty() || !analog_probe2.empty();
+  }
 };
 
 // Event data structure (matches Rust EventData)
 struct Event {
-    uint8_t module;
-    uint8_t channel;
-    uint16_t energy;
-    uint16_t energy_short;
-    double timestamp_ns;
-    uint64_t flags;
-    bool has_waveform;
-    Waveform waveform;
+  uint8_t module;
+  uint8_t channel;
+  uint16_t energy;
+  uint16_t energy_short;
+  double timestamp_ns;
+  uint64_t flags;
+  bool has_waveform;
+  Waveform waveform;
 };
 
 // Footer structure
 struct Footer {
-    char magic[8];
-    uint64_t data_checksum;
-    uint64_t total_events;
-    uint64_t data_bytes;
-    double first_event_time_ns;
-    double last_event_time_ns;
-    uint64_t file_end_time_ns;
-    uint8_t write_complete;
-    uint8_t reserved[7];
+  char magic[8];
+  uint64_t data_checksum;
+  uint64_t total_events;
+  uint64_t data_bytes;
+  double first_event_time_ns;
+  double last_event_time_ns;
+  uint64_t file_end_time_ns;
+  uint8_t write_complete;
+  uint8_t reserved[7];
 };
 
 // Read little-endian uint32
-uint32_t read_u32_le(std::ifstream& f) {
-    uint8_t buf[4];
-    f.read(reinterpret_cast<char*>(buf), 4);
-    return buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+uint32_t read_u32_le(std::ifstream &f)
+{
+  uint8_t buf[4];
+  f.read(reinterpret_cast<char *>(buf), 4);
+  return buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
 }
 
 // Read little-endian uint64
-uint64_t read_u64_le(std::ifstream& f) {
-    uint8_t buf[8];
-    f.read(reinterpret_cast<char*>(buf), 8);
-    return static_cast<uint64_t>(buf[0]) |
-           (static_cast<uint64_t>(buf[1]) << 8) |
-           (static_cast<uint64_t>(buf[2]) << 16) |
-           (static_cast<uint64_t>(buf[3]) << 24) |
-           (static_cast<uint64_t>(buf[4]) << 32) |
-           (static_cast<uint64_t>(buf[5]) << 40) |
-           (static_cast<uint64_t>(buf[6]) << 48) |
-           (static_cast<uint64_t>(buf[7]) << 56);
+uint64_t read_u64_le(std::ifstream &f)
+{
+  uint8_t buf[8];
+  f.read(reinterpret_cast<char *>(buf), 8);
+  return static_cast<uint64_t>(buf[0]) | (static_cast<uint64_t>(buf[1]) << 8) |
+         (static_cast<uint64_t>(buf[2]) << 16) |
+         (static_cast<uint64_t>(buf[3]) << 24) |
+         (static_cast<uint64_t>(buf[4]) << 32) |
+         (static_cast<uint64_t>(buf[5]) << 40) |
+         (static_cast<uint64_t>(buf[6]) << 48) |
+         (static_cast<uint64_t>(buf[7]) << 56);
 }
 
 // Read little-endian double
-double read_f64_le(std::ifstream& f) {
-    uint64_t bits = read_u64_le(f);
-    double result;
-    std::memcpy(&result, &bits, sizeof(double));
-    return result;
+double read_f64_le(std::ifstream &f)
+{
+  uint64_t bits = read_u64_le(f);
+  double result;
+  std::memcpy(&result, &bits, sizeof(double));
+  return result;
 }
 
 // Simple MessagePack parser for EventDataBatch
@@ -118,596 +123,634 @@ double read_f64_le(std::ifstream& f) {
 //   - Waveform is array of 8 or 9 elements:
 //     [analog_probe1, analog_probe2, digital_probe1, digital_probe2,
 //      digital_probe3, digital_probe4, time_resolution, trigger_threshold, (ns_per_sample)]
-class MsgPackParser {
-public:
-    MsgPackParser(const std::vector<uint8_t>& data) : data_(data), pos_(0) {}
+class MsgPackParser
+{
+ public:
+  MsgPackParser(const std::vector<uint8_t> &data) : data_(data), pos_(0) {}
 
-    bool parse_batch(uint32_t& source_id, std::vector<Event>& events) {
-        // Batch is array of 4 elements
-        size_t batch_size;
-        if (!read_array_header(batch_size) || batch_size != 4) {
-            return false;
-        }
-
-        // source_id (u32)
-        uint64_t src;
-        if (!read_uint(src)) return false;
-        source_id = static_cast<uint32_t>(src);
-
-        // sequence_number (u64) - skip
-        uint64_t seq;
-        if (!read_uint(seq)) return false;
-
-        // timestamp (u64) - skip
-        uint64_t ts;
-        if (!read_uint(ts)) return false;
-
-        // events array
-        size_t num_events;
-        if (!read_array_header(num_events)) return false;
-
-        events.reserve(num_events);
-        for (size_t i = 0; i < num_events; i++) {
-            Event ev;
-            if (!parse_event(ev)) return false;
-            events.push_back(ev);
-        }
-
-        return true;
+  bool parse_batch(uint32_t &source_id, std::vector<Event> &events)
+  {
+    // Batch is array of 4 elements
+    size_t batch_size;
+    if (!read_array_header(batch_size) || batch_size != 4) {
+      return false;
     }
 
-private:
-    bool parse_event(Event& ev) {
-        // Event is array of 6 or 7 elements (7 if has waveform)
-        size_t ev_size;
-        if (!read_array_header(ev_size)) {
-            return false;
-        }
-        if (ev_size != 6 && ev_size != 7) {
-            std::cerr << "Warning: Unexpected event array size: " << ev_size << std::endl;
-            return false;
-        }
+    // source_id (u32)
+    uint64_t src;
+    if (!read_uint(src)) return false;
+    source_id = static_cast<uint32_t>(src);
 
-        uint64_t tmp;
+    // sequence_number (u64) - skip
+    uint64_t seq;
+    if (!read_uint(seq)) return false;
 
-        // module (u8)
-        if (!read_uint(tmp)) return false;
-        ev.module = static_cast<uint8_t>(tmp);
+    // timestamp (u64) - skip
+    uint64_t ts;
+    if (!read_uint(ts)) return false;
 
-        // channel (u8)
-        if (!read_uint(tmp)) return false;
-        ev.channel = static_cast<uint8_t>(tmp);
+    // events array
+    size_t num_events;
+    if (!read_array_header(num_events)) return false;
 
-        // energy (u16)
-        if (!read_uint(tmp)) return false;
-        ev.energy = static_cast<uint16_t>(tmp);
-
-        // energy_short (u16)
-        if (!read_uint(tmp)) return false;
-        ev.energy_short = static_cast<uint16_t>(tmp);
-
-        // timestamp_ns (f64)
-        if (!read_float64(ev.timestamp_ns)) return false;
-
-        // flags (u64)
-        if (!read_uint(ev.flags)) return false;
-
-        // waveform (optional)
-        ev.has_waveform = (ev_size == 7);
-        if (ev.has_waveform) {
-            if (!parse_waveform(ev.waveform)) return false;
-        }
-
-        return true;
+    events.reserve(num_events);
+    for (size_t i = 0; i < num_events; i++) {
+      Event ev;
+      if (!parse_event(ev)) return false;
+      events.push_back(ev);
     }
 
-    bool parse_waveform(Waveform& wf) {
-        // Waveform is array of 8 or 9 elements (9 if ns_per_sample is present)
-        size_t wf_size;
-        if (!read_array_header(wf_size) || (wf_size != 8 && wf_size != 9)) {
-            std::cerr << "Warning: Unexpected waveform array size: " << wf_size << std::endl;
-            return false;
-        }
+    return true;
+  }
 
-        // analog_probe1 (Vec<i16>)
-        if (!read_i16_array(wf.analog_probe1)) return false;
-
-        // analog_probe2 (Vec<i16>)
-        if (!read_i16_array(wf.analog_probe2)) return false;
-
-        // digital_probe1 (Vec<u8>)
-        if (!read_u8_array(wf.digital_probe1)) return false;
-
-        // digital_probe2 (Vec<u8>)
-        if (!read_u8_array(wf.digital_probe2)) return false;
-
-        // digital_probe3 (Vec<u8>)
-        if (!read_u8_array(wf.digital_probe3)) return false;
-
-        // digital_probe4 (Vec<u8>)
-        if (!read_u8_array(wf.digital_probe4)) return false;
-
-        // time_resolution (u8)
-        uint64_t tmp;
-        if (!read_uint(tmp)) return false;
-        wf.time_resolution = static_cast<uint8_t>(tmp);
-
-        // trigger_threshold (u16)
-        if (!read_uint(tmp)) return false;
-        wf.trigger_threshold = static_cast<uint16_t>(tmp);
-
-        // ns_per_sample (f64, optional - added in later versions)
-        if (wf_size == 9) {
-            if (!read_float64(wf.ns_per_sample)) return false;
-        }
-
-        return true;
+ private:
+  bool parse_event(Event &ev)
+  {
+    // Event is array of 6 or 7 elements (7 if has waveform)
+    size_t ev_size;
+    if (!read_array_header(ev_size)) {
+      return false;
+    }
+    if (ev_size != 6 && ev_size != 7) {
+      std::cerr << "Warning: Unexpected event array size: " << ev_size
+                << std::endl;
+      return false;
     }
 
-    bool read_i16_array(std::vector<int16_t>& arr) {
-        size_t size;
-        if (!read_array_header(size)) return false;
+    uint64_t tmp;
 
-        arr.reserve(size);
-        for (size_t i = 0; i < size; i++) {
-            int64_t val;
-            if (!read_int(val)) return false;
-            arr.push_back(static_cast<int16_t>(val));
-        }
-        return true;
+    // module (u8)
+    if (!read_uint(tmp)) return false;
+    ev.module = static_cast<uint8_t>(tmp);
+
+    // channel (u8)
+    if (!read_uint(tmp)) return false;
+    ev.channel = static_cast<uint8_t>(tmp);
+
+    // energy (u16)
+    if (!read_uint(tmp)) return false;
+    ev.energy = static_cast<uint16_t>(tmp);
+
+    // energy_short (u16)
+    if (!read_uint(tmp)) return false;
+    ev.energy_short = static_cast<uint16_t>(tmp);
+
+    // timestamp_ns (f64)
+    if (!read_float64(ev.timestamp_ns)) return false;
+
+    // flags (u64)
+    if (!read_uint(ev.flags)) return false;
+
+    // waveform (optional)
+    ev.has_waveform = (ev_size == 7);
+    if (ev.has_waveform) {
+      if (!parse_waveform(ev.waveform)) return false;
     }
 
-    bool read_u8_array(std::vector<uint8_t>& arr) {
-        // Can be either an array or binary data (bin8/bin16/bin32)
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_];
+    return true;
+  }
 
-        // Check for binary format first
-        if (b == 0xc4 || b == 0xc5 || b == 0xc6) {
-            return read_bin(arr);
-        }
-
-        // Otherwise, it's an array
-        size_t size;
-        if (!read_array_header(size)) return false;
-
-        arr.reserve(size);
-        for (size_t i = 0; i < size; i++) {
-            uint64_t val;
-            if (!read_uint(val)) return false;
-            arr.push_back(static_cast<uint8_t>(val));
-        }
-        return true;
+  bool parse_waveform(Waveform &wf)
+  {
+    // Waveform is array of 8 or 9 elements (9 if ns_per_sample is present)
+    size_t wf_size;
+    if (!read_array_header(wf_size) || (wf_size != 8 && wf_size != 9)) {
+      std::cerr << "Warning: Unexpected waveform array size: " << wf_size
+                << std::endl;
+      return false;
     }
 
-    bool read_bin(std::vector<uint8_t>& arr) {
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_++];
-        size_t size = 0;
+    // analog_probe1 (Vec<i16>)
+    if (!read_i16_array(wf.analog_probe1)) return false;
 
-        if (b == 0xc4 && pos_ + 1 <= data_.size()) {
-            // bin8
-            size = data_[pos_++];
-        } else if (b == 0xc5 && pos_ + 2 <= data_.size()) {
-            // bin16
-            size = (data_[pos_] << 8) | data_[pos_ + 1];
-            pos_ += 2;
-        } else if (b == 0xc6 && pos_ + 4 <= data_.size()) {
-            // bin32
-            size = (static_cast<uint32_t>(data_[pos_]) << 24) |
-                   (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
-                   (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
-                   static_cast<uint32_t>(data_[pos_ + 3]);
-            pos_ += 4;
-        } else {
-            return false;
-        }
+    // analog_probe2 (Vec<i16>)
+    if (!read_i16_array(wf.analog_probe2)) return false;
 
-        if (pos_ + size > data_.size()) return false;
-        arr.assign(data_.begin() + pos_, data_.begin() + pos_ + size);
-        pos_ += size;
-        return true;
+    // digital_probe1 (Vec<u8>)
+    if (!read_u8_array(wf.digital_probe1)) return false;
+
+    // digital_probe2 (Vec<u8>)
+    if (!read_u8_array(wf.digital_probe2)) return false;
+
+    // digital_probe3 (Vec<u8>)
+    if (!read_u8_array(wf.digital_probe3)) return false;
+
+    // digital_probe4 (Vec<u8>)
+    if (!read_u8_array(wf.digital_probe4)) return false;
+
+    // time_resolution (u8)
+    uint64_t tmp;
+    if (!read_uint(tmp)) return false;
+    wf.time_resolution = static_cast<uint8_t>(tmp);
+
+    // trigger_threshold (u16)
+    if (!read_uint(tmp)) return false;
+    wf.trigger_threshold = static_cast<uint16_t>(tmp);
+
+    // ns_per_sample (f64, optional - added in later versions)
+    if (wf_size == 9) {
+      if (!read_float64(wf.ns_per_sample)) return false;
     }
 
-    bool read_array_header(size_t& size) {
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_++];
+    return true;
+  }
 
-        // fixarray (0x90 - 0x9f)
-        if ((b & 0xf0) == 0x90) {
-            size = b & 0x0f;
-            return true;
-        }
-        // array16 (0xdc)
-        if (b == 0xdc && pos_ + 2 <= data_.size()) {
-            size = (data_[pos_] << 8) | data_[pos_ + 1];
-            pos_ += 2;
-            return true;
-        }
-        // array32 (0xdd)
-        if (b == 0xdd && pos_ + 4 <= data_.size()) {
-            size = (static_cast<uint32_t>(data_[pos_]) << 24) |
-                   (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
-                   (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
-                   static_cast<uint32_t>(data_[pos_ + 3]);
-            pos_ += 4;
-            return true;
-        }
-        return false;
+  bool read_i16_array(std::vector<int16_t> &arr)
+  {
+    size_t size;
+    if (!read_array_header(size)) return false;
+
+    arr.reserve(size);
+    for (size_t i = 0; i < size; i++) {
+      int64_t val;
+      if (!read_int(val)) return false;
+      arr.push_back(static_cast<int16_t>(val));
+    }
+    return true;
+  }
+
+  bool read_u8_array(std::vector<uint8_t> &arr)
+  {
+    // Can be either an array or binary data (bin8/bin16/bin32)
+    if (pos_ >= data_.size()) return false;
+    uint8_t b = data_[pos_];
+
+    // Check for binary format first
+    if (b == 0xc4 || b == 0xc5 || b == 0xc6) {
+      return read_bin(arr);
     }
 
-    bool read_uint(uint64_t& val) {
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_++];
+    // Otherwise, it's an array
+    size_t size;
+    if (!read_array_header(size)) return false;
 
-        // positive fixint (0x00 - 0x7f)
-        if (b <= 0x7f) {
-            val = b;
-            return true;
-        }
-        // uint8 (0xcc)
-        if (b == 0xcc && pos_ + 1 <= data_.size()) {
-            val = data_[pos_++];
-            return true;
-        }
-        // uint16 (0xcd)
-        if (b == 0xcd && pos_ + 2 <= data_.size()) {
-            val = (data_[pos_] << 8) | data_[pos_ + 1];
-            pos_ += 2;
-            return true;
-        }
-        // uint32 (0xce)
-        if (b == 0xce && pos_ + 4 <= data_.size()) {
-            val = (static_cast<uint32_t>(data_[pos_]) << 24) |
-                  (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
-                  (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
-                  static_cast<uint32_t>(data_[pos_ + 3]);
-            pos_ += 4;
-            return true;
-        }
-        // uint64 (0xcf)
-        if (b == 0xcf && pos_ + 8 <= data_.size()) {
-            val = (static_cast<uint64_t>(data_[pos_]) << 56) |
-                  (static_cast<uint64_t>(data_[pos_ + 1]) << 48) |
-                  (static_cast<uint64_t>(data_[pos_ + 2]) << 40) |
-                  (static_cast<uint64_t>(data_[pos_ + 3]) << 32) |
-                  (static_cast<uint64_t>(data_[pos_ + 4]) << 24) |
-                  (static_cast<uint64_t>(data_[pos_ + 5]) << 16) |
-                  (static_cast<uint64_t>(data_[pos_ + 6]) << 8) |
-                  static_cast<uint64_t>(data_[pos_ + 7]);
-            pos_ += 8;
-            return true;
-        }
-        return false;
+    arr.reserve(size);
+    for (size_t i = 0; i < size; i++) {
+      uint64_t val;
+      if (!read_uint(val)) return false;
+      arr.push_back(static_cast<uint8_t>(val));
+    }
+    return true;
+  }
+
+  bool read_bin(std::vector<uint8_t> &arr)
+  {
+    if (pos_ >= data_.size()) return false;
+    uint8_t b = data_[pos_++];
+    size_t size = 0;
+
+    if (b == 0xc4 && pos_ + 1 <= data_.size()) {
+      // bin8
+      size = data_[pos_++];
+    } else if (b == 0xc5 && pos_ + 2 <= data_.size()) {
+      // bin16
+      size = (data_[pos_] << 8) | data_[pos_ + 1];
+      pos_ += 2;
+    } else if (b == 0xc6 && pos_ + 4 <= data_.size()) {
+      // bin32
+      size = (static_cast<uint32_t>(data_[pos_]) << 24) |
+             (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
+             (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
+             static_cast<uint32_t>(data_[pos_ + 3]);
+      pos_ += 4;
+    } else {
+      return false;
     }
 
-    bool read_int(int64_t& val) {
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_];
+    if (pos_ + size > data_.size()) return false;
+    arr.assign(data_.begin() + pos_, data_.begin() + pos_ + size);
+    pos_ += size;
+    return true;
+  }
 
-        // positive fixint (0x00 - 0x7f)
-        if (b <= 0x7f) {
-            pos_++;
-            val = b;
-            return true;
-        }
-        // negative fixint (0xe0 - 0xff)
-        if (b >= 0xe0) {
-            pos_++;
-            val = static_cast<int8_t>(b);
-            return true;
-        }
-        // int8 (0xd0)
-        if (b == 0xd0 && pos_ + 2 <= data_.size()) {
-            pos_++;
-            val = static_cast<int8_t>(data_[pos_++]);
-            return true;
-        }
-        // int16 (0xd1)
-        if (b == 0xd1 && pos_ + 3 <= data_.size()) {
-            pos_++;
-            val = static_cast<int16_t>((data_[pos_] << 8) | data_[pos_ + 1]);
-            pos_ += 2;
-            return true;
-        }
-        // int32 (0xd2)
-        if (b == 0xd2 && pos_ + 5 <= data_.size()) {
-            pos_++;
-            val = static_cast<int32_t>(
-                (static_cast<uint32_t>(data_[pos_]) << 24) |
-                (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
-                (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
-                static_cast<uint32_t>(data_[pos_ + 3]));
-            pos_ += 4;
-            return true;
-        }
-        // uint types (for positive values stored as unsigned)
-        uint64_t uval;
-        if (read_uint(uval)) {
-            val = static_cast<int64_t>(uval);
-            return true;
-        }
-        return false;
+  bool read_array_header(size_t &size)
+  {
+    if (pos_ >= data_.size()) return false;
+    uint8_t b = data_[pos_++];
+
+    // fixarray (0x90 - 0x9f)
+    if ((b & 0xf0) == 0x90) {
+      size = b & 0x0f;
+      return true;
     }
-
-    bool read_float64(double& val) {
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_++];
-
-        // float64 (0xcb)
-        if (b == 0xcb && pos_ + 8 <= data_.size()) {
-            // Big-endian IEEE 754
-            uint64_t bits = (static_cast<uint64_t>(data_[pos_]) << 56) |
-                           (static_cast<uint64_t>(data_[pos_ + 1]) << 48) |
-                           (static_cast<uint64_t>(data_[pos_ + 2]) << 40) |
-                           (static_cast<uint64_t>(data_[pos_ + 3]) << 32) |
-                           (static_cast<uint64_t>(data_[pos_ + 4]) << 24) |
-                           (static_cast<uint64_t>(data_[pos_ + 5]) << 16) |
-                           (static_cast<uint64_t>(data_[pos_ + 6]) << 8) |
-                           static_cast<uint64_t>(data_[pos_ + 7]);
-            pos_ += 8;
-            std::memcpy(&val, &bits, sizeof(double));
-            return true;
-        }
-        return false;
+    // array16 (0xdc)
+    if (b == 0xdc && pos_ + 2 <= data_.size()) {
+      size = (data_[pos_] << 8) | data_[pos_ + 1];
+      pos_ += 2;
+      return true;
     }
+    // array32 (0xdd)
+    if (b == 0xdd && pos_ + 4 <= data_.size()) {
+      size = (static_cast<uint32_t>(data_[pos_]) << 24) |
+             (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
+             (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
+             static_cast<uint32_t>(data_[pos_ + 3]);
+      pos_ += 4;
+      return true;
+    }
+    return false;
+  }
 
-    const std::vector<uint8_t>& data_;
-    size_t pos_;
+  bool read_uint(uint64_t &val)
+  {
+    if (pos_ >= data_.size()) return false;
+    uint8_t b = data_[pos_++];
+
+    // positive fixint (0x00 - 0x7f)
+    if (b <= 0x7f) {
+      val = b;
+      return true;
+    }
+    // uint8 (0xcc)
+    if (b == 0xcc && pos_ + 1 <= data_.size()) {
+      val = data_[pos_++];
+      return true;
+    }
+    // uint16 (0xcd)
+    if (b == 0xcd && pos_ + 2 <= data_.size()) {
+      val = (data_[pos_] << 8) | data_[pos_ + 1];
+      pos_ += 2;
+      return true;
+    }
+    // uint32 (0xce)
+    if (b == 0xce && pos_ + 4 <= data_.size()) {
+      val = (static_cast<uint32_t>(data_[pos_]) << 24) |
+            (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
+            (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
+            static_cast<uint32_t>(data_[pos_ + 3]);
+      pos_ += 4;
+      return true;
+    }
+    // uint64 (0xcf)
+    if (b == 0xcf && pos_ + 8 <= data_.size()) {
+      val = (static_cast<uint64_t>(data_[pos_]) << 56) |
+            (static_cast<uint64_t>(data_[pos_ + 1]) << 48) |
+            (static_cast<uint64_t>(data_[pos_ + 2]) << 40) |
+            (static_cast<uint64_t>(data_[pos_ + 3]) << 32) |
+            (static_cast<uint64_t>(data_[pos_ + 4]) << 24) |
+            (static_cast<uint64_t>(data_[pos_ + 5]) << 16) |
+            (static_cast<uint64_t>(data_[pos_ + 6]) << 8) |
+            static_cast<uint64_t>(data_[pos_ + 7]);
+      pos_ += 8;
+      return true;
+    }
+    return false;
+  }
+
+  bool read_int(int64_t &val)
+  {
+    if (pos_ >= data_.size()) return false;
+    uint8_t b = data_[pos_];
+
+    // positive fixint (0x00 - 0x7f)
+    if (b <= 0x7f) {
+      pos_++;
+      val = b;
+      return true;
+    }
+    // negative fixint (0xe0 - 0xff)
+    if (b >= 0xe0) {
+      pos_++;
+      val = static_cast<int8_t>(b);
+      return true;
+    }
+    // int8 (0xd0)
+    if (b == 0xd0 && pos_ + 2 <= data_.size()) {
+      pos_++;
+      val = static_cast<int8_t>(data_[pos_++]);
+      return true;
+    }
+    // int16 (0xd1)
+    if (b == 0xd1 && pos_ + 3 <= data_.size()) {
+      pos_++;
+      val = static_cast<int16_t>((data_[pos_] << 8) | data_[pos_ + 1]);
+      pos_ += 2;
+      return true;
+    }
+    // int32 (0xd2)
+    if (b == 0xd2 && pos_ + 5 <= data_.size()) {
+      pos_++;
+      val =
+          static_cast<int32_t>((static_cast<uint32_t>(data_[pos_]) << 24) |
+                               (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
+                               (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
+                               static_cast<uint32_t>(data_[pos_ + 3]));
+      pos_ += 4;
+      return true;
+    }
+    // uint types (for positive values stored as unsigned)
+    uint64_t uval;
+    if (read_uint(uval)) {
+      val = static_cast<int64_t>(uval);
+      return true;
+    }
+    return false;
+  }
+
+  bool read_float64(double &val)
+  {
+    if (pos_ >= data_.size()) return false;
+    uint8_t b = data_[pos_++];
+
+    // float64 (0xcb)
+    if (b == 0xcb && pos_ + 8 <= data_.size()) {
+      // Big-endian IEEE 754
+      uint64_t bits = (static_cast<uint64_t>(data_[pos_]) << 56) |
+                      (static_cast<uint64_t>(data_[pos_ + 1]) << 48) |
+                      (static_cast<uint64_t>(data_[pos_ + 2]) << 40) |
+                      (static_cast<uint64_t>(data_[pos_ + 3]) << 32) |
+                      (static_cast<uint64_t>(data_[pos_ + 4]) << 24) |
+                      (static_cast<uint64_t>(data_[pos_ + 5]) << 16) |
+                      (static_cast<uint64_t>(data_[pos_ + 6]) << 8) |
+                      static_cast<uint64_t>(data_[pos_ + 7]);
+      pos_ += 8;
+      std::memcpy(&val, &bits, sizeof(double));
+      return true;
+    }
+    return false;
+  }
+
+  const std::vector<uint8_t> &data_;
+  size_t pos_;
 };
 
 // Read and print file header info
-bool read_header(std::ifstream& f, size_t& header_end_pos) {
-    // Check magic
-    char magic[8];
-    f.read(magic, 8);
-    if (std::memcmp(magic, FILE_MAGIC, 8) != 0) {
-        std::cerr << "Error: Invalid file magic. Expected DELILA02" << std::endl;
-        return false;
-    }
+bool read_header(std::ifstream &f, size_t &header_end_pos)
+{
+  // Check magic
+  char magic[8];
+  f.read(magic, 8);
+  if (std::memcmp(magic, FILE_MAGIC, 8) != 0) {
+    std::cerr << "Error: Invalid file magic. Expected DELILA02" << std::endl;
+    return false;
+  }
 
-    // Read header length
-    uint32_t header_len = read_u32_le(f);
-    std::cout << "Header length: " << header_len << " bytes" << std::endl;
+  // Read header length
+  uint32_t header_len = read_u32_le(f);
+  std::cout << "Header length: " << header_len << " bytes" << std::endl;
 
-    // Skip header content (MessagePack metadata)
-    // For now, we just skip it. Could parse for run_number, exp_name, etc.
-    f.seekg(header_len, std::ios::cur);
+  // Skip header content (MessagePack metadata)
+  // For now, we just skip it. Could parse for run_number, exp_name, etc.
+  f.seekg(header_len, std::ios::cur);
 
-    header_end_pos = f.tellg();
-    std::cout << "Data starts at offset: " << header_end_pos << std::endl;
+  header_end_pos = f.tellg();
+  std::cout << "Data starts at offset: " << header_end_pos << std::endl;
 
-    return true;
+  return true;
 }
 
 // Read and print footer info
-bool read_footer(std::ifstream& f, size_t file_size) {
-    if (file_size < FOOTER_SIZE) {
-        std::cerr << "Warning: File too small for footer" << std::endl;
-        return false;
-    }
+bool read_footer(std::ifstream &f, size_t file_size)
+{
+  if (file_size < FOOTER_SIZE) {
+    std::cerr << "Warning: File too small for footer" << std::endl;
+    return false;
+  }
 
-    f.seekg(file_size - FOOTER_SIZE, std::ios::beg);
+  f.seekg(file_size - FOOTER_SIZE, std::ios::beg);
 
-    Footer footer;
-    f.read(footer.magic, 8);
+  Footer footer;
+  f.read(footer.magic, 8);
 
-    if (std::memcmp(footer.magic, FOOTER_MAGIC, 8) != 0) {
-        std::cerr << "Warning: Invalid footer magic" << std::endl;
-        return false;
-    }
+  if (std::memcmp(footer.magic, FOOTER_MAGIC, 8) != 0) {
+    std::cerr << "Warning: Invalid footer magic" << std::endl;
+    return false;
+  }
 
-    footer.data_checksum = read_u64_le(f);
-    footer.total_events = read_u64_le(f);
-    footer.data_bytes = read_u64_le(f);
-    footer.first_event_time_ns = read_f64_le(f);
-    footer.last_event_time_ns = read_f64_le(f);
-    footer.file_end_time_ns = read_u64_le(f);
-    f.read(reinterpret_cast<char*>(&footer.write_complete), 1);
+  footer.data_checksum = read_u64_le(f);
+  footer.total_events = read_u64_le(f);
+  footer.data_bytes = read_u64_le(f);
+  footer.first_event_time_ns = read_f64_le(f);
+  footer.last_event_time_ns = read_f64_le(f);
+  footer.file_end_time_ns = read_u64_le(f);
+  f.read(reinterpret_cast<char *>(&footer.write_complete), 1);
 
-    std::cout << "\n=== Footer ===" << std::endl;
-    std::cout << "Total events:    " << footer.total_events << std::endl;
-    std::cout << "Data bytes:      " << footer.data_bytes << std::endl;
-    std::cout << "First timestamp: " << footer.first_event_time_ns << " ns" << std::endl;
-    std::cout << "Last timestamp:  " << footer.last_event_time_ns << " ns" << std::endl;
-    std::cout << "Write complete:  " << (footer.write_complete ? "Yes" : "No") << std::endl;
+  std::cout << "\n=== Footer ===" << std::endl;
+  std::cout << "Total events:    " << footer.total_events << std::endl;
+  std::cout << "Data bytes:      " << footer.data_bytes << std::endl;
+  std::cout << "First timestamp: " << footer.first_event_time_ns << " ns"
+            << std::endl;
+  std::cout << "Last timestamp:  " << footer.last_event_time_ns << " ns"
+            << std::endl;
+  std::cout << "Write complete:  " << (footer.write_complete ? "Yes" : "No")
+            << std::endl;
 
-    return true;
+  return true;
 }
 
 // Main function
-void read_delila(const char* filename, int max_events = -1) {
-    std::cout << "Reading DELILA file: " << filename << std::endl;
+void read_delila(const char *filename, int max_events = -1)
+{
+  std::cout << "Reading DELILA file: " << filename << std::endl;
 
-    std::ifstream f(filename, std::ios::binary);
-    if (!f.is_open()) {
-        std::cerr << "Error: Cannot open file" << std::endl;
-        return;
+  std::ifstream f(filename, std::ios::binary);
+  if (!f.is_open()) {
+    std::cerr << "Error: Cannot open file" << std::endl;
+    return;
+  }
+
+  // Get file size
+  f.seekg(0, std::ios::end);
+  size_t file_size = f.tellg();
+  f.seekg(0, std::ios::beg);
+  std::cout << "File size: " << file_size << " bytes" << std::endl;
+
+  // Read header
+  size_t header_end_pos;
+  if (!read_header(f, header_end_pos)) {
+    return;
+  }
+
+  // Read footer
+  read_footer(f, file_size);
+
+  // Calculate data region
+  size_t data_end = file_size - FOOTER_SIZE;
+  std::cout << "\nData region: " << header_end_pos << " - " << data_end
+            << std::endl;
+
+  // Read data blocks
+  f.seekg(header_end_pos, std::ios::beg);
+
+  std::vector<Event> all_events;
+  int block_count = 0;
+  int waveform_count = 0;
+
+  while (f.tellg() < static_cast<std::streampos>(data_end)) {
+    // Read block length
+    uint32_t block_len = read_u32_le(f);
+    if (block_len == 0 || block_len > 100000000) {
+      std::cerr << "Warning: Invalid block length " << block_len << std::endl;
+      break;
     }
 
-    // Get file size
-    f.seekg(0, std::ios::end);
-    size_t file_size = f.tellg();
-    f.seekg(0, std::ios::beg);
-    std::cout << "File size: " << file_size << " bytes" << std::endl;
+    // Read block data
+    std::vector<uint8_t> block_data(block_len);
+    f.read(reinterpret_cast<char *>(block_data.data()), block_len);
 
-    // Read header
-    size_t header_end_pos;
-    if (!read_header(f, header_end_pos)) {
-        return;
+    if (!f.good()) {
+      std::cerr << "Warning: Read error at block " << block_count << std::endl;
+      break;
     }
 
-    // Read footer
-    read_footer(f, file_size);
+    // Parse MessagePack
+    MsgPackParser parser(block_data);
+    uint32_t source_id;
+    std::vector<Event> events;
 
-    // Calculate data region
-    size_t data_end = file_size - FOOTER_SIZE;
-    std::cout << "\nData region: " << header_end_pos << " - " << data_end << std::endl;
+    if (!parser.parse_batch(source_id, events)) {
+      std::cerr << "Warning: Failed to parse block " << block_count
+                << std::endl;
+      break;
+    }
 
-    // Read data blocks
-    f.seekg(header_end_pos, std::ios::beg);
+    // Add events
+    for (const auto &ev : events) {
+      all_events.push_back(ev);
+      if (ev.has_waveform) waveform_count++;
+      if (max_events > 0 && static_cast<int>(all_events.size()) >= max_events) {
+        break;
+      }
+    }
 
-    std::vector<Event> all_events;
-    int block_count = 0;
-    int waveform_count = 0;
+    block_count++;
 
-    while (f.tellg() < static_cast<std::streampos>(data_end)) {
-        // Read block length
-        uint32_t block_len = read_u32_le(f);
-        if (block_len == 0 || block_len > 100000000) {
-            std::cerr << "Warning: Invalid block length " << block_len << std::endl;
-            break;
+    if (max_events > 0 && static_cast<int>(all_events.size()) >= max_events) {
+      break;
+    }
+  }
+
+  std::cout << "\nParsed " << block_count << " blocks, " << all_events.size()
+            << " events" << std::endl;
+  std::cout << "Events with waveform: " << waveform_count << std::endl;
+
+  if (all_events.empty()) {
+    std::cout << "No events to display" << std::endl;
+    return;
+  }
+
+  // Print first 10 events
+  std::cout << "\n=== First "
+            << std::min(10, static_cast<int>(all_events.size()))
+            << " events ===" << std::endl;
+  std::cout
+      << "Module  Ch  Energy  EShort  Timestamp(ns)      Flags     Waveform"
+      << std::endl;
+  std::cout
+      << "------  --  ------  ------  -----------------  --------  --------"
+      << std::endl;
+  for (size_t i = 0; i < std::min(static_cast<size_t>(10), all_events.size());
+       i++) {
+    const Event &ev = all_events[i];
+    printf("%6d  %2d  %6d  %6d  %17.1f  0x%06llx  %s\n", ev.module, ev.channel,
+           ev.energy, ev.energy_short, ev.timestamp_ns,
+           static_cast<unsigned long long>(ev.flags),
+           ev.has_waveform ? "Yes" : "No");
+    if (ev.has_waveform) {
+      printf("        -> analog1: %zu samples, analog2: %zu samples\n",
+             ev.waveform.analog_probe1.size(),
+             ev.waveform.analog_probe2.size());
+    }
+  }
+
+  // Create histograms
+  TCanvas *c1 = new TCanvas("c1", "DELILA Data", 1200, 800);
+  c1->Divide(2, 2);
+
+  // Energy histogram
+  c1->cd(1);
+  TH1F *h_energy =
+      new TH1F("h_energy", "Energy Distribution;Energy;Counts", 4096, 0, 65536);
+  for (const auto &ev : all_events) {
+    h_energy->Fill(ev.energy);
+  }
+  h_energy->Draw();
+
+  // Energy short histogram
+  c1->cd(2);
+  TH1F *h_eshort =
+      new TH1F("h_eshort", "Energy Short Distribution;Energy Short;Counts",
+               4096, 0, 65536);
+  for (const auto &ev : all_events) {
+    h_eshort->Fill(ev.energy_short);
+  }
+  h_eshort->Draw();
+
+  // Channel distribution
+  c1->cd(3);
+  TH1F *h_ch =
+      new TH1F("h_ch", "Channel Distribution;Channel;Counts", 64, 0, 64);
+  for (const auto &ev : all_events) {
+    h_ch->Fill(ev.channel);
+  }
+  h_ch->Draw();
+
+  // Module distribution
+  c1->cd(4);
+  TH1F *h_mod =
+      new TH1F("h_mod", "Module Distribution;Module;Counts", 32, 0, 32);
+  for (const auto &ev : all_events) {
+    h_mod->Fill(ev.module);
+  }
+  h_mod->Draw();
+
+  c1->Update();
+
+  // If we have waveforms, show one example
+  if (waveform_count > 0) {
+    // Find first event with waveform
+    const Event *wf_event = nullptr;
+    for (const auto &ev : all_events) {
+      if (ev.has_waveform && ev.waveform.has_data()) {
+        wf_event = &ev;
+        break;
+      }
+    }
+
+    if (wf_event) {
+      TCanvas *c2 = new TCanvas("c2", "Waveform Example", 800, 600);
+      c2->Divide(1, 2);
+
+      double ns_step = wf_event->waveform.ns_per_sample;
+      bool use_ns = (ns_step > 0.0);
+      const char *x_title = use_ns ? "Time (ns)" : "Sample";
+
+      // Analog probe 1
+      c2->cd(1);
+      const auto &ap1 = wf_event->waveform.analog_probe1;
+      if (!ap1.empty()) {
+        TGraph *g1 = new TGraph();
+        for (size_t i = 0; i < ap1.size(); i++) {
+          double x = use_ns ? i * ns_step : i;
+          g1->SetPoint(i, x, ap1[i]);
         }
+        g1->SetTitle(Form("Analog Probe 1 (Mod%d/Ch%d, E=%d);%s;ADC",
+                          wf_event->module, wf_event->channel, wf_event->energy,
+                          x_title));
+        g1->SetLineColor(kBlue);
+        g1->Draw("AL");
+      }
 
-        // Read block data
-        std::vector<uint8_t> block_data(block_len);
-        f.read(reinterpret_cast<char*>(block_data.data()), block_len);
-
-        if (!f.good()) {
-            std::cerr << "Warning: Read error at block " << block_count << std::endl;
-            break;
+      // Analog probe 2
+      c2->cd(2);
+      const auto &ap2 = wf_event->waveform.analog_probe2;
+      if (!ap2.empty()) {
+        TGraph *g2 = new TGraph();
+        for (size_t i = 0; i < ap2.size(); i++) {
+          double x = use_ns ? i * ns_step : i;
+          g2->SetPoint(i, x, ap2[i]);
         }
+        g2->SetTitle(Form("Analog Probe 2 (Mod%d/Ch%d, E=%d);%s;ADC",
+                          wf_event->module, wf_event->channel, wf_event->energy,
+                          x_title));
+        g2->SetLineColor(kRed);
+        g2->Draw("AL");
+      }
 
-        // Parse MessagePack
-        MsgPackParser parser(block_data);
-        uint32_t source_id;
-        std::vector<Event> events;
-
-        if (!parser.parse_batch(source_id, events)) {
-            std::cerr << "Warning: Failed to parse block " << block_count << std::endl;
-            break;
-        }
-
-        // Add events
-        for (const auto& ev : events) {
-            all_events.push_back(ev);
-            if (ev.has_waveform) waveform_count++;
-            if (max_events > 0 && static_cast<int>(all_events.size()) >= max_events) {
-                break;
-            }
-        }
-
-        block_count++;
-
-        if (max_events > 0 && static_cast<int>(all_events.size()) >= max_events) {
-            break;
-        }
+      c2->Update();
     }
+  }
 
-    std::cout << "\nParsed " << block_count << " blocks, " << all_events.size() << " events" << std::endl;
-    std::cout << "Events with waveform: " << waveform_count << std::endl;
-
-    if (all_events.empty()) {
-        std::cout << "No events to display" << std::endl;
-        return;
-    }
-
-    // Print first 10 events
-    std::cout << "\n=== First " << std::min(10, static_cast<int>(all_events.size())) << " events ===" << std::endl;
-    std::cout << "Module  Ch  Energy  EShort  Timestamp(ns)      Flags     Waveform" << std::endl;
-    std::cout << "------  --  ------  ------  -----------------  --------  --------" << std::endl;
-    for (size_t i = 0; i < std::min(static_cast<size_t>(10), all_events.size()); i++) {
-        const Event& ev = all_events[i];
-        printf("%6d  %2d  %6d  %6d  %17.1f  0x%06llx  %s\n",
-               ev.module, ev.channel, ev.energy, ev.energy_short,
-               ev.timestamp_ns, static_cast<unsigned long long>(ev.flags),
-               ev.has_waveform ? "Yes" : "No");
-        if (ev.has_waveform) {
-            printf("        -> analog1: %zu samples, analog2: %zu samples\n",
-                   ev.waveform.analog_probe1.size(), ev.waveform.analog_probe2.size());
-        }
-    }
-
-    // Create histograms
-    TCanvas* c1 = new TCanvas("c1", "DELILA Data", 1200, 800);
-    c1->Divide(2, 2);
-
-    // Energy histogram
-    c1->cd(1);
-    TH1F* h_energy = new TH1F("h_energy", "Energy Distribution;Energy;Counts", 4096, 0, 65536);
-    for (const auto& ev : all_events) {
-        h_energy->Fill(ev.energy);
-    }
-    h_energy->Draw();
-
-    // Energy short histogram
-    c1->cd(2);
-    TH1F* h_eshort = new TH1F("h_eshort", "Energy Short Distribution;Energy Short;Counts", 4096, 0, 65536);
-    for (const auto& ev : all_events) {
-        h_eshort->Fill(ev.energy_short);
-    }
-    h_eshort->Draw();
-
-    // Channel distribution
-    c1->cd(3);
-    TH1F* h_ch = new TH1F("h_ch", "Channel Distribution;Channel;Counts", 64, 0, 64);
-    for (const auto& ev : all_events) {
-        h_ch->Fill(ev.channel);
-    }
-    h_ch->Draw();
-
-    // Module distribution
-    c1->cd(4);
-    TH1F* h_mod = new TH1F("h_mod", "Module Distribution;Module;Counts", 32, 0, 32);
-    for (const auto& ev : all_events) {
-        h_mod->Fill(ev.module);
-    }
-    h_mod->Draw();
-
-    c1->Update();
-
-    // If we have waveforms, show one example
-    if (waveform_count > 0) {
-        // Find first event with waveform
-        const Event* wf_event = nullptr;
-        for (const auto& ev : all_events) {
-            if (ev.has_waveform && ev.waveform.has_data()) {
-                wf_event = &ev;
-                break;
-            }
-        }
-
-        if (wf_event) {
-            TCanvas* c2 = new TCanvas("c2", "Waveform Example", 800, 600);
-            c2->Divide(1, 2);
-
-            double ns_step = wf_event->waveform.ns_per_sample;
-            bool use_ns = (ns_step > 0.0);
-            const char* x_title = use_ns ? "Time (ns)" : "Sample";
-
-            // Analog probe 1
-            c2->cd(1);
-            const auto& ap1 = wf_event->waveform.analog_probe1;
-            if (!ap1.empty()) {
-                TGraph* g1 = new TGraph();
-                for (size_t i = 0; i < ap1.size(); i++) {
-                    double x = use_ns ? i * ns_step : i;
-                    g1->SetPoint(i, x, ap1[i]);
-                }
-                g1->SetTitle(Form("Analog Probe 1 (Mod%d/Ch%d, E=%d);%s;ADC",
-                                  wf_event->module, wf_event->channel, wf_event->energy, x_title));
-                g1->SetLineColor(kBlue);
-                g1->Draw("AL");
-            }
-
-            // Analog probe 2
-            c2->cd(2);
-            const auto& ap2 = wf_event->waveform.analog_probe2;
-            if (!ap2.empty()) {
-                TGraph* g2 = new TGraph();
-                for (size_t i = 0; i < ap2.size(); i++) {
-                    double x = use_ns ? i * ns_step : i;
-                    g2->SetPoint(i, x, ap2[i]);
-                }
-                g2->SetTitle(Form("Analog Probe 2 (Mod%d/Ch%d, E=%d);%s;ADC",
-                                  wf_event->module, wf_event->channel, wf_event->energy, x_title));
-                g2->SetLineColor(kRed);
-                g2->Draw("AL");
-            }
-
-            c2->Update();
-        }
-    }
-
-    std::cout << "\nHistograms created. Use ROOT interactive mode to explore." << std::endl;
+  std::cout << "\nHistograms created. Use ROOT interactive mode to explore."
+            << std::endl;
 }

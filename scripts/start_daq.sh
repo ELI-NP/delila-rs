@@ -260,7 +260,7 @@ COMP_NAMES+=("Monitor")
 COMP_PIDS+=($!)
 
 # Start online event builder (if configured and binary exists)
-if grep -q "\[network\.event_builder\]" "$CONFIG_FILE" 2>/dev/null; then
+if grep -q "^\[network\.event_builder\]" "$CONFIG_FILE" 2>/dev/null; then
     if [ -f "$BINARY_DIR/online_event_builder" ]; then
         echo "  Starting online event builder..."
         $BINARY_DIR/online_event_builder --config "$CONFIG_FILE" > "$LOG_DIR/event_builder.log" 2>&1 &
