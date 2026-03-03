@@ -1,0 +1,218 @@
+[
+  {
+    "section": "Core",
+    "name": "POLARITY",
+    "address": 0,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "OFFSET",
+    "address": 1,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "THRS",
+    "address": 2,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "TRIG_K",
+    "address": 3,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "TRIG_M",
+    "address": 4,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "TRAP_K",
+    "address": 5,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "TRAP_M",
+    "address": 6,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "DECONV_M",
+    "address": 7,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "TRAP_GAIN",
+    "address": 8,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "BL_LEN",
+    "address": 9,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "BL_INIB",
+    "address": 10,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "SAMPLE_POS",
+    "address": 11,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "RUN_CFG",
+    "address": 12,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "amax_trigger_and",
+    "address": 49162,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "en_trigger_and",
+    "address": 49163,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "WINDOW_MAXIM",
+    "address": 81920,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "Core",
+    "name": "time_start",
+    "address": 1310723,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "baseline_delay",
+    "address": 1441792,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "baseline_len",
+    "address": 1441793,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "baseline_offset",
+    "address": 1441794,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "AMAX_window",
+    "address": 1441795,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "AMAX_delay",
+    "address": 1441796,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "AMAX_len",
+    "address": 1441797,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "debug_maxim_value",
+    "address": 1441798,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "debug_amax_out",
+    "address": 1441799,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "debug_baseline",
+    "address": 1441800,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "rangee",
+    "address": 1441801,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  }
+]
