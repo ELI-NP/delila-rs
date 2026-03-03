@@ -301,6 +301,10 @@ struct ReaderCommandExt {
     rate_tracker: Arc<RateTracker>,
     /// Channel to delegate hardware requests to the read_loop's existing CaenHandle
     request_tx: std::sync::mpsc::Sender<ReadLoopRequest>,
+    /// Hardware-confirmed state (updated by ReadLoop after actual HW transitions).
+    /// GetStatus reports the minimum of software state and this value so that
+    /// the Operator doesn't proceed until hardware is truly ready.
+    hw_state: Arc<std::sync::Mutex<ComponentState>>,
 }
 
 impl CommandHandlerExt for ReaderCommandExt {
@@ -339,6 +343,17 @@ impl CommandHandlerExt for ReaderCommandExt {
             trigger_loss_count: trigger_loss,
             trigger_loss_rate: loss_rate,
         })
+    }
+
+    fn effective_state(&self, software_state: ComponentState) -> ComponentState {
+        let hw = *self.hw_state.lock().unwrap();
+        // Report the lesser of software and hardware state so Operator waits
+        // until hardware actually reaches the target state.
+        if state_rank(hw) < state_rank(software_state) {
+            hw
+        } else {
+            software_state
+        }
     }
 
     fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
@@ -873,6 +888,7 @@ impl Reader {
     /// Reads raw data from CAEN digitizer and sends to decode channel.
     /// Uses lazy connection: if the digitizer is not available at startup,
     /// the loop stays alive and retries connection on demand (Detect, Configure, etc.).
+    #[allow(clippy::too_many_arguments)]
     fn read_loop_raw(
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
@@ -881,6 +897,7 @@ impl Reader {
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
+        hw_state: Arc<std::sync::Mutex<ComponentState>>,
     ) -> Result<(), ReaderError> {
         info!(url = %config.url, "ReadLoop (RAW) starting");
 
@@ -933,43 +950,56 @@ impl Reader {
 
                 // Configure needed?
                 if target_rank >= state_rank(ComponentState::Configured) && !conn.hw_configured {
+                    // Reset digitizer to factory defaults first — ensures clean slate
+                    // regardless of prior state (e.g. CoMPASS register changes)
+                    match conn.handle.send_command("/cmd/reset") {
+                        Ok(()) => info!("Digitizer reset to factory defaults"),
+                        Err(e) => warn!(error = %e, "Digitizer reset failed (non-fatal)"),
+                    }
+
+                    // Re-configure endpoint after reset (/cmd/reset invalidates
+                    // activeendpoint and data format — read_data returns DISABLED without this)
+                    match conn.handle.configure_endpoint(include_n_events) {
+                        Ok(ep) => {
+                            conn.endpoint = ep;
+                            info!("Endpoint reconfigured after reset");
+                        }
+                        Err(e) => error!(error = %e, "Failed to reconfigure endpoint after reset"),
+                    }
+
                     if let Some(ref config_path) = config.config_file {
                         info!(path = %config_path, "Loading digitizer configuration");
                         match crate::config::digitizer::DigitizerConfig::load(config_path) {
                             Ok(dig_config) => match conn.handle.apply_config(&dig_config) {
                                 Ok(count) => {
                                     info!(count, "Digitizer configuration applied");
-                                    conn.hw_configured = true;
                                 }
                                 Err(e) => {
                                     warn!(error = %e, "Auto-configure from JSON failed — \
                                         awaiting Operator ApplyDigitizerConfig");
-                                    conn.hw_configured = true;
                                     conn.auto_config_failed = true;
                                 }
                             },
                             Err(e) => {
                                 error!(error = %e, path = %config_path, "Failed to load config file");
                                 // Mark as configured anyway — digitizer keeps its current settings
-                                conn.hw_configured = true;
                             }
                         }
                     } else {
                         info!("No config_file specified, using current digitizer settings");
-                        conn.hw_configured = true;
                     }
-                }
 
-                // ADC calibration needed? (DIG1 only, before Arm)
-                if target_rank >= state_rank(ComponentState::Armed)
-                    && conn.hw_configured
-                    && !conn.hw_armed
-                    && config.firmware.is_dig1()
-                {
-                    match conn.handle.send_command("/cmd/calibrateadc") {
-                        Ok(()) => info!("ADC calibration completed"),
-                        Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
+                    // ADC calibration (DIG1 only) — final Configure step, before
+                    // marking hw_configured. Prevents Arm delay / S_IN race.
+                    if config.firmware.is_dig1() {
+                        match conn.handle.send_command("/cmd/calibrateadc") {
+                            Ok(()) => info!("ADC calibration completed"),
+                            Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
+                        }
                     }
+
+                    conn.hw_configured = true;
+                    *hw_state.lock().unwrap() = ComponentState::Configured;
                 }
 
                 // Arm needed?
@@ -984,6 +1014,7 @@ impl Reader {
                             error!(error = %e, "Failed to arm digitizer");
                         }
                         conn.hw_armed = true;
+                        *hw_state.lock().unwrap() = ComponentState::Armed;
                     }
                 }
 
@@ -993,6 +1024,7 @@ impl Reader {
                         error!(error = %e, "Failed to start acquisition");
                     }
                     conn.hw_running = true;
+                    *hw_state.lock().unwrap() = ComponentState::Running;
                     // Reset DIG2 poll state for new run
                     dig2_poll.reset();
                 }
@@ -1047,6 +1079,7 @@ impl Reader {
                     let _ = conn.handle.send_command("/cmd/cleardata");
                     conn.hw_armed = false;
                     conn.hw_running = false;
+                    *hw_state.lock().unwrap() = ComponentState::Configured;
                 }
 
                 // Reset needed? (target is Idle, but we have armed/configured state)
@@ -1058,6 +1091,7 @@ impl Reader {
                     conn.hw_running = false;
                     conn.hw_configured = false;
                     conn.auto_config_failed = false;
+                    *hw_state.lock().unwrap() = ComponentState::Idle;
                 }
             }
 
@@ -1278,6 +1312,7 @@ impl Reader {
     /// Used for AMax/DPP_OPEN firmware.
     /// Uses lazy connection: if the digitizer is not available at startup,
     /// the loop stays alive and retries connection on demand (Detect, Configure, etc.).
+    #[allow(clippy::too_many_arguments)]
     fn read_loop_opendpp(
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
@@ -1286,6 +1321,7 @@ impl Reader {
         metrics: Arc<ReaderMetrics>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
+        hw_state: Arc<std::sync::Mutex<ComponentState>>,
     ) -> Result<(), ReaderError> {
         info!(url = %config.url, "ReadLoop (OpenDPP) starting");
 
@@ -1323,43 +1359,56 @@ impl Reader {
 
                 // Configure needed?
                 if target_rank >= state_rank(ComponentState::Configured) && !conn.hw_configured {
+                    // Reset digitizer to factory defaults first — ensures clean slate
+                    // regardless of prior state (e.g. CoMPASS register changes)
+                    match conn.handle.send_command("/cmd/reset") {
+                        Ok(()) => info!("Digitizer reset to factory defaults"),
+                        Err(e) => warn!(error = %e, "Digitizer reset failed (non-fatal)"),
+                    }
+
+                    // Re-configure endpoint after reset (/cmd/reset invalidates
+                    // activeendpoint and data format — read_data returns DISABLED without this)
+                    match conn.handle.configure_opendpp_endpoint(false) {
+                        Ok(ep) => {
+                            conn.endpoint = ep;
+                            info!("Endpoint reconfigured after reset");
+                        }
+                        Err(e) => error!(error = %e, "Failed to reconfigure endpoint after reset"),
+                    }
+
                     if let Some(ref config_path) = config.config_file {
                         info!(path = %config_path, "Loading digitizer configuration");
                         match crate::config::digitizer::DigitizerConfig::load(config_path) {
                             Ok(dig_config) => match conn.handle.apply_config(&dig_config) {
                                 Ok(count) => {
                                     info!(count, "Digitizer configuration applied");
-                                    conn.hw_configured = true;
                                 }
                                 Err(e) => {
                                     warn!(error = %e, "Auto-configure from JSON failed — \
                                         awaiting Operator ApplyDigitizerConfig");
-                                    conn.hw_configured = true;
                                     conn.auto_config_failed = true;
                                 }
                             },
                             Err(e) => {
                                 error!(error = %e, path = %config_path, "Failed to load config file");
                                 // Mark as configured anyway — digitizer keeps its current settings
-                                conn.hw_configured = true;
                             }
                         }
                     } else {
                         info!("No config_file specified, using current digitizer settings");
-                        conn.hw_configured = true;
                     }
-                }
 
-                // ADC calibration needed? (DIG1 only, before Arm)
-                if target_rank >= state_rank(ComponentState::Armed)
-                    && conn.hw_configured
-                    && !conn.hw_armed
-                    && config.firmware.is_dig1()
-                {
-                    match conn.handle.send_command("/cmd/calibrateadc") {
-                        Ok(()) => info!("ADC calibration completed"),
-                        Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
+                    // ADC calibration (DIG1 only) — final Configure step, before
+                    // marking hw_configured. Prevents Arm delay / S_IN race.
+                    if config.firmware.is_dig1() {
+                        match conn.handle.send_command("/cmd/calibrateadc") {
+                            Ok(()) => info!("ADC calibration completed"),
+                            Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
+                        }
                     }
+
+                    conn.hw_configured = true;
+                    *hw_state.lock().unwrap() = ComponentState::Configured;
                 }
 
                 // Arm needed?
@@ -1374,6 +1423,7 @@ impl Reader {
                             error!(error = %e, "Failed to arm digitizer");
                         }
                         conn.hw_armed = true;
+                        *hw_state.lock().unwrap() = ComponentState::Armed;
                     }
                 }
 
@@ -1383,6 +1433,7 @@ impl Reader {
                         error!(error = %e, "Failed to start acquisition");
                     }
                     conn.hw_running = true;
+                    *hw_state.lock().unwrap() = ComponentState::Running;
                 }
 
                 // Stop needed? (target dropped below Running)
@@ -1405,6 +1456,7 @@ impl Reader {
                     let _ = conn.handle.send_command("/cmd/cleardata");
                     conn.hw_armed = false;
                     conn.hw_running = false;
+                    *hw_state.lock().unwrap() = ComponentState::Configured;
                 }
 
                 // Reset needed? (target is Idle, but we have armed/configured state)
@@ -1416,6 +1468,7 @@ impl Reader {
                     conn.hw_running = false;
                     conn.hw_configured = false;
                     conn.auto_config_failed = false;
+                    *hw_state.lock().unwrap() = ComponentState::Idle;
                 }
             }
 
@@ -1935,6 +1988,12 @@ impl Reader {
         // Channel for delegating hardware requests (Detect/ApplyConfig) to the read_loop
         let (request_tx, request_rx) = std::sync::mpsc::channel::<ReadLoopRequest>();
 
+        // Hardware-confirmed state: ReadLoop updates this after actual HW transitions.
+        // GetStatus reports min(software_state, hw_state) so Operator waits until
+        // hardware is truly ready before proceeding (e.g. Start after Arm).
+        let hw_state = Arc::new(std::sync::Mutex::new(ComponentState::Idle));
+        let hw_state_for_read = hw_state.clone();
+
         // Spawn command handler task using common infrastructure
         let command_address = self.config.command_address.clone();
         let shared_state = self.shared_state.clone();
@@ -1954,6 +2013,7 @@ impl Reader {
                         metrics: metrics_for_cmd.clone(),
                         rate_tracker: rate_tracker_for_cmd.clone(),
                         request_tx: request_tx.clone(),
+                        hw_state: hw_state.clone(),
                     };
                     handle_command(state, tx, cmd, Some(&mut ext))
                 },
@@ -1983,6 +2043,7 @@ impl Reader {
                     read_metrics,
                     read_shutdown_clone,
                     request_rx,
+                    hw_state_for_read,
                 )
             } else {
                 info!("Using RAW endpoint for firmware {:?}", read_config.firmware);
@@ -1994,6 +2055,7 @@ impl Reader {
                     read_metrics,
                     read_shutdown_clone,
                     request_rx,
+                    hw_state_for_read,
                 )
             }
         });

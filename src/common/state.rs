@@ -87,6 +87,15 @@ pub trait CommandHandlerExt {
         None
     }
 
+    /// Return the effective state for GetStatus, considering hardware readiness.
+    ///
+    /// Components with async hardware (e.g. Reader with DIG1 ADC calibration)
+    /// can override this to report the actual hardware state rather than the
+    /// software target state. Default: returns `software_state` unchanged.
+    fn effective_state(&self, software_state: ComponentState) -> ComponentState {
+        software_state
+    }
+
     /// Called when UpdateEmulatorConfig command is received
     /// Only implemented by Emulator; other components return error
     fn on_update_emulator_config(&mut self, _config: &EmulatorRuntimeConfig) -> Result<(), String> {
@@ -255,10 +264,17 @@ pub fn handle_command<E: CommandHandlerExt>(
         }
 
         Command::GetStatus => {
-            let base_msg = if let Some(ref cfg) = state.run_config {
-                format!("State: {}, Run: {}", state.state, cfg.run_number)
+            // Use effective_state to let components report hardware-confirmed state
+            let reported_state = if let Some(ref e) = ext {
+                e.effective_state(state.state)
             } else {
-                format!("State: {}", state.state)
+                state.state
+            };
+
+            let base_msg = if let Some(ref cfg) = state.run_config {
+                format!("State: {}, Run: {}", reported_state, cfg.run_number)
+            } else {
+                format!("State: {}", reported_state)
             };
 
             let msg = if let Some(ref e) = ext {
@@ -271,7 +287,7 @@ pub fn handle_command<E: CommandHandlerExt>(
                 base_msg
             };
 
-            let mut resp = CommandResponse::success(state.state, msg);
+            let mut resp = CommandResponse::success(reported_state, msg);
             resp.run_number = state.run_number();
 
             // Add metrics if available
