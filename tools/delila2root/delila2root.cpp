@@ -1,5 +1,7 @@
 // delila2root — Convert .delila files to time-sorted ROOT TTree
 //
+// One event per TTree entry (scalar branches) for simple single-loop reading.
+//
 // Usage:
 //   ./delila2root -o output.root data/run0018_*.delila
 //
@@ -9,7 +11,6 @@
 //   3. Two-pointer merge with carry_over → TTree::Fill for safe events
 //   4. Carry unsafe tail to next iteration
 //
-// Performance: POD Event (24B), no heap allocations, no vector::erase
 // MsgPack parser adapted from macros/read_delila.C
 
 #include <TFile.h>
@@ -37,8 +38,6 @@ static constexpr size_t FOOTER_SIZE = 64;
 // ============================================================================
 // Data structures
 // ============================================================================
-
-// POD Event: 24 bytes, trivially copyable, cache-friendly for sorting
 struct Event {
     double timestamp_ns;   // 8B — sort key at offset 0
     uint64_t flags;        // 8B
@@ -133,14 +132,12 @@ class MsgPackParser {
         if (!read_float64(ts)) return false;
         if (!read_uint(fl)) return false;
 
-        // Skip waveform data if present (Phase 1: non-waveform only)
-        // Must skip before early return to keep parser position correct
+        // Skip waveform data if present
         if (ev_size == 7) {
             if (!skip_value()) return false;
         }
 
-        // Energy threshold filter — reject before push_back to avoid
-        // allocating, sorting, and merging events we'll discard anyway
+        // Energy threshold filter
         if (static_cast<uint16_t>(e) < energy_min_) {
             return true;
         }
@@ -389,48 +386,39 @@ static bool read_events_from_file(const std::string& path,
 }
 
 // ============================================================================
-// Chunked array buffer — reduces Fill() calls by CHUNK factor
+// Scalar output — one event per TTree entry
 // ============================================================================
-static constexpr int CHUNK = 8192;
-
-struct ChunkBuffer {
-    Int_t n = 0;
-    UChar_t mod[CHUNK], ch[CHUNK];
-    UShort_t energy[CHUNK], eshort[CHUNK];
-    Double_t timestamp[CHUNK];
-    ULong64_t flags[CHUNK];
+struct ScalarBuffer {
+    UChar_t mod;
+    UChar_t ch;
+    UShort_t energy;
+    UShort_t eshort;
+    Double_t timestamp;
+    ULong64_t flags;
 
     TTree* tree = nullptr;
     uint64_t total_written = 0;
 
     void add(const Event& ev) {
-        mod[n] = ev.module;
-        ch[n] = ev.channel;
-        energy[n] = ev.energy;
-        eshort[n] = ev.energy_short;
-        timestamp[n] = ev.timestamp_ns;
-        flags[n] = ev.flags;
-        n++;
-        if (n == CHUNK) flush();
-    }
-
-    void flush() {
-        if (n > 0) {
-            tree->Fill();
-            total_written += n;
-            n = 0;
-        }
+        mod = ev.module;
+        ch = ev.channel;
+        energy = ev.energy;
+        eshort = ev.energy_short;
+        timestamp = ev.timestamp_ns;
+        flags = ev.flags;
+        tree->Fill();
+        total_written++;
     }
 };
 
 // ============================================================================
-// Two-pointer merge: carry_over × file_events → chunked Fill + next carry_over
+// Two-pointer merge: carry_over × file_events → Fill + next carry_over
 // ============================================================================
 static void merge_and_flush(
     std::vector<Event>& carry_over,
     const std::vector<Event>& file_events,
     double safe_threshold,
-    ChunkBuffer& buf) {
+    ScalarBuffer& buf) {
 
     auto it_c = carry_over.cbegin();
     auto it_c_end = carry_over.cend();
@@ -554,7 +542,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ========================================================================
-    // Phase 2: Set up ROOT output with LZ4 compression
+    // Phase 2: Set up ROOT output with LZ4 compression (scalar branches)
     // ========================================================================
     TFile* fout = TFile::Open(output_file.c_str(), "RECREATE");
     if (!fout || fout->IsZombie()) {
@@ -567,17 +555,15 @@ int main(int argc, char* argv[]) {
     TTree* tree = new TTree(tree_name.c_str(), "DELILA Data (time-sorted)");
     tree->SetAutoFlush(1000000);
 
-    ChunkBuffer buf;
+    ScalarBuffer buf;
     buf.tree = tree;
 
-    static constexpr int kBasketSize = 1024 * 1024;  // 1 MB
-    tree->Branch("n", &buf.n, "n/I");
-    tree->Branch("Mod", buf.mod, "Mod[n]/b", kBasketSize);
-    tree->Branch("Ch", buf.ch, "Ch[n]/b", kBasketSize);
-    tree->Branch("Energy", buf.energy, "Energy[n]/s", kBasketSize);
-    tree->Branch("EnergyShort", buf.eshort, "EnergyShort[n]/s", kBasketSize);
-    tree->Branch("Timestamp", buf.timestamp, "Timestamp[n]/D", kBasketSize);
-    tree->Branch("Flags", buf.flags, "Flags[n]/l", kBasketSize);
+    tree->Branch("Mod", &buf.mod, "Mod/b");
+    tree->Branch("Ch", &buf.ch, "Ch/b");
+    tree->Branch("Energy", &buf.energy, "Energy/s");
+    tree->Branch("EnergyShort", &buf.eshort, "EnergyShort/s");
+    tree->Branch("Timestamp", &buf.timestamp, "Timestamp/D");
+    tree->Branch("Flags", &buf.flags, "Flags/l");
 
     // ========================================================================
     // Phase 3: Per-file sort + two-pointer merge
@@ -614,7 +600,7 @@ int main(int argc, char* argv[]) {
             threshold = std::numeric_limits<double>::max();
         }
 
-        // (d) Two-pointer merge: carry_over × file_events → chunked Fill
+        // (d) Two-pointer merge: carry_over × file_events → Fill
         merge_and_flush(carry_over, file_events, threshold, buf);
     }
 
@@ -626,7 +612,6 @@ int main(int argc, char* argv[]) {
         merge_and_flush(
             carry_over, empty, std::numeric_limits<double>::max(), buf);
     }
-    buf.flush();  // write remaining partial chunk
     uint64_t total_written = buf.total_written;
 
     // ========================================================================
