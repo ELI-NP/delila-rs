@@ -65,7 +65,7 @@ interface RunHistoryItem {
       } @else if (runs().length === 0) {
         <p class="no-data">No runs found.</p>
       } @else {
-        <table mat-table [dataSource]="sortedRuns()" multiTemplateDataRows matSort (matSortChange)="onSortChange($event)" class="runs-table">
+        <table mat-table [dataSource]="sortedRuns()" multiTemplateDataRows matSort matSortActive="start_time" matSortDirection="desc" (matSortChange)="onSortChange($event)" class="runs-table">
           <ng-container matColumnDef="run_number">
             <th mat-header-cell *matHeaderCellDef mat-sort-header>Run#</th>
             <td mat-cell *matCellDef="let run">{{ run.run_number }}</td>
@@ -366,7 +366,7 @@ export class RunsPageComponent implements OnInit {
   readonly configLoading = signal(false);
   readonly loading = signal(false);
   readonly selectedConfigIdx = signal(0);
-  readonly sortState = signal<Sort>({ active: 'run_number', direction: 'desc' });
+  readonly sortState = signal<Sort>({ active: 'start_time', direction: 'desc' });
 
   displayedColumns = ['run_number', 'comment', 'start_time', 'end_time', 'duration'];
 

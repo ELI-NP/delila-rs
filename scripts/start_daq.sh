@@ -48,7 +48,23 @@ for proc in operator monitor recorder merger reader emulator data_sink online_ev
 done
 if [ "$KILLED" = true ]; then
     echo -e "${YELLOW}Killed leftover DAQ processes from previous session${NC}"
-    sleep 1
+    # Wait for processes to actually exit (up to 5s), then force kill
+    for i in $(seq 1 10); do
+        STILL_RUNNING=false
+        for proc in operator monitor recorder merger reader emulator data_sink online_event_builder; do
+            if pgrep -f "target/release/$proc" &>/dev/null; then
+                STILL_RUNNING=true
+                break
+            fi
+        done
+        [ "$STILL_RUNNING" = false ] && break
+        sleep 0.5
+    done
+    # Force kill any remaining stragglers
+    for proc in operator monitor recorder merger reader emulator data_sink online_event_builder; do
+        pkill -9 -f "target/release/$proc" 2>/dev/null
+    done
+    sleep 0.5  # brief wait for kernel to release sockets after SIGKILL
 fi
 
 # MongoDB configuration
