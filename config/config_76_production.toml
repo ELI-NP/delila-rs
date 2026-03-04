@@ -9,7 +9,7 @@ port = 9091
 # =============================================================================
 # Network Topology
 # =============================================================================
-# Port auto-allocation: data = 6000 + id, command = 6100 + id
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
 
 [network]
 

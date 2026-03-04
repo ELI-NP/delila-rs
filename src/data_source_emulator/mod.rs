@@ -795,8 +795,8 @@ mod tests {
     #[test]
     fn test_config_custom() {
         let config = EmulatorConfig {
-            address: "tcp://*:6000".to_string(),
-            command_address: "tcp://*:6001".to_string(),
+            address: "tcp://*:7000".to_string(),
+            command_address: "tcp://*:7001".to_string(),
             source_id: 42,
             events_per_batch: 200,
             batch_interval_ms: 50,

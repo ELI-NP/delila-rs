@@ -581,9 +581,9 @@ mod tests {
     #[test]
     fn custom_config() {
         let config = MergerConfig {
-            sub_addresses: vec!["tcp://localhost:6000".to_string()],
-            pub_address: "tcp://*:6001".to_string(),
-            command_address: "tcp://*:6002".to_string(),
+            sub_addresses: vec!["tcp://localhost:7000".to_string()],
+            pub_address: "tcp://*:7001".to_string(),
+            command_address: "tcp://*:7002".to_string(),
         };
         assert_eq!(config.sub_addresses.len(), 1);
     }

@@ -181,11 +181,11 @@ pub struct NetworkConfig {
 }
 
 fn default_port_base_data() -> u16 {
-    6000
+    7000
 }
 
 fn default_port_base_command() -> u16 {
-    6100
+    7100
 }
 
 fn default_cluster_name() -> String {
@@ -374,7 +374,7 @@ impl SourceNetworkConfig {
         self.resolve_address(&self.command_address_with_base(port_base))
     }
 
-    /// Get the data connect address for Merger to subscribe to this Reader (legacy, uses 6000 base).
+    /// Get the data connect address for Merger to subscribe to this Reader (legacy, uses 7000 base).
     pub fn data_connect_address(&self) -> String {
         self.resolve_address(&self.data_address(default_port_base_data()))
     }
@@ -1147,10 +1147,10 @@ type = "psd2"
         let config = Config::from_toml(toml).unwrap();
         let source = &config.network.sources[0];
 
-        // bind is None → auto-allocate from port_base_data (6000) + id (3)
+        // bind is None → auto-allocate from port_base_data (7000) + id (3)
         assert!(source.bind.is_none());
-        assert_eq!(source.data_address(6000), "tcp://*:6003");
-        assert_eq!(source.command_address_with_base(6100), "tcp://*:6103");
+        assert_eq!(source.data_address(7000), "tcp://*:7003");
+        assert_eq!(source.command_address_with_base(7100), "tcp://*:7103");
     }
 
     #[test]
@@ -1168,8 +1168,8 @@ command = "tcp://*:8888"
         let source = &config.network.sources[0];
 
         // Explicit bind/command override auto-allocation
-        assert_eq!(source.data_address(6000), "tcp://*:9999");
-        assert_eq!(source.command_address_with_base(6100), "tcp://*:8888");
+        assert_eq!(source.data_address(7000), "tcp://*:9999");
+        assert_eq!(source.command_address_with_base(7100), "tcp://*:8888");
     }
 
     #[test]
@@ -1240,7 +1240,7 @@ publish = "tcp://*:5557"
 [network]
 "#;
         let config = Config::from_toml(toml).unwrap();
-        assert_eq!(config.network.port_base_data, 6000);
-        assert_eq!(config.network.port_base_command, 6100);
+        assert_eq!(config.network.port_base_data, 7000);
+        assert_eq!(config.network.port_base_command, 7100);
     }
 }

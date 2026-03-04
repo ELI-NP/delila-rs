@@ -175,12 +175,12 @@ mod tests {
             "--source-id",
             "2",
             "--address",
-            "tcp://*:6000",
+            "tcp://*:7000",
         ])
         .unwrap();
         assert_eq!(args.common.config_file, "custom.toml");
         assert_eq!(args.source_id, Some(2));
-        assert_eq!(args.address, Some("tcp://*:6000".to_string()));
+        assert_eq!(args.address, Some("tcp://*:7000".to_string()));
     }
 
     #[test]
