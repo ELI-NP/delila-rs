@@ -11,6 +11,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
+| **1** | [44_a3818_open_fix.md](44_a3818_open_fix.md) | **✅ 完了** | A3818 scheduling-while-atomic 修正 (spin_lock→mutex) + Reader 再接続バックオフ, 76デプロイ済 |
 | **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **📋 計画中** | 3月MVP: PHA1統合 + EB オンライン化 + Grafana + 運用改善 |
 | **1** | [event-builder/38_eb_unification_mimalloc.md](event-builder/38_eb_unification_mimalloc.md) | **🔧 Phase 0-3 完了** | EB 統一パイプライン: Phase 0-3 完了 (source.rs, pipeline.rs, CLI rewrite)。Phase 4 (Online 移行) + Phase 5 (レガシー削除) が残り ([計画](../.claude/plans/fuzzy-twirling-journal.md)) |
 | **2** | [37_grafana_monitoring.md](37_grafana_monitoring.md) | **📋 計画完了** | Grafana モニタリング: InfluxDB v3 Core + チャンネル別レート ([設計書](../docs/plans/grafana_monitoring.md)) |

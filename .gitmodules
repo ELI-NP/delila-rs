@@ -4,3 +4,6 @@
 [submodule "external/caen-dig2"]
 	path = external/caen-dig2
 	url = https://github.com/aogaki/caen-dig2.git
+[submodule "external/caen-a3818-driver"]
+	path = external/caen-a3818-driver
+	url = git@github.com:aogaki/caen-a3818-driver.git

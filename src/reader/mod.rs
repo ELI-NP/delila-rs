@@ -21,6 +21,7 @@ use crate::common::{
     EventData as CommonEventData, EventDataBatch, Message, Waveform as CommonWaveform,
 };
 use futures::SinkExt;
+use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -681,8 +682,25 @@ fn state_rank(s: ComponentState) -> u8 {
     }
 }
 
-/// Reconnection cooldown interval
-const RECONNECT_COOLDOWN: Duration = Duration::from_millis(1000);
+/// Reconnection backoff parameters.
+/// Exponential backoff (1s→2s→4s→8s→16s→max 30s) + random jitter (±500ms)
+/// prevents Thundering Herd when multiple readers reconnect simultaneously
+/// after an optical link failure.
+const RECONNECT_INITIAL: Duration = Duration::from_millis(1000);
+const RECONNECT_MAX: Duration = Duration::from_millis(30000);
+const RECONNECT_JITTER_MS: u64 = 500;
+
+/// Compute next reconnect cooldown with exponential backoff + jitter.
+/// Returns the jittered cooldown and the next (doubled) base for the caller to store.
+fn next_reconnect_cooldown(current_base: Duration) -> (Duration, Duration) {
+    let jitter_ms = rand::thread_rng().gen_range(0..=RECONNECT_JITTER_MS * 2);
+    let jittered = current_base
+        .checked_add(Duration::from_millis(jitter_ms))
+        .unwrap_or(RECONNECT_MAX)
+        .min(RECONNECT_MAX + Duration::from_millis(RECONNECT_JITTER_MS));
+    let next_base = (current_base * 2).min(RECONNECT_MAX);
+    (jittered, next_base)
+}
 
 /// Send firmware-specific arm command to the digitizer.
 ///
@@ -906,6 +924,7 @@ impl Reader {
         // Lazy connection: try initial connect (non-fatal)
         let mut connection = try_connect_raw(&config.url, include_n_events);
         let mut last_connect_attempt = Instant::now();
+        let mut reconnect_backoff = RECONNECT_INITIAL;
 
         // Pre-allocate reusable read buffer.
         // CAEN FELib does NOT check buffer bounds — undersized buffers cause SIGBUS.
@@ -934,10 +953,23 @@ impl Reader {
                 break;
             }
 
-            // --- Connection management: periodic retry when disconnected ---
-            if connection.is_none() && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN {
-                last_connect_attempt = Instant::now();
-                connection = try_connect_raw(&config.url, include_n_events);
+            // --- Connection management: periodic retry with exponential backoff ---
+            if connection.is_none() {
+                let (cooldown, next_base) = next_reconnect_cooldown(reconnect_backoff);
+                if last_connect_attempt.elapsed() > cooldown {
+                    last_connect_attempt = Instant::now();
+                    connection = try_connect_raw(&config.url, include_n_events);
+                    if connection.is_some() {
+                        info!("Reconnected successfully, resetting backoff");
+                        reconnect_backoff = RECONNECT_INITIAL;
+                    } else {
+                        warn!(
+                            backoff_ms = next_base.as_millis() as u64,
+                            "Reconnect failed, increasing backoff"
+                        );
+                        reconnect_backoff = next_base;
+                    }
+                }
             }
 
             // Get target state from Operator
@@ -1328,6 +1360,7 @@ impl Reader {
         // Lazy connection: try initial connect (non-fatal)
         let mut connection = try_connect_opendpp(&config.url);
         let mut last_connect_attempt = Instant::now();
+        let mut reconnect_backoff = RECONNECT_INITIAL;
 
         // Buffer for user info words
         let mut user_info_buffer = [0u64; 16];
@@ -1343,10 +1376,23 @@ impl Reader {
                 break;
             }
 
-            // --- Connection management: periodic retry when disconnected ---
-            if connection.is_none() && last_connect_attempt.elapsed() > RECONNECT_COOLDOWN {
-                last_connect_attempt = Instant::now();
-                connection = try_connect_opendpp(&config.url);
+            // --- Connection management: periodic retry with exponential backoff ---
+            if connection.is_none() {
+                let (cooldown, next_base) = next_reconnect_cooldown(reconnect_backoff);
+                if last_connect_attempt.elapsed() > cooldown {
+                    last_connect_attempt = Instant::now();
+                    connection = try_connect_opendpp(&config.url);
+                    if connection.is_some() {
+                        info!("Reconnected successfully, resetting backoff");
+                        reconnect_backoff = RECONNECT_INITIAL;
+                    } else {
+                        warn!(
+                            backoff_ms = next_base.as_millis() as u64,
+                            "Reconnect failed, increasing backoff"
+                        );
+                        reconnect_backoff = next_base;
+                    }
+                }
             }
 
             // Get target state from Operator

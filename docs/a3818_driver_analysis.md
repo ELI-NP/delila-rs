@@ -42,7 +42,7 @@ s->pos_app_dma_in[opt_link][slave] += pkt_sz * 2;
 波形データ付き（512サンプル）の場合、閾値は **~10K events/s** まで低下する。
 
 **実測シナリオ:**
-- PSD2 で 700K events/s → 100ms リードアウトで約 1.4MB → 1MB バッファを **40% 超過**
+- PSD1 で 700K events/s → 100ms リードアウトで約 1.4MB → 1MB バッファを **40% 超過**
 - vmalloc はガードページを持つため、1MB を超えた memcpy → ページフォルト
 - 割り込みコンテキスト内のページフォルトは **即座にカーネルパニック**
 
@@ -149,6 +149,52 @@ if (!startDMA) ENABLE_RX_INT(opt_link);
 ```
 
 PCIe デバイスが応答しない状態（0xFFFFFFFF = デバイス消失）で writel すると MCE → カーネルパニック。
+
+### Bug 7: [CRITICAL] `a3818_open()` の spin_lock + msleep → scheduling while atomic
+
+**場所:** `a3818_open()` (a3818.c:784-790)
+**発見日:** 2026-03-05
+**発見契機:** 172.18.4.76 が 2026-03-04 17:54 にフリーズ。翌日の再起動でも segfault。
+
+```c
+if( s->TypeOfBoard == A3818BOARD ) {
+    if (!s->GTPReset) {
+        spin_lock( &s->CardLock);                      // ★ preempt_count += 1
+        if (a3818_reset_onopen(s) == A3818_OK)         // ★ 内部で msleep(10) + msleep(1)!
+            s->GTPReset = 1;
+        spin_unlock( &s->CardLock);
+    }
+}
+```
+
+**メカニズム:**
+- `spin_lock()` は preemption を無効化する (preempt_count > 0 → "atomic" コンテキスト)
+- `a3818_reset_onopen()` 内で `msleep(10)` + `msleep(1)` を呼ぶ
+- `msleep()` → `schedule()` → カーネルが preempt_count > 0 を検出 → `BUG: scheduling while atomic`
+- さらに `spin_lock` (IRQ 無効化なし) なので、同一 CPU で IRQ が発火すると CardLock デッドロック
+
+**再現シナリオ (再接続ストーム):**
+1. A3818 光リンク一時障害 → 10/12 Reader が同時に CAEN error -6
+2. 30s トランジエントエラーリトライ失敗 → 全 Reader が Error 遷移 → connection = None
+3. 1 秒間隔の再接続ループで全 Reader が `a3818_open()` → `spin_lock` + `msleep` を並列実行
+4. `BUG: scheduling while atomic` → workqueue CPU hogging → RT throttling → システムフリーズ
+
+**実測データ (2026-03-05 dmesg):**
+```
+BUG: scheduling while atomic: tokio-runtime-w/26020/0x00000002
+ a3818_open+0x176/0x3d0 [a3818]
+BUG: scheduling while atomic: tokio-runtime-w/26050/0x00000002
+ a3818_open+0x176/0x3d0 [a3818]
+BUG: scheduling while atomic: tokio-runtime-w/26085/0x00000002
+ ...
+a3818: rcv-pkt: Timeout on RX -> Link 0  (6回、回復せず)
+```
+
+**修正:** `v1.6.12-delila2` で対応
+- `CardLock` (spinlock) → 専用 `GTPResetMutex` (mutex) に変更
+- Mutex はスリープ可能 → `msleep` が安全に呼べる
+- IRQ ハンドラは `CardLock` を使い続ける (変更なし)
+- Double-checked locking で GTPReset の一回限り実行を保証
 
 ### Bug 6: [LOW] `a3818_mmiowb()` が空定義
 
