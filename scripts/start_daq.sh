@@ -5,7 +5,7 @@
 # Options:
 #   --no-mongo    Skip MongoDB/Docker startup
 
-CONFIG_FILE="config/config_psd1_test.toml"
+CONFIG_FILE="config.toml"
 BINARY_DIR="./target/release"
 SKIP_MONGO=false
 

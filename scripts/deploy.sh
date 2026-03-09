@@ -64,7 +64,8 @@ rsync -avz --progress \
     --exclude '/.git' \
     --exclude '/data' \
     --exclude '/logs' \
-    --exclude '/node_modules' \
+    --exclude 'node_modules' \
+    --exclude '.angular' \
     --exclude '/DELILA2' \
     --exclude '/legacy' \
     --exclude '/.claude' \

@@ -367,6 +367,7 @@ impl RunRepository {
     pub async fn get_runs_by_experiment(
         &self,
         exp_name: &str,
+        limit: i64,
     ) -> Result<Vec<RunDocument>, RepositoryError> {
         use futures::TryStreamExt;
 
@@ -374,6 +375,7 @@ impl RunRepository {
             .collection
             .find(doc! { "exp_name": exp_name })
             .sort(doc! { "start_time": -1 })
+            .limit(limit)
             .await?;
 
         let runs: Vec<RunDocument> = cursor.try_collect().await?;

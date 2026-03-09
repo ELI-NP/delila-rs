@@ -24,6 +24,7 @@ devtree.json
 
 # AMax
 TrapezoidalfilterMCA_dpp_tests
+AMAX_firmware32_channel_4input_caenlist
 
 # Compiled binaries
 tools/delila2root/delila2root
@@ -33,3 +34,4 @@ __pycache__/
 *.root
 
 tmp
+memo*

@@ -107,7 +107,7 @@ pub(super) async fn get_run_config_snapshot(
     Ok(Json(snapshot.digitizer_configs))
 }
 
-/// Get recent run history
+/// Get recent run history (filtered by current experiment name)
 #[utoipa::path(
     get,
     path = "/api/runs",
@@ -136,15 +136,20 @@ pub(super) async fn get_run_history(
         .and_then(|s| s.parse().ok())
         .unwrap_or(50);
 
-    let runs = repo.get_recent_runs(limit).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error(format!(
-                "Failed to get run history: {}",
-                e
-            ))),
-        )
-    })?;
+    let exp_name = &state.config.experiment_name;
+
+    let runs = repo
+        .get_runs_by_experiment(exp_name, limit)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to get run history: {}",
+                    e
+                ))),
+            )
+        })?;
 
     Ok(Json(runs.into_iter().map(Into::into).collect()))
 }
