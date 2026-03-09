@@ -1362,8 +1362,8 @@ impl Reader {
         let mut last_connect_attempt = Instant::now();
         let mut reconnect_backoff = RECONNECT_INITIAL;
 
-        // Buffer for user info words
-        let mut user_info_buffer = [0u64; 16];
+        // Buffer for user info words (FW caenlist max len = 1024)
+        let mut user_info_buffer = [0u64; 1024];
 
         // Track consecutive read errors for retry logic (same as RAW loop)
         let mut read_error_since: Option<Instant> = None;

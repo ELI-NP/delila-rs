@@ -3,6 +3,7 @@ name = "amax_viewer"
 version = "0.1.0"
 edition = "2021"
 description = "AMax Firmware Development Tool - 2D Histogram Viewer"
+default-run = "amax_viewer"
 
 [dependencies]
 # GUI
@@ -14,6 +15,9 @@ delila-rs = { path = "../.." }
 
 # Async runtime for potential future use
 tokio = { version = "1", features = ["rt", "macros"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
 
 # Error handling
 anyhow = "1"

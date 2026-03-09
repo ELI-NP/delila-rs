@@ -51,6 +51,7 @@ name = "amax_viewer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "delila-rs",
  "dirs",
  "eframe",

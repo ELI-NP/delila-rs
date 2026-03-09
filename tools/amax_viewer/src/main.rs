@@ -3,6 +3,7 @@
 //! Real-time parameter adjustment and histogram viewer for AMax (user_info[0]) vs Energy.
 //! Register definitions are loaded from register_defs.json (JSON-driven UI).
 
+use clap::Parser;
 use delila_rs::reader::CaenHandle;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints};
@@ -14,6 +15,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+#[derive(Parser, Debug)]
+#[command(about = "AMax Viewer - Firmware Development Tool")]
+struct Args {
+    /// Start in Test Pulse mode (use digitizer internal test pulse)
+    #[arg(short = 't', long)]
+    test_pulse: bool,
+}
 
 // Default register definitions embedded at compile time.
 // User can override by editing dirs::config_dir()/amax_viewer/register_defs.json
@@ -47,7 +56,11 @@ struct EventBuffer {
     user_info_1: Vec<i64>,
     user_info_2: Vec<i64>,
     user_info_3: Vec<i64>,
+    waveform: Vec<Vec<i32>>,
+    waveform_size: Vec<i32>,
 }
+
+const MAX_BUFFER_BYTES: usize = 10 * 1_073_741_824; // 10 GB
 
 impl EventBuffer {
     fn push(
@@ -60,6 +73,7 @@ impl EventBuffer {
         flags_b: u16,
         psd: u16,
         user_info: &[u64],
+        waveform: Option<&[u16]>,
     ) {
         self.channel.push(channel as i32);
         self.energy.push(energy as i32);
@@ -72,6 +86,16 @@ impl EventBuffer {
         self.user_info_1.push(*user_info.get(1).unwrap_or(&0) as i64);
         self.user_info_2.push(*user_info.get(2).unwrap_or(&0) as i64);
         self.user_info_3.push(*user_info.get(3).unwrap_or(&0) as i64);
+        match waveform {
+            Some(wf) => {
+                self.waveform_size.push(wf.len() as i32);
+                self.waveform.push(wf.iter().map(|&v| v as i32).collect());
+            }
+            None => {
+                self.waveform_size.push(0);
+                self.waveform.push(Vec::new());
+            }
+        }
     }
 
     fn len(&self) -> usize {
@@ -90,6 +114,22 @@ impl EventBuffer {
         self.user_info_1.clear();
         self.user_info_2.clear();
         self.user_info_3.clear();
+        self.waveform.clear();
+        self.waveform_size.clear();
+    }
+
+    /// Estimated memory usage in bytes
+    fn estimated_memory_bytes(&self) -> usize {
+        let n = self.len();
+        // Scalar fields: i32×7 + i64×5 = 68 bytes per event
+        let scalar = n * 68;
+        // Waveform: Vec overhead (24 bytes) + data (4 bytes per sample)
+        let wf: usize = self
+            .waveform
+            .iter()
+            .map(|w| 24 + w.len() * 4)
+            .sum();
+        scalar + wf
     }
 
     /// Write all events to ROOT file
@@ -112,6 +152,8 @@ impl EventBuffer {
         tree.new_branch("user_info_1", self.user_info_1.clone().into_iter());
         tree.new_branch("user_info_2", self.user_info_2.clone().into_iter());
         tree.new_branch("user_info_3", self.user_info_3.clone().into_iter());
+        tree.new_branch("waveform", self.waveform.clone().into_iter());
+        tree.new_branch("waveform_size", self.waveform_size.clone().into_iter());
 
         tree.write(&mut file)?;
         file.close()?;
@@ -331,6 +373,36 @@ fn colormap(t: f32) -> egui::Color32 {
     }
 }
 
+/// Test pulse parameters (all SetInRun=true, can be changed during acquisition)
+#[derive(Clone)]
+struct TestPulseParams {
+    period_ns: u32,     // TestPulsePeriod [ns]
+    width_ns: u32,      // TestPulseWidth [ns]
+    low_level: u32,     // TestPulseLowLevel [ADC count]
+    high_level: u32,    // TestPulseHighLevel [ADC count]
+}
+
+impl Default for TestPulseParams {
+    fn default() -> Self {
+        Self {
+            period_ns: 1_000_000,  // 1ms = 1kHz
+            width_ns: 10,          // 10 ns
+            low_level: 1000,
+            high_level: 3000,
+        }
+    }
+}
+
+impl TestPulseParams {
+    fn frequency_hz(&self) -> f64 {
+        if self.period_ns == 0 {
+            0.0
+        } else {
+            1.0e9 / self.period_ns as f64
+        }
+    }
+}
+
 /// Shared state between GUI and acquisition thread
 struct SharedState {
     histogram: Histogram2D,
@@ -346,6 +418,14 @@ struct SharedState {
     event_buffer: EventBuffer,
     recording: bool,
     recorded_count: usize,
+    /// Test pulse params — GUI writes, acq thread reads and applies via SetInRun
+    test_pulse_params: TestPulseParams,
+    /// Set to true by GUI when test_pulse_params changed; cleared by acq thread after applying
+    test_pulse_params_dirty: bool,
+    /// Runtime test pulse toggle state
+    test_pulse_active: bool,
+    /// Set to true by GUI when test_pulse_active toggled; cleared by acq thread after applying
+    test_pulse_toggle_requested: bool,
 }
 
 struct AmaxViewerApp {
@@ -356,10 +436,12 @@ struct AmaxViewerApp {
     texture: Option<egui::TextureHandle>,
     output_path: String,
     register_defs: Vec<RegisterDef>,
+    test_pulse: bool,
+    was_recording: bool,
 }
 
 impl AmaxViewerApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>, test_pulse: bool) -> Self {
         let settings = AppSettings::load();
         let register_defs = load_register_defs();
         let param_values = init_param_values(&register_defs, &settings.param_values);
@@ -370,7 +452,11 @@ impl AmaxViewerApp {
             running: false,
             event_rate: 0.0,
             connected: false,
-            status_message: "Not connected".to_string(),
+            status_message: if test_pulse {
+                "Test Pulse mode — Not connected".to_string()
+            } else {
+                "Not connected".to_string()
+            },
             waveform_buffer: vec![0u16; 8192],
             waveform_len: 0,
             latest_waveform_energy: 0,
@@ -378,6 +464,10 @@ impl AmaxViewerApp {
             event_buffer: EventBuffer::default(),
             recording: false,
             recorded_count: 0,
+            test_pulse_params: TestPulseParams::default(),
+            test_pulse_params_dirty: false,
+            test_pulse_active: test_pulse,
+            test_pulse_toggle_requested: false,
         }));
 
         Self {
@@ -388,6 +478,8 @@ impl AmaxViewerApp {
             texture: None,
             output_path: settings.output_path,
             register_defs,
+            test_pulse,
+            was_recording: false,
         }
     }
 
@@ -401,9 +493,10 @@ impl AmaxViewerApp {
         let shutdown = self.shutdown.clone();
         let url = self.url.clone();
         let register_defs = self.register_defs.clone();
+        let test_pulse = self.test_pulse;
 
         self.acq_thread = Some(thread::spawn(move || {
-            acquisition_thread(url, shared, shutdown, register_defs);
+            acquisition_thread(url, shared, shutdown, register_defs, test_pulse);
         }));
     }
 
@@ -427,10 +520,21 @@ impl eframe::App for AmaxViewerApp {
             .min_width(250.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                let mut state = self.shared.lock().unwrap();
+
+                if state.test_pulse_active {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("TEST PULSE MODE")
+                            .color(egui::Color32::from_rgb(255, 100, 0))
+                            .heading()
+                            .strong(),
+                    );
+                    ui.add_space(4.0);
+                }
+
                 ui.heading("Connection");
                 ui.text_edit_singleline(&mut self.url);
-
-                let mut state = self.shared.lock().unwrap();
 
                 ui.horizontal(|ui| {
                     if state.running {
@@ -447,9 +551,141 @@ impl eframe::App for AmaxViewerApp {
                     }
                 });
 
+                // Test Pulse toggle (runtime)
+                {
+                    let prev = state.test_pulse_active;
+                    ui.checkbox(&mut state.test_pulse_active, "Test Pulse");
+                    if state.test_pulse_active != prev {
+                        state.test_pulse_toggle_requested = true;
+                    }
+                }
+
                 ui.label(format!("Status: {}", state.status_message));
                 ui.label(format!("Events: {}", state.histogram.total_events));
                 ui.label(format!("Rate: {:.1} Hz", state.event_rate));
+
+                // Test Pulse parameters (shown only when active)
+                if state.test_pulse_active {
+                    ui.separator();
+                    egui::CollapsingHeader::new("Test Pulse Settings")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            let mut changed = false;
+
+                            ui.horizontal(|ui| {
+                                ui.label("Period:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut state.test_pulse_params.period_ns)
+                                            .range(1000..=1_000_000_000u32)
+                                            .suffix(" ns"),
+                                    )
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                                ui.label(format!(
+                                    "({:.1} Hz)",
+                                    state.test_pulse_params.frequency_hz()
+                                ));
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Width:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut state.test_pulse_params.width_ns)
+                                            .range(100..=1_000_000_000u32)
+                                            .suffix(" ns"),
+                                    )
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Low Level:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(
+                                            &mut state.test_pulse_params.low_level,
+                                        )
+                                        .range(0..=65535u32)
+                                        .suffix(" ADC"),
+                                    )
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("High Level:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(
+                                            &mut state.test_pulse_params.high_level,
+                                        )
+                                        .range(0..=65535u32)
+                                        .suffix(" ADC"),
+                                    )
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                            });
+
+                            if changed {
+                                state.test_pulse_params_dirty = true;
+                            }
+
+                            if state.running {
+                                ui.label(
+                                    egui::RichText::new("Changes apply immediately (SetInRun)")
+                                        .small()
+                                        .weak(),
+                                );
+                            }
+                        });
+                }
+
+                ui.separator();
+                ui.heading("ROOT Output");
+
+                ui.horizontal(|ui| {
+                    ui.label("File:");
+                    ui.text_edit_singleline(&mut self.output_path);
+                });
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut state.recording, "Record");
+                    let mem_mb =
+                        state.event_buffer.estimated_memory_bytes() as f64 / (1024.0 * 1024.0);
+                    ui.label(format!(
+                        "({} events, {:.1} MB)",
+                        state.recorded_count, mem_mb
+                    ));
+                });
+
+                // Auto-save: when DAQ stops with data, or when user unchecks Record
+                let is_recording = state.recording && state.running;
+                if self.was_recording && !is_recording && state.recorded_count > 0 {
+                    match state.event_buffer.write_root(&self.output_path) {
+                        Ok(n) => {
+                            state.status_message =
+                                format!("Saved {} events to {}", n, self.output_path);
+                            eprintln!("Auto-saved {} events to {}", n, self.output_path);
+                            state.event_buffer.clear();
+                            state.recorded_count = 0;
+                        }
+                        Err(e) => {
+                            state.status_message = format!("Save failed: {}", e);
+                            eprintln!("Auto-save failed: {}", e);
+                        }
+                    }
+                }
+                self.was_recording = is_recording;
 
                 ui.separator();
                 ui.heading("Parameters");
@@ -547,34 +783,6 @@ impl eframe::App for AmaxViewerApp {
                 ui.label(format!("Energy bin width: {:.1}", energy_width));
                 ui.label(format!("AMax bin width: {:.1}", amax_width));
 
-                ui.separator();
-                ui.heading("ROOT Output");
-
-                ui.horizontal(|ui| {
-                    ui.label("File:");
-                    ui.text_edit_singleline(&mut self.output_path);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut state.recording, "Record");
-                    ui.label(format!("({} events)", state.recorded_count));
-                });
-
-                if !state.running && state.recorded_count > 0 {
-                    if ui.button("Save ROOT File").clicked() {
-                        match state.event_buffer.write_root(&self.output_path) {
-                            Ok(n) => {
-                                state.status_message =
-                                    format!("Saved {} events to {}", n, self.output_path);
-                                state.event_buffer.clear();
-                                state.recorded_count = 0;
-                            }
-                            Err(e) => {
-                                state.status_message = format!("Save failed: {}", e);
-                            }
-                        }
-                    }
-                }
                 }); // ScrollArea
             });
 
@@ -686,15 +894,23 @@ fn acquisition_thread(
     shared: Arc<Mutex<SharedState>>,
     shutdown: Arc<AtomicBool>,
     register_defs: Vec<RegisterDef>,
+    test_pulse: bool,
 ) {
+    eprintln!("[ACQ] Connecting to {}...", url);
     let handle = match CaenHandle::open(&url) {
         Ok(h) => {
+            eprintln!("[ACQ] Connected OK");
             let mut state = shared.lock().unwrap();
             state.connected = true;
-            state.status_message = "Connected".to_string();
+            state.status_message = if test_pulse {
+                "Connected (Test Pulse)".to_string()
+            } else {
+                "Connected".to_string()
+            };
             h
         }
         Err(e) => {
+            eprintln!("[ACQ] Connection failed: {}", e);
             let mut state = shared.lock().unwrap();
             state.status_message = format!("Connection failed: {}", e);
             state.running = false;
@@ -708,7 +924,43 @@ fn acquisition_thread(
         let _ = handle.set_value(&format!("/ch/{}/par/chenable", ch), "False");
     }
 
+    // NOTE: Waveform record length is controlled by AMax FW-specific registers (not ChRecordLengthT)
+
+    // Save original trigger sources and configure test pulse if needed
+    let original_gts = handle.get_value("/par/GlobalTriggerSource").ok();
+    let original_ats = handle.get_value("/par/AcqTriggerSource").ok();
+
+    // Track whether test pulse is currently active on hardware
+    let mut tp_hw_active = false;
+
+    if test_pulse {
+        eprintln!("[ACQ] Configuring test pulse...");
+        let params = {
+            let state = shared.lock().unwrap();
+            state.test_pulse_params.clone()
+        };
+        let errors = apply_test_pulse(&handle, &params);
+        tp_hw_active = true;
+
+        let mut state = shared.lock().unwrap();
+        if errors.is_empty() {
+            let msg = format!(
+                "Test Pulse configured ({:.0} Hz, ADC {}-{})",
+                params.frequency_hz(),
+                params.low_level,
+                params.high_level
+            );
+            eprintln!("[ACQ] {}", msg);
+            state.status_message = msg;
+        } else {
+            let msg = format!("Test Pulse errors: {}", errors.join("; "));
+            eprintln!("[ACQ] {}", msg);
+            state.status_message = msg;
+        }
+    }
+
     // Apply register parameters
+    eprintln!("[ACQ] Applying {} register parameters...", register_defs.len());
     {
         let state = shared.lock().unwrap();
         let (success, errors, mismatches, first_error) =
@@ -716,41 +968,60 @@ fn acquisition_thread(
         drop(state);
         let mut state = shared.lock().unwrap();
         if errors > 0 || mismatches > 0 {
-            state.status_message = format!(
+            let msg = format!(
                 "Init: {} OK, {} err, {} mismatch: {}",
                 success,
                 errors,
                 mismatches,
                 first_error.unwrap_or_default()
             );
+            eprintln!("[ACQ] {}", msg);
+            state.status_message = msg;
         } else {
-            state.status_message = format!("Init: {} registers verified OK", success);
+            let tp_label = if test_pulse { " [TestPulse]" } else { "" };
+            let msg = format!("Init: {} registers verified OK{}", success, tp_label);
+            eprintln!("[ACQ] {}", msg);
+            state.status_message = msg;
         }
     }
 
     // Configure OpenDPP endpoint with waveform
+    eprintln!("[ACQ] Configuring OpenDPP endpoint...");
     let endpoint = match handle.configure_opendpp_endpoint(true) {
-        Ok(ep) => ep,
+        Ok(ep) => {
+            eprintln!("[ACQ] Endpoint configured OK");
+            ep
+        }
         Err(e) => {
+            eprintln!("[ACQ] Endpoint error: {}", e);
             let mut state = shared.lock().unwrap();
             state.status_message = format!("Endpoint error: {}", e);
             state.running = false;
+            restore_trigger_sources(&handle, &original_gts, &original_ats, test_pulse);
             return;
         }
     };
 
     // Start acquisition
-    let _ = handle.send_command("/cmd/cleardata");
-    let _ = handle.send_command("/cmd/armacquisition");
-    let _ = handle.send_command("/cmd/swstartacquisition");
+    eprintln!("[ACQ] Starting acquisition (cleardata → arm → start)...");
+    if let Err(e) = handle.send_command("/cmd/cleardata") {
+        eprintln!("[ACQ] cleardata failed: {}", e);
+    }
+    if let Err(e) = handle.send_command("/cmd/armacquisition") {
+        eprintln!("[ACQ] armacquisition failed: {}", e);
+    }
+    if let Err(e) = handle.send_command("/cmd/swstartacquisition") {
+        eprintln!("[ACQ] swstartacquisition failed: {}", e);
+    }
 
     {
         let mut state = shared.lock().unwrap();
         state.running = true;
         state.status_message = "Running".to_string();
+        eprintln!("[ACQ] Running");
     }
 
-    let mut user_info_buffer = [0u64; 16];
+    let mut user_info_buffer = [0u64; 1024]; // FW caenlist max len = 1024
     let mut waveform_buffer = [0u16; 8192];
     let mut last_rate_update = std::time::Instant::now();
     let mut last_waveform_update = std::time::Instant::now();
@@ -775,17 +1046,26 @@ fn acquisition_thread(
                     state.histogram_dirty = true;
 
                     if state.recording {
-                        state.event_buffer.push(
-                            event.channel,
-                            event.energy,
-                            event.timestamp,
-                            event.fine_timestamp,
-                            event.flags_a,
-                            event.flags_b,
-                            event.psd,
-                            &event.user_info,
-                        );
-                        state.recorded_count = state.event_buffer.len();
+                        // Check memory limit before recording
+                        if state.event_buffer.estimated_memory_bytes() >= MAX_BUFFER_BYTES {
+                            state.recording = false;
+                            state.status_message =
+                                "Recording stopped: 10 GB memory limit reached".to_string();
+                            eprintln!("Recording auto-stopped: buffer reached 10 GB limit");
+                        } else {
+                            state.event_buffer.push(
+                                event.channel,
+                                event.energy,
+                                event.timestamp,
+                                event.fine_timestamp,
+                                event.flags_a,
+                                event.flags_b,
+                                event.psd,
+                                &event.user_info,
+                                event.waveform.as_deref(),
+                            );
+                            state.recorded_count = state.event_buffer.len();
+                        }
                     }
 
                     if should_update_waveform {
@@ -803,7 +1083,12 @@ fn acquisition_thread(
                 thread::sleep(Duration::from_millis(1));
             }
             Err(e) => {
+                eprintln!("[ACQ] Read error: code={}, {}: {}", e.code, e.name, e.description);
+                let mut state = shared.lock().unwrap();
+                state.status_message = format!("Read error: {} (code {})", e.name, e.code);
+                drop(state);
                 if e.code == -12 {
+                    eprintln!("[ACQ] STOP signal received, exiting read loop");
                     break;
                 }
                 thread::sleep(Duration::from_millis(10));
@@ -820,9 +1105,88 @@ fn acquisition_thread(
             events_since_last_update = 0;
             last_rate_update = std::time::Instant::now();
         }
+
+        // Handle runtime test pulse toggle
+        {
+            let mut state = shared.lock().unwrap();
+            if state.test_pulse_toggle_requested {
+                state.test_pulse_toggle_requested = false;
+                let want_active = state.test_pulse_active;
+                let params = state.test_pulse_params.clone();
+                drop(state);
+
+                // Stop → reconfigure → restart
+                eprintln!("[ACQ] Test pulse toggle: want_active={}, tp_hw_active={}", want_active, tp_hw_active);
+                let _ = handle.send_command("/cmd/disarmacquisition");
+
+                if want_active && !tp_hw_active {
+                    eprintln!("[ACQ] Enabling test pulse at runtime...");
+                    let errors = apply_test_pulse(&handle, &params);
+                    tp_hw_active = true;
+                    let mut state = shared.lock().unwrap();
+                    if errors.is_empty() {
+                        let msg = format!(
+                            "Test Pulse ON ({:.0} Hz)",
+                            params.frequency_hz()
+                        );
+                        eprintln!("[ACQ] {}", msg);
+                        state.status_message = msg;
+                    } else {
+                        let msg = format!("Test Pulse errors: {}", errors.join("; "));
+                        eprintln!("[ACQ] {}", msg);
+                        state.status_message = msg;
+                    }
+                } else if !want_active && tp_hw_active {
+                    eprintln!("[ACQ] Disabling test pulse at runtime...");
+                    restore_trigger_sources(
+                        &handle,
+                        &original_gts,
+                        &original_ats,
+                        true,
+                    );
+                    tp_hw_active = false;
+                    let mut state = shared.lock().unwrap();
+                    state.status_message = "Test Pulse OFF — triggers restored".to_string();
+                    eprintln!("[ACQ] Test Pulse OFF — triggers restored");
+                }
+
+                let _ = handle.send_command("/cmd/cleardata");
+                let _ = handle.send_command("/cmd/armacquisition");
+                let _ = handle.send_command("/cmd/swstartacquisition");
+            } else if state.test_pulse_params_dirty && tp_hw_active {
+                // SetInRun: apply params without restart
+                state.test_pulse_params_dirty = false;
+                let params = state.test_pulse_params.clone();
+                drop(state);
+
+                let _ = handle.set_value(
+                    "/par/TestPulsePeriod",
+                    &params.period_ns.to_string(),
+                );
+                let _ = handle.set_value(
+                    "/par/TestPulseWidth",
+                    &params.width_ns.to_string(),
+                );
+                let _ = handle.set_value(
+                    "/par/TestPulseLowLevel",
+                    &params.low_level.to_string(),
+                );
+                let _ = handle.set_value(
+                    "/par/TestPulseHighLevel",
+                    &params.high_level.to_string(),
+                );
+            }
+        }
     }
 
+    eprintln!("[ACQ] Stopping acquisition...");
     let _ = handle.send_command("/cmd/disarmacquisition");
+
+    // Restore original trigger sources if test pulse was active on hardware
+    if tp_hw_active {
+        eprintln!("[ACQ] Restoring original trigger sources...");
+    }
+    restore_trigger_sources(&handle, &original_gts, &original_ats, tp_hw_active);
 
     {
         let mut state = shared.lock().unwrap();
@@ -830,6 +1194,79 @@ fn acquisition_thread(
         state.connected = false;
         state.status_message = "Stopped".to_string();
     }
+    eprintln!("[ACQ] Stopped");
+}
+
+/// Apply test pulse parameters and set trigger source to TestPulse.
+/// Returns a list of error messages (empty = success).
+fn apply_test_pulse(handle: &CaenHandle, params: &TestPulseParams) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    let tp_settings = [
+        ("/par/TestPulsePeriod", params.period_ns.to_string()),
+        ("/par/TestPulseWidth", params.width_ns.to_string()),
+        ("/par/TestPulseLowLevel", params.low_level.to_string()),
+        ("/par/TestPulseHighLevel", params.high_level.to_string()),
+    ];
+    for (path, value) in &tp_settings {
+        if let Err(e) = handle.set_value(path, value) {
+            eprintln!("[ACQ] Test pulse set_value {} = {} failed: {}", path, value, e);
+            errors.push(format!("{}: {}", path, e));
+        }
+    }
+
+    // GlobalTriggerSource — AMax (OpenDPP) FW may not support this parameter at all.
+    // Self-trigger goes through FW internal OR gate, so GlobalTriggerSource is optional.
+    let gts_candidates = ["TestPulse", "TstTrg", "SwTrg", "TestPulse | SwTrg"];
+    let mut gts_set = false;
+    for candidate in &gts_candidates {
+        if handle.set_value("/par/GlobalTriggerSource", candidate).is_ok() {
+            eprintln!("[ACQ] GlobalTriggerSource = {} (accepted)", candidate);
+            gts_set = true;
+            break;
+        }
+    }
+    if !gts_set {
+        eprintln!("[ACQ] GlobalTriggerSource: no candidate accepted (OK for OpenDPP/AMax FW)");
+    }
+
+    // AcqTriggerSource — this is the essential one for test pulse triggering
+    let ats_candidates = ["TestPulse", "GlobalTriggerSource", "TstTrg", "SwTrg"];
+    let mut ats_set = false;
+    for candidate in &ats_candidates {
+        if handle.set_value("/par/AcqTriggerSource", candidate).is_ok() {
+            eprintln!("[ACQ] AcqTriggerSource = {} (accepted)", candidate);
+            ats_set = true;
+            break;
+        }
+    }
+    if !ats_set {
+        let msg = "AcqTriggerSource: no candidate value accepted".to_string();
+        eprintln!("[ACQ] {}", msg);
+        errors.push(msg);
+    }
+
+    errors
+}
+
+/// Restore original trigger source settings and disable test pulse
+fn restore_trigger_sources(
+    handle: &CaenHandle,
+    original_gts: &Option<String>,
+    original_ats: &Option<String>,
+    was_active: bool,
+) {
+    if !was_active {
+        return;
+    }
+    if let Some(gts) = original_gts {
+        let _ = handle.set_value("/par/GlobalTriggerSource", gts);
+    }
+    if let Some(ats) = original_ats {
+        let _ = handle.set_value("/par/AcqTriggerSource", ats);
+    }
+    // Disable test pulse by setting period to 0
+    let _ = handle.set_value("/par/TestPulsePeriod", "0");
 }
 
 /// Apply register parameters to digitizer with read-back verification.
@@ -886,10 +1323,19 @@ fn apply_params(
 }
 
 fn main() -> eframe::Result<()> {
+    let args = Args::parse();
+    let test_pulse = args.test_pulse;
+
+    let title = if test_pulse {
+        "AMax Viewer - Firmware Development Tool [TEST PULSE]"
+    } else {
+        "AMax Viewer - Firmware Development Tool"
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
-            .with_title("AMax Viewer - Firmware Development Tool"),
+            .with_title(title),
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
                 eframe::egui_wgpu::WgpuSetupCreateNew {
@@ -909,6 +1355,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "AMax Viewer",
         options,
-        Box::new(|cc| Ok(Box::new(AmaxViewerApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(AmaxViewerApp::new(cc, test_pulse)))),
     )
 }

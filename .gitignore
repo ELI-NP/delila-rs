@@ -28,6 +28,7 @@ AMAX_firmware32_channel_4input_caenlist
 
 # Compiled binaries
 tools/delila2root/delila2root
+tools/delila2root/delila2root_*
 __pycache__/
 
 # Test output files

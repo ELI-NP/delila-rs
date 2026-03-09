@@ -84,7 +84,7 @@ fn main() {
 
     // Read data using OpenDPP event-by-event
     println!("\n--- Reading Data (3 seconds) ---");
-    let mut user_info_buffer = [0u64; 16]; // Buffer for user info words
+    let mut user_info_buffer = [0u64; 1024]; // FW caenlist max len = 1024
     let mut total_events = 0u32;
 
     let start = std::time::Instant::now();

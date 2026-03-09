@@ -1226,7 +1226,15 @@ impl EndpointHandle {
         };
 
         if ret == 0 {
-            // Success
+            // Success — clamp size to buffer capacity and warn on overflow
+            if user_info_size > user_info_buffer.len() {
+                eprintln!(
+                    "[CAEN] WARNING: user_info_size {} exceeds buffer {} — data truncated!",
+                    user_info_size,
+                    user_info_buffer.len()
+                );
+                user_info_size = user_info_buffer.len();
+            }
             let user_info = user_info_buffer[..user_info_size].to_vec();
             Ok(Some(OpenDppEvent {
                 channel,
@@ -1310,7 +1318,23 @@ impl EndpointHandle {
         };
 
         if ret == 0 {
-            // Success
+            // Success — clamp sizes to buffer capacity and warn on overflow
+            if user_info_size > user_info_buffer.len() {
+                eprintln!(
+                    "[CAEN] WARNING: user_info_size {} exceeds buffer {} — data truncated!",
+                    user_info_size,
+                    user_info_buffer.len()
+                );
+                user_info_size = user_info_buffer.len();
+            }
+            if waveform_size > waveform_buffer.len() {
+                eprintln!(
+                    "[CAEN] WARNING: waveform_size {} exceeds buffer {} — data truncated!",
+                    waveform_size,
+                    waveform_buffer.len()
+                );
+                waveform_size = waveform_buffer.len();
+            }
             let user_info = user_info_buffer[..user_info_size].to_vec();
             let waveform = if waveform_size > 0 {
                 Some(waveform_buffer[..waveform_size].to_vec())

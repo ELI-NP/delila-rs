@@ -146,7 +146,7 @@ fn main() {
     let mut ratio_max: f64 = f64::MIN;
     let mut ratio_count: u64 = 0;
 
-    let mut user_info_buffer = [0u64; 16];
+    let mut user_info_buffer = [0u64; 1024]; // FW caenlist max len = 1024
 
     // Live register polling
     let poll_regs: [(u32, &str); 3] = [
