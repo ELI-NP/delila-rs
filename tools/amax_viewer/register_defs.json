@@ -1,216 +1,432 @@
 [
   {
-    "section": "Core",
-    "name": "POLARITY",
-    "address": 0,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "OFFSET",
-    "address": 1,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "THRS",
-    "address": 2,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "TRIG_K",
-    "address": 3,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "TRIG_M",
-    "address": 4,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "TRAP_K",
-    "address": 5,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "TRAP_M",
-    "address": 6,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "DECONV_M",
-    "address": 7,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "TRAP_GAIN",
-    "address": 8,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "BL_LEN",
-    "address": 9,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "BL_INIB",
-    "address": 10,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "SAMPLE_POS",
-    "address": 11,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "RUN_CFG",
-    "address": 12,
+    "section": "AMax",
+    "name": "page_amax_energy_0_POLARITY",
+    "address": 8388610,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "amax_trigger_and",
-    "address": 49162,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "en_trigger_and",
-    "address": 49163,
+    "name": "page_amax_energy_0_OFFSET",
+    "address": 8388611,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "WINDOW_MAXIM",
-    "address": 81920,
-    "min": 0,
-    "max": 4294967295,
-    "default": 0
-  },
-  {
-    "section": "Core",
-    "name": "time_start",
-    "address": 1310723,
+    "name": "page_amax_energy_0_THRS",
+    "address": 8388612,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "baseline_delay",
-    "address": 1441792,
+    "name": "page_amax_energy_0_TRIG_K",
+    "address": 8388613,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "baseline_len",
-    "address": 1441793,
+    "name": "page_amax_energy_0_TRIG_M",
+    "address": 8388614,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "baseline_offset",
-    "address": 1441794,
+    "name": "page_amax_energy_0_TRAP_K",
+    "address": 8388615,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "AMAX_window",
-    "address": 1441795,
+    "name": "page_amax_energy_0_TRAP_M",
+    "address": 8388616,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "AMAX_delay",
-    "address": 1441796,
+    "name": "page_amax_energy_0_DECONV_M",
+    "address": 8388617,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "AMAX_len",
-    "address": 1441797,
+    "name": "page_amax_energy_0_TRAP_GAIN",
+    "address": 8388618,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "debug_maxim_value",
-    "address": 1441798,
+    "name": "page_amax_energy_0_BL_LEN",
+    "address": 8388619,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "debug_amax_out",
-    "address": 1441799,
+    "name": "page_amax_energy_0_BL_INIB",
+    "address": 8388620,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "debug_baseline",
-    "address": 1441800,
+    "name": "page_amax_energy_0_SAMPLE_POS",
+    "address": 8388621,
     "min": 0,
     "max": 4294967295,
     "default": 0
   },
   {
     "section": "AMax",
-    "name": "rangee",
-    "address": 1441801,
+    "name": "page_amax_energy_0_RUN_CFG",
+    "address": 8388623,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_WINDOW_MAXIM",
+    "address": 8388629,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_baseline_delay",
+    "address": 8388632,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_baseline_len",
+    "address": 8388633,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_baseline_offset",
+    "address": 8388634,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_AMAX_window",
+    "address": 8388626,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_AMAX_delay",
+    "address": 8388628,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_AMAX_len",
+    "address": 8388630,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_debug_amax_out",
+    "address": 8388636,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_PRETRIGGER_INPUT",
+    "address": 8388609,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_READ_ENERGY",
+    "address": 8388638,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_PRETRIGGER_TRAP",
+    "address": 8388639,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_PRETRIGGER_AMAX",
+    "address": 8388640,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_maxim_outt",
+    "address": 8388641,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_0_selector_wave",
+    "address": 8388608,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_POLARITY",
+    "address": 8650754,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_OFFSET",
+    "address": 8650755,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_THRS",
+    "address": 8650756,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_TRIG_K",
+    "address": 8650757,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_TRIG_M",
+    "address": 8650758,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_TRAP_K",
+    "address": 8650759,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_TRAP_M",
+    "address": 8650760,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_DECONV_M",
+    "address": 8650761,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_TRAP_GAIN",
+    "address": 8650762,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_BL_LEN",
+    "address": 8650763,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_BL_INIB",
+    "address": 8650764,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_SAMPLE_POS",
+    "address": 8650765,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_RUN_CFG",
+    "address": 8650767,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_WINDOW_MAXIM",
+    "address": 8650773,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_baseline_delay",
+    "address": 8650776,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_baseline_len",
+    "address": 8650777,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_baseline_offset",
+    "address": 8650778,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_AMAX_window",
+    "address": 8650770,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_AMAX_delay",
+    "address": 8650772,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_AMAX_len",
+    "address": 8650774,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_debug_amax_out",
+    "address": 8650780,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_PRETRIGGER_INPUT",
+    "address": 8650753,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_READ_ENERGY",
+    "address": 8650782,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_PRETRIGGER_TRAP",
+    "address": 8650783,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_PRETRIGGER_AMAX",
+    "address": 8650784,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_maxim_outt",
+    "address": 8650785,
+    "min": 0,
+    "max": 4294967295,
+    "default": 0
+  },
+  {
+    "section": "AMax",
+    "name": "page_amax_energy_1_selector_wave",
+    "address": 8650752,
     "min": 0,
     "max": 4294967295,
     "default": 0

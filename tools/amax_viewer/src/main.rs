@@ -19,6 +19,9 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(about = "AMax Viewer - Firmware Development Tool")]
 struct Args {
+    /// Register definitions JSON file (e.g. registers/register_20260310.json)
+    register_defs: Option<PathBuf>,
+
     /// Start in Test Pulse mode (use digitizer internal test pulse)
     #[arg(short = 't', long)]
     test_pulse: bool,
@@ -233,10 +236,24 @@ impl AppSettings {
     }
 }
 
-/// Load register definitions. Priority: user config file > embedded default.
-/// On first run, copies the embedded default to the user config dir.
-fn load_register_defs() -> Vec<RegisterDef> {
-    // Try user config file first
+/// Load register definitions.
+/// Priority: CLI argument > user config file (~/.config) > embedded default.
+fn load_register_defs(cli_path: Option<&PathBuf>) -> Vec<RegisterDef> {
+    // 1. CLI argument (highest priority)
+    if let Some(path) = cli_path {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<Vec<RegisterDef>>(&content) {
+                Ok(defs) => {
+                    eprintln!("Loaded {} register defs from {}", defs.len(), path.display());
+                    return defs;
+                }
+                Err(e) => eprintln!("Failed to parse {}: {}", path.display(), e),
+            },
+            Err(e) => eprintln!("Failed to read {}: {}", path.display(), e),
+        }
+    }
+
+    // 2. User config file
     if let Some(path) = AppSettings::register_defs_path() {
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
@@ -253,7 +270,7 @@ fn load_register_defs() -> Vec<RegisterDef> {
         }
     }
 
-    // Fall back to embedded default
+    // 3. Embedded default
     serde_json::from_str(DEFAULT_REGISTER_DEFS).unwrap_or_default()
 }
 
@@ -441,9 +458,9 @@ struct AmaxViewerApp {
 }
 
 impl AmaxViewerApp {
-    fn new(_cc: &eframe::CreationContext<'_>, test_pulse: bool) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>, test_pulse: bool, register_defs_path: Option<PathBuf>) -> Self {
         let settings = AppSettings::load();
-        let register_defs = load_register_defs();
+        let register_defs = load_register_defs(register_defs_path.as_ref());
         let param_values = init_param_values(&register_defs, &settings.param_values);
 
         let shared = Arc::new(Mutex::new(SharedState {
@@ -595,7 +612,7 @@ impl eframe::App for AmaxViewerApp {
                                 if ui
                                     .add(
                                         egui::DragValue::new(&mut state.test_pulse_params.width_ns)
-                                            .range(100..=1_000_000_000u32)
+                                            .range(8..=1_000_000_000u32)
                                             .suffix(" ns"),
                                     )
                                     .changed()
@@ -918,10 +935,9 @@ fn acquisition_thread(
         }
     };
 
-    // Enable channel 0 only
-    let _ = handle.set_value("/ch/0/par/chenable", "True");
-    for ch in 1..32 {
-        let _ = handle.set_value(&format!("/ch/{}/par/chenable", ch), "False");
+    // Enable all channels
+    for ch in 0..32 {
+        let _ = handle.set_value(&format!("/ch/{}/par/chenable", ch), "True");
     }
 
     // NOTE: Waveform record length is controlled by AMax FW-specific registers (not ChRecordLengthT)
@@ -959,29 +975,33 @@ fn acquisition_thread(
         }
     }
 
-    // Apply register parameters
-    eprintln!("[ACQ] Applying {} register parameters...", register_defs.len());
-    {
-        let state = shared.lock().unwrap();
-        let (success, errors, mismatches, first_error) =
-            apply_params(&handle, &register_defs, &state.param_values);
-        drop(state);
-        let mut state = shared.lock().unwrap();
-        if errors > 0 || mismatches > 0 {
-            let msg = format!(
-                "Init: {} OK, {} err, {} mismatch: {}",
-                success,
-                errors,
-                mismatches,
-                first_error.unwrap_or_default()
-            );
-            eprintln!("[ACQ] {}", msg);
-            state.status_message = msg;
-        } else {
-            let tp_label = if test_pulse { " [TestPulse]" } else { "" };
-            let msg = format!("Init: {} registers verified OK{}", success, tp_label);
-            eprintln!("[ACQ] {}", msg);
-            state.status_message = msg;
+    // Apply register parameters (skip if empty to test FW behavior without register writes)
+    if register_defs.is_empty() {
+        eprintln!("[ACQ] No register parameters to apply (skipped)");
+    } else {
+        eprintln!("[ACQ] Applying {} register parameters...", register_defs.len());
+        {
+            let state = shared.lock().unwrap();
+            let (success, errors, mismatches, first_error) =
+                apply_params(&handle, &register_defs, &state.param_values);
+            drop(state);
+            let mut state = shared.lock().unwrap();
+            if errors > 0 || mismatches > 0 {
+                let msg = format!(
+                    "Init: {} OK, {} err, {} mismatch: {}",
+                    success,
+                    errors,
+                    mismatches,
+                    first_error.unwrap_or_default()
+                );
+                eprintln!("[ACQ] {}", msg);
+                state.status_message = msg;
+            } else {
+                let tp_label = if test_pulse { " [TestPulse]" } else { "" };
+                let msg = format!("Init: {} registers verified OK{}", success, tp_label);
+                eprintln!("[ACQ] {}", msg);
+                state.status_message = msg;
+            }
         }
     }
 
@@ -1026,6 +1046,7 @@ fn acquisition_thread(
     let mut last_rate_update = std::time::Instant::now();
     let mut last_waveform_update = std::time::Instant::now();
     let mut events_since_last_update = 0u64;
+    let mut consecutive_nones = 0u32;
 
     while !shutdown.load(Ordering::Relaxed) {
         match endpoint.read_opendpp_event_with_waveform(
@@ -1035,6 +1056,7 @@ fn acquisition_thread(
         ) {
             Ok(Some(event)) => {
                 events_since_last_update += 1;
+                consecutive_nones = 0;
 
                 let amax = *event.user_info.first().unwrap_or(&0);
                 let should_update_waveform =
@@ -1080,6 +1102,41 @@ fn acquisition_thread(
                 }
             }
             Ok(None) => {
+                consecutive_nones += 1;
+                // After ~3s of no data (30 × 100ms timeout), check acquisition status
+                if consecutive_nones == 30 {
+                    eprintln!("[ACQ] No data for ~3s, checking acquisition status...");
+                    // FELib parameters
+                    for param in [
+                        "/par/AcquisitionStatus",
+                        "/par/EnEventCountDown",
+                        "/par/EventCountDown",
+                        "/par/EnAutoDisarmAcq",
+                        "/par/NumEventsPerAggregate",
+                        "/par/VolatileClockOutDelay",
+                        "/par/AcqTriggerSource",
+                        "/par/TestPulsePeriod",
+                        "/par/TestPulseWidth",
+                    ] {
+                        if let Ok(v) = handle.get_value(param) {
+                            eprintln!("[ACQ]   {} = {}", param, v);
+                        }
+                    }
+                    // Channel status
+                    for ch in 0..2 {
+                        for param in ["chenable", "SelfTriggerRate"] {
+                            if let Ok(v) = handle.get_value(&format!("/ch/{}/par/{}", ch, param)) {
+                                eprintln!("[ACQ]   ch{}/{} = {}", ch, param, v);
+                            }
+                        }
+                    }
+                    // Read back RUN_CFG registers
+                    for (name, addr) in [("ch0_RUN_CFG", 8388623u32), ("ch1_RUN_CFG", 8650767u32)] {
+                        if let Ok(v) = handle.get_user_register(addr * 4) {
+                            eprintln!("[ACQ]   {} = {} (0x{:X})", name, v, v);
+                        }
+                    }
+                }
                 thread::sleep(Duration::from_millis(1));
             }
             Err(e) => {
@@ -1325,6 +1382,7 @@ fn apply_params(
 fn main() -> eframe::Result<()> {
     let args = Args::parse();
     let test_pulse = args.test_pulse;
+    let register_defs_path = args.register_defs;
 
     let title = if test_pulse {
         "AMax Viewer - Firmware Development Tool [TEST PULSE]"
@@ -1355,6 +1413,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "AMax Viewer",
         options,
-        Box::new(move |cc| Ok(Box::new(AmaxViewerApp::new(cc, test_pulse)))),
+        Box::new(move |cc| Ok(Box::new(AmaxViewerApp::new(cc, test_pulse, register_defs_path)))),
     )
 }

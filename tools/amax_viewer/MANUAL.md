@@ -19,9 +19,16 @@ Binary: `target/release/amax_viewer`
 ## Launch
 
 ```bash
+# Basic (uses saved or embedded register definitions)
 cargo run --release --bin amax_viewer
-# or
 ./target/release/amax_viewer
+
+# With a specific register definitions file
+./target/release/amax_viewer registers/register_20260310.json
+
+# Test Pulse mode
+./target/release/amax_viewer -t
+./target/release/amax_viewer registers/register_20260310.json -t
 ```
 
 On the first run, configuration files are created automatically (see [Settings Persistence](#settings-persistence)).
@@ -142,12 +149,17 @@ Drag the top edge of the panel to resize it.
 
 ### File Location
 
-| Priority | Path |
-|----------|------|
-| 1 — user config | `~/.config/amax_viewer/register_defs.json` (Linux)<br>`~/Library/Application Support/amax_viewer/register_defs.json` (macOS) |
-| 2 — fallback | Default embedded in the binary at compile time |
+Register definitions are loaded in the following priority order:
 
-On the first run, if the user config file does not exist, the embedded default is copied there automatically. Edit that file freely.
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 — CLI argument | First positional argument | `./amax_viewer registers/register_20260310.json` |
+| 2 — user config | `~/.config/amax_viewer/register_defs.json` (Linux)<br>`~/Library/Application Support/amax_viewer/register_defs.json` (macOS) | — |
+| 3 — fallback | Default embedded in the binary at compile time | — |
+
+- **CLI argument**: Any path (absolute or relative). The loaded file count is printed to stderr on startup.
+- **User config**: On the first run, if this file does not exist, the embedded default is copied there automatically. Edit freely.
+- **Fallback**: Used if both above are unavailable or contain parse errors.
 
 ### Format
 
@@ -182,32 +194,111 @@ On the first run, if the user config file does not exist, the embedded default i
 
 > **Note**: Use the same word addresses as in the Sci-Compiler `RegisterFile.json`.
 > The tool multiplies by 4 internally before calling `CAEN_FELib_SetUserRegister`.
+>
+> **WARNING**: Old firmware addresses (0x0–0x30) are invalid on new page-based firmware.
+> Writing to them returns no error but **corrupts the firmware's internal state**,
+> causing TestPulse event generation to stall. Always use `gen_defs` to generate
+> the correct addresses from the new firmware's `RegisterFile.json`.
 
 ### Adding or Modifying Registers
 
-1. Edit the user config file directly.
+1. Edit the JSON file directly (either the CLI-specified file or the user config file).
 2. Restart the application — the UI rebuilds from the updated JSON.
+
+### Managing Multiple Firmware Versions
+
+Keep separate files per firmware version and specify the appropriate one on launch:
+
+```bash
+registers/
+├── register_opendpp_v1.json     # Old FW
+├── register_20260310.json       # New FW (32ch_4input)
+└── register_experimental.json   # Testing
+```
+
+```bash
+./target/release/amax_viewer registers/register_20260310.json
+```
 
 ---
 
 ## gen_defs Tool (RegisterFile.json → register_defs.json)
 
-Use this when the firmware is updated and `RegisterFile.json` (Sci-Compiler output) changes.
+Converts Sci-Compiler's `RegisterFile.json` into amax_viewer's register definition format.
+Use this whenever the firmware is updated and the register map changes.
+
+### Input: RegisterFile.json
+
+Sci-Compiler outputs `RegisterFile.json` in its project's `output/output/` directory.
+The file contains a `Registers` array with `Name` and `Address` fields:
+
+```json
+{
+  "Registers": [
+    { "Name": "THRS", "Address": 2, ... },
+    { "Name": "WINDOW_MAXIM", "Address": 81920, ... }
+  ]
+}
+```
+
+### Usage
 
 ```bash
-cd tools/amax_viewer
-
+# From the repository root
 cargo run --release --bin gen_defs -- \
-  ../../legacy/AMax/output/output/RegisterFile.json \
-  register_defs.json
+  path/to/RegisterFile.json \
+  registers/register_20260310.json
 
 # Output:
-# Wrote 27 register definitions to register_defs.json
+# Wrote 27 register definitions to registers/register_20260310.json
 # Edit min/max/default values as needed before using.
 ```
 
-The generated JSON has `min=0, max=4294967295, default=0` for every register.
-**Always edit min/max/default manually** to appropriate values (refer to firmware documentation).
+The second argument (output path) defaults to `register_defs.json` if omitted.
+
+### Section Auto-Detection
+
+Each register is automatically classified into a UI section:
+
+| Section | Rule |
+|---------|------|
+| **AMax** | Address ≥ 1,441,792 (0x160000), or name starts with `AMAX` / `baseline`, or name is `WINDOW_MAXIM` |
+| **Core** | Everything else |
+
+You can change the section names by editing the output JSON.
+
+### Post-Generation Editing (Required)
+
+The generated file has `min=0, max=4294967295, default=0` for **all** registers.
+You must edit these values manually before use:
+
+```json
+{
+  "section": "Core",
+  "name": "THRS",
+  "address": 2,
+  "min": 0,           ← set appropriate minimum
+  "max": 16383,        ← set appropriate maximum (e.g. 14-bit = 16383)
+  "default": 100       ← set a reasonable startup value
+}
+```
+
+Refer to the firmware documentation (`AMAX_firmware.../documentation_.../a00103.html`)
+for parameter ranges and descriptions.
+
+### Complete Workflow (New Firmware)
+
+```bash
+# 1. Generate from Sci-Compiler output
+cargo run --release --bin gen_defs -- \
+  path/to/new_fw/RegisterFile.json \
+  registers/register_YYYYMMDD.json
+
+# 2. Edit min/max/default values in the generated file
+
+# 3. Launch amax_viewer with the new definitions
+./target/release/amax_viewer registers/register_YYYYMMDD.json
+```
 
 ---
 
@@ -270,3 +361,5 @@ These are restored on the next launch.
 | ROOT file is empty | **Record** was not checked during acquisition |
 | Parameter changes have no effect | Must press **Restart to Apply** or **Enter** to re-write registers |
 | `register_defs.json` load error on startup | JSON syntax error. Fix or delete the user config file. The embedded default will be used as a fallback |
+| TestPulse stops generating events | Old register addresses (0x0–0x30) may have corrupted FW state. Power-cycle the digitizer or send `/cmd/reset`, then use correct page-based addresses |
+| CLI register file not loading | Check stderr for error messages. The path is relative to the working directory |
