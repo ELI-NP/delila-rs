@@ -341,6 +341,11 @@ pub struct SourceNetworkConfig {
     /// running on a remote Linux machine.
     #[serde(default = "default_host")]
     pub host: String,
+
+    /// Minimum ADC value filter (inclusive). Events with energy < adc_min are discarded.
+    /// Default: 0 (no filtering). Applies to all firmware types.
+    #[serde(default)]
+    pub adc_min: u16,
 }
 
 fn default_source_pipeline_order() -> u32 {

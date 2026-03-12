@@ -156,6 +156,9 @@ pub struct ReaderConfig {
     pub time_step_ns: f64,
     /// Path to digitizer configuration JSON file (optional)
     pub config_file: Option<String>,
+    /// Minimum ADC value filter. Events with energy < adc_min are discarded.
+    /// 0 = no filtering (default).
+    pub adc_min: u16,
 }
 
 impl Default for ReaderConfig {
@@ -172,6 +175,7 @@ impl Default for ReaderConfig {
             heartbeat_interval_ms: 1000,
             time_step_ns: 2.0, // 500 MHz ADC = 2ns per sample
             config_file: None,
+            adc_min: 0,
         }
     }
 }
@@ -205,6 +209,7 @@ impl ReaderConfig {
             heartbeat_interval_ms: 1000,
             time_step_ns: source.time_step_ns.unwrap_or(2.0),
             config_file: source.config_file.clone(),
+            adc_min: source.adc_min,
         })
     }
 }
@@ -231,6 +236,8 @@ pub struct ReaderMetrics {
     pub n_lost_trigger_flag_events: AtomicU64,
     /// Per-channel cumulative event counts (index = channel number)
     pub per_channel_counts: [AtomicU64; MAX_CHANNELS],
+    /// Events filtered out by adc_min threshold
+    pub filtered_events: AtomicU64,
 }
 
 impl Default for ReaderMetrics {
@@ -244,6 +251,7 @@ impl Default for ReaderMetrics {
             trigger_lost_flag_events: AtomicU64::new(0),
             n_lost_trigger_flag_events: AtomicU64::new(0),
             per_channel_counts: std::array::from_fn(|_| AtomicU64::new(0)),
+            filtered_events: AtomicU64::new(0),
         }
     }
 }
@@ -1755,6 +1763,11 @@ impl Reader {
     ) -> Result<(), ReaderError> {
         info!("DecodeLoop starting");
 
+        let adc_min = config.adc_min;
+        if adc_min > 0 {
+            info!(adc_min, "ADC minimum filter enabled: events with energy < {} will be discarded", adc_min);
+        }
+
         // Create decoder based on firmware type
         let mut decoder = match config.firmware {
             FirmwareType::PSD2 => {
@@ -1885,7 +1898,12 @@ impl Reader {
                                                     .fetch_add(1024, Ordering::Relaxed);
                                             }
                                         }
-                                        // Per-channel count
+                                        // ADC minimum filter
+                                        if adc_min > 0 && common_event.energy < adc_min {
+                                            metrics.filtered_events.fetch_add(1, Ordering::Relaxed);
+                                            continue;
+                                        }
+                                        // Per-channel count (after filter)
                                         let ch = common_event.channel as usize;
                                         if ch < MAX_CHANNELS {
                                             metrics.per_channel_counts[ch].fetch_add(1, Ordering::Relaxed);
@@ -1893,8 +1911,14 @@ impl Reader {
                                         batch.push(common_event);
                                     }
 
-                                    // Update metrics
+                                    // Update metrics (n_events = pre-filter count)
                                     metrics.events_decoded.fetch_add(n_events as u64, Ordering::Relaxed);
+
+                                    // Skip empty batches (all events filtered)
+                                    if batch.is_empty() {
+                                        continue;
+                                    }
+                                    let n_events = batch.len();
 
                                     // Rate-limited trigger loss warning (DIG1)
                                     if config.firmware.is_dig1() {
