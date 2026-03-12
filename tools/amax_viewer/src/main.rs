@@ -66,6 +66,7 @@ struct EventBuffer {
 const MAX_BUFFER_BYTES: usize = 10 * 1_073_741_824; // 10 GB
 
 impl EventBuffer {
+    #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
         channel: u8,
@@ -175,6 +176,9 @@ struct AppSettings {
     /// Register values keyed by register name
     #[serde(default)]
     param_values: HashMap<String, u32>,
+    /// Channel filter: None = All, Some(ch) = specific channel
+    #[serde(default)]
+    selected_channel: Option<u8>,
 }
 
 impl Default for AppSettings {
@@ -183,6 +187,7 @@ impl Default for AppSettings {
             url: Self::default_url(),
             output_path: Self::default_output_path(),
             param_values: HashMap::new(),
+            selected_channel: None,
         }
     }
 }
@@ -443,6 +448,8 @@ struct SharedState {
     test_pulse_active: bool,
     /// Set to true by GUI when test_pulse_active toggled; cleared by acq thread after applying
     test_pulse_toggle_requested: bool,
+    /// Channel filter for histogram/waveform: None = All, Some(ch) = specific channel
+    selected_channel: Option<u8>,
 }
 
 struct AmaxViewerApp {
@@ -485,6 +492,7 @@ impl AmaxViewerApp {
             test_pulse_params_dirty: false,
             test_pulse_active: test_pulse,
             test_pulse_toggle_requested: false,
+            selected_channel: settings.selected_channel,
         }));
 
         Self {
@@ -578,8 +586,37 @@ impl eframe::App for AmaxViewerApp {
                 }
 
                 ui.label(format!("Status: {}", state.status_message));
-                ui.label(format!("Events: {}", state.histogram.total_events));
+                let ch_label = match state.selected_channel {
+                    None => "All".to_string(),
+                    Some(ch) => format!("Ch {}", ch),
+                };
+                ui.label(format!("Events: {} ({})", state.histogram.total_events, ch_label));
                 ui.label(format!("Rate: {:.1} Hz", state.event_rate));
+
+                // Channel selector
+                {
+                    let prev = state.selected_channel;
+                    let selected_text = match state.selected_channel {
+                        None => "All".to_string(),
+                        Some(ch) => format!("Ch {}", ch),
+                    };
+                    egui::ComboBox::from_label("Channel")
+                        .selected_text(&selected_text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut state.selected_channel, None, "All");
+                            for ch in 0..32u8 {
+                                ui.selectable_value(
+                                    &mut state.selected_channel,
+                                    Some(ch),
+                                    format!("Ch {}", ch),
+                                );
+                            }
+                        });
+                    if state.selected_channel != prev {
+                        state.histogram.clear();
+                        state.histogram_dirty = true;
+                    }
+                }
 
                 // Test Pulse parameters (shown only when active)
                 if state.test_pulse_active {
@@ -898,6 +935,7 @@ impl eframe::App for AmaxViewerApp {
                 url: self.url.clone(),
                 output_path: self.output_path.clone(),
                 param_values: state.param_values.clone(),
+                selected_channel: state.selected_channel,
             };
             settings.save();
         }
@@ -1064,8 +1102,14 @@ fn acquisition_thread(
 
                 {
                     let mut state = shared.lock().unwrap();
-                    state.histogram.fill(event.energy, amax);
-                    state.histogram_dirty = true;
+                    let ch_match = match state.selected_channel {
+                        None => true,
+                        Some(ch) => event.channel == ch,
+                    };
+                    if ch_match {
+                        state.histogram.fill(event.energy, amax);
+                        state.histogram_dirty = true;
+                    }
 
                     if state.recording {
                         // Check memory limit before recording
@@ -1090,7 +1134,7 @@ fn acquisition_thread(
                         }
                     }
 
-                    if should_update_waveform {
+                    if should_update_waveform && ch_match {
                         if let Some(ref wf) = event.waveform {
                             let len = wf.len().min(state.waveform_buffer.len());
                             state.waveform_buffer[..len].copy_from_slice(&wf[..len]);
