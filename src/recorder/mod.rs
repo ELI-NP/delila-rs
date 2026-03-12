@@ -528,6 +528,7 @@ impl CommandHandlerExt for RecorderCommandExt {
             data_rate: 0.0,
             trigger_loss_count: 0,
             trigger_loss_rate: 0.0,
+            channel_counts: None,
         })
     }
 }

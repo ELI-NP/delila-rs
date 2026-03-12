@@ -1,0 +1,68 @@
+# DELILA DAQ Configuration - 3MV Tandem
+# Hardware: V1725S x2 (PHA1) + VX1730B x1 (PSD1), Optical Link port 0
+# Connections: conet=0 PHA1-0(SN517), conet=1 PHA1-1(SN515), conet=2 PSD1-0(SN66)
+
+[operator]
+experiment_name = "3MV_20260312"
+port = 9091
+
+[operator.influxdb]
+url = "http://localhost:8181"
+database = "delila"
+interval_secs = 2
+
+[operator.elog]
+url = "http://localhost:8082"
+logbook = "3MV_2026"
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# PHA1-0 (V1725S, SN517, master - SW start, propagates via GPIO)
+[[network.sources]]
+id = 0
+name = "PHA1-0-SN517"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/3MV-pha1-0.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# PHA1-1 (V1725S, SN515, slave - S_IN start)
+[[network.sources]]
+id = 1
+name = "PHA1-1-SN515"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+config_file = "config/digitizers/3MV-pha1-1.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# PSD1-0 (VX1730B, SN66, slave - S_IN start)
+[[network.sources]]
+id = 2
+name = "PSD1-0-SN66"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=2"
+config_file = "config/digitizers/3MV-psd1-0.json"
+pipeline_order = 1
+
+# --- Pipeline components ---
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

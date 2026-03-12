@@ -372,7 +372,7 @@ impl RouterBuilder {
         self
     }
 
-    pub fn build(self) -> Router {
+    pub fn build(self) -> (Router, Arc<AppState>) {
         let digitizer_configs = if self.config_files.is_empty() {
             load_digitizer_configs_from_dir(&self.config_dir).unwrap_or_default()
         } else {
@@ -501,7 +501,7 @@ impl RouterBuilder {
             // Swagger UI
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .layer(cors)
-            .with_state(state);
+            .with_state(state.clone());
 
         // Serve Angular SPA from web_ui_dir (if configured)
         if let Some(ref ui_dir) = web_ui_dir {
@@ -518,7 +518,7 @@ impl RouterBuilder {
             }
         }
 
-        router
+        (router, state)
     }
 }
 

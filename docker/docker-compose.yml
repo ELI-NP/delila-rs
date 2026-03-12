@@ -33,3 +33,48 @@ services:
       mongo:
         condition: service_healthy
 
+  influxdb:
+    image: quay.io/influxdb/influxdb3-core:latest
+    container_name: delila_influxdb
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./data/influxdb:/var/lib/influxdb3
+      - ./data/influxdb-plugins:/plugins
+    command: ["serve", "--node-id", "delila", "--object-store", "file", "--data-dir", "/var/lib/influxdb3", "--without-auth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elog:
+    build:
+      context: ./elog
+    container_name: delila_elog
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./elog/elogd.cfg:/usr/local/elog/elogd.cfg:ro
+      - ./data/elog:/usr/local/elog/logbooks
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: delila_grafana
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: delila
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./data/grafana:/var/lib/grafana
+    depends_on:
+      influxdb:
+        condition: service_healthy

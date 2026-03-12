@@ -279,9 +279,7 @@ fn run_time_calibration(
                                 && hit.energy <= ref_energy_max
                             {
                                 trigger_times.push(hit.timestamp_ns);
-                            } else if hit.module != ref_module
-                                || hit.channel != ref_channel
-                            {
+                            } else if hit.module != ref_module || hit.channel != ref_channel {
                                 block_hits.push(hit);
                             }
                         }

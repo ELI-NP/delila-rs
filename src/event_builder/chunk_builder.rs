@@ -97,15 +97,16 @@ impl TriggerConfig {
 
 /// ソート済みチャンクからイベントを構築する (pure, 副作用なし)
 ///
-/// # アルゴリズム
+/// # アルゴリズム: Dynamic Window Merging
 ///
-/// 1. ソート済みヒットを順にスキャン
-/// 2. トリガーチャンネルを発見したら:
-///    - `ts >= core_end` → スキップ (unsafe 領域、次チャンクで処理)
-///    - backward scan で prior trigger チェック (pile-up rejection)
-///    - `partition_point` で ±coincidence_window 内のヒット範囲を特定
-///    - coincident hits をスキャンして AC 判定
-///    - BuiltEvent を emit
+/// 1. ソート済みヒットを順にスキャンし、トリガーを収集
+/// 2. 隣接トリガーの ±coincidence_window が重なる場合、ウィンドウをマージ
+/// 3. マージされたウィンドウ内の全ヒットを1イベントとして emit
+///
+/// これにより:
+/// - ダブルカウントなし（重複ウィンドウがマージされるため）
+/// - データロスなし（抑制されたトリガーのヒットもマージ先に含まれる）
+/// - ドミノ効果なし（トリガー抑制自体が不要）
 ///
 /// # Arguments
 /// * `chunk` - ソート済みチャンク
@@ -120,32 +121,50 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
     }
 
     let window = config.coincidence_window_ns;
-    let mut events = Vec::new();
 
-    for (idx, hit) in hits.iter().enumerate() {
-        // Skip non-trigger hits
+    // Phase 1: Collect trigger windows in core region, merging overlaps
+    let mut merged_windows: Vec<MergedWindow> = Vec::new();
+
+    for hit in hits.iter() {
         if !config.is_trigger(hit.module, hit.channel) {
             continue;
         }
-
         // Skip triggers in unsafe region (processed in next chunk)
         if hit.timestamp_ns >= chunk.core_end {
             continue;
         }
 
-        // Check for prior trigger within coincidence window (pile-up rejection)
-        if has_prior_trigger(hits, idx, config) {
-            continue;
+        let t_start = hit.timestamp_ns - window;
+        let t_end = hit.timestamp_ns + window;
+
+        if let Some(last) = merged_windows.last_mut() {
+            if t_start <= last.window_end {
+                // Overlap — extend the current merged window
+                if t_end > last.window_end {
+                    last.window_end = t_end;
+                }
+                // Keep the first trigger as the primary (earliest in time)
+                continue;
+            }
         }
 
-        // Build event from this trigger
-        let trigger_time = hit.timestamp_ns;
-        let window_start = trigger_time - window;
-        let window_end = trigger_time + window;
+        // No overlap — start a new window
+        merged_windows.push(MergedWindow {
+            primary_trigger_time: hit.timestamp_ns,
+            primary_trigger_module: hit.module,
+            primary_trigger_channel: hit.channel,
+            window_start: t_start,
+            window_end: t_end,
+        });
+    }
 
-        // Binary search for coincidence window boundaries
-        let range_start = hits.partition_point(|h| h.timestamp_ns < window_start);
-        let range_end = hits.partition_point(|h| h.timestamp_ns <= window_end);
+    // Phase 2: Build events from merged windows
+    let mut events = Vec::with_capacity(merged_windows.len());
+
+    for mw in &merged_windows {
+        // Binary search for window boundaries
+        let range_start = hits.partition_point(|h| h.timestamp_ns < mw.window_start);
+        let range_end = hits.partition_point(|h| h.timestamp_ns <= mw.window_end);
 
         // Collect channels present in window (for AC detection)
         let channels_in_window: HashSet<(u8, u8)> = hits[range_start..range_end]
@@ -166,7 +185,7 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
                 channel: h.channel,
                 energy: h.energy,
                 energy_short: h.energy_short,
-                relative_time: h.timestamp_ns - trigger_time,
+                relative_time: h.timestamp_ns - mw.primary_trigger_time,
                 with_ac,
             });
         }
@@ -174,9 +193,9 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
         if !event_hits.is_empty() {
             events.push(BuiltEvent {
                 event_id: 0, // Assigned by caller
-                trigger_time,
-                trigger_module: hit.module,
-                trigger_channel: hit.channel,
+                trigger_time: mw.primary_trigger_time,
+                trigger_module: mw.primary_trigger_module,
+                trigger_channel: mw.primary_trigger_channel,
                 hits: event_hits,
             });
         }
@@ -185,33 +204,21 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
     events
 }
 
-/// Check if there's a prior trigger within coincidence window (backward scan)
+/// マージされたトリガーウィンドウ
 ///
-/// A "prior" trigger is one that:
-/// - Is within coincidence_window before the current trigger
-/// - Has equal or higher priority (lower priority value)
-///
-/// If such a trigger exists, the current trigger is suppressed (pile-up rejection).
-fn has_prior_trigger(hits: &[Hit], trigger_idx: usize, config: &TriggerConfig) -> bool {
-    let trigger = &hits[trigger_idx];
-    let trigger_time = trigger.timestamp_ns;
-    let trigger_priority = config.priority(trigger.module, trigger.channel);
-    let window_start = trigger_time - config.coincidence_window_ns;
-
-    // Backward scan from trigger
-    for i in (0..trigger_idx).rev() {
-        let h = &hits[i];
-        if h.timestamp_ns < window_start {
-            break;
-        }
-        if config.is_trigger(h.module, h.channel) {
-            let other_priority = config.priority(h.module, h.channel);
-            if other_priority <= trigger_priority {
-                return true;
-            }
-        }
-    }
-    false
+/// 複数トリガーの ±coincidence_window が重なった場合に
+/// 1つのウィンドウとして管理する内部構造体。
+struct MergedWindow {
+    /// 最初のトリガーの時刻 (イベントの trigger_time になる)
+    primary_trigger_time: f64,
+    /// 最初のトリガーのモジュール
+    primary_trigger_module: u8,
+    /// 最初のトリガーのチャンネル
+    primary_trigger_channel: u8,
+    /// マージ後のウィンドウ開始 [ns]
+    window_start: f64,
+    /// マージ後のウィンドウ終端 [ns]
+    window_end: f64,
 }
 
 /// ヒットバッファをソートし、Safe Horizon で分割する
@@ -363,89 +370,112 @@ mod tests {
     }
 
     #[test]
-    fn test_pileup_rejection() {
-        // Two triggers within coincidence window — lower priority is suppressed
+    fn test_overlapping_triggers_merged() {
+        // Two triggers within coincidence window — merged into one event
         let mut triggers = HashSet::new();
         triggers.insert((0, 0));
         triggers.insert((0, 1));
-        let mut priorities = HashMap::new();
-        priorities.insert((0, 0), 0); // highest priority
-        priorities.insert((0, 1), 1); // lower priority
         let config = TriggerConfig {
             triggers,
-            priorities,
+            priorities: HashMap::new(),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
         };
 
         let chunk = SortedChunk {
             hits: vec![
-                make_hit(0, 0, 1000.0), // trigger (priority 0)
-                make_hit(0, 1, 1200.0), // trigger (priority 1) — within window of (0,0), suppressed
+                make_hit(0, 0, 1000.0), // trigger 1
                 make_hit(1, 0, 1100.0), // coincident
+                make_hit(0, 1, 1200.0), // trigger 2 — within window, merged
             ],
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
         assert_eq!(events.len(), 1);
+        // Primary trigger is the earliest
         assert_eq!(events[0].trigger_module, 0);
         assert_eq!(events[0].trigger_channel, 0);
+        // All 3 hits included in the merged event
+        assert_eq!(events[0].hits.len(), 3);
     }
 
     #[test]
-    fn test_pileup_equal_priority() {
-        // Two triggers with same priority — earlier one wins
+    fn test_window_extends_for_later_trigger() {
+        // Second trigger extends window, capturing hits that would otherwise be lost
         let mut triggers = HashSet::new();
         triggers.insert((0, 0));
         triggers.insert((0, 1));
-        let mut priorities = HashMap::new();
-        priorities.insert((0, 0), 0);
-        priorities.insert((0, 1), 0); // same priority
         let config = TriggerConfig {
             triggers,
-            priorities,
+            priorities: HashMap::new(),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
         };
 
         let chunk = SortedChunk {
             hits: vec![
-                make_hit(0, 0, 1000.0), // first trigger
-                make_hit(0, 1, 1200.0), // second trigger — suppressed (same priority, prior exists)
+                make_hit(0, 0, 1000.0), // trigger 1: window [500, 1500]
+                make_hit(0, 1, 1400.0), // trigger 2: window extends to [500, 1900]
+                make_hit(1, 0, 1800.0), // this hit is beyond T1's window but within merged window
             ],
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].trigger_channel, 0);
+        // Hit at 1800 should be included (merged window extends to 1900)
+        assert_eq!(events[0].hits.len(), 3);
     }
 
     #[test]
-    fn test_higher_priority_later_not_suppressed() {
-        // Higher priority trigger after lower priority — NOT suppressed
+    fn test_no_domino_effect() {
+        // Three triggers in sequence — no cascading suppression
+        let config = simple_config(); // (0,0) trigger, 500ns window
+        let chunk = SortedChunk {
+            hits: vec![
+                make_hit(0, 0, 0.0),    // T1: window [-500, 500]
+                make_hit(0, 0, 400.0),  // T2: overlap → merged, window extends to [−500, 900]
+                make_hit(0, 0, 800.0),  // T3: overlap with merged → extends to [−500, 1300]
+                make_hit(0, 0, 5000.0), // T4: separated → new event
+            ],
+            core_end: 10000.0,
+        };
+        let events = build_events_from_chunk(&chunk, &config);
+        // T1+T2+T3 merge into 1 event, T4 is separate
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].hits.len(), 3); // T1, T2, T3
+        assert_eq!(events[1].hits.len(), 1); // T4
+    }
+
+    #[test]
+    fn test_independent_detectors_merged() {
+        // Module 6 and Module 8 fire simultaneously (independent physics)
+        // Both triggers merge into one event — analysis separates later
         let mut triggers = HashSet::new();
-        triggers.insert((0, 0));
-        triggers.insert((0, 1));
-        let mut priorities = HashMap::new();
-        priorities.insert((0, 0), 1); // lower priority
-        priorities.insert((0, 1), 0); // higher priority
+        triggers.insert((6, 0));
+        triggers.insert((8, 5));
         let config = TriggerConfig {
             triggers,
-            priorities,
+            priorities: HashMap::new(),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
         };
 
         let chunk = SortedChunk {
             hits: vec![
-                make_hit(0, 0, 1000.0), // trigger (priority 1)
-                make_hit(0, 1, 1200.0), // trigger (priority 0) — NOT suppressed, it's higher priority
+                make_hit(6, 0, 1000.0), // trigger mod 6
+                make_hit(6, 1, 1050.0), // coincident with mod 6
+                make_hit(8, 5, 1200.0), // trigger mod 8 — within window, merged
+                make_hit(8, 6, 1250.0), // coincident with mod 8
+                make_hit(0, 0, 1100.0), // background detector
             ],
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
-        // Both should fire: (0,0) first, then (0,1) is higher priority so not suppressed
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
+        // All 5 hits in one merged event
+        assert_eq!(events[0].hits.len(), 5);
+        // Primary trigger is mod 6 (earlier)
+        assert_eq!(events[0].trigger_module, 6);
     }
 
     #[test]

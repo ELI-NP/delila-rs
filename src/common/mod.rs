@@ -85,6 +85,10 @@ pub struct ComponentMetrics {
     /// Trigger loss rate as percentage (0.0 - 100.0)
     #[serde(default)]
     pub trigger_loss_rate: f64,
+    /// Per-channel cumulative event counts (index = channel number)
+    /// Only populated by Reader components; None for others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_counts: Option<Vec<u64>>,
 }
 
 /// Flag bit definitions for event status

@@ -76,6 +76,49 @@ pub struct OperatorFileConfig {
     /// Timeout for reset phase in ms (default: 5000)
     #[serde(default)]
     pub reset_timeout_ms: Option<u64>,
+    /// InfluxDB configuration for Grafana monitoring
+    #[serde(default)]
+    pub influxdb: Option<InfluxDbConfig>,
+    /// ELOG electronic logbook configuration
+    #[serde(default)]
+    pub elog: Option<ElogConfig>,
+}
+
+/// InfluxDB v3 Core configuration for metrics export
+#[derive(Debug, Clone, Deserialize)]
+pub struct InfluxDbConfig {
+    /// InfluxDB write endpoint URL (e.g., "http://localhost:8181")
+    pub url: String,
+    /// Database name (default: "delila")
+    #[serde(default = "default_influxdb_database")]
+    pub database: String,
+    /// Polling interval in seconds (default: 2)
+    #[serde(default = "default_influxdb_interval")]
+    pub interval_secs: u64,
+}
+
+/// ELOG electronic logbook configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct ElogConfig {
+    /// ELOG server URL (e.g., "http://localhost:8082")
+    pub url: String,
+    /// Logbook name (e.g., "3MV_2026")
+    pub logbook: String,
+    /// Author name for auto-posted entries (default: "DELILA-DAQ")
+    #[serde(default = "default_elog_author")]
+    pub author: String,
+}
+
+fn default_elog_author() -> String {
+    "DELILA-DAQ".to_string()
+}
+
+fn default_influxdb_database() -> String {
+    "delila".to_string()
+}
+
+fn default_influxdb_interval() -> u64 {
+    2
 }
 
 fn default_operator_port() -> u16 {
@@ -92,6 +135,8 @@ impl Default for OperatorFileConfig {
             arm_timeout_ms: None,
             start_timeout_ms: None,
             reset_timeout_ms: None,
+            influxdb: None,
+            elog: None,
         }
     }
 }
@@ -287,18 +332,6 @@ pub struct SourceNetworkConfig {
     #[serde(default = "default_source_pipeline_order")]
     pub pipeline_order: u32,
 
-    /// Master digitizer flag for synchronized start
-    ///
-    /// In a multi-digitizer setup with TrgOut cascade:
-    /// - Master (is_master=true): Receives SWstart command
-    /// - Slaves (is_master=false): Auto-start via TrgOut cascade from master
-    ///
-    /// Start sequence:
-    /// 1. Arm all digitizers (parallel)
-    /// 2. Start master only → Slaves auto-start via TrgOut
-    #[serde(default)]
-    pub is_master: bool,
-
     /// Hostname or IP address where this Reader is running.
     /// Used by the Operator to resolve `tcp://*:PORT` bind addresses
     /// into connect addresses (`tcp://{host}:PORT`).
@@ -327,11 +360,6 @@ impl SourceNetworkConfig {
     /// Check if this source is an emulator
     pub fn is_emulator(&self) -> bool {
         self.source_type == SourceType::Emulator
-    }
-
-    /// Check if this source is the master digitizer
-    pub fn is_master_digitizer(&self) -> bool {
-        self.is_master && self.is_digitizer()
     }
 
     /// Get data bind address with auto-allocation fallback.
@@ -1046,39 +1074,31 @@ digitizer_url = "dig2://172.18.4.56"
     }
 
     #[test]
-    fn parse_master_slave_sources() {
+    fn parse_multiple_sources() {
         let toml = r#"
 [network]
 [[network.sources]]
 id = 0
-name = "master"
+name = "dig0"
 type = "psd2"
 bind = "tcp://*:5555"
 digitizer_url = "dig2://172.18.4.100"
-is_master = true
 
 [[network.sources]]
 id = 1
-name = "slave"
+name = "dig1"
 type = "psd2"
 bind = "tcp://*:5556"
 digitizer_url = "dig2://172.18.4.101"
-is_master = false
 "#;
         let config = Config::from_toml(toml).unwrap();
         assert_eq!(config.network.sources.len(), 2);
-
-        let master = &config.network.sources[0];
-        assert!(master.is_master);
-        assert!(master.is_master_digitizer());
-
-        let slave = &config.network.sources[1];
-        assert!(!slave.is_master);
-        assert!(!slave.is_master_digitizer());
+        assert!(config.network.sources[0].is_digitizer());
+        assert!(config.network.sources[1].is_digitizer());
     }
 
     #[test]
-    fn emulator_is_not_master_digitizer() {
+    fn emulator_is_not_digitizer() {
         let toml = r#"
 [network]
 [[network.sources]]
@@ -1086,14 +1106,11 @@ id = 0
 name = "emulator"
 type = "emulator"
 bind = "tcp://*:5555"
-is_master = true
 "#;
         let config = Config::from_toml(toml).unwrap();
         let source = &config.network.sources[0];
-
-        // is_master is true, but it's an emulator, not a digitizer
-        assert!(source.is_master);
-        assert!(!source.is_master_digitizer());
+        assert!(!source.is_digitizer());
+        assert!(source.is_emulator());
     }
 
     #[test]

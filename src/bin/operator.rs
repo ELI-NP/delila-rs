@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use delila_rs::common::OperatorArgs;
-use delila_rs::config::Config;
+use delila_rs::config::{Config, InfluxDbConfig};
 use delila_rs::operator::{
     ComponentConfig, DigitizerConfigRepository, EmulatorSettings, OperatorConfig, RouterBuilder,
     RunRepository,
@@ -49,6 +49,7 @@ struct Args {
 }
 
 /// Load component configuration, operator config, emulator settings, and config file paths
+#[allow(clippy::type_complexity)]
 fn load_config(
     config_file: &str,
 ) -> (
@@ -56,6 +57,7 @@ fn load_config(
     OperatorConfig,
     EmulatorSettings,
     Vec<(u32, PathBuf)>,
+    Option<InfluxDbConfig>,
 ) {
     // Try to load from config file
     if let Ok(config) = Config::load(config_file) {
@@ -93,6 +95,7 @@ fn load_config(
                 .operator
                 .reset_timeout_ms
                 .unwrap_or(defaults.reset_timeout_ms),
+            elog: config.operator.elog,
         };
         // Load emulator settings from config
         let emulator_settings = if let Ok(settings) = config.settings.get_settings() {
@@ -109,7 +112,14 @@ fn load_config(
             .filter(|s| s.is_digitizer())
             .filter_map(|s| s.config_file.as_ref().map(|f| (s.id, PathBuf::from(f))))
             .collect();
-        return (components, operator_config, emulator_settings, config_files);
+        let influxdb_config = config.operator.influxdb;
+        return (
+            components,
+            operator_config,
+            emulator_settings,
+            config_files,
+            influxdb_config,
+        );
     }
 
     warn!(
@@ -124,7 +134,7 @@ fn load_config(
             name: "Emulator 0".to_string(),
             address: "tcp://localhost:5560".to_string(),
             pipeline_order: 1,
-            is_master: false,
+
             source_id: Some(0),
             is_digitizer: false,
             config_file: None,
@@ -134,7 +144,7 @@ fn load_config(
             name: "Emulator 1".to_string(),
             address: "tcp://localhost:5561".to_string(),
             pipeline_order: 1,
-            is_master: false,
+
             source_id: Some(1),
             is_digitizer: false,
             config_file: None,
@@ -144,7 +154,7 @@ fn load_config(
             name: "Merger".to_string(),
             address: "tcp://localhost:5570".to_string(),
             pipeline_order: 2,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -154,7 +164,7 @@ fn load_config(
             name: "Recorder".to_string(),
             address: "tcp://localhost:5580".to_string(),
             pipeline_order: 3,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -164,7 +174,7 @@ fn load_config(
             name: "Monitor".to_string(),
             address: "tcp://localhost:5590".to_string(),
             pipeline_order: 3,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -176,6 +186,7 @@ fn load_config(
         OperatorConfig::default(),
         EmulatorSettings::default(),
         Vec::new(),
+        None,
     )
 }
 
@@ -196,7 +207,6 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             name,
             address,
             pipeline_order: source.pipeline_order,
-            is_master: source.is_master_digitizer(),
             source_id: Some(source.id),
             is_digitizer: source.is_digitizer(),
             config_file: source.config_file.as_ref().map(PathBuf::from),
@@ -215,7 +225,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             name: "Merger".to_string(),
             address,
             pipeline_order: merger.pipeline_order,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -234,7 +244,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             name: "Recorder".to_string(),
             address,
             pipeline_order: recorder.pipeline_order,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -253,7 +263,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             name: "Monitor".to_string(),
             address,
             pipeline_order: monitor.pipeline_order,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -272,7 +282,7 @@ fn build_components_from_config(config: &Config) -> Vec<ComponentConfig> {
             name: "EventBuilder".to_string(),
             address,
             pipeline_order: eb.pipeline_order,
-            is_master: false,
+
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -294,7 +304,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // Load component, operator, and emulator configuration
-    let (components, operator_config, emulator_settings, config_files) =
+    let (components, operator_config, emulator_settings, config_files, influxdb_config) =
         load_config(&args.operator.common.config_file);
     info!("Loaded {} component(s)", components.len());
     for comp in &components {
@@ -355,7 +365,7 @@ async fn main() -> anyhow::Result<()> {
     let port = args.operator.port.unwrap_or(operator_config.port);
 
     // Create router with builder
-    let app = RouterBuilder::new(components)
+    let (app, app_state) = RouterBuilder::new(components)
         .config(operator_config)
         .config_dir(PathBuf::from("./config/digitizers"))
         .config_files(config_files)
@@ -363,6 +373,15 @@ async fn main() -> anyhow::Result<()> {
         .digitizer_repo(digitizer_repo)
         .emulator_settings(emulator_settings)
         .build();
+
+    // Start InfluxDB writer background task if configured
+    if let Some(influxdb_config) = influxdb_config {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            delila_rs::operator::influxdb::run_writer(influxdb_config, state).await;
+        });
+    }
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Starting Operator server on http://{}", addr);
     info!("Swagger UI: http://localhost:{}/swagger-ui/", port);

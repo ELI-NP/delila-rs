@@ -5,7 +5,9 @@
 
 mod client;
 mod digitizer_repository;
+pub mod elog;
 mod event_builder_repository;
+pub mod influxdb;
 mod routes;
 mod run_repository;
 
@@ -16,7 +18,7 @@ pub use digitizer_repository::{
 pub use event_builder_repository::{
     EventBuilderConfigDocument, EventBuilderRepoError, EventBuilderRepository,
 };
-pub use routes::{EmulatorSettings, RouterBuilder};
+pub use routes::{AppState, EmulatorSettings, RouterBuilder};
 pub use run_repository::{
     CurrentRunInfo, ErrorLogEntry, LastRunInfo, RepositoryError, RunDocument, RunNote,
     RunRepository, RunStats, RunStatus,
@@ -224,14 +226,6 @@ pub struct ComponentConfig {
     /// - Start: descending order (downstream first, then upstream)
     /// - Stop: ascending order (upstream first, then downstream)
     pub pipeline_order: u32,
-    /// Master flag for synchronized digitizer start
-    ///
-    /// In multi-digitizer setups with TrgOut cascade:
-    /// - Master (is_master=true): Receives SW Start command
-    /// - Slaves (is_master=false): Auto-start via TrgOut cascade
-    ///
-    /// For non-digitizer components (Merger, Recorder, Monitor), this is always false.
-    pub is_master: bool,
     /// Source ID from config (only for data sources: emulators, readers)
     /// None for non-source components (Merger, Recorder, Monitor).
     pub source_id: Option<u32>,
@@ -264,6 +258,8 @@ pub struct OperatorConfig {
     pub web_ui_dir: Option<PathBuf>,
     /// Monitor HTTP port (from TOML monitor config)
     pub monitor_http_port: Option<u16>,
+    /// ELOG configuration for auto-posting on run stop
+    pub elog: Option<crate::config::ElogConfig>,
 }
 
 impl Default for OperatorConfig {
@@ -277,6 +273,7 @@ impl Default for OperatorConfig {
             experiment_name: "DefaultExp".to_string(),
             web_ui_dir: None,
             monitor_http_port: None,
+            elog: None,
         }
     }
 }
@@ -502,7 +499,6 @@ mod tests {
             name: "Merger".to_string(),
             address: "tcp://localhost:5570".to_string(),
             pipeline_order: 2,
-            is_master: false,
             source_id: None,
             is_digitizer: false,
             config_file: None,
@@ -511,23 +507,21 @@ mod tests {
         assert_eq!(config.name, "Merger");
         assert!(config.address.contains("5570"));
         assert_eq!(config.pipeline_order, 2);
-        assert!(!config.is_master);
     }
 
     #[test]
-    fn test_component_config_master() {
+    fn test_component_config_digitizer() {
         let config = ComponentConfig {
-            name: "PSD2-Master".to_string(),
+            name: "PSD2".to_string(),
             address: "tcp://localhost:5560".to_string(),
             pipeline_order: 1,
-            is_master: true,
             source_id: Some(0),
             is_digitizer: true,
             config_file: None,
             source_type: Some(crate::config::SourceType::Psd2),
         };
-        assert_eq!(config.name, "PSD2-Master");
-        assert!(config.is_master);
+        assert_eq!(config.name, "PSD2");
+        assert!(config.is_digitizer);
     }
 
     #[test]

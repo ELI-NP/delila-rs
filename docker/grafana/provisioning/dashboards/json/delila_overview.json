@@ -1,0 +1,107 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Channel Event Rate (Hz)",
+      "type": "timeseries",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Hz",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "lastNotNull"] }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "query": "SELECT non_negative_derivative(mean(\"count\"), 1s) FROM \"channel_rate\" WHERE $timeFilter GROUP BY time($__interval), \"module\", \"channel\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Total Event Rate (Hz)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Hz",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "query": "SELECT non_negative_derivative(mean(\"total_events\"), 1s) FROM \"system_rate\" WHERE $timeFilter GROUP BY time($__interval), \"module\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Data Rate (bytes/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "query": "SELECT non_negative_derivative(mean(\"bytes\"), 1s) FROM \"system_rate\" WHERE $timeFilter GROUP BY time($__interval), \"module\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    }
+  ],
+  "refresh": "2s",
+  "schemaVersion": 39,
+  "tags": ["delila", "daq"],
+  "templating": { "list": [] },
+  "time": { "from": "now-5m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "DELILA DAQ Overview",
+  "uid": "delila-overview",
+  "version": 1
+}

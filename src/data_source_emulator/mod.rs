@@ -277,6 +277,7 @@ impl CommandHandlerExt for EmulatorCommandExt {
             data_rate: 0.0,
             trigger_loss_count: 0,
             trigger_loss_rate: 0.0,
+            channel_counts: None,
         })
     }
 

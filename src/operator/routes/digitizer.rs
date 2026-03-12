@@ -302,7 +302,11 @@ fn firmware_from_device_info(device_info: &serde_json::Value) -> FirmwareType {
         "DPP_OPEN" => FirmwareType::AMax,
         // Fallback: use model name to guess generation
         _ => {
-            if model.contains("1730") || model.contains("1725") || model.contains("5730") || model.contains("5725") {
+            if model.contains("1730")
+                || model.contains("1725")
+                || model.contains("5730")
+                || model.contains("5725")
+            {
                 FirmwareType::PSD1 // DIG1 device, assume PSD
             } else {
                 FirmwareType::PSD2 // DIG2 device or unknown

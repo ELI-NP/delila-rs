@@ -210,7 +210,10 @@ impl ReaderConfig {
 }
 
 /// Metrics for monitoring
-#[derive(Debug, Default)]
+/// Maximum channels per digitizer (DT5725S = 32ch, DT5730B = 16ch)
+pub const MAX_CHANNELS: usize = 32;
+
+#[derive(Debug)]
 pub struct ReaderMetrics {
     /// Total events decoded
     pub events_decoded: AtomicU64,
@@ -226,6 +229,23 @@ pub struct ReaderMetrics {
     pub trigger_lost_flag_events: AtomicU64,
     /// Events with n_lost_trigger flag set (DIG1 only)
     pub n_lost_trigger_flag_events: AtomicU64,
+    /// Per-channel cumulative event counts (index = channel number)
+    pub per_channel_counts: [AtomicU64; MAX_CHANNELS],
+}
+
+impl Default for ReaderMetrics {
+    fn default() -> Self {
+        Self {
+            events_decoded: AtomicU64::new(0),
+            bytes_read: AtomicU64::new(0),
+            batches_published: AtomicU64::new(0),
+            queue_length: AtomicU64::new(0),
+            trigger_loss_count: AtomicU64::new(0),
+            trigger_lost_flag_events: AtomicU64::new(0),
+            n_lost_trigger_flag_events: AtomicU64::new(0),
+            per_channel_counts: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
 }
 
 /// Rate tracker for 1-second interval rate calculation
@@ -343,6 +363,13 @@ impl CommandHandlerExt for ReaderCommandExt {
             data_rate: 0.0,
             trigger_loss_count: trigger_loss,
             trigger_loss_rate: loss_rate,
+            channel_counts: Some(
+                self.metrics
+                    .per_channel_counts
+                    .iter()
+                    .map(|c| c.load(Ordering::Relaxed))
+                    .collect(),
+            ),
         })
     }
 
@@ -1858,6 +1885,11 @@ impl Reader {
                                                     .fetch_add(1024, Ordering::Relaxed);
                                             }
                                         }
+                                        // Per-channel count
+                                        let ch = common_event.channel as usize;
+                                        if ch < MAX_CHANNELS {
+                                            metrics.per_channel_counts[ch].fetch_add(1, Ordering::Relaxed);
+                                        }
                                         batch.push(common_event);
                                     }
 
@@ -1938,7 +1970,12 @@ impl Reader {
                                 sequence_number,
                                 1,
                             );
-                            batch.push(Self::convert_event(event_data, config.firmware));
+                            let common_event = Self::convert_event(event_data, config.firmware);
+                            let ch = common_event.channel as usize;
+                            if ch < MAX_CHANNELS {
+                                metrics.per_channel_counts[ch].fetch_add(1, Ordering::Relaxed);
+                            }
+                            batch.push(common_event);
 
                             // Update metrics
                             metrics.events_decoded.fetch_add(1, Ordering::Relaxed);

@@ -232,29 +232,24 @@ impl ComponentClient {
     /// for all of them to reach Running before proceeding to the next order group.
     /// This prevents data buffer overflow while maximizing parallelism.
     ///
-    /// **Master/Slave Support:**
-    /// When using synchronized digitizer start (TrgOut cascade):
-    /// - All components are armed first (happens before this function)
-    /// - Slave digitizers (is_master=false when any master exists) do NOT receive Start command
-    /// - Slaves auto-start via TrgOut cascade when the master starts
+    /// Each Reader's `startmode` parameter determines its actual behavior:
+    /// - `START_MODE_SW`: Sends armacquisition (master — triggers TrgOut)
+    /// - `START_MODE_S_IN`: No-op (slave — already armed, waits for S_IN)
     ///
     /// Example: order=3 [Recorder, Monitor] → parallel start, wait all Running
     ///          order=2 [Merger] → start, wait Running
-    ///          order=1 [Master, Slave1, Slave2] → only Master gets Start, wait all Running
+    ///          order=1 [Dig0, Dig1, Dig2] → all get Start, wait all Running
     pub async fn start_all_sequential(
         &self,
         configs: &[ComponentConfig],
         run_number: u32,
         per_component_timeout_ms: u64,
     ) -> Result<Vec<CommandResult>, String> {
-        // Check if we have any master digitizer (enables Master/Slave mode)
-        let has_master = configs.iter().any(|c| c.is_master);
-
         // Group by pipeline_order (descending: downstream first)
         let groups = Self::group_by_pipeline_order(configs, true);
 
         tracing::info!(
-            "Start order (downstream first): {:?}{}",
+            "Start order (downstream first): {:?}",
             groups
                 .iter()
                 .map(|(order, cfgs)| (
@@ -262,60 +257,24 @@ impl ComponentClient {
                     cfgs.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
                 ))
                 .collect::<Vec<_>>(),
-            if has_master {
-                " [Master/Slave mode enabled]"
-            } else {
-                ""
-            }
         );
 
         let mut results = Vec::with_capacity(configs.len());
 
         for (order, group_configs) in groups {
-            // Separate masters/slaves for logging and execution
-            let (to_start, to_skip): (Vec<_>, Vec<_>) = group_configs.iter().partition(|c| {
-                // Skip slave digitizers in Master/Slave mode
-                // A slave is: pipeline_order == 1 (source) AND is_master == false AND has_master exists
-                if has_master && order == 1 && !c.is_master {
-                    false // This is a slave digitizer, skip Start
-                } else {
-                    true // Send Start command
-                }
-            });
+            let start_names: Vec<_> = group_configs.iter().map(|c| c.name.as_str()).collect();
+            tracing::info!(
+                "Starting group order={}: {:?} in parallel...",
+                order,
+                start_names
+            );
 
-            if !to_skip.is_empty() {
-                let skip_names: Vec<_> = to_skip.iter().map(|c| c.name.as_str()).collect();
-                tracing::info!(
-                    "Skipping Start for slave digitizers: {:?} (auto-start via TrgOut)",
-                    skip_names
-                );
-            }
-
-            let start_names: Vec<_> = to_start.iter().map(|c| c.name.as_str()).collect();
-            if !to_start.is_empty() {
-                tracing::info!(
-                    "Starting group order={}: {:?} in parallel...",
-                    order,
-                    start_names
-                );
-            }
-
-            // Start only non-slave components in this group in parallel
-            let futures: Vec<_> = to_start
+            // Start all components in this group in parallel
+            let futures: Vec<_> = group_configs
                 .iter()
                 .map(|config| self.start(config, run_number))
                 .collect();
-            let mut group_results = join_all(futures).await;
-
-            // Add synthetic "success" results for skipped slaves
-            for slave in &to_skip {
-                group_results.push(CommandResult {
-                    name: slave.name.clone(),
-                    success: true,
-                    state: ComponentState::Running, // Will transition via TrgOut
-                    message: "Slave digitizer - auto-start via TrgOut".to_string(),
-                });
-            }
+            let group_results = join_all(futures).await;
 
             // Check for failures - find first failure and build error message
             let error_msg = group_results

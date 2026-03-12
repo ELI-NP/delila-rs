@@ -972,11 +972,11 @@ mod tests {
 
         let hits = vec![
             make_hit_energy(0, 0, 1000.0, 1500), // trigger: energy in range → accepted
-            make_hit_energy(0, 0, 2000.0, 500),   // trigger: energy below range → rejected
-            make_hit_energy(0, 0, 3000.0, 3000),   // trigger: energy above range → rejected
-            make_hit_energy(0, 1, 1010.0, 800),    // detector
-            make_hit_energy(0, 1, 2010.0, 800),    // detector (no matching trigger)
-            make_hit_energy(0, 1, 3010.0, 800),    // detector (no matching trigger)
+            make_hit_energy(0, 0, 2000.0, 500),  // trigger: energy below range → rejected
+            make_hit_energy(0, 0, 3000.0, 3000), // trigger: energy above range → rejected
+            make_hit_energy(0, 1, 1010.0, 800),  // detector
+            make_hit_energy(0, 1, 2010.0, 800),  // detector (no matching trigger)
+            make_hit_energy(0, 1, 3010.0, 800),  // detector (no matching trigger)
         ];
 
         cal.process_hits_by_trigger_index(&hits);
@@ -993,7 +993,7 @@ mod tests {
 
         let hits = vec![
             make_hit_energy(0, 0, 1000.0, 1500), // accepted trigger
-            make_hit_energy(0, 0, 2000.0, 500),   // rejected trigger
+            make_hit_energy(0, 0, 2000.0, 500),  // rejected trigger
             make_hit_energy(0, 1, 1010.0, 800),
             make_hit_energy(0, 1, 2010.0, 800),
         ];
@@ -1029,7 +1029,7 @@ mod tests {
 
         let hits = vec![
             make_hit_energy(0, 0, 1000.0, 0),     // min energy
-            make_hit_energy(0, 0, 2000.0, 65535),  // max energy
+            make_hit_energy(0, 0, 2000.0, 65535), // max energy
             make_hit_energy(0, 1, 1010.0, 800),
             make_hit_energy(0, 1, 2010.0, 800),
         ];

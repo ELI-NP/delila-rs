@@ -361,7 +361,11 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
     // Always record run end and clear current_run, even if some components
     // failed to stop. Stop is best-effort — partial failure must not leave
     // the UI thinking the run is still active.
-    if let (Some(ref repo), Some(run_info)) = (&state.run_repo, current_run) {
+    if let (Some(ref repo), Some(mut run_info)) = (&state.run_repo, current_run) {
+        // Calculate final elapsed time
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        run_info.elapsed_secs = (now_ms - run_info.start_time) / 1000;
+
         // Get final stats from components
         let components = state.client.get_all_status(&state.components).await;
         let total_events: i64 = components
@@ -391,11 +395,32 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
                 run_info.run_number,
                 &run_info.exp_name,
                 RunStatus::Completed,
-                stats,
+                stats.clone(),
             )
             .await
         {
             tracing::warn!("Failed to record run end in MongoDB: {}", e);
+        }
+
+        // Post to ELOG (fire-and-forget, must not block stop)
+        if let Some(ref elog_config) = state.config.elog {
+            let elog_config = elog_config.clone();
+            let run_number = run_info.run_number;
+            let exp_name = run_info.exp_name.clone();
+            let comment = run_info.comment.clone();
+            let elapsed = run_info.elapsed_secs;
+            let stats = stats.clone();
+            tokio::spawn(async move {
+                crate::operator::elog::post_run_summary(
+                    &elog_config,
+                    run_number,
+                    &exp_name,
+                    &comment,
+                    elapsed,
+                    &stats,
+                )
+                .await;
+            });
         }
     }
 

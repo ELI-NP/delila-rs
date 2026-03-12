@@ -42,6 +42,9 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 # CLI argument parsing
 clap = { version = "4", features = ["derive", "env"] }
 
+# HTTP client (InfluxDB metrics writer + ELOG posting)
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+
 # Web API
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "compression-gzip", "fs"] }
