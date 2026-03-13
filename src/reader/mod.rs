@@ -1765,7 +1765,10 @@ impl Reader {
 
         let adc_min = config.adc_min;
         if adc_min > 0 {
-            info!(adc_min, "ADC minimum filter enabled: events with energy < {} will be discarded", adc_min);
+            info!(
+                adc_min,
+                "ADC minimum filter enabled: events with energy < {} will be discarded", adc_min
+            );
         }
 
         // Create decoder based on firmware type

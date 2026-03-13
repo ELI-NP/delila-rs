@@ -8,13 +8,13 @@ use delila_rs::reader::CaenHandle;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints};
 use oxyroot::{RootFile, WriterTree};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(about = "AMax Viewer - Firmware Development Tool")]
@@ -86,10 +86,14 @@ impl EventBuffer {
         self.flags_a.push(flags_a as i32);
         self.flags_b.push(flags_b as i32);
         self.psd.push(psd as i32);
-        self.user_info_0.push(*user_info.first().unwrap_or(&0) as i64);
-        self.user_info_1.push(*user_info.get(1).unwrap_or(&0) as i64);
-        self.user_info_2.push(*user_info.get(2).unwrap_or(&0) as i64);
-        self.user_info_3.push(*user_info.get(3).unwrap_or(&0) as i64);
+        self.user_info_0
+            .push(*user_info.first().unwrap_or(&0) as i64);
+        self.user_info_1
+            .push(*user_info.get(1).unwrap_or(&0) as i64);
+        self.user_info_2
+            .push(*user_info.get(2).unwrap_or(&0) as i64);
+        self.user_info_3
+            .push(*user_info.get(3).unwrap_or(&0) as i64);
         match waveform {
             Some(wf) => {
                 self.waveform_size.push(wf.len() as i32);
@@ -128,11 +132,7 @@ impl EventBuffer {
         // Scalar fields: i32×7 + i64×5 = 68 bytes per event
         let scalar = n * 68;
         // Waveform: Vec overhead (24 bytes) + data (4 bytes per sample)
-        let wf: usize = self
-            .waveform
-            .iter()
-            .map(|w| 24 + w.len() * 4)
-            .sum();
+        let wf: usize = self.waveform.iter().map(|w| 24 + w.len() * 4).sum();
         scalar + wf
     }
 
@@ -166,6 +166,15 @@ impl EventBuffer {
     }
 }
 
+/// Deserialize selected_channel with backward compatibility (old Option<u8> null → 0)
+fn deserialize_channel<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<u8>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or(0))
+}
+
 /// Application settings (persisted to settings.json)
 #[derive(Clone, Serialize, Deserialize)]
 struct AppSettings {
@@ -176,9 +185,9 @@ struct AppSettings {
     /// Register values keyed by register name
     #[serde(default)]
     param_values: HashMap<String, u32>,
-    /// Channel filter: None = All, Some(ch) = specific channel
-    #[serde(default)]
-    selected_channel: Option<u8>,
+    /// Selected channel for display (0-31)
+    #[serde(default, deserialize_with = "deserialize_channel")]
+    selected_channel: u8,
 }
 
 impl Default for AppSettings {
@@ -187,7 +196,7 @@ impl Default for AppSettings {
             url: Self::default_url(),
             output_path: Self::default_output_path(),
             param_values: HashMap::new(),
-            selected_channel: None,
+            selected_channel: 0,
         }
     }
 }
@@ -249,7 +258,11 @@ fn load_register_defs(cli_path: Option<&PathBuf>) -> Vec<RegisterDef> {
         match std::fs::read_to_string(path) {
             Ok(content) => match serde_json::from_str::<Vec<RegisterDef>>(&content) {
                 Ok(defs) => {
-                    eprintln!("Loaded {} register defs from {}", defs.len(), path.display());
+                    eprintln!(
+                        "Loaded {} register defs from {}",
+                        defs.len(),
+                        path.display()
+                    );
                     return defs;
                 }
                 Err(e) => eprintln!("Failed to parse {}: {}", path.display(), e),
@@ -290,6 +303,7 @@ fn init_param_values(defs: &[RegisterDef], saved: &HashMap<String, u32>) -> Hash
 }
 
 /// 2D Histogram data
+#[derive(Clone)]
 struct Histogram2D {
     bins: Vec<Vec<u32>>,
     energy_bins: usize,
@@ -378,6 +392,33 @@ impl Histogram2D {
     }
 }
 
+/// Per-channel data storage (histogram + waveform + rate)
+struct ChannelData {
+    histogram: Histogram2D,
+    waveform_buffer: Vec<u16>,
+    waveform_len: usize,
+    latest_waveform_energy: u16,
+    histogram_dirty: bool,
+    last_waveform_update: Instant,
+    events_since_last_tick: u64,
+    event_rate: f64,
+}
+
+impl ChannelData {
+    fn new(energy_bins: usize, amax_bins: usize) -> Self {
+        Self {
+            histogram: Histogram2D::new(energy_bins, amax_bins),
+            waveform_buffer: vec![0u16; 8192],
+            waveform_len: 0,
+            latest_waveform_energy: 0,
+            histogram_dirty: true,
+            last_waveform_update: Instant::now(),
+            events_since_last_tick: 0,
+            event_rate: 0.0,
+        }
+    }
+}
+
 fn colormap(t: f32) -> egui::Color32 {
     let t = t.clamp(0.0, 1.0);
     if t < 0.25 {
@@ -398,17 +439,17 @@ fn colormap(t: f32) -> egui::Color32 {
 /// Test pulse parameters (all SetInRun=true, can be changed during acquisition)
 #[derive(Clone)]
 struct TestPulseParams {
-    period_ns: u32,     // TestPulsePeriod [ns]
-    width_ns: u32,      // TestPulseWidth [ns]
-    low_level: u32,     // TestPulseLowLevel [ADC count]
-    high_level: u32,    // TestPulseHighLevel [ADC count]
+    period_ns: u32,  // TestPulsePeriod [ns]
+    width_ns: u32,   // TestPulseWidth [ns]
+    low_level: u32,  // TestPulseLowLevel [ADC count]
+    high_level: u32, // TestPulseHighLevel [ADC count]
 }
 
 impl Default for TestPulseParams {
     fn default() -> Self {
         Self {
-            period_ns: 1_000_000,  // 1ms = 1kHz
-            width_ns: 10,          // 10 ns
+            period_ns: 1_000_000, // 1ms = 1kHz
+            width_ns: 10,         // 10 ns
             low_level: 1000,
             high_level: 3000,
         }
@@ -427,16 +468,14 @@ impl TestPulseParams {
 
 /// Shared state between GUI and acquisition thread
 struct SharedState {
-    histogram: Histogram2D,
+    /// Per-channel histogram, waveform, and rate data
+    channels: Vec<ChannelData>,
     param_values: HashMap<String, u32>,
     running: bool,
+    /// Global event rate (all channels)
     event_rate: f64,
     connected: bool,
     status_message: String,
-    waveform_buffer: Vec<u16>,
-    waveform_len: usize,
-    latest_waveform_energy: u16,
-    histogram_dirty: bool,
     event_buffer: EventBuffer,
     recording: bool,
     recorded_count: usize,
@@ -448,8 +487,6 @@ struct SharedState {
     test_pulse_active: bool,
     /// Set to true by GUI when test_pulse_active toggled; cleared by acq thread after applying
     test_pulse_toggle_requested: bool,
-    /// Channel filter for histogram/waveform: None = All, Some(ch) = specific channel
-    selected_channel: Option<u8>,
 }
 
 struct AmaxViewerApp {
@@ -462,29 +499,35 @@ struct AmaxViewerApp {
     register_defs: Vec<RegisterDef>,
     test_pulse: bool,
     was_recording: bool,
+    /// Selected channel for display (GUI-only state, not shared with acq thread)
+    selected_channel: u8,
+    /// Track previous channel to detect changes for texture regeneration
+    prev_selected_channel: u8,
 }
 
 impl AmaxViewerApp {
-    fn new(_cc: &eframe::CreationContext<'_>, test_pulse: bool, register_defs_path: Option<PathBuf>) -> Self {
+    fn new(
+        _cc: &eframe::CreationContext<'_>,
+        test_pulse: bool,
+        register_defs_path: Option<PathBuf>,
+    ) -> Self {
         let settings = AppSettings::load();
         let register_defs = load_register_defs(register_defs_path.as_ref());
         let param_values = init_param_values(&register_defs, &settings.param_values);
 
+        let channels: Vec<ChannelData> = (0..32).map(|_| ChannelData::new(512, 512)).collect();
+
         let shared = Arc::new(Mutex::new(SharedState {
-            histogram: Histogram2D::new(512, 512),
+            channels,
             param_values,
             running: false,
             event_rate: 0.0,
             connected: false,
             status_message: if test_pulse {
-                "Test Pulse mode — Not connected".to_string()
+                "Test Pulse mode - Not connected".to_string()
             } else {
                 "Not connected".to_string()
             },
-            waveform_buffer: vec![0u16; 8192],
-            waveform_len: 0,
-            latest_waveform_energy: 0,
-            histogram_dirty: true,
             event_buffer: EventBuffer::default(),
             recording: false,
             recorded_count: 0,
@@ -492,8 +535,9 @@ impl AmaxViewerApp {
             test_pulse_params_dirty: false,
             test_pulse_active: test_pulse,
             test_pulse_toggle_requested: false,
-            selected_channel: settings.selected_channel,
         }));
+
+        let selected_channel = settings.selected_channel.min(31);
 
         Self {
             url: settings.url,
@@ -505,6 +549,8 @@ impl AmaxViewerApp {
             register_defs,
             test_pulse,
             was_recording: false,
+            selected_channel,
+            prev_selected_channel: selected_channel,
         }
     }
 
@@ -541,302 +587,319 @@ impl eframe::App for AmaxViewerApp {
         let mut stop_clicked = false;
         let thread_active = self.acq_thread.is_some();
 
+        // Bounds-clamp selected_channel to prevent panic on channels[] indexing
+        // (could be out of range from corrupted settings file)
+        self.selected_channel = self.selected_channel.min(31);
+
         egui::SidePanel::left("params_panel")
             .min_width(250.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                let mut state = self.shared.lock().unwrap();
+                    let mut state = self.shared.lock().unwrap();
 
-                if state.test_pulse_active {
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new("TEST PULSE MODE")
-                            .color(egui::Color32::from_rgb(255, 100, 0))
-                            .heading()
-                            .strong(),
-                    );
-                    ui.add_space(4.0);
-                }
+                    if state.test_pulse_active {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("TEST PULSE MODE")
+                                .color(egui::Color32::from_rgb(255, 100, 0))
+                                .heading()
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+                    }
 
-                ui.heading("Connection");
-                ui.text_edit_singleline(&mut self.url);
+                    ui.heading("Connection");
+                    ui.text_edit_singleline(&mut self.url);
 
-                ui.horizontal(|ui| {
-                    if state.running {
-                        if ui.button("Stop").clicked() {
-                            stop_clicked = true;
+                    ui.horizontal(|ui| {
+                        if state.running {
+                            if ui.button("Stop").clicked() {
+                                stop_clicked = true;
+                            }
+                        } else if ui.button("Start").clicked() {
+                            start_clicked = true;
                         }
-                    } else if ui.button("Start").clicked() {
-                        start_clicked = true;
+
+                        if ui.button("Clear").clicked() {
+                            let ch = self.selected_channel as usize;
+                            state.channels[ch].histogram.clear();
+                            state.channels[ch].histogram_dirty = true;
+                        }
+                    });
+
+                    // Test Pulse toggle (runtime)
+                    {
+                        let prev = state.test_pulse_active;
+                        ui.checkbox(&mut state.test_pulse_active, "Test Pulse");
+                        if state.test_pulse_active != prev {
+                            state.test_pulse_toggle_requested = true;
+                        }
                     }
 
-                    if ui.button("Clear").clicked() {
-                        state.histogram.clear();
-                        state.histogram_dirty = true;
-                    }
-                });
+                    ui.label(format!("Status: {}", state.status_message));
+                    let ch = self.selected_channel as usize;
+                    ui.label(format!(
+                        "Events: {} (Ch {})",
+                        state.channels[ch].histogram.total_events, self.selected_channel
+                    ));
+                    ui.label(format!(
+                        "Rate: {:.1} Hz (Ch: {:.1} Hz)",
+                        state.event_rate, state.channels[ch].event_rate
+                    ));
 
-                // Test Pulse toggle (runtime)
-                {
-                    let prev = state.test_pulse_active;
-                    ui.checkbox(&mut state.test_pulse_active, "Test Pulse");
-                    if state.test_pulse_active != prev {
-                        state.test_pulse_toggle_requested = true;
-                    }
-                }
-
-                ui.label(format!("Status: {}", state.status_message));
-                let ch_label = match state.selected_channel {
-                    None => "All".to_string(),
-                    Some(ch) => format!("Ch {}", ch),
-                };
-                ui.label(format!("Events: {} ({})", state.histogram.total_events, ch_label));
-                ui.label(format!("Rate: {:.1} Hz", state.event_rate));
-
-                // Channel selector
-                {
-                    let prev = state.selected_channel;
-                    let selected_text = match state.selected_channel {
-                        None => "All".to_string(),
-                        Some(ch) => format!("Ch {}", ch),
-                    };
+                    // Channel selector
                     egui::ComboBox::from_label("Channel")
-                        .selected_text(&selected_text)
+                        .selected_text(format!("Ch {}", self.selected_channel))
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.selected_channel, None, "All");
                             for ch in 0..32u8 {
                                 ui.selectable_value(
-                                    &mut state.selected_channel,
-                                    Some(ch),
+                                    &mut self.selected_channel,
+                                    ch,
                                     format!("Ch {}", ch),
                                 );
                             }
                         });
-                    if state.selected_channel != prev {
-                        state.histogram.clear();
-                        state.histogram_dirty = true;
-                    }
-                }
 
-                // Test Pulse parameters (shown only when active)
-                if state.test_pulse_active {
-                    ui.separator();
-                    egui::CollapsingHeader::new("Test Pulse Settings")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            let mut changed = false;
+                    // Test Pulse parameters (shown only when active)
+                    if state.test_pulse_active {
+                        ui.separator();
+                        egui::CollapsingHeader::new("Test Pulse Settings")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                let mut changed = false;
 
-                            ui.horizontal(|ui| {
-                                ui.label("Period:");
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut state.test_pulse_params.period_ns)
+                                ui.horizontal(|ui| {
+                                    ui.label("Period:");
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(
+                                                &mut state.test_pulse_params.period_ns,
+                                            )
                                             .range(1000..=1_000_000_000u32)
                                             .suffix(" ns"),
-                                    )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
-                                ui.label(format!(
-                                    "({:.1} Hz)",
-                                    state.test_pulse_params.frequency_hz()
-                                ));
-                            });
+                                        )
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                    ui.label(format!(
+                                        "({:.1} Hz)",
+                                        state.test_pulse_params.frequency_hz()
+                                    ));
+                                });
 
-                            ui.horizontal(|ui| {
-                                ui.label("Width:");
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut state.test_pulse_params.width_ns)
+                                ui.horizontal(|ui| {
+                                    ui.label("Width:");
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(
+                                                &mut state.test_pulse_params.width_ns,
+                                            )
                                             .range(8..=1_000_000_000u32)
                                             .suffix(" ns"),
-                                    )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.label("Low Level:");
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut state.test_pulse_params.low_level,
                                         )
-                                        .range(0..=65535u32)
-                                        .suffix(" ADC"),
-                                    )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
-                            });
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                });
 
-                            ui.horizontal(|ui| {
-                                ui.label("High Level:");
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut state.test_pulse_params.high_level,
+                                ui.horizontal(|ui| {
+                                    ui.label("Low Level:");
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(
+                                                &mut state.test_pulse_params.low_level,
+                                            )
+                                            .range(0..=65535u32)
+                                            .suffix(" ADC"),
                                         )
-                                        .range(0..=65535u32)
-                                        .suffix(" ADC"),
-                                    )
-                                    .changed()
-                                {
-                                    changed = true;
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("High Level:");
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(
+                                                &mut state.test_pulse_params.high_level,
+                                            )
+                                            .range(0..=65535u32)
+                                            .suffix(" ADC"),
+                                        )
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                });
+
+                                if changed {
+                                    state.test_pulse_params_dirty = true;
+                                }
+
+                                if state.running {
+                                    ui.label(
+                                        egui::RichText::new("Changes apply immediately (SetInRun)")
+                                            .small()
+                                            .weak(),
+                                    );
                                 }
                             });
-
-                            if changed {
-                                state.test_pulse_params_dirty = true;
-                            }
-
-                            if state.running {
-                                ui.label(
-                                    egui::RichText::new("Changes apply immediately (SetInRun)")
-                                        .small()
-                                        .weak(),
-                                );
-                            }
-                        });
-                }
-
-                ui.separator();
-                ui.heading("ROOT Output");
-
-                ui.horizontal(|ui| {
-                    ui.label("File:");
-                    ui.text_edit_singleline(&mut self.output_path);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut state.recording, "Record");
-                    let mem_mb =
-                        state.event_buffer.estimated_memory_bytes() as f64 / (1024.0 * 1024.0);
-                    ui.label(format!(
-                        "({} events, {:.1} MB)",
-                        state.recorded_count, mem_mb
-                    ));
-                });
-
-                // Auto-save: when DAQ stops with data, or when user unchecks Record
-                let is_recording = state.recording && state.running;
-                if self.was_recording && !is_recording && state.recorded_count > 0 {
-                    match state.event_buffer.write_root(&self.output_path) {
-                        Ok(n) => {
-                            state.status_message =
-                                format!("Saved {} events to {}", n, self.output_path);
-                            eprintln!("Auto-saved {} events to {}", n, self.output_path);
-                            state.event_buffer.clear();
-                            state.recorded_count = 0;
-                        }
-                        Err(e) => {
-                            state.status_message = format!("Save failed: {}", e);
-                            eprintln!("Auto-save failed: {}", e);
-                        }
                     }
-                }
-                self.was_recording = is_recording;
 
-                ui.separator();
-                ui.heading("Parameters");
+                    ui.separator();
+                    ui.heading("ROOT Output");
 
-                // Dynamic UI from register_defs
-                let mut current_section = String::new();
-                for reg in &self.register_defs {
-                    if reg.section != current_section {
-                        ui.separator();
-                        ui.heading(&reg.section);
-                        current_section = reg.section.clone();
-                    }
-                    let value = state
-                        .param_values
-                        .entry(reg.name.clone())
-                        .or_insert(reg.default);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{}:", reg.name));
-                        ui.add(egui::DragValue::new(value).range(reg.min..=reg.max));
+                        ui.label("File:");
+                        ui.text_edit_singleline(&mut self.output_path);
                     });
-                }
 
-                ui.add_space(10.0);
-                if thread_active {
-                    if ui.button("Restart to Apply").clicked() {
-                        stop_clicked = true;
-                        start_clicked = true;
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut state.recording, "Record");
+                        let mem_mb =
+                            state.event_buffer.estimated_memory_bytes() as f64 / (1024.0 * 1024.0);
+                        ui.label(format!(
+                            "({} events, {:.1} MB)",
+                            state.recorded_count, mem_mb
+                        ));
+                    });
+
+                    // Auto-save: when DAQ stops with data, or when user unchecks Record
+                    let is_recording = state.recording && state.running;
+                    if self.was_recording && !is_recording && state.recorded_count > 0 {
+                        match state.event_buffer.write_root(&self.output_path) {
+                            Ok(n) => {
+                                state.status_message =
+                                    format!("Saved {} events to {}", n, self.output_path);
+                                eprintln!("Auto-saved {} events to {}", n, self.output_path);
+                                state.event_buffer.clear();
+                                state.recorded_count = 0;
+                            }
+                            Err(e) => {
+                                state.status_message = format!("Save failed: {}", e);
+                                eprintln!("Auto-save failed: {}", e);
+                            }
+                        }
                     }
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        stop_clicked = true;
-                        start_clicked = true;
+                    self.was_recording = is_recording;
+
+                    ui.separator();
+                    ui.heading("Parameters");
+
+                    // Dynamic UI from register_defs
+                    let mut current_section = String::new();
+                    for reg in &self.register_defs {
+                        if reg.section != current_section {
+                            ui.separator();
+                            ui.heading(&reg.section);
+                            current_section = reg.section.clone();
+                        }
+                        let value = state
+                            .param_values
+                            .entry(reg.name.clone())
+                            .or_insert(reg.default);
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}:", reg.name));
+                            ui.add(egui::DragValue::new(value).range(reg.min..=reg.max));
+                        });
                     }
-                    ui.label("(or press Enter)");
-                } else {
-                    ui.label("Press Start to begin");
-                }
 
-                ui.separator();
-                ui.heading("Histogram Range");
-
-                ui.horizontal(|ui| {
-                    ui.label("Energy Max:");
-                    let mut max = state.histogram.energy_max as u32;
-                    if ui
-                        .add(egui::DragValue::new(&mut max).range(1000..=65536))
-                        .changed()
-                    {
-                        state.histogram.energy_max = max as f64;
+                    ui.add_space(10.0);
+                    if thread_active {
+                        if ui.button("Restart to Apply").clicked() {
+                            stop_clicked = true;
+                            start_clicked = true;
+                        }
+                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            stop_clicked = true;
+                            start_clicked = true;
+                        }
+                        ui.label("(or press Enter)");
+                    } else {
+                        ui.label("Press Start to begin");
                     }
-                });
 
-                ui.horizontal(|ui| {
-                    ui.label("AMax Max:");
-                    let mut max = state.histogram.amax_max as u32;
-                    if ui
-                        .add(egui::DragValue::new(&mut max).range(1000..=65536))
-                        .changed()
-                    {
-                        state.histogram.amax_max = max as f64;
-                    }
-                });
+                    ui.separator();
+                    ui.heading("Histogram Range");
 
-                ui.separator();
-                ui.heading("Bin Settings");
+                    // Read current values from selected channel
+                    let sel = self.selected_channel as usize;
+                    ui.horizontal(|ui| {
+                        ui.label("Energy Max:");
+                        let mut max = state.channels[sel].histogram.energy_max as u32;
+                        if ui
+                            .add(egui::DragValue::new(&mut max).range(1000..=65536))
+                            .changed()
+                        {
+                            let max_f = max as f64;
+                            for ch_data in &mut state.channels {
+                                ch_data.histogram.energy_max = max_f;
+                                ch_data.histogram_dirty = true;
+                            }
+                        }
+                    });
 
-                let current_energy_bins = state.histogram.energy_bins;
-                let current_amax_bins = state.histogram.amax_bins;
+                    ui.horizontal(|ui| {
+                        ui.label("AMax Max:");
+                        let mut max = state.channels[sel].histogram.amax_max as u32;
+                        if ui
+                            .add(egui::DragValue::new(&mut max).range(1000..=65536))
+                            .changed()
+                        {
+                            let max_f = max as f64;
+                            for ch_data in &mut state.channels {
+                                ch_data.histogram.amax_max = max_f;
+                                ch_data.histogram_dirty = true;
+                            }
+                        }
+                    });
 
-                ui.horizontal(|ui| {
-                    ui.label("Energy Bins:");
-                    let mut bins = current_energy_bins as u32;
-                    if ui
-                        .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
-                        .changed()
-                    {
-                        state.histogram.resize(bins as usize, current_amax_bins);
-                    }
-                });
+                    ui.separator();
+                    ui.heading("Bin Settings");
 
-                ui.horizontal(|ui| {
-                    ui.label("AMax Bins:");
-                    let mut bins = current_amax_bins as u32;
-                    if ui
-                        .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
-                        .changed()
-                    {
-                        state.histogram.resize(current_energy_bins, bins as usize);
-                    }
-                });
+                    let current_energy_bins = state.channels[sel].histogram.energy_bins;
+                    let current_amax_bins = state.channels[sel].histogram.amax_bins;
 
-                let energy_width = (state.histogram.energy_max - state.histogram.energy_min)
-                    / current_energy_bins as f64;
-                let amax_width = (state.histogram.amax_max - state.histogram.amax_min)
-                    / current_amax_bins as f64;
-                ui.label(format!("Energy bin width: {:.1}", energy_width));
-                ui.label(format!("AMax bin width: {:.1}", amax_width));
+                    ui.horizontal(|ui| {
+                        ui.label("Energy Bins:");
+                        let mut bins = current_energy_bins as u32;
+                        if ui
+                            .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
+                            .changed()
+                        {
+                            for ch_data in &mut state.channels {
+                                ch_data.histogram.resize(bins as usize, current_amax_bins);
+                                ch_data.histogram_dirty = true;
+                            }
+                        }
+                    });
 
+                    ui.horizontal(|ui| {
+                        ui.label("AMax Bins:");
+                        let mut bins = current_amax_bins as u32;
+                        if ui
+                            .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
+                            .changed()
+                        {
+                            for ch_data in &mut state.channels {
+                                ch_data.histogram.resize(current_energy_bins, bins as usize);
+                                ch_data.histogram_dirty = true;
+                            }
+                        }
+                    });
+
+                    let energy_width = (state.channels[sel].histogram.energy_max
+                        - state.channels[sel].histogram.energy_min)
+                        / current_energy_bins as f64;
+                    let amax_width = (state.channels[sel].histogram.amax_max
+                        - state.channels[sel].histogram.amax_min)
+                        / current_amax_bins as f64;
+                    ui.label(format!("Energy bin width: {:.1}", energy_width));
+                    ui.label(format!("AMax bin width: {:.1}", amax_width));
                 }); // ScrollArea
             });
 
@@ -851,11 +914,13 @@ impl eframe::App for AmaxViewerApp {
             .resizable(true)
             .default_height(200.0)
             .show(ctx, |ui| {
+                let sel = self.selected_channel as usize;
                 let (points_opt, energy) = {
                     let state = self.shared.lock().unwrap();
-                    let energy = state.latest_waveform_energy;
-                    if state.waveform_len > 0 {
-                        let points: PlotPoints = state.waveform_buffer[..state.waveform_len]
+                    let ch_data = &state.channels[sel];
+                    let energy = ch_data.latest_waveform_energy;
+                    if ch_data.waveform_len > 0 {
+                        let points: PlotPoints = ch_data.waveform_buffer[..ch_data.waveform_len]
                             .iter()
                             .enumerate()
                             .map(|(i, &v)| [i as f64, v as f64])
@@ -888,27 +953,37 @@ impl eframe::App for AmaxViewerApp {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("AMax vs Energy");
+            let sel = self.selected_channel as usize;
+            ui.heading(format!("AMax vs Energy (Ch {})", self.selected_channel));
 
+            let channel_changed = self.selected_channel != self.prev_selected_channel;
+            self.prev_selected_channel = self.selected_channel;
+
+            // Check if texture needs regeneration (short lock, no clone yet)
             let (needs_update, energy_max, amax_max) = {
                 let mut state = self.shared.lock().unwrap();
-                let needs = state.histogram_dirty;
-                if needs {
-                    state.histogram_dirty = false;
+                let ch_data = &mut state.channels[sel];
+                let dirty = ch_data.histogram_dirty;
+                let needs = dirty || channel_changed || self.texture.is_none();
+                if dirty {
+                    ch_data.histogram_dirty = false;
                 }
-                (needs, state.histogram.energy_max, state.histogram.amax_max)
+                (
+                    needs,
+                    ch_data.histogram.energy_max,
+                    ch_data.histogram.amax_max,
+                )
             };
 
-            if needs_update || self.texture.is_none() {
-                let state = self.shared.lock().unwrap();
-                let image = state.histogram.to_texture();
-                drop(state);
-
-                self.texture = Some(ctx.load_texture(
-                    "histogram",
-                    image,
-                    egui::TextureOptions::NEAREST,
-                ));
+            // Clone and generate texture only when needed
+            if needs_update {
+                let hist_clone = {
+                    let state = self.shared.lock().unwrap();
+                    state.channels[sel].histogram.clone()
+                };
+                let image = hist_clone.to_texture();
+                self.texture =
+                    Some(ctx.load_texture("histogram", image, egui::TextureOptions::NEAREST));
             }
 
             if let Some(texture) = &self.texture {
@@ -935,7 +1010,7 @@ impl eframe::App for AmaxViewerApp {
                 url: self.url.clone(),
                 output_path: self.output_path.clone(),
                 param_values: state.param_values.clone(),
-                selected_channel: state.selected_channel,
+                selected_channel: self.selected_channel,
             };
             settings.save();
         }
@@ -1017,7 +1092,10 @@ fn acquisition_thread(
     if register_defs.is_empty() {
         eprintln!("[ACQ] No register parameters to apply (skipped)");
     } else {
-        eprintln!("[ACQ] Applying {} register parameters...", register_defs.len());
+        eprintln!(
+            "[ACQ] Applying {} register parameters...",
+            register_defs.len()
+        );
         {
             let state = shared.lock().unwrap();
             let (success, errors, mismatches, first_error) =
@@ -1081,8 +1159,7 @@ fn acquisition_thread(
 
     let mut user_info_buffer = [0u64; 1024]; // FW caenlist max len = 1024
     let mut waveform_buffer = [0u16; 8192];
-    let mut last_rate_update = std::time::Instant::now();
-    let mut last_waveform_update = std::time::Instant::now();
+    let mut last_rate_update = Instant::now();
     let mut events_since_last_update = 0u64;
     let mut consecutive_nones = 0u32;
 
@@ -1096,23 +1173,33 @@ fn acquisition_thread(
                 events_since_last_update += 1;
                 consecutive_nones = 0;
 
+                let ch_idx = event.channel as usize;
                 let amax = *event.user_info.first().unwrap_or(&0);
-                let should_update_waveform =
-                    last_waveform_update.elapsed() >= Duration::from_millis(100);
 
                 {
                     let mut state = shared.lock().unwrap();
-                    let ch_match = match state.selected_channel {
-                        None => true,
-                        Some(ch) => event.channel == ch,
-                    };
-                    if ch_match {
-                        state.histogram.fill(event.energy, amax);
-                        state.histogram_dirty = true;
+
+                    // Fill per-channel histogram (always, regardless of UI selection)
+                    if ch_idx < state.channels.len() {
+                        let ch_data = &mut state.channels[ch_idx];
+                        ch_data.histogram.fill(event.energy, amax);
+                        ch_data.histogram_dirty = true;
+                        ch_data.events_since_last_tick += 1;
+
+                        // Per-channel waveform update (rate-limited per channel)
+                        if ch_data.last_waveform_update.elapsed() >= Duration::from_millis(100) {
+                            if let Some(ref wf) = event.waveform {
+                                let len = wf.len().min(ch_data.waveform_buffer.len());
+                                ch_data.waveform_buffer[..len].copy_from_slice(&wf[..len]);
+                                ch_data.waveform_len = len;
+                                ch_data.latest_waveform_energy = event.energy;
+                            }
+                            ch_data.last_waveform_update = Instant::now();
+                        }
                     }
 
+                    // Recording: always all channels
                     if state.recording {
-                        // Check memory limit before recording
                         if state.event_buffer.estimated_memory_bytes() >= MAX_BUFFER_BYTES {
                             state.recording = false;
                             state.status_message =
@@ -1132,16 +1219,6 @@ fn acquisition_thread(
                             );
                             state.recorded_count = state.event_buffer.len();
                         }
-                    }
-
-                    if should_update_waveform && ch_match {
-                        if let Some(ref wf) = event.waveform {
-                            let len = wf.len().min(state.waveform_buffer.len());
-                            state.waveform_buffer[..len].copy_from_slice(&wf[..len]);
-                            state.waveform_len = len;
-                            state.latest_waveform_energy = event.energy;
-                        }
-                        last_waveform_update = std::time::Instant::now();
                     }
                 }
             }
@@ -1184,7 +1261,10 @@ fn acquisition_thread(
                 thread::sleep(Duration::from_millis(1));
             }
             Err(e) => {
-                eprintln!("[ACQ] Read error: code={}, {}: {}", e.code, e.name, e.description);
+                eprintln!(
+                    "[ACQ] Read error: code={}, {}: {}",
+                    e.code, e.name, e.description
+                );
                 let mut state = shared.lock().unwrap();
                 state.status_message = format!("Read error: {} (code {})", e.name, e.code);
                 drop(state);
@@ -1198,13 +1278,19 @@ fn acquisition_thread(
 
         let elapsed = last_rate_update.elapsed();
         if elapsed >= Duration::from_secs(1) {
-            let rate = events_since_last_update as f64 / elapsed.as_secs_f64();
+            let secs = elapsed.as_secs_f64();
+            let rate = events_since_last_update as f64 / secs;
             {
                 let mut state = shared.lock().unwrap();
                 state.event_rate = rate;
+                // Per-channel rate calculation
+                for ch_data in &mut state.channels {
+                    ch_data.event_rate = ch_data.events_since_last_tick as f64 / secs;
+                    ch_data.events_since_last_tick = 0;
+                }
             }
             events_since_last_update = 0;
-            last_rate_update = std::time::Instant::now();
+            last_rate_update = Instant::now();
         }
 
         // Handle runtime test pulse toggle
@@ -1217,7 +1303,10 @@ fn acquisition_thread(
                 drop(state);
 
                 // Stop → reconfigure → restart
-                eprintln!("[ACQ] Test pulse toggle: want_active={}, tp_hw_active={}", want_active, tp_hw_active);
+                eprintln!(
+                    "[ACQ] Test pulse toggle: want_active={}, tp_hw_active={}",
+                    want_active, tp_hw_active
+                );
                 let _ = handle.send_command("/cmd/disarmacquisition");
 
                 if want_active && !tp_hw_active {
@@ -1226,10 +1315,7 @@ fn acquisition_thread(
                     tp_hw_active = true;
                     let mut state = shared.lock().unwrap();
                     if errors.is_empty() {
-                        let msg = format!(
-                            "Test Pulse ON ({:.0} Hz)",
-                            params.frequency_hz()
-                        );
+                        let msg = format!("Test Pulse ON ({:.0} Hz)", params.frequency_hz());
                         eprintln!("[ACQ] {}", msg);
                         state.status_message = msg;
                     } else {
@@ -1239,12 +1325,7 @@ fn acquisition_thread(
                     }
                 } else if !want_active && tp_hw_active {
                     eprintln!("[ACQ] Disabling test pulse at runtime...");
-                    restore_trigger_sources(
-                        &handle,
-                        &original_gts,
-                        &original_ats,
-                        true,
-                    );
+                    restore_trigger_sources(&handle, &original_gts, &original_ats, true);
                     tp_hw_active = false;
                     let mut state = shared.lock().unwrap();
                     state.status_message = "Test Pulse OFF — triggers restored".to_string();
@@ -1260,22 +1341,10 @@ fn acquisition_thread(
                 let params = state.test_pulse_params.clone();
                 drop(state);
 
-                let _ = handle.set_value(
-                    "/par/TestPulsePeriod",
-                    &params.period_ns.to_string(),
-                );
-                let _ = handle.set_value(
-                    "/par/TestPulseWidth",
-                    &params.width_ns.to_string(),
-                );
-                let _ = handle.set_value(
-                    "/par/TestPulseLowLevel",
-                    &params.low_level.to_string(),
-                );
-                let _ = handle.set_value(
-                    "/par/TestPulseHighLevel",
-                    &params.high_level.to_string(),
-                );
+                let _ = handle.set_value("/par/TestPulsePeriod", &params.period_ns.to_string());
+                let _ = handle.set_value("/par/TestPulseWidth", &params.width_ns.to_string());
+                let _ = handle.set_value("/par/TestPulseLowLevel", &params.low_level.to_string());
+                let _ = handle.set_value("/par/TestPulseHighLevel", &params.high_level.to_string());
             }
         }
     }
@@ -1311,7 +1380,10 @@ fn apply_test_pulse(handle: &CaenHandle, params: &TestPulseParams) -> Vec<String
     ];
     for (path, value) in &tp_settings {
         if let Err(e) = handle.set_value(path, value) {
-            eprintln!("[ACQ] Test pulse set_value {} = {} failed: {}", path, value, e);
+            eprintln!(
+                "[ACQ] Test pulse set_value {} = {} failed: {}",
+                path, value, e
+            );
             errors.push(format!("{}: {}", path, e));
         }
     }
@@ -1321,7 +1393,10 @@ fn apply_test_pulse(handle: &CaenHandle, params: &TestPulseParams) -> Vec<String
     let gts_candidates = ["TestPulse", "TstTrg", "SwTrg", "TestPulse | SwTrg"];
     let mut gts_set = false;
     for candidate in &gts_candidates {
-        if handle.set_value("/par/GlobalTriggerSource", candidate).is_ok() {
+        if handle
+            .set_value("/par/GlobalTriggerSource", candidate)
+            .is_ok()
+        {
             eprintln!("[ACQ] GlobalTriggerSource = {} (accepted)", candidate);
             gts_set = true;
             break;
@@ -1382,8 +1457,8 @@ fn apply_params(
     let mut mismatches = 0;
     let mut first_error: Option<String> = None;
 
-    let mut write_and_verify = |name: &str, byte_addr: u32, value: u32| {
-        match handle.set_user_register(byte_addr, value) {
+    let mut write_and_verify =
+        |name: &str, byte_addr: u32, value: u32| match handle.set_user_register(byte_addr, value) {
             Ok(()) => match handle.get_user_register(byte_addr) {
                 Ok(readback) => {
                     if readback == value {
@@ -1401,8 +1476,7 @@ fn apply_params(
                 Err(e) => {
                     success += 1;
                     if first_error.is_none() {
-                        first_error =
-                            Some(format!("{}: write OK, read failed: {}", name, e));
+                        first_error = Some(format!("{}: write OK, read failed: {}", name, e));
                     }
                 }
             },
@@ -1412,8 +1486,7 @@ fn apply_params(
                     first_error = Some(format!("{} (0x{:X}): {}", name, byte_addr, e));
                 }
             }
-        }
-    };
+        };
 
     for reg in defs {
         let value = values.get(&reg.name).copied().unwrap_or(reg.default);
@@ -1442,8 +1515,7 @@ fn main() -> eframe::Result<()> {
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
                 eframe::egui_wgpu::WgpuSetupCreateNew {
                     instance_descriptor: eframe::wgpu::InstanceDescriptor {
-                        backends: eframe::wgpu::Backends::VULKAN
-                            | eframe::wgpu::Backends::METAL,
+                        backends: eframe::wgpu::Backends::VULKAN | eframe::wgpu::Backends::METAL,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -1457,6 +1529,12 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "AMax Viewer",
         options,
-        Box::new(move |cc| Ok(Box::new(AmaxViewerApp::new(cc, test_pulse, register_defs_path)))),
+        Box::new(move |cc| {
+            Ok(Box::new(AmaxViewerApp::new(
+                cc,
+                test_pulse,
+                register_defs_path,
+            )))
+        }),
     )
 }

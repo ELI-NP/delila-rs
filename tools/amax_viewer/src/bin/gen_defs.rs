@@ -57,7 +57,10 @@ fn main() {
     }
 
     let input_path = &args[1];
-    let output_path = args.get(2).map(|s| s.as_str()).unwrap_or("register_defs.json");
+    let output_path = args
+        .get(2)
+        .map(|s| s.as_str())
+        .unwrap_or("register_defs.json");
 
     let content = match fs::read_to_string(input_path) {
         Ok(c) => c,
