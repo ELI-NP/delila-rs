@@ -1,434 +1,479 @@
 [
   {
+    "section": "Core",
+    "name": "ENERGY_MAIN_CH0",
+    "address": 524288,
+    "min": 0,
+    "max": 33554431,
+    "default": 0,
+    "readonly": true
+  },
+  {
+    "section": "Core",
+    "name": "ENERGY_MAIN_CH1",
+    "address": 524289,
+    "min": 0,
+    "max": 33554431,
+    "default": 0,
+    "readonly": true
+  },
+  {
     "section": "AMax",
+    "name": "AMAX_MAIN_CH0",
+    "address": 524290,
+    "min": 0,
+    "max": 33554431,
+    "default": 0,
+    "readonly": true
+  },
+  {
+    "section": "AMax",
+    "name": "AMAX_MAIN_CH1",
+    "address": 524291,
+    "min": 0,
+    "max": 33554431,
+    "default": 0,
+    "readonly": true
+  },
+  {
+    "section": "Core",
+    "name": "ENERGY_MAIN_LATCH",
+    "address": 524292,
+    "min": 0,
+    "max": 33554431,
+    "default": 0,
+    "readonly": true
+  },
+  {
+    "section": "Core",
     "name": "page_amax_energy_0_POLARITY",
-    "address": 8388610,
+    "address": 2,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_OFFSET",
-    "address": 8388611,
+    "address": 3,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_THRS",
-    "address": 8388612,
+    "address": 4,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 40
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_TRIG_K",
-    "address": 8388613,
+    "address": 5,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 10
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_TRIG_M",
-    "address": 8388614,
+    "address": 6,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 12
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_TRAP_K",
-    "address": 8388615,
+    "address": 7,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 500
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_TRAP_M",
-    "address": 8388616,
+    "address": 8,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 550
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_DECONV_M",
-    "address": 8388617,
+    "address": 9,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 3499000
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_TRAP_GAIN",
-    "address": 8388618,
+    "address": 10,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_BL_LEN",
-    "address": 8388619,
+    "address": 11,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 2500
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_BL_INIB",
-    "address": 8388620,
+    "address": 12,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1200
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_SAMPLE_POS",
-    "address": 8388621,
+    "address": 13,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 510
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_RUN_CFG",
-    "address": 8388623,
+    "address": 15,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_WINDOW_MAXIM",
-    "address": 8388629,
+    "address": 21,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 200
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_baseline_delay",
-    "address": 8388632,
+    "address": 24,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 200
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_baseline_len",
-    "address": 8388633,
+    "address": 25,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 6
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_baseline_offset",
-    "address": 8388634,
+    "address": 26,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1000
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_AMAX_window",
-    "address": 8388626,
+    "address": 18,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1000
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_AMAX_delay",
-    "address": 8388628,
+    "address": 20,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 32
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_AMAX_len",
-    "address": 8388630,
+    "address": 22,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 5
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_debug_amax_out",
-    "address": 8388636,
+    "address": 28,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_PRETRIGGER_INPUT",
-    "address": 8388609,
+    "address": 1,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 600
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_READ_ENERGY",
-    "address": 8388638,
+    "address": 30,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_PRETRIGGER_TRAP",
-    "address": 8388639,
+    "address": 31,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_PRETRIGGER_AMAX",
-    "address": 8388640,
+    "address": 32,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_maxim_outt",
-    "address": 8388641,
+    "address": 33,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_0_selector_wave",
-    "address": 8388608,
+    "address": 0,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_POLARITY",
-    "address": 8650754,
+    "address": 262146,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_OFFSET",
-    "address": 8650755,
+    "address": 262147,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_THRS",
-    "address": 8650756,
+    "address": 262148,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 40
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_TRIG_K",
-    "address": 8650757,
+    "address": 262149,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 10
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_TRIG_M",
-    "address": 8650758,
+    "address": 262150,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 12
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_TRAP_K",
-    "address": 8650759,
+    "address": 262151,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 500
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_TRAP_M",
-    "address": 8650760,
+    "address": 262152,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 550
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_DECONV_M",
-    "address": 8650761,
+    "address": 262153,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 3499000
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_TRAP_GAIN",
-    "address": 8650762,
+    "address": 262154,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 2500
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_BL_LEN",
-    "address": 8650763,
+    "address": 262155,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 6
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_BL_INIB",
-    "address": 8650764,
+    "address": 262156,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1200
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_SAMPLE_POS",
-    "address": 8650765,
+    "address": 262157,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 510
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_RUN_CFG",
-    "address": 8650767,
+    "address": 262159,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_WINDOW_MAXIM",
-    "address": 8650773,
+    "address": 262165,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 200
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_baseline_delay",
-    "address": 8650776,
+    "address": 262168,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 200
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_baseline_len",
-    "address": 8650777,
+    "address": 262169,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 6
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_baseline_offset",
-    "address": 8650778,
+    "address": 262170,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1000
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_AMAX_window",
-    "address": 8650770,
+    "address": 262162,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 1000
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_AMAX_delay",
-    "address": 8650772,
+    "address": 262164,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 32
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_AMAX_len",
-    "address": 8650774,
+    "address": 262166,
     "min": 0,
-    "max": 4294967295,
-    "default": 0
+    "max": 33554431,
+    "default": 5
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_debug_amax_out",
-    "address": 8650780,
+    "address": 262172,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_PRETRIGGER_INPUT",
-    "address": 8650753,
+    "address": 262145,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_READ_ENERGY",
-    "address": 8650782,
+    "address": 262174,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_PRETRIGGER_TRAP",
-    "address": 8650783,
+    "address": 262175,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_PRETRIGGER_AMAX",
-    "address": 8650784,
+    "address": 262176,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_maxim_outt",
-    "address": 8650785,
+    "address": 262177,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   },
   {
-    "section": "AMax",
+    "section": "Core",
     "name": "page_amax_energy_1_selector_wave",
-    "address": 8650752,
+    "address": 262144,
     "min": 0,
-    "max": 4294967295,
+    "max": 33554431,
     "default": 0
   }
 ]

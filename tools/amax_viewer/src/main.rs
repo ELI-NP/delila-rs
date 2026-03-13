@@ -43,6 +43,9 @@ struct RegisterDef {
     min: u32,
     max: u32,
     default: u32,
+    /// Read-only status registers (skip writing, display as label)
+    #[serde(default)]
+    readonly: bool,
 }
 
 /// Event data for ROOT file output — all OpenDPP fields
@@ -804,7 +807,11 @@ impl eframe::App for AmaxViewerApp {
                             .or_insert(reg.default);
                         ui.horizontal(|ui| {
                             ui.label(format!("{}:", reg.name));
-                            ui.add(egui::DragValue::new(value).range(reg.min..=reg.max));
+                            if reg.readonly {
+                                ui.label(format!("{}", *value));
+                            } else {
+                                ui.add(egui::DragValue::new(value).range(reg.min..=reg.max));
+                            }
                         });
                     }
 
@@ -1006,10 +1013,20 @@ impl eframe::App for AmaxViewerApp {
     fn on_exit(&mut self) {
         {
             let state = self.shared.lock().unwrap();
+            // Only save param values that differ from register_defs defaults.
+            // This ensures register_defs.json default updates take effect on next launch.
+            let mut changed_params = HashMap::new();
+            for reg in &self.register_defs {
+                if let Some(&val) = state.param_values.get(&reg.name) {
+                    if val != reg.default && !reg.readonly {
+                        changed_params.insert(reg.name.clone(), val);
+                    }
+                }
+            }
             let settings = AppSettings {
                 url: self.url.clone(),
                 output_path: self.output_path.clone(),
-                param_values: state.param_values.clone(),
+                param_values: changed_params,
                 selected_channel: self.selected_channel,
             };
             settings.save();
@@ -1088,36 +1105,43 @@ fn acquisition_thread(
         }
     }
 
-    // Apply register parameters (skip if empty to test FW behavior without register writes)
+    // Read current HW register values (populates UI with actual hardware state)
+    let hw_values = if !register_defs.is_empty() {
+        eprintln!("[ACQ] Reading current HW register values...");
+        read_hw_params(&handle, &register_defs, &shared)
+    } else {
+        HashMap::new()
+    };
+
+    // Apply register parameters (diff-write: only changed values, skip readonly)
     if register_defs.is_empty() {
         eprintln!("[ACQ] No register parameters to apply (skipped)");
     } else {
-        eprintln!(
-            "[ACQ] Applying {} register parameters...",
-            register_defs.len()
-        );
-        {
-            let state = shared.lock().unwrap();
-            let (success, errors, mismatches, first_error) =
-                apply_params(&handle, &register_defs, &state.param_values);
-            drop(state);
-            let mut state = shared.lock().unwrap();
-            if errors > 0 || mismatches > 0 {
-                let msg = format!(
-                    "Init: {} OK, {} err, {} mismatch: {}",
-                    success,
-                    errors,
-                    mismatches,
-                    first_error.unwrap_or_default()
-                );
-                eprintln!("[ACQ] {}", msg);
-                state.status_message = msg;
-            } else {
-                let tp_label = if test_pulse { " [TestPulse]" } else { "" };
-                let msg = format!("Init: {} registers verified OK{}", success, tp_label);
-                eprintln!("[ACQ] {}", msg);
-                state.status_message = msg;
-            }
+        let state = shared.lock().unwrap();
+        let (written, unchanged, readonly_skipped, errors, first_error) =
+            apply_params(&handle, &register_defs, &state.param_values, &hw_values);
+        drop(state);
+
+        let mut state = shared.lock().unwrap();
+        if errors > 0 {
+            let msg = format!(
+                "Init: wrote {}, unchanged {}, readonly {}, err {}: {}",
+                written,
+                unchanged,
+                readonly_skipped,
+                errors,
+                first_error.unwrap_or_default()
+            );
+            eprintln!("[ACQ] {}", msg);
+            state.status_message = msg;
+        } else {
+            let tp_label = if test_pulse { " [TestPulse]" } else { "" };
+            let msg = format!(
+                "Init: wrote {}, unchanged {}, readonly {}{}",
+                written, unchanged, readonly_skipped, tp_label
+            );
+            eprintln!("[ACQ] {}", msg);
+            state.status_message = msg;
         }
     }
 
@@ -1252,7 +1276,7 @@ fn acquisition_thread(
                         }
                     }
                     // Read back RUN_CFG registers
-                    for (name, addr) in [("ch0_RUN_CFG", 8388623u32), ("ch1_RUN_CFG", 8650767u32)] {
+                    for (name, addr) in [("ch0_RUN_CFG", 15u32), ("ch1_RUN_CFG", 262159u32)] {
                         if let Ok(v) = handle.get_user_register(addr * 4) {
                             eprintln!("[ACQ]   {} = {} (0x{:X})", name, v, v);
                         }
@@ -1445,55 +1469,109 @@ fn restore_trigger_sources(
     let _ = handle.set_value("/par/TestPulsePeriod", "0");
 }
 
-/// Apply register parameters to digitizer with read-back verification.
-/// Returns (success_count, error_count, mismatch_count, first_error_message)
+/// Read current register values from hardware.
+/// Updates shared state param_values so the UI shows actual HW values.
+/// Returns the HW values map for use in diff-write.
+fn read_hw_params(
+    handle: &CaenHandle,
+    defs: &[RegisterDef],
+    shared: &Arc<Mutex<SharedState>>,
+) -> HashMap<String, u32> {
+    let mut read_ok = 0;
+    let mut read_err = 0;
+    let mut hw_values: HashMap<String, u32> = HashMap::new();
+
+    for reg in defs {
+        let byte_addr = reg.address * 4;
+        match handle.get_user_register(byte_addr) {
+            Ok(value) => {
+                hw_values.insert(reg.name.clone(), value);
+                read_ok += 1;
+            }
+            Err(e) => {
+                eprintln!("[ACQ] Read {} (0x{:X}) failed: {}", reg.name, byte_addr, e);
+                read_err += 1;
+            }
+        }
+    }
+
+    // Update shared state with HW values (UI will show actual hardware state)
+    {
+        let mut state = shared.lock().unwrap();
+        for (name, hw_val) in &hw_values {
+            state.param_values.insert(name.clone(), *hw_val);
+        }
+    }
+
+    eprintln!(
+        "[ACQ] Read {} HW registers OK, {} failed",
+        read_ok, read_err
+    );
+
+    hw_values
+}
+
+/// Apply register parameters to digitizer with diff-write.
+/// Only writes registers where the desired value differs from the HW value.
+/// Skips readonly registers entirely.
+/// Returns (written, skipped_unchanged, skipped_readonly, errors, first_error_message)
 fn apply_params(
     handle: &CaenHandle,
     defs: &[RegisterDef],
     values: &HashMap<String, u32>,
-) -> (usize, usize, usize, Option<String>) {
-    let mut success = 0;
+    hw_values: &HashMap<String, u32>,
+) -> (usize, usize, usize, usize, Option<String>) {
+    let mut written = 0;
+    let mut unchanged = 0;
+    let mut readonly_skipped = 0;
     let mut errors = 0;
-    let mut mismatches = 0;
     let mut first_error: Option<String> = None;
 
-    let mut write_and_verify =
-        |name: &str, byte_addr: u32, value: u32| match handle.set_user_register(byte_addr, value) {
+    for reg in defs {
+        if reg.readonly {
+            readonly_skipped += 1;
+            continue;
+        }
+
+        let desired = values.get(&reg.name).copied().unwrap_or(reg.default);
+        let hw_val = hw_values.get(&reg.name).copied();
+
+        // Skip if HW already has the desired value
+        if hw_val == Some(desired) {
+            unchanged += 1;
+            continue;
+        }
+
+        let byte_addr = reg.address * 4;
+        match handle.set_user_register(byte_addr, desired) {
             Ok(()) => match handle.get_user_register(byte_addr) {
                 Ok(readback) => {
-                    if readback == value {
-                        success += 1;
+                    if readback == desired {
+                        written += 1;
                     } else {
-                        mismatches += 1;
+                        errors += 1;
                         if first_error.is_none() {
                             first_error = Some(format!(
                                 "{} (0x{:X}): wrote {}, read {}",
-                                name, byte_addr, value, readback
+                                reg.name, byte_addr, desired, readback
                             ));
                         }
                     }
                 }
-                Err(e) => {
-                    success += 1;
-                    if first_error.is_none() {
-                        first_error = Some(format!("{}: write OK, read failed: {}", name, e));
-                    }
+                Err(_) => {
+                    written += 1; // write succeeded, readback failed (acceptable)
                 }
             },
             Err(e) => {
                 errors += 1;
                 if first_error.is_none() {
-                    first_error = Some(format!("{} (0x{:X}): {}", name, byte_addr, e));
+                    first_error = Some(format!("{} (0x{:X}): {}", reg.name, byte_addr, e));
                 }
             }
-        };
-
-    for reg in defs {
-        let value = values.get(&reg.name).copied().unwrap_or(reg.default);
-        write_and_verify(&reg.name, reg.address * 4, value);
+        }
     }
 
-    (success, errors, mismatches, first_error)
+    (written, unchanged, readonly_skipped, errors, first_error)
 }
 
 fn main() -> eframe::Result<()> {
