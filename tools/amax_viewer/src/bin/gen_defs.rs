@@ -34,6 +34,12 @@ struct RegisterDef {
     min: u32,
     max: u32,
     default: u32,
+    #[serde(skip_serializing_if = "is_false")]
+    readonly: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 fn infer_section(name: &str, address: u32) -> &'static str {
@@ -88,6 +94,7 @@ fn main() {
             min: 0,
             max: u32::MAX,
             default: 0,
+            readonly: false,
         })
         .collect();
 
@@ -99,12 +106,15 @@ fn main() {
         }
     };
 
+    let readonly_count = defs.iter().filter(|d| d.readonly).count();
+
     match fs::write(output_path, &json) {
         Ok(()) => {
             println!(
-                "Wrote {} register definitions to {}",
+                "Wrote {} register definitions to {} ({} readonly)",
                 defs.len(),
-                output_path
+                output_path,
+                readonly_count
             );
             println!("Edit min/max/default values as needed before using.");
         }
