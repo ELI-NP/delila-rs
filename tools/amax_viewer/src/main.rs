@@ -1105,6 +1105,12 @@ fn acquisition_thread(
         }
     }
 
+    // Snapshot user's desired values BEFORE read_hw_params overwrites them
+    let desired_values = {
+        let state = shared.lock().unwrap();
+        state.param_values.clone()
+    };
+
     // Read current HW register values (populates UI with actual hardware state)
     let hw_values = if !register_defs.is_empty() {
         eprintln!("[ACQ] Reading current HW register values...");
@@ -1114,15 +1120,18 @@ fn acquisition_thread(
     };
 
     // Apply register parameters (diff-write: only changed values, skip readonly)
+    // Use desired_values (pre-overwrite snapshot), not state.param_values (overwritten by read_hw_params)
     if register_defs.is_empty() {
         eprintln!("[ACQ] No register parameters to apply (skipped)");
     } else {
-        let state = shared.lock().unwrap();
         let (written, unchanged, readonly_skipped, errors, first_error) =
-            apply_params(&handle, &register_defs, &state.param_values, &hw_values);
-        drop(state);
+            apply_params(&handle, &register_defs, &desired_values, &hw_values);
 
+        // Restore UI to show user's desired values (read_hw_params overwrote them with HW values)
         let mut state = shared.lock().unwrap();
+        for (name, val) in &desired_values {
+            state.param_values.insert(name.clone(), *val);
+        }
         if errors > 0 {
             let msg = format!(
                 "Init: wrote {}, unchanged {}, readonly {}, err {}: {}",
