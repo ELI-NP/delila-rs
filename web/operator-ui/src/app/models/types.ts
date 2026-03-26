@@ -216,6 +216,7 @@ export interface ChannelConfig {
   coinc_trgsw?: string;
   pileup_gap?: number;
   pileup_counting_en?: string;
+  pileup_flag_en?: string;
   // --- Waveform ---
   wave_saving?: string;
   analog_probe_0?: string;

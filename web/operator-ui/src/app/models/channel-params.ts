@@ -146,6 +146,7 @@ const PHA1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'coinc_trgsw', label: 'Coinc TrgSW', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['VETO_SRC_DISABLED', 'VETO_SRC_COMMON', 'VETO_SRC_INDIVIDUAL', 'VETO_SRC_SATURATION'], setInRun: true },
+  { key: 'pileup_flag_en', label: 'Pileup Flag', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
 ];
 
 // --- Waveform ----------------------------------------------------------------
