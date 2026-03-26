@@ -512,6 +512,9 @@ pub struct ChannelConfig {
     /// Pileup counting enable (PSD1: "FALSE","TRUE")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pileup_counting_en: Option<String>,
+    /// Pileup flag enable (PHA1: "FALSE","TRUE") — controls bit[27] of DPP Algorithm Control
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pileup_flag_en: Option<String>,
 
     // ---- Waveform ----
     /// Wave saving mode (PSD2: "Always","OnRequest")
@@ -773,6 +776,7 @@ impl DigitizerConfig {
             merge_field!(coinc_trgsw);
             merge_field!(pileup_gap);
             merge_field!(pileup_counting_en);
+            merge_field!(pileup_flag_en);
             // Waveform
             merge_field!(wave_saving);
             merge_field!(analog_probe_0);
@@ -928,6 +932,7 @@ impl DigitizerConfig {
                 "ch_coinc_majlev",
                 "ch_coinc_trgext",
                 "ch_coinc_trgsw",
+                "ch_pu_flag_en",
             ]),
         }
     }
@@ -1517,6 +1522,10 @@ impl DigitizerConfig {
                 }
                 if let Some(ref v) = config.coinc_trgsw {
                     push_str!("ch_coinc_trgsw", v);
+                }
+                // ---- PHA1 Pileup ----
+                if let Some(ref v) = config.pileup_flag_en {
+                    push_str!("ch_pu_flag_en", v);
                 }
             }
         }
