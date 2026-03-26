@@ -6,9 +6,75 @@
   "links": [],
   "panels": [
     {
+      "title": "Beam Current",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "nA",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "green", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "query": "SELECT non_negative_derivative(mean(\"count\"), 1s)/10 FROM \"channel_rate\" WHERE (\"channel\"::tag = '0' AND \"module\"::tag = '2') AND $timeFilter GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Beam Current History",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "nA",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "query": "SELECT non_negative_derivative(mean(\"count\"), 1s)/10 FROM \"channel_rate\" WHERE (\"channel\"::tag = '0' AND \"module\"::tag = '2') AND $timeFilter GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
       "title": "Channel Event Rate (Hz)",
       "type": "timeseries",
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 8 },
       "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
       "fieldConfig": {
         "defaults": {
@@ -38,7 +104,7 @@
     {
       "title": "Total Event Rate (Hz)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
       "fieldConfig": {
         "defaults": {
@@ -67,7 +133,7 @@
     {
       "title": "Data Rate (bytes/s)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
       "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
       "fieldConfig": {
         "defaults": {
@@ -103,5 +169,5 @@
   "timezone": "",
   "title": "DELILA DAQ Overview",
   "uid": "delila-overview",
-  "version": 1
+  "version": 2
 }
