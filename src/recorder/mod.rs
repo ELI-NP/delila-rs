@@ -40,7 +40,7 @@ use tracing::{debug, info, warn};
 
 use crate::common::{
     handle_command, run_command_task, CommandHandlerExt, ComponentSharedState, ComponentState,
-    Message, MessageHeader, RunConfig,
+    EventDataBatch, Message, MessageHeader, RunConfig,
 };
 
 /// Recorder configuration
@@ -413,6 +413,23 @@ impl FileWriter {
             let bytes_written = 4 + data.len() as u64;
             self.current_file_size += bytes_written;
             self.footer.total_events += event_count;
+
+            // Extract timestamp range from batch for footer (writer thread, cheap vs I/O)
+            if let Ok(batch) = EventDataBatch::from_msgpack(data) {
+                if !batch.events.is_empty() {
+                    let mut min_ts = f64::MAX;
+                    let mut max_ts = f64::MIN;
+                    for ev in &batch.events {
+                        if ev.timestamp_ns < min_ts {
+                            min_ts = ev.timestamp_ns;
+                        }
+                        if ev.timestamp_ns > max_ts {
+                            max_ts = ev.timestamp_ns;
+                        }
+                    }
+                    self.footer.update_timestamp_range(min_ts, max_ts);
+                }
+            }
 
             self.stats
                 .written_bytes
