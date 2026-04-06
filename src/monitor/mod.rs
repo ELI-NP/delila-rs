@@ -502,6 +502,7 @@ struct MonitorStateSnapshot {
 struct AtomicStats {
     received_batches: AtomicU64,
     processed_batches: AtomicU64,
+    processed_events: AtomicU64,
     dropped_batches: AtomicU64,
 }
 
@@ -510,6 +511,7 @@ impl AtomicStats {
         Self {
             received_batches: AtomicU64::new(0),
             processed_batches: AtomicU64::new(0),
+            processed_events: AtomicU64::new(0),
             dropped_batches: AtomicU64::new(0),
         }
     }
@@ -520,8 +522,9 @@ impl AtomicStats {
     }
 
     #[inline]
-    fn record_processed(&self) {
+    fn record_processed(&self, event_count: u64) {
         self.processed_batches.fetch_add(1, Ordering::Relaxed);
+        self.processed_events.fetch_add(event_count, Ordering::Relaxed);
     }
 
     #[inline]
@@ -532,13 +535,14 @@ impl AtomicStats {
     fn reset(&self) {
         self.received_batches.store(0, Ordering::Relaxed);
         self.processed_batches.store(0, Ordering::Relaxed);
+        self.processed_events.store(0, Ordering::Relaxed);
         self.dropped_batches.store(0, Ordering::Relaxed);
     }
 
     fn snapshot(&self) -> (u64, u64, u64) {
         (
             self.received_batches.load(Ordering::Relaxed),
-            self.processed_batches.load(Ordering::Relaxed),
+            self.processed_events.load(Ordering::Relaxed),
             self.dropped_batches.load(Ordering::Relaxed),
         )
     }
@@ -884,6 +888,7 @@ impl CommandHandlerExt for MonitorCommandExt {
         // This allows viewing histograms after Stop while starting fresh each run
         let _ = self.histogram_tx.send(HistogramMessage::Clear);
         let _ = self.histogram_tx.send(HistogramMessage::SetStartTime);
+        self.atomic_stats.reset();
         Ok(())
     }
 
@@ -1302,8 +1307,9 @@ impl Monitor {
                 batch = data_rx.recv() => {
                     match batch {
                         Some(batch) => {
+                            let event_count = batch.events.len() as u64;
                             state.process_batch(batch);
-                            atomic_stats.record_processed();
+                            atomic_stats.record_processed(event_count);
                         }
                         None => {
                             info!("Data channel closed");
@@ -1506,12 +1512,12 @@ mod tests {
         let stats = AtomicStats::new();
         stats.record_received();
         stats.record_received();
-        stats.record_processed();
+        stats.record_processed(10);
         stats.record_drop();
 
-        let (recv, proc, drop) = stats.snapshot();
+        let (recv, events, drop) = stats.snapshot();
         assert_eq!(recv, 2);
-        assert_eq!(proc, 1);
+        assert_eq!(events, 10);
         assert_eq!(drop, 1);
     }
 }

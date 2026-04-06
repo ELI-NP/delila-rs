@@ -619,8 +619,13 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     std::cout << "\nWriting ROOT file..." << std::flush;
     tree->Write();
-    fout->Close();
-    delete fout;
+    // After ROOT auto-splits (file size > TTree::GetMaxTreeSize()), the
+    // original fout is closed internally and tree moves to a new TFile.
+    // Always use tree->GetCurrentFile() to close the active file.
+    TFile* current_file = tree->GetCurrentFile();
+    if (current_file) {
+        current_file->Close();
+    }
 
     auto t_end = std::chrono::steady_clock::now();
     double elapsed =

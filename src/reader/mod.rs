@@ -394,6 +394,10 @@ impl CommandHandlerExt for ReaderCommandExt {
 
     fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
         self.rate_tracker.reset();
+        // Reset all metrics for new run
+        self.metrics.events_decoded.store(0, Ordering::Relaxed);
+        self.metrics.bytes_read.store(0, Ordering::Relaxed);
+        self.metrics.batches_published.store(0, Ordering::Relaxed);
         self.metrics.trigger_loss_count.store(0, Ordering::Relaxed);
         self.metrics
             .trigger_lost_flag_events
@@ -401,6 +405,10 @@ impl CommandHandlerExt for ReaderCommandExt {
         self.metrics
             .n_lost_trigger_flag_events
             .store(0, Ordering::Relaxed);
+        self.metrics.filtered_events.store(0, Ordering::Relaxed);
+        for ch in &self.metrics.per_channel_counts {
+            ch.store(0, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -1146,6 +1154,7 @@ impl Reader {
                     let _ = conn.handle.send_command("/cmd/cleardata");
                     conn.hw_armed = false;
                     conn.hw_running = false;
+                    read_error_since = None; // Clear stale error timer across runs
                     *hw_state.lock().unwrap() = ComponentState::Configured;
                 }
 
@@ -1158,6 +1167,7 @@ impl Reader {
                     conn.hw_running = false;
                     conn.hw_configured = false;
                     conn.auto_config_failed = false;
+                    read_error_since = None;
                     *hw_state.lock().unwrap() = ComponentState::Idle;
                 }
             }
@@ -1537,6 +1547,7 @@ impl Reader {
                     let _ = conn.handle.send_command("/cmd/cleardata");
                     conn.hw_armed = false;
                     conn.hw_running = false;
+                    read_error_since = None; // Clear stale error timer across runs
                     *hw_state.lock().unwrap() = ComponentState::Configured;
                 }
 
@@ -1549,6 +1560,7 @@ impl Reader {
                     conn.hw_running = false;
                     conn.hw_configured = false;
                     conn.auto_config_failed = false;
+                    read_error_since = None;
                     *hw_state.lock().unwrap() = ComponentState::Idle;
                 }
             }
