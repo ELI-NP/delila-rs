@@ -29,6 +29,8 @@ pub struct RunStats {
     pub total_events: i64,
     pub total_bytes: i64,
     pub average_rate: f64,
+    #[serde(default)]
+    pub trigger_loss_count: i64,
 }
 
 /// Error log entry

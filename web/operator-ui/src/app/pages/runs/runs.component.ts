@@ -24,7 +24,7 @@ interface RunHistoryItem {
   end_time: number | null;
   duration_secs: number | null;
   status: string;
-  stats: { total_events: number; total_bytes: number; average_rate: number };
+  stats: { total_events: number; total_bytes: number; average_rate: number; trigger_loss_count?: number };
 }
 
 @Component({
@@ -53,9 +53,14 @@ interface RunHistoryItem {
     <div class="runs-container">
       <div class="header-row">
         <h2>Run History</h2>
-        <button mat-stroked-button (click)="loadRuns()">
-          <mat-icon>refresh</mat-icon> Refresh
-        </button>
+        <div class="header-actions">
+          <button mat-stroked-button (click)="exportJson()" [disabled]="exporting()">
+            <mat-icon>download</mat-icon> Export JSON
+          </button>
+          <button mat-stroked-button (click)="loadRuns()">
+            <mat-icon>refresh</mat-icon> Refresh
+          </button>
+        </div>
       </div>
 
       @if (loading()) {
@@ -134,6 +139,15 @@ interface RunHistoryItem {
                       <div class="detail-item">
                         <span class="label">Avg Rate</span>
                         <span class="value">{{ formatRate(run.stats.average_rate) }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="label">Trigger Loss</span>
+                        <span class="value" [class.trigger-loss]="(run.stats.trigger_loss_count ?? 0) > 0">
+                          {{ formatCount(run.stats.trigger_loss_count ?? 0) }}
+                          @if ((run.stats.trigger_loss_count ?? 0) > 0 && run.stats.total_events > 0) {
+                            ({{ ((run.stats.trigger_loss_count ?? 0) / (run.stats.total_events + (run.stats.trigger_loss_count ?? 0)) * 100).toFixed(3) }}%)
+                          }
+                        </span>
                       </div>
                     </div>
 
@@ -236,6 +250,7 @@ interface RunHistoryItem {
       margin-bottom: 16px;
     }
     .header-row h2 { margin: 0; }
+    .header-actions { display: flex; gap: 8px; }
     .loading-container {
       display: flex;
       justify-content: center;
@@ -299,6 +314,7 @@ interface RunHistoryItem {
     .status-running { color: #2196f3; }
     .status-error { color: #f44336; }
     .status-aborted { color: #ff9800; }
+    .trigger-loss { color: #f44336; font-weight: 500; }
     .section-title {
       margin-top: 24px;
       margin-bottom: 8px;
@@ -367,6 +383,7 @@ export class RunsPageComponent implements OnInit {
   readonly loading = signal(false);
   readonly selectedConfigIdx = signal(0);
   readonly sortState = signal<Sort>({ active: 'start_time', direction: 'desc' });
+  readonly exporting = signal(false);
 
   displayedColumns = ['run_number', 'comment', 'start_time', 'end_time', 'duration'];
 
@@ -405,6 +422,26 @@ export class RunsPageComponent implements OnInit {
         this.loading.set(false);
       },
       error: () => this.loading.set(false),
+    });
+  }
+
+  exportJson(): void {
+    this.exporting.set(true);
+    this.http.get<unknown>('/api/runs/export').subscribe({
+      next: (data) => {
+        const json = JSON.stringify(data, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const exp = (data as { experiment?: string })?.experiment ?? 'export';
+        const date = new Date().toISOString().slice(0, 10);
+        a.download = `${exp}_runs_${date}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.exporting.set(false);
+      },
+      error: () => this.exporting.set(false),
     });
   }
 

@@ -288,3 +288,102 @@ pub(super) async fn add_run_note(
 
     Ok(Json(note))
 }
+
+/// Export run item with embedded config snapshot
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RunExportItem {
+    pub run_number: i32,
+    pub comment: String,
+    pub start_time: i64,
+    pub end_time: Option<i64>,
+    pub duration_secs: Option<i32>,
+    pub status: RunStatus,
+    pub stats: RunStats,
+    pub notes: Vec<RunNote>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digitizer_configs: Option<Vec<DigitizerConfig>>,
+}
+
+/// Full experiment export
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ExperimentExport {
+    pub experiment: String,
+    pub exported_at: String,
+    pub total_runs: usize,
+    pub runs: Vec<RunExportItem>,
+}
+
+/// Export all run history with config snapshots as JSON
+#[utoipa::path(
+    get,
+    path = "/api/runs/export",
+    tag = "Run History",
+    responses(
+        (status = 200, description = "Full experiment export", body = ExperimentExport),
+        (status = 503, description = "MongoDB not available", body = ApiResponse)
+    )
+)]
+pub(super) async fn export_runs(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ExperimentExport>, (StatusCode, Json<ApiResponse>)> {
+    let run_repo = state.run_repo.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::error("MongoDB not configured")),
+        )
+    })?;
+
+    let exp_name = &state.config.experiment_name;
+
+    // Get all runs (no limit)
+    let runs = run_repo
+        .get_runs_by_experiment(exp_name, 0)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!("Failed to get runs: {}", e))),
+            )
+        })?;
+
+    // Get all config snapshots
+    let snapshots = if let Some(ref dig_repo) = state.digitizer_repo {
+        dig_repo
+            .list_run_snapshots(exp_name, 0)
+            .await
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // Build a map: run_number -> configs
+    let mut config_map: std::collections::HashMap<i32, Vec<DigitizerConfig>> =
+        std::collections::HashMap::new();
+    for snap in snapshots {
+        config_map.insert(snap.run_number, snap.digitizer_configs);
+    }
+
+    let export_runs: Vec<RunExportItem> = runs
+        .into_iter()
+        .map(|doc| RunExportItem {
+            run_number: doc.run_number,
+            comment: doc.comment,
+            start_time: doc.start_time,
+            end_time: doc.end_time,
+            duration_secs: doc.duration_secs,
+            status: doc.status,
+            stats: doc.stats,
+            notes: doc.notes,
+            digitizer_configs: config_map.remove(&doc.run_number),
+        })
+        .collect();
+
+    let export = ExperimentExport {
+        experiment: exp_name.clone(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        total_runs: export_runs.len(),
+        runs: export_runs,
+    };
+
+    Ok(Json(export))
+}

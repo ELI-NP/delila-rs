@@ -58,7 +58,10 @@ use event_builder::{
     update_l2_settings as eb_update_l2_settings, update_time_settings as eb_update_time_settings,
 };
 use monitor_layout::{get_monitor_layout, save_monitor_layout};
-use run::{add_run_note, get_next_run_number, get_run, get_run_config_snapshot, get_run_history};
+use run::{
+    add_run_note, export_runs, get_next_run_number, get_run, get_run_config_snapshot,
+    get_run_history,
+};
 use status::{arm, configure, get_status, reset, run_start, start, stop};
 use tuneup::{tuneup_apply, tuneup_start, tuneup_stop};
 
@@ -233,6 +236,7 @@ impl AppState {
         digitizer::restore_digitizer_version,
         run::get_run_config_snapshot,
         run::get_run_history,
+        run::export_runs,
         run::get_run,
         run::get_next_run_number,
         run::add_run_note,
@@ -432,6 +436,7 @@ impl RouterBuilder {
             .route("/api/tuneup/apply/:id", post(tuneup_apply))
             // Run history routes
             .route("/api/runs", get(get_run_history))
+            .route("/api/runs/export", get(export_runs))
             .route("/api/runs/next", get(get_next_run_number))
             .route("/api/runs/current/note", post(add_run_note))
             .route("/api/runs/:run_number", get(get_run))

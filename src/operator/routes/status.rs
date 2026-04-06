@@ -42,6 +42,12 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
                 let (total_events, total_bytes) = recorder_metrics
                     .map(|m| (m.events_processed as i64, m.bytes_transferred as i64))
                     .unwrap_or((0, 0));
+                let trigger_loss_count: i64 = components
+                    .iter()
+                    .filter(|c| c.role == "source")
+                    .filter_map(|c| c.metrics.as_ref())
+                    .map(|m| m.trigger_loss_count as i64)
+                    .sum();
                 let average_rate = if info.elapsed_secs > 0 {
                     total_events as f64 / info.elapsed_secs as f64
                 } else {
@@ -52,6 +58,7 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
                     total_events,
                     total_bytes,
                     average_rate,
+                    trigger_loss_count,
                 };
             }
             Some(info)
@@ -378,6 +385,12 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             .filter_map(|c| c.metrics.as_ref())
             .map(|m| m.bytes_transferred as i64)
             .sum();
+        let trigger_loss_count: i64 = components
+            .iter()
+            .filter(|c| c.role == "source")
+            .filter_map(|c| c.metrics.as_ref())
+            .map(|m| m.trigger_loss_count as i64)
+            .sum();
         let average_rate = if run_info.elapsed_secs > 0 {
             total_events as f64 / run_info.elapsed_secs as f64
         } else {
@@ -388,6 +401,7 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             total_events,
             total_bytes,
             average_rate,
+            trigger_loss_count,
         };
 
         if let Err(e) = repo
