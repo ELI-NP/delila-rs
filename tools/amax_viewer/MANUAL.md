@@ -29,9 +29,25 @@ cargo run --release --bin amax_viewer
 # Test Pulse mode
 ./target/release/amax_viewer -t
 ./target/release/amax_viewer registers/register_20260310.json -t
+
+# Force-reset all parameters to defaults (useful after firmware change)
+./target/release/amax_viewer --reset-params
+./target/release/amax_viewer registers/register_new_fw.json --reset-params
 ```
 
 On the first run, configuration files are created automatically (see [Settings Persistence](#settings-persistence)).
+
+### Firmware Change Auto-Detection
+
+When switching firmware, the register definition file changes. The viewer automatically detects this by comparing a hash of the loaded `register_defs.json` content with the hash stored in `settings.json`. If the hash differs:
+
+1. All saved parameter values are cleared (reset to `register_defs.json` defaults)
+2. On the next acquisition start, **all registers are force-written** to the digitizer (no diff-write optimization)
+3. A status message "Parameters reset to defaults (firmware change detected)" is displayed
+
+This prevents stale parameters from a previous firmware from corrupting the new firmware's state.
+
+If auto-detection does not trigger (e.g., same definition file with updated defaults), use `--reset-params` to force a manual reset.
 
 ---
 
@@ -235,8 +251,8 @@ The file contains a `Registers` array with `Name` and `Address` fields:
 ```json
 {
   "Registers": [
-    { "Name": "THRS", "Address": 2, ... },
-    { "Name": "WINDOW_MAXIM", "Address": 81920, ... }
+    { "Name": "page_amax_energy_0_THRS", "Address": 8388612, ... },
+    { "Name": "page_amax_energy_0_WINDOW_MAXIM", "Address": 8388629, ... }
   ]
 }
 ```
@@ -244,17 +260,24 @@ The file contains a `Registers` array with `Name` and `Address` fields:
 ### Usage
 
 ```bash
-# From the repository root
+# Basic: generate with default values (requires manual editing)
 cargo run --release --bin gen_defs -- \
   path/to/RegisterFile.json \
-  registers/register_20260310.json
+  -o registers/register_YYYYMMDD.json
 
-# Output:
-# Wrote 27 register definitions to registers/register_20260310.json
-# Edit min/max/default values as needed before using.
+# With parameter table: auto-apply bit widths, defaults, and readonly flags
+cargo run --release --bin gen_defs -- \
+  path/to/RegisterFile.json \
+  -p fw_params.json \
+  -o registers/register_YYYYMMDD.json
 ```
 
-The second argument (output path) defaults to `register_defs.json` if omitted.
+| Option | Description |
+|--------|-------------|
+| `<RegisterFile.json>` | Sci-Compiler register file (required, positional) |
+| `-p <fw_params.json>` | Firmware parameter table (bit widths, defaults, readonly patterns) |
+| `-o <output.json>` | Output file path (default: `register_defs.json`) |
+| `-h` / `--help` | Show usage |
 
 ### Section Auto-Detection
 
@@ -267,7 +290,7 @@ Each register is automatically classified into a UI section:
 
 You can change the section names by editing the output JSON.
 
-### Post-Generation Editing (Required)
+### Without `-p`: Manual Editing Required
 
 The generated file has `min=0, max=4294967295, default=0` for **all** registers.
 You must edit these values manually before use:
@@ -283,21 +306,112 @@ You must edit these values manually before use:
 }
 ```
 
-Refer to the firmware documentation (`AMAX_firmware.../documentation_.../a00103.html`)
-for parameter ranges and descriptions.
+### With `-p`: Firmware Parameter Table (Recommended)
+
+The parameter table (`fw_params.json`) encodes firmware-specific knowledge: bit widths,
+default values, and readonly patterns. This eliminates manual post-editing.
+
+#### Parameter Table Format
+
+```json
+{
+  "params": {
+    "POLARITY":    { "bits": 1,  "default": 1 },
+    "THRS":        { "bits": 32, "default": 20 },
+    "TRAP_K":      { "bits": 16, "default": 500 },
+    "DECONV_M":    { "bits": 24, "default": 3499000 },
+    "AMAX_window": { "bits": 32, "default": 1000 }
+  },
+  "readonly_patterns": [
+    "ENERGY_MAIN",
+    "AMAX_MAIN",
+    "debug_amax_out",
+    "READ_ENERGY",
+    "maxim_outt"
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `params` | Map of register keyword → `{bits, default}`. Keywords are matched as **substrings** of register names (e.g. `"THRS"` matches `page_amax_energy_0_THRS`, `page_amax_energy_1_THRS`, etc.). When multiple keywords match, the **longest** match wins |
+| `params[].bits` | Number of data bits. Used to compute `max = 2^bits - 1` (e.g. 16 bits → max 65535) |
+| `params[].default` | Default value for this register. Validated: error if `default > max` |
+| `readonly_patterns` | List of substrings. Any register name containing one of these patterns is marked `readonly: true` |
+
+#### Creating a Parameter Table for a New Firmware
+
+1. Open the firmware source or documentation
+2. For each register, determine:
+   - The base name (without channel prefix, e.g. `THRS` not `page_amax_energy_0_THRS`)
+   - The number of data bits
+   - A reasonable default value
+3. Add status/output registers to `readonly_patterns`
+4. Save as `fw_params.json` and pass to `gen_defs` with `-p`
+
+> **Note**: The parameter table is firmware-family-specific (shared across Trapezoid_simple,
+> Trapezoid_2channels, Trapezoid_32channels if they use the same register names).
+> Only update it when register names or bit widths change.
+
+A reference parameter table is included: [`fw_params.json`](fw_params.json).
 
 ### Complete Workflow (New Firmware)
 
-```bash
-# 1. Generate from Sci-Compiler output
-cargo run --release --bin gen_defs -- \
-  path/to/new_fw/RegisterFile.json \
-  registers/register_YYYYMMDD.json
+```
+┌──────────────────┐     ┌──────────────┐     ┌──────────────────┐
+│  Sci-Compiler    │     │  fw_params   │     │   amax_viewer    │
+│  RegisterFile.json├────►│  .json       ├────►│  register_defs   │
+│  (addresses)     │     │  (bits/defs) │     │  .json (complete)│
+└──────────────────┘     └──────────────┘     └──────────────────┘
+        gen_defs -p merges both sources
+```
 
-# 2. Edit min/max/default values in the generated file
+```bash
+# 1. Flash new firmware to the digitizer
+#    (using CAEN Upgrader or Sci-Compiler)
+
+# 2. Generate register definitions with parameter table
+cargo run --release --bin gen_defs -- \
+  path/to/new_fw/output/output/RegisterFile.json \
+  -p fw_params.json \
+  -o registers/register_YYYYMMDD.json
+
+# Output example:
+# Wrote 54 register definitions to registers/register_YYYYMMDD.json (6 readonly)
+# Parameter table applied: 48 matched, 0 unmatched
 
 # 3. Launch amax_viewer with the new definitions
 ./target/release/amax_viewer registers/register_YYYYMMDD.json
+
+# → "Register definitions changed (firmware update detected). Parameters reset to defaults."
+# → All registers are force-written to hardware on first Start
+```
+
+#### Switching Between Firmware Versions
+
+Keep separate register definition files per firmware version:
+
+```
+registers/
+├── register_trapezoid_simple.json    # 1-channel
+├── register_trapezoid_2ch.json       # 2-channel (current)
+└── register_trapezoid_32ch.json      # 32-channel
+```
+
+```bash
+# Switch firmware
+./target/release/amax_viewer registers/register_trapezoid_32ch.json
+
+# The viewer detects the register definition change automatically:
+# → parameters are reset to defaults
+# → all registers are force-written to the digitizer
+```
+
+No manual cleanup of `settings.json` or `~/.config` files is needed.
+If auto-detection does not trigger, use `--reset-params`:
+
+```bash
+./target/release/amax_viewer registers/register_trapezoid_32ch.json --reset-params
 ```
 
 ---
@@ -345,9 +459,29 @@ On exit, the following are saved automatically:
 |------|----------|
 | URL | `~/.config/amax_viewer/settings.json` |
 | Output file path | same |
-| All current register values | same |
+| Register values (non-default only) | same |
+| Register definitions hash | same |
 
 These are restored on the next launch.
+
+### Firmware Change Detection
+
+The hash of the loaded `register_defs.json` content is stored in `settings.json`.
+On the next launch, if the current `register_defs.json` hash differs from the stored hash:
+
+1. All saved register values are discarded
+2. Registers are initialized from the new `register_defs.json` defaults
+3. All registers are force-written to hardware (bypassing diff-write)
+
+This prevents stale parameters from a previous firmware from being applied to new hardware.
+
+### Embedded Default Auto-Update
+
+When the binary is recompiled with an updated `register_defs.json`:
+
+- If the user relies on `~/.config/amax_viewer/register_defs.json` (no CLI argument),
+  the config file is automatically updated to match the new embedded default
+- This only happens when the embedded default differs from the config file
 
 ---
 
@@ -362,4 +496,6 @@ These are restored on the next launch.
 | Parameter changes have no effect | Must press **Restart to Apply** or **Enter** to re-write registers |
 | `register_defs.json` load error on startup | JSON syntax error. Fix or delete the user config file. The embedded default will be used as a fallback |
 | TestPulse stops generating events | Old register addresses (0x0–0x30) may have corrupted FW state. Power-cycle the digitizer or send `/cmd/reset`, then use correct page-based addresses |
+| Parameters from previous FW persist | Normally auto-detected via hash. If not, use `--reset-params` to force-clear saved parameters |
+| `gen_defs` shows "N unmatched" | The parameter table (`fw_params.json`) is missing entries for some registers. Add the missing keywords to the `params` section |
 | CLI register file not loading | Check stderr for error messages. The path is relative to the working directory |

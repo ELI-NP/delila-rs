@@ -1,0 +1,39 @@
+{
+  "_comment": "AMax firmware parameter table: bit widths and default values for gen_defs.",
+  "_usage": "cargo run --bin gen_defs -- RegisterFile.json -p fw_params.json -o register_defs.json",
+  "_matching": "Keys are matched as substrings of register names (e.g. 'THRS' matches 'page_amax_energy_0_THRS').",
+  "params": {
+    "POLARITY": { "bits": 1, "default": 1 },
+    "OFFSET": { "bits": 16, "default": 0 },
+    "THRS": { "bits": 32, "default": 20 },
+    "TRIG_K": { "bits": 16, "default": 10 },
+    "TRIG_M": { "bits": 16, "default": 12 },
+    "TRAP_K": { "bits": 16, "default": 500 },
+    "TRAP_M": { "bits": 16, "default": 550 },
+    "DECONV_M": { "bits": 24, "default": 3499000 },
+    "TRAP_GAIN": { "bits": 24, "default": 2500 },
+    "BL_LEN": { "bits": 4, "default": 6 },
+    "BL_INIB": { "bits": 16, "default": 1200 },
+    "SAMPLE_POS": { "bits": 16, "default": 1800 },
+    "RUN_CFG": { "bits": 1, "default": 1 },
+    "WINDOW_MAXIM": { "bits": 32, "default": 500 },
+    "baseline_delay": { "bits": 32, "default": 200 },
+    "baseline_len": { "bits": 16, "default": 6 },
+    "baseline_offset": { "bits": 16, "default": 1000 },
+    "AMAX_window": { "bits": 32, "default": 1000 },
+    "AMAX_delay": { "bits": 32, "default": 32 },
+    "AMAX_len": { "bits": 16, "default": 5 },
+    "PRETRIGGER_INPUT": { "bits": 32, "default": 600 },
+    "PRETRIGGER_TRAP": { "bits": 32, "default": 600 },
+    "PRETRIGGER_AMAX": { "bits": 32, "default": 600 },
+    "selector_wave": { "bits": 1, "default": 0 }
+  },
+  "readonly_patterns": [
+    "ENERGY_MAIN",
+    "AMAX_MAIN",
+    "ENERGY_MAIN_LATCH",
+    "debug_amax_out",
+    "READ_ENERGY",
+    "maxim_outt"
+  ]
+}

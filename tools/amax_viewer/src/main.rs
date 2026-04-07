@@ -25,6 +25,10 @@ struct Args {
     /// Start in Test Pulse mode (use digitizer internal test pulse)
     #[arg(short = 't', long)]
     test_pulse: bool,
+
+    /// Reset all register parameters to defaults (useful after firmware change)
+    #[arg(long)]
+    reset_params: bool,
 }
 
 // Default register definitions embedded at compile time.
@@ -191,6 +195,9 @@ struct AppSettings {
     /// Selected channel for display (0-31)
     #[serde(default, deserialize_with = "deserialize_channel")]
     selected_channel: u8,
+    /// Hash of register_defs.json content — used to detect firmware changes
+    #[serde(default)]
+    register_defs_hash: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -200,6 +207,7 @@ impl Default for AppSettings {
             output_path: Self::default_output_path(),
             param_values: HashMap::new(),
             selected_channel: 0,
+            register_defs_hash: None,
         }
     }
 }
@@ -253,9 +261,18 @@ impl AppSettings {
     }
 }
 
+/// Compute a hash of register definitions content for firmware change detection.
+fn compute_defs_hash(content: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 /// Load register definitions.
 /// Priority: CLI argument > user config file (~/.config) > embedded default.
-fn load_register_defs(cli_path: Option<&PathBuf>) -> Vec<RegisterDef> {
+/// Returns (parsed defs, raw JSON content for hashing).
+fn load_register_defs(cli_path: Option<&PathBuf>) -> (Vec<RegisterDef>, String) {
     // 1. CLI argument (highest priority)
     if let Some(path) = cli_path {
         match std::fs::read_to_string(path) {
@@ -266,7 +283,7 @@ fn load_register_defs(cli_path: Option<&PathBuf>) -> Vec<RegisterDef> {
                         defs.len(),
                         path.display()
                     );
-                    return defs;
+                    return (defs, content);
                 }
                 Err(e) => eprintln!("Failed to parse {}: {}", path.display(), e),
             },
@@ -278,8 +295,21 @@ fn load_register_defs(cli_path: Option<&PathBuf>) -> Vec<RegisterDef> {
     if let Some(path) = AppSettings::register_defs_path() {
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(defs) = serde_json::from_str::<Vec<RegisterDef>>(&content) {
-                    return defs;
+                // Check if embedded default has been updated (new binary build)
+                let file_hash = compute_defs_hash(&content);
+                let embedded_hash = compute_defs_hash(DEFAULT_REGISTER_DEFS);
+                if file_hash != embedded_hash {
+                    eprintln!(
+                        "Updating config register_defs.json (embedded default changed)"
+                    );
+                    let _ = std::fs::write(&path, DEFAULT_REGISTER_DEFS);
+                    if let Ok(defs) =
+                        serde_json::from_str::<Vec<RegisterDef>>(DEFAULT_REGISTER_DEFS)
+                    {
+                        return (defs, DEFAULT_REGISTER_DEFS.to_string());
+                    }
+                } else if let Ok(defs) = serde_json::from_str::<Vec<RegisterDef>>(&content) {
+                    return (defs, content);
                 }
             }
         } else {
@@ -292,7 +322,8 @@ fn load_register_defs(cli_path: Option<&PathBuf>) -> Vec<RegisterDef> {
     }
 
     // 3. Embedded default
-    serde_json::from_str(DEFAULT_REGISTER_DEFS).unwrap_or_default()
+    let defs = serde_json::from_str(DEFAULT_REGISTER_DEFS).unwrap_or_default();
+    (defs, DEFAULT_REGISTER_DEFS.to_string())
 }
 
 /// Build param_values map from register defs (fill missing keys with defaults)
@@ -506,6 +537,10 @@ struct AmaxViewerApp {
     selected_channel: u8,
     /// Track previous channel to detect changes for texture regeneration
     prev_selected_channel: u8,
+    /// Force-write all registers on next acquisition start (set on FW change or --reset-params)
+    force_write_params: bool,
+    /// Hash of current register_defs content (saved to settings on exit)
+    register_defs_hash: String,
 }
 
 impl AmaxViewerApp {
@@ -513,9 +548,27 @@ impl AmaxViewerApp {
         _cc: &eframe::CreationContext<'_>,
         test_pulse: bool,
         register_defs_path: Option<PathBuf>,
+        reset_params: bool,
     ) -> Self {
-        let settings = AppSettings::load();
-        let register_defs = load_register_defs(register_defs_path.as_ref());
+        let mut settings = AppSettings::load();
+        let (register_defs, defs_content) = load_register_defs(register_defs_path.as_ref());
+        let current_hash = compute_defs_hash(&defs_content);
+
+        let fw_changed = settings.register_defs_hash.as_ref() != Some(&current_hash);
+        let force_reset = reset_params || fw_changed;
+
+        if force_reset {
+            if fw_changed {
+                eprintln!(
+                    "Register definitions changed (firmware update detected). Parameters reset to defaults."
+                );
+            }
+            if reset_params {
+                eprintln!("--reset-params: Parameters reset to defaults.");
+            }
+            settings.param_values.clear();
+        }
+
         let param_values = init_param_values(&register_defs, &settings.param_values);
 
         let channels: Vec<ChannelData> = (0..32).map(|_| ChannelData::new(512, 512)).collect();
@@ -526,7 +579,9 @@ impl AmaxViewerApp {
             running: false,
             event_rate: 0.0,
             connected: false,
-            status_message: if test_pulse {
+            status_message: if force_reset {
+                "Parameters reset to defaults (firmware change detected)".to_string()
+            } else if test_pulse {
                 "Test Pulse mode - Not connected".to_string()
             } else {
                 "Not connected".to_string()
@@ -554,6 +609,8 @@ impl AmaxViewerApp {
             was_recording: false,
             selected_channel,
             prev_selected_channel: selected_channel,
+            force_write_params: force_reset,
+            register_defs_hash: current_hash,
         }
     }
 
@@ -568,9 +625,12 @@ impl AmaxViewerApp {
         let url = self.url.clone();
         let register_defs = self.register_defs.clone();
         let test_pulse = self.test_pulse;
+        let force_write = self.force_write_params;
+        // Clear flag so subsequent reconnects don't force-write again
+        self.force_write_params = false;
 
         self.acq_thread = Some(thread::spawn(move || {
-            acquisition_thread(url, shared, shutdown, register_defs, test_pulse);
+            acquisition_thread(url, shared, shutdown, register_defs, test_pulse, force_write);
         }));
     }
 
@@ -1028,6 +1088,7 @@ impl eframe::App for AmaxViewerApp {
                 output_path: self.output_path.clone(),
                 param_values: changed_params,
                 selected_channel: self.selected_channel,
+                register_defs_hash: Some(self.register_defs_hash.clone()),
             };
             settings.save();
         }
@@ -1042,6 +1103,7 @@ fn acquisition_thread(
     shutdown: Arc<AtomicBool>,
     register_defs: Vec<RegisterDef>,
     test_pulse: bool,
+    force_write: bool,
 ) {
     eprintln!("[ACQ] Connecting to {}...", url);
     let handle = match CaenHandle::open(&url) {
@@ -1121,11 +1183,19 @@ fn acquisition_thread(
 
     // Apply register parameters (diff-write: only changed values, skip readonly)
     // Use desired_values (pre-overwrite snapshot), not state.param_values (overwritten by read_hw_params)
+    // When force_write is true (FW change or --reset-params), pass empty hw_values
+    // to force all registers to be written regardless of current hardware state.
     if register_defs.is_empty() {
         eprintln!("[ACQ] No register parameters to apply (skipped)");
     } else {
+        let effective_hw = if force_write {
+            eprintln!("[ACQ] Force-writing ALL registers (firmware change or --reset-params)");
+            HashMap::new()
+        } else {
+            hw_values
+        };
         let (written, unchanged, readonly_skipped, errors, first_error) =
-            apply_params(&handle, &register_defs, &desired_values, &hw_values);
+            apply_params(&handle, &register_defs, &desired_values, &effective_hw);
 
         // Restore UI to show user's desired values (read_hw_params overwrote them with HW values)
         let mut state = shared.lock().unwrap();
@@ -1586,6 +1656,7 @@ fn apply_params(
 fn main() -> eframe::Result<()> {
     let args = Args::parse();
     let test_pulse = args.test_pulse;
+    let reset_params = args.reset_params;
     let register_defs_path = args.register_defs;
 
     let title = if test_pulse {
@@ -1621,6 +1692,7 @@ fn main() -> eframe::Result<()> {
                 cc,
                 test_pulse,
                 register_defs_path,
+                reset_params,
             )))
         }),
     )
