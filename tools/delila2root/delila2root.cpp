@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -38,19 +39,27 @@ static constexpr size_t FOOTER_SIZE = 64;
 // ============================================================================
 // Data structures
 // ============================================================================
-struct Event {
-    double timestamp_ns;   // 8B — sort key at offset 0
-    uint64_t flags;        // 8B
-    uint16_t energy;       // 2B
-    uint16_t energy_short; // 2B
-    uint8_t module;        // 1B
-    uint8_t channel;       // 1B
-    // 2B padding → sizeof = 24
+struct WaveformData {
+    std::vector<Short_t> analog_probe1;
+    std::vector<Short_t> analog_probe2;
+    std::vector<UChar_t> digital_probe1;
+    std::vector<UChar_t> digital_probe2;
+    std::vector<UChar_t> digital_probe3;
+    std::vector<UChar_t> digital_probe4;
+    UChar_t time_resolution = 0;
+    UShort_t trigger_threshold = 0;
+    Double_t ns_per_sample = 0.0;
 };
 
-static_assert(sizeof(Event) == 24, "Event must be 24 bytes");
-static_assert(std::is_trivially_copyable<Event>::value,
-              "Event must be trivially copyable");
+struct Event {
+    double timestamp_ns;
+    uint64_t flags;
+    uint16_t energy;
+    uint16_t energy_short;
+    uint8_t module;
+    uint8_t channel;
+    std::unique_ptr<WaveformData> waveform;  // nullptr if no waveform
+};
 
 struct FileInfo {
     std::string path;
@@ -132,12 +141,14 @@ class MsgPackParser {
         if (!read_float64(ts)) return false;
         if (!read_uint(fl)) return false;
 
-        // Skip waveform data if present
+        // Parse waveform data if present
+        std::unique_ptr<WaveformData> wf;
         if (ev_size == 7) {
-            if (!skip_value()) return false;
+            wf = std::make_unique<WaveformData>();
+            if (!parse_waveform(*wf)) return false;
         }
 
-        // Energy threshold filter
+        // Energy threshold filter (waveform auto-freed if filtered)
         if (static_cast<uint16_t>(e) < energy_min_) {
             return true;
         }
@@ -149,85 +160,10 @@ class MsgPackParser {
         ev.energy_short = static_cast<uint16_t>(es);
         ev.module = static_cast<uint8_t>(mod);
         ev.channel = static_cast<uint8_t>(ch);
-        events.push_back(ev);
+        ev.waveform = std::move(wf);
+        events.push_back(std::move(ev));
 
         return true;
-    }
-
-    bool skip_value() {
-        if (pos_ >= data_.size()) return false;
-        uint8_t b = data_[pos_];
-
-        if (b <= 0x7f) { pos_++; return true; }
-        if (b >= 0xe0) { pos_++; return true; }
-        if ((b & 0xe0) == 0xa0) {
-            pos_++; pos_ += (b & 0x1f);
-            return pos_ <= data_.size();
-        }
-        if ((b & 0xf0) == 0x90) {
-            size_t c = b & 0x0f; pos_++;
-            for (size_t i = 0; i < c; i++) {
-                if (!skip_value()) return false;
-            }
-            return true;
-        }
-        if ((b & 0xf0) == 0x80) {
-            size_t c = b & 0x0f; pos_++;
-            for (size_t i = 0; i < c * 2; i++) {
-                if (!skip_value()) return false;
-            }
-            return true;
-        }
-
-        pos_++;
-        switch (b) {
-            case 0xc0: case 0xc2: case 0xc3: return true;
-            case 0xc4:
-                if (pos_ >= data_.size()) return false;
-                pos_ += 1 + data_[pos_];
-                return pos_ <= data_.size();
-            case 0xc5:
-                if (pos_ + 2 > data_.size()) return false;
-                { size_t l = (data_[pos_] << 8) | data_[pos_ + 1];
-                  pos_ += 2 + l; }
-                return pos_ <= data_.size();
-            case 0xc6:
-                if (pos_ + 4 > data_.size()) return false;
-                { size_t l = (static_cast<uint32_t>(data_[pos_]) << 24) |
-                             (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
-                             (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
-                             static_cast<uint32_t>(data_[pos_ + 3]);
-                  pos_ += 4 + l; }
-                return pos_ <= data_.size();
-            case 0xca: pos_ += 4; return pos_ <= data_.size();
-            case 0xcb: pos_ += 8; return pos_ <= data_.size();
-            case 0xcc: case 0xd0: pos_ += 1; return pos_ <= data_.size();
-            case 0xcd: case 0xd1: pos_ += 2; return pos_ <= data_.size();
-            case 0xce: case 0xd2: pos_ += 4; return pos_ <= data_.size();
-            case 0xcf: case 0xd3: pos_ += 8; return pos_ <= data_.size();
-            case 0xdc: {
-                if (pos_ + 2 > data_.size()) return false;
-                size_t c = (data_[pos_] << 8) | data_[pos_ + 1];
-                pos_ += 2;
-                for (size_t i = 0; i < c; i++) {
-                    if (!skip_value()) return false;
-                }
-                return true;
-            }
-            case 0xdd: {
-                if (pos_ + 4 > data_.size()) return false;
-                size_t c = (static_cast<uint32_t>(data_[pos_]) << 24) |
-                           (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
-                           (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
-                           static_cast<uint32_t>(data_[pos_ + 3]);
-                pos_ += 4;
-                for (size_t i = 0; i < c; i++) {
-                    if (!skip_value()) return false;
-                }
-                return true;
-            }
-            default: return false;
-        }
     }
 
     bool read_array_header(size_t& size) {
@@ -298,6 +234,144 @@ class MsgPackParser {
             return true;
         }
         return false;
+    }
+
+    bool read_int(int64_t& val) {
+        if (pos_ >= data_.size()) return false;
+        uint8_t b = data_[pos_];
+
+        // positive fixint (0x00 - 0x7f)
+        if (b <= 0x7f) {
+            pos_++;
+            val = b;
+            return true;
+        }
+        // negative fixint (0xe0 - 0xff)
+        if (b >= 0xe0) {
+            pos_++;
+            val = static_cast<int8_t>(b);
+            return true;
+        }
+        // int8 (0xd0)
+        if (b == 0xd0 && pos_ + 2 <= data_.size()) {
+            pos_++;
+            val = static_cast<int8_t>(data_[pos_++]);
+            return true;
+        }
+        // int16 (0xd1)
+        if (b == 0xd1 && pos_ + 3 <= data_.size()) {
+            pos_++;
+            val = static_cast<int16_t>((data_[pos_] << 8) | data_[pos_ + 1]);
+            pos_ += 2;
+            return true;
+        }
+        // int32 (0xd2)
+        if (b == 0xd2 && pos_ + 5 <= data_.size()) {
+            pos_++;
+            val = static_cast<int32_t>(
+                (static_cast<uint32_t>(data_[pos_]) << 24) |
+                (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
+                (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
+                static_cast<uint32_t>(data_[pos_ + 3]));
+            pos_ += 4;
+            return true;
+        }
+        // uint types (for positive values stored as unsigned)
+        uint64_t uval;
+        if (read_uint(uval)) {
+            val = static_cast<int64_t>(uval);
+            return true;
+        }
+        return false;
+    }
+
+    bool read_i16_array(std::vector<Short_t>& arr) {
+        size_t size;
+        if (!read_array_header(size)) return false;
+
+        arr.resize(size);
+        for (size_t i = 0; i < size; i++) {
+            int64_t val;
+            if (!read_int(val)) return false;
+            arr[i] = static_cast<Short_t>(val);
+        }
+        return true;
+    }
+
+    bool read_bin(std::vector<UChar_t>& arr) {
+        if (pos_ >= data_.size()) return false;
+        uint8_t b = data_[pos_++];
+        size_t size = 0;
+
+        if (b == 0xc4 && pos_ + 1 <= data_.size()) {
+            // bin8
+            size = data_[pos_++];
+        } else if (b == 0xc5 && pos_ + 2 <= data_.size()) {
+            // bin16
+            size = (data_[pos_] << 8) | data_[pos_ + 1];
+            pos_ += 2;
+        } else if (b == 0xc6 && pos_ + 4 <= data_.size()) {
+            // bin32
+            size = (static_cast<uint32_t>(data_[pos_]) << 24) |
+                   (static_cast<uint32_t>(data_[pos_ + 1]) << 16) |
+                   (static_cast<uint32_t>(data_[pos_ + 2]) << 8) |
+                   static_cast<uint32_t>(data_[pos_ + 3]);
+            pos_ += 4;
+        } else {
+            return false;
+        }
+
+        if (pos_ + size > data_.size()) return false;
+        arr.assign(data_.begin() + pos_, data_.begin() + pos_ + size);
+        pos_ += size;
+        return true;
+    }
+
+    bool read_u8_array(std::vector<UChar_t>& arr) {
+        if (pos_ >= data_.size()) return false;
+        uint8_t b = data_[pos_];
+
+        // Check for binary format first
+        if (b == 0xc4 || b == 0xc5 || b == 0xc6) {
+            return read_bin(arr);
+        }
+
+        // Otherwise, it's an array
+        size_t size;
+        if (!read_array_header(size)) return false;
+
+        arr.resize(size);
+        for (size_t i = 0; i < size; i++) {
+            uint64_t val;
+            if (!read_uint(val)) return false;
+            arr[i] = static_cast<UChar_t>(val);
+        }
+        return true;
+    }
+
+    bool parse_waveform(WaveformData& wf) {
+        size_t wf_size;
+        if (!read_array_header(wf_size) || (wf_size != 8 && wf_size != 9)) {
+            return false;
+        }
+
+        if (!read_i16_array(wf.analog_probe1)) return false;
+        if (!read_i16_array(wf.analog_probe2)) return false;
+        if (!read_u8_array(wf.digital_probe1)) return false;
+        if (!read_u8_array(wf.digital_probe2)) return false;
+        if (!read_u8_array(wf.digital_probe3)) return false;
+        if (!read_u8_array(wf.digital_probe4)) return false;
+
+        uint64_t tmp;
+        if (!read_uint(tmp)) return false;
+        wf.time_resolution = static_cast<UChar_t>(tmp);
+        if (!read_uint(tmp)) return false;
+        wf.trigger_threshold = static_cast<UShort_t>(tmp);
+
+        if (wf_size == 9) {
+            if (!read_float64(wf.ns_per_sample)) return false;
+        }
+        return true;
     }
 
     const std::vector<uint8_t>& data_;
@@ -389,6 +463,7 @@ static bool read_events_from_file(const std::string& path,
 // Scalar output — one event per TTree entry
 // ============================================================================
 struct ScalarBuffer {
+    // Scalar fields
     UChar_t mod;
     UChar_t ch;
     UShort_t energy;
@@ -396,16 +471,52 @@ struct ScalarBuffer {
     Double_t timestamp;
     ULong64_t flags;
 
+    // Waveform fields
+    std::vector<Short_t> analog_probe1;
+    std::vector<Short_t> analog_probe2;
+    std::vector<UChar_t> digital_probe1;
+    std::vector<UChar_t> digital_probe2;
+    std::vector<UChar_t> digital_probe3;
+    std::vector<UChar_t> digital_probe4;
+    UChar_t time_resolution = 0;
+    UShort_t trigger_threshold = 0;
+    Double_t ns_per_sample = 0.0;
+
     TTree* tree = nullptr;
     uint64_t total_written = 0;
 
-    void add(const Event& ev) {
+    void add(Event& ev) {
         mod = ev.module;
         ch = ev.channel;
         energy = ev.energy;
         eshort = ev.energy_short;
         timestamp = ev.timestamp_ns;
         flags = ev.flags;
+
+        if (ev.waveform) {
+            // swap avoids extra allocation — buffer gets waveform's storage,
+            // waveform gets buffer's (freed when Event is destroyed)
+            analog_probe1.swap(ev.waveform->analog_probe1);
+            analog_probe2.swap(ev.waveform->analog_probe2);
+            digital_probe1.swap(ev.waveform->digital_probe1);
+            digital_probe2.swap(ev.waveform->digital_probe2);
+            digital_probe3.swap(ev.waveform->digital_probe3);
+            digital_probe4.swap(ev.waveform->digital_probe4);
+            time_resolution = ev.waveform->time_resolution;
+            trigger_threshold = ev.waveform->trigger_threshold;
+            ns_per_sample = ev.waveform->ns_per_sample;
+        } else {
+            analog_probe1.clear();
+            analog_probe2.clear();
+            digital_probe1.clear();
+            digital_probe2.clear();
+            digital_probe3.clear();
+            digital_probe4.clear();
+            time_resolution = 0;
+            trigger_threshold = 0;
+            ns_per_sample = 0.0;
+        }
+
         tree->Fill();
         total_written++;
     }
@@ -416,31 +527,29 @@ struct ScalarBuffer {
 // ============================================================================
 static void merge_and_flush(
     std::vector<Event>& carry_over,
-    const std::vector<Event>& file_events,
+    std::vector<Event>& file_events,
     double safe_threshold,
     ScalarBuffer& buf) {
 
-    auto it_c = carry_over.cbegin();
-    auto it_c_end = carry_over.cend();
-    auto it_f = file_events.cbegin();
-    auto it_f_end = file_events.cend();
-
+    // Event is move-only (contains unique_ptr<WaveformData>), so we use
+    // index-based iteration with std::move instead of const iterators.
+    size_t ic = 0, if_ = 0;
     std::vector<Event> next_carry;
 
-    while (it_c != it_c_end || it_f != it_f_end) {
-        const Event* ev;
-        if (it_c != it_c_end &&
-            (it_f == it_f_end ||
-             it_c->timestamp_ns <= it_f->timestamp_ns)) {
-            ev = &(*it_c++);
+    while (ic < carry_over.size() || if_ < file_events.size()) {
+        Event* pick;
+        if (ic < carry_over.size() &&
+            (if_ >= file_events.size() ||
+             carry_over[ic].timestamp_ns <= file_events[if_].timestamp_ns)) {
+            pick = &carry_over[ic++];
         } else {
-            ev = &(*it_f++);
+            pick = &file_events[if_++];
         }
 
-        if (ev->timestamp_ns < safe_threshold) {
-            buf.add(*ev);
+        if (pick->timestamp_ns < safe_threshold) {
+            buf.add(*pick);
         } else {
-            next_carry.push_back(*ev);
+            next_carry.push_back(std::move(*pick));
         }
     }
 
@@ -536,7 +645,8 @@ int main(int argc, char* argv[]) {
               << std::endl;
     std::cout << "Memory per file: ~"
               << (file_infos[0].total_events * sizeof(Event) / 1024 / 1024)
-              << " MB (" << sizeof(Event) << " bytes/event)" << std::endl;
+              << " MB (scalars only, " << sizeof(Event)
+              << " bytes/event + waveform data on heap)" << std::endl;
     if (energy_min > 0) {
         std::cout << "Energy filter: energy >= " << energy_min << std::endl;
     }
@@ -544,7 +654,7 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Phase 2: Set up ROOT output with LZ4 compression (scalar branches)
     // ========================================================================
-    TFile* fout = TFile::Open(output_file.c_str(), "RECREATE");
+    TFile* fout = new TFile(output_file.c_str(), "RECREATE");
     if (!fout || fout->IsZombie()) {
         std::cerr << "Error: Cannot create " << output_file << std::endl;
         return 1;
@@ -553,7 +663,7 @@ int main(int argc, char* argv[]) {
     fout->SetCompressionLevel(1);
 
     TTree* tree = new TTree(tree_name.c_str(), "DELILA Data (time-sorted)");
-    tree->SetAutoFlush(1000000);
+    tree->SetAutoFlush(-100000000LL);  // 100MB byte-based flush
 
     ScalarBuffer buf;
     buf.tree = tree;
@@ -564,6 +674,17 @@ int main(int argc, char* argv[]) {
     tree->Branch("EnergyShort", &buf.eshort, "EnergyShort/s");
     tree->Branch("Timestamp", &buf.timestamp, "Timestamp/D");
     tree->Branch("Flags", &buf.flags, "Flags/l");
+
+    // Waveform branches (std::vector — ROOT has built-in dictionary)
+    tree->Branch("AnalogProbe1", &buf.analog_probe1);
+    tree->Branch("AnalogProbe2", &buf.analog_probe2);
+    tree->Branch("DigitalProbe1", &buf.digital_probe1);
+    tree->Branch("DigitalProbe2", &buf.digital_probe2);
+    tree->Branch("DigitalProbe3", &buf.digital_probe3);
+    tree->Branch("DigitalProbe4", &buf.digital_probe4);
+    tree->Branch("TimeResolution", &buf.time_resolution, "TimeResolution/b");
+    tree->Branch("TriggerThreshold", &buf.trigger_threshold, "TriggerThreshold/s");
+    tree->Branch("NsPerSample", &buf.ns_per_sample, "NsPerSample/D");
 
     // ========================================================================
     // Phase 3: Per-file sort + two-pointer merge
@@ -586,7 +707,7 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // (b) Sort this file's events by timestamp (POD 24B, fast)
+        // (b) Sort this file's events by timestamp (move-only, sorts via pointer swap)
         std::sort(file_events.begin(), file_events.end(),
                   [](const Event& a, const Event& b) {
                       return a.timestamp_ns < b.timestamp_ns;
