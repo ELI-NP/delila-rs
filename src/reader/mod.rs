@@ -6,6 +6,8 @@
 //! - Reader integration with two-task architecture
 
 pub mod caen;
+#[cfg(feature = "x743")]
+pub mod caen_legacy;
 pub mod decoder;
 
 // Re-exports
@@ -193,6 +195,8 @@ impl ReaderConfig {
             crate::config::SourceType::Psd1 => FirmwareType::PSD1,
             crate::config::SourceType::Pha1 => FirmwareType::PHA1,
             crate::config::SourceType::AMax => FirmwareType::AMax,
+            crate::config::SourceType::X743CI => FirmwareType::X743CI,
+            crate::config::SourceType::X743Std => FirmwareType::X743Std,
             // Emulator/Zle sources shouldn't create a Reader — caller should handle
             _ => return None,
         };
@@ -1817,6 +1821,9 @@ impl Reader {
                     num_channels: 1, // AMax typically uses only ch0
                 };
                 DecoderKind::AMax(AMaxDecoder::new(amax_config))
+            }
+            FirmwareType::X743CI | FirmwareType::X743Std => {
+                unreachable!("x743 uses its own read loop, not the FELib decode pipeline")
             }
         };
 

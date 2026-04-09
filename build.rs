@@ -1,4 +1,4 @@
-// build.rs - Generate CAEN FELib bindings using bindgen
+// build.rs - Generate CAEN FELib and CAENDigitizer bindings using bindgen
 
 use std::env;
 use std::path::PathBuf;
@@ -9,6 +9,12 @@ fn main() {
 
     // Tell cargo to link the CAEN_FELib library
     println!("cargo:rustc-link-lib=CAEN_FELib");
+
+    // Link CAENDigitizer library for x743 support
+    #[cfg(feature = "x743")]
+    {
+        println!("cargo:rustc-link-lib=CAENDigitizer");
+    }
 
     // macOS: Set rpath for runtime library loading
     #[cfg(target_os = "macos")]
@@ -25,34 +31,65 @@ fn main() {
         .include("/usr/local/include")
         .compile("caen_wrapper");
 
-    // Generate bindings
-    let bindings = bindgen::Builder::default()
-        // The input header
+    // Generate FELib bindings
+    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    let felib_bindings = bindgen::Builder::default()
         .header("src/reader/caen/wrapper.h")
-        // Include path for CAEN headers
         .clang_arg("-I/usr/local/include")
-        // CAEN uses two naming conventions:
-        // - Functions/Types: CAEN_FELib_* (CamelCase)
-        // - Macros/Constants: CAEN_FELIB_* (ALL_CAPS)
         .allowlist_function("CAEN_FELib_.*")
         .allowlist_type("CAEN_FELib_.*")
         .allowlist_var("CAEN_FELIB_.*")
-        // Use Rust enums for C enums
         .rustified_enum("CAEN_FELib_ErrorCode")
-        // Generate comments from C docs
         .generate_comments(true)
-        // Derive common traits
         .derive_debug(true)
         .derive_default(true)
         .derive_eq(true)
         .derive_hash(true)
-        // Generate bindings
         .generate()
-        .expect("Unable to generate bindings");
+        .expect("Unable to generate FELib bindings");
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
+    felib_bindings
         .write_to_file(out_path.join("caen_felib_bindings.rs"))
-        .expect("Couldn't write bindings!");
+        .expect("Couldn't write FELib bindings!");
+
+    // Generate CAENDigitizer bindings for x743 support
+    #[cfg(feature = "x743")]
+    {
+        println!("cargo:rerun-if-changed=src/reader/caen_legacy/wrapper.h");
+        println!("cargo:rerun-if-changed=src/reader/caen_legacy/CAENDigitizer.h");
+        println!("cargo:rerun-if-changed=src/reader/caen_legacy/CAENDigitizerType.h");
+
+        let digitizer_bindings = bindgen::Builder::default()
+            .header("src/reader/caen_legacy/wrapper.h")
+            .clang_arg("-Isrc/reader/caen_legacy")
+            .allowlist_function("CAEN_DGTZ_.*")
+            .allowlist_type("CAEN_DGTZ_.*")
+            .allowlist_var("CAEN_DGTZ_.*")
+            .allowlist_var("MAX_V1743_GROUP_SIZE")
+            .allowlist_var("MAX_X743_CHANNELS_X_GROUP")
+            // Use Rust enums for key C enums
+            .rustified_enum("CAEN_DGTZ_ErrorCode")
+            .rustified_enum("CAEN_DGTZ_ConnectionType")
+            .rustified_enum("CAEN_DGTZ_AcqMode_t")
+            .rustified_enum("CAEN_DGTZ_ReadMode_t")
+            .rustified_enum("CAEN_DGTZ_TriggerMode_t")
+            .rustified_enum("CAEN_DGTZ_TriggerPolarity_t")
+            .rustified_enum("CAEN_DGTZ_IOLevel_t")
+            .rustified_enum("CAEN_DGTZ_SAMFrequency_t")
+            .rustified_enum("CAEN_DGTZ_SAM_CORRECTION_LEVEL_t")
+            .rustified_enum("CAEN_DGTZ_SAMPulseSourceType_t")
+            .rustified_enum("CAEN_DGTZ_AcquisitionMode_t")
+            .rustified_enum("CAEN_DGTZ_TrigerLogic_t")
+            .rustified_enum("CAEN_DGTZ_EnaDis_t")
+            .generate_comments(true)
+            .derive_debug(true)
+            .derive_default(true)
+            .generate()
+            .expect("Unable to generate CAENDigitizer bindings");
+
+        digitizer_bindings
+            .write_to_file(out_path.join("caen_digitizer_bindings.rs"))
+            .expect("Couldn't write CAENDigitizer bindings!");
+    }
 }

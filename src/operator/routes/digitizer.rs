@@ -334,6 +334,7 @@ fn default_board_config(firmware: FirmwareType) -> BoardConfig {
             start_source: Some("SWcmd".to_string()),
             ..BoardConfig::default()
         },
+        FirmwareType::X743CI | FirmwareType::X743Std => BoardConfig::default(),
     }
 }
 
@@ -370,6 +371,10 @@ fn default_channel_config(firmware: FirmwareType) -> ChannelConfig {
         },
         FirmwareType::AMax => ChannelConfig {
             enabled: Some("False".to_string()),
+            dc_offset: Some(50.0),
+            ..ChannelConfig::default()
+        },
+        FirmwareType::X743CI | FirmwareType::X743Std => ChannelConfig {
             dc_offset: Some(50.0),
             ..ChannelConfig::default()
         },
