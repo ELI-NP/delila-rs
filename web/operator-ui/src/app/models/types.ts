@@ -148,6 +148,7 @@ export interface BoardConfig {
   extras_enabled?: string;
   event_aggregation?: number;
   coinc_trgout?: number;
+  fine_ts_mode?: string; // DIG1 only: "hardware" | "software"
   extra?: Record<string, unknown>;
 }
 
@@ -170,6 +171,7 @@ export interface ChannelConfig {
   trigger_threshold?: number;
   cfd_delay_ns?: number;
   cfd_fraction?: string;
+  cfd_interpolation_point?: number; // DIG1 only: 0-3
   trigger_holdoff_ns?: number;
   smoothing_factor?: string;
   time_filter_smoothing?: string;

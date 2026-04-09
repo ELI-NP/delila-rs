@@ -27,6 +27,7 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   'trigger_threshold',
   'cfd_delay_ns',
   'cfd_fraction',
+  'cfd_interpolation_point',
   'trigger_holdoff_ns',
   'smoothing_factor',
   'time_filter_smoothing',

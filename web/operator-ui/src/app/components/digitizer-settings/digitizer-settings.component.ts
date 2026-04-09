@@ -303,6 +303,14 @@ import {
 
                     @if (config.firmware !== 'PSD2') {
                       <mat-form-field appearance="outline">
+                        <mat-label>Fine TS Mode</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.board.fine_ts_mode">
+                          <mat-option value="hardware">HW (FPGA)</mat-option>
+                          <mat-option value="software">SW (SAZC/SBZC)</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
                         <mat-label>Extras</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extras_enabled">
                           <mat-option value="TRUE">Enabled</mat-option>
