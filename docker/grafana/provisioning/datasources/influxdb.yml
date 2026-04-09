@@ -9,4 +9,6 @@ datasources:
     isDefault: true
     editable: true
     jsonData:
+      version: SQL
       httpMode: POST
+      insecureGrpc: true

@@ -84,6 +84,11 @@ command = "tcp://*:5590"
 http_port = 8181
 pipeline_order = 3
 
+[operator.influxdb]
+url = "http://localhost:8086"
+database = "delila"
+interval_secs = 2
+
 # [network.event_builder]
 # subscribe = "tcp://localhost:5557"
 # command = "tcp://*:5595"

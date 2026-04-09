@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -8,18 +10,37 @@
     {
       "title": "Beam Current",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "nA",
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "green", "value": 10 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 10
+              }
             ]
           }
         },
@@ -29,23 +50,37 @@
         "graphMode": "area",
         "colorMode": "value",
         "textMode": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"] }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
-          "query": "SELECT non_negative_derivative(mean(\"count\"), 1s)/10 FROM \"channel_rate\" WHERE (\"channel\"::tag = '0' AND \"module\"::tag = '2') AND $timeFilter GROUP BY time($__interval) fill(null)",
-          "rawQuery": true,
-          "resultFormat": "time_series"
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, event_rate / 10.0 AS \"beam_current\" FROM system_rate WHERE module = '2' AND time >= now() - interval '5 minutes' ORDER BY time DESC LIMIT 1",
+          "format": "table"
         }
       ]
     },
     {
       "title": "Beam Current History",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "nA",
@@ -58,24 +93,40 @@
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "single" },
-        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
-          "query": "SELECT non_negative_derivative(mean(\"count\"), 1s)/10 FROM \"channel_rate\" WHERE (\"channel\"::tag = '0' AND \"module\"::tag = '2') AND $timeFilter GROUP BY time($__interval) fill(null)",
-          "rawQuery": true,
-          "resultFormat": "time_series"
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, event_rate / 10.0 AS \"beam_current\" FROM system_rate WHERE module = '2' AND time >= now() - interval '5 minutes' ORDER BY time",
+          "format": "time_series"
         }
       ]
     },
     {
-      "title": "Channel Event Rate (Hz)",
+      "title": "Event Rate (Hz)",
       "type": "timeseries",
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 8 },
-      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "Hz",
@@ -88,27 +139,48 @@
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "lastNotNull"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
-          "query": "SELECT non_negative_derivative(mean(\"count\"), 1s) FROM \"channel_rate\" WHERE $timeFilter GROUP BY time($__interval), \"module\", \"channel\" fill(null)",
-          "rawQuery": true,
-          "resultFormat": "time_series"
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, event_rate, module FROM system_rate WHERE time >= now() - interval '5 minutes' ORDER BY time",
+          "format": "time_series"
         }
       ]
     },
     {
-      "title": "Total Event Rate (Hz)",
+      "title": "Total Events",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
-      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "Hz",
+          "unit": "short",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 20
@@ -117,24 +189,42 @@
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
-          "query": "SELECT non_negative_derivative(mean(\"total_events\"), 1s) FROM \"system_rate\" WHERE $timeFilter GROUP BY time($__interval), \"module\" fill(null)",
-          "rawQuery": true,
-          "resultFormat": "time_series"
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, total_events, module FROM system_rate WHERE time >= now() - interval '5 minutes' ORDER BY time",
+          "format": "time_series"
         }
       ]
     },
     {
       "title": "Data Rate (bytes/s)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
-      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "Bps",
@@ -146,28 +236,47 @@
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
-          "query": "SELECT non_negative_derivative(mean(\"bytes\"), 1s) FROM \"system_rate\" WHERE $timeFilter GROUP BY time($__interval), \"module\" fill(null)",
-          "rawQuery": true,
-          "resultFormat": "time_series"
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, bytes, module FROM system_rate WHERE time >= now() - interval '5 minutes' ORDER BY time",
+          "format": "time_series"
         }
       ]
     }
   ],
-  "refresh": "2s",
+  "refresh": "5s",
   "schemaVersion": 39,
-  "tags": ["delila", "daq"],
-  "templating": { "list": [] },
-  "time": { "from": "now-5m", "to": "now" },
+  "tags": [
+    "delila",
+    "daq"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "",
   "title": "DELILA DAQ Overview",
   "uid": "delila-overview",
-  "version": 2
+  "version": 3
 }

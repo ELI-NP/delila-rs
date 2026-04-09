@@ -1,0 +1,4 @@
+serial_port: "/dev/ttyUSB0"
+board_id: 0
+poll_interval_sec: 2.0
+influx_url: "http://localhost:8086/api/v3/write_lp?db=delila"

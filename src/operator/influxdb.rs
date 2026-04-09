@@ -16,7 +16,7 @@ use crate::config::InfluxDbConfig;
 pub async fn run_writer(config: InfluxDbConfig, state: Arc<AppState>) {
     let client = reqwest::Client::new();
     let write_url = format!(
-        "{}/write?db={}",
+        "{}/api/v3/write_lp?db={}",
         config.url.trim_end_matches('/'),
         config.database
     );

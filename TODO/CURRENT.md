@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-03-13
+**Updated:** 2026-04-08
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,9 +15,10 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **1** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **✅ MVP達成** | 3月MVP: 全Goal達成 — 全FW DAQ稼働 + Grafana + ELOG |
-| **2** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング — ポストMVP |
-| **3** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
+| **1** | [45_v1743_support.md](45_v1743_support.md) | **🔧 Phase 1 完了** | V1743 (SAMLONG 3.2GS/s) サポート — Phase 1: FFI+接続 ✅, Phase 2: DPP_CI 次 |
+| **2** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **✅ MVP達成** | 3月MVP: 全Goal達成 — 全FW DAQ稼働 + Grafana + ELOG |
+| **3** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング — ポストMVP |
+| **4** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
 | - | [event-builder/SPECIFICATION.md](event-builder/SPECIFICATION.md) | **参照** | Event Builder 仕様 |
 
 ---
@@ -25,7 +26,7 @@ Claudeセッション開始時に必ず読み込まれます。
 ## ポスト MVP — 次のセッション候補
 
 - **A:** Energy Calibration + PSD 表示 (GitHub #7) → **設計完了** (2026-02-19, [設計書](../docs/plans/energy_calibration_psd.md)) — Phase 1 から開始
-- **B:** x743 統合 (GitHub #6) → **設計完了** ([設計書](../docs/plans/x743_integration.md))
+- **B:** x743 統合 (GitHub #6) → **Active** ([TODO](45_v1743_support.md), [設計書](../docs/plans/x743_integration.md))
 - **C:** Online EB 統合 (Phase 4: ZmqHitSource + Pipeline) — 夏以降の実験で必要
 - **G:** 設定自動生成スクリプト (3-4) + デプロイスクリプト改善 (3-5)
 - **I:** FELib/Dig2 Rust 移植検討 — JSON-RPC プロトコル直接実装 (ポスト MVP)
@@ -160,6 +161,7 @@ Claudeセッション開始時に必ず読み込まれます。
   - VX2730 (Serial: 52621, DPP_PSD2, 32ch, Ethernet, 172.18.4.57)
   - DT5730B (Serial: 990, DPP_PSD1/PHA1, 16ch, USB)
   - 5x VX1730B (PSD1, 16ch each) + 1x VX2730 (PSD2, 32ch) on 172.18.4.76
+  - VX1743 (Serial: 25, SAMLONG 12-bit, 8ch/4groups, Optical Link) on 172.18.4.147
 - **動作環境:** Linux (Ubuntu, Rust 1.93.0) + macOS (クロスマシン統合)
 
 ## Reference Documents
