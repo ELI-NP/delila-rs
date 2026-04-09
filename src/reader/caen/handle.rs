@@ -736,12 +736,27 @@ impl CaenHandle {
         }
 
         // Force ch_extras_opt for DIG1 firmware (PSD1/PHA1).
-        // The decoder depends on the specific EXTRAS word bit layout,
-        // so this must not be user-configurable.
+        // The decoder depends on the specific EXTRAS word bit layout.
+        // In SW Fine TS mode, use SAZC/SBZC option (0b101) instead of HW Fine TS (0b010).
         if config.firmware.is_dig1() {
-            let extras_value = match config.firmware {
-                crate::config::digitizer::FirmwareType::PSD1 => "EXTRAS_OPT_TT48_FLAGS_FINETT",
-                crate::config::digitizer::FirmwareType::PHA1 => "EXTRAS_OPT_TT48_FINETT",
+            let fine_ts_mode = config
+                .board
+                .fine_ts_mode
+                .unwrap_or(crate::config::digitizer::FineTsMode::Hardware);
+
+            let extras_value = match (config.firmware, fine_ts_mode) {
+                (crate::config::digitizer::FirmwareType::PSD1, crate::config::digitizer::FineTsMode::Hardware) => {
+                    "EXTRAS_OPT_TT48_FLAGS_FINETT"
+                }
+                (crate::config::digitizer::FirmwareType::PSD1, crate::config::digitizer::FineTsMode::Software) => {
+                    "EXTRAS_OPT_SBZC_SAZC"
+                }
+                (crate::config::digitizer::FirmwareType::PHA1, crate::config::digitizer::FineTsMode::Hardware) => {
+                    "EXTRAS_OPT_TT48_FINETT"
+                }
+                (crate::config::digitizer::FirmwareType::PHA1, crate::config::digitizer::FineTsMode::Software) => {
+                    "EXTRAS_OPT_EBZC_EAZC"
+                }
                 _ => unreachable!(),
             };
             for ch in 0..config.num_channels {
@@ -757,10 +772,32 @@ impl CaenHandle {
             }
             info!(
                 firmware = ?config.firmware,
+                fine_ts_mode = ?fine_ts_mode,
                 value = extras_value,
                 channels = config.num_channels,
-                "Forced ch_extras_opt for 48-bit extended timestamps"
+                "Forced ch_extras_opt"
             );
+
+            // Apply CFD interpolation point via direct register write (no FELib param exists)
+            if let Some(interp_pt) = config.channel_defaults.cfd_interpolation_point {
+                let interp_pt = interp_pt.min(3) as u32; // clamp to 0-3
+                for ch in 0..config.num_channels {
+                    let addr = 0x103C + (ch as u32) * 0x0100;
+                    match self.get_user_register(addr) {
+                        Ok(current) => {
+                            let new_val = (current & !0x0C00) | (interp_pt << 10);
+                            if let Err(e) = self.set_user_register(addr, new_val) {
+                                warn!(ch = ch, error = %e, "Failed to set CFD interpolation point");
+                            } else {
+                                debug!(ch = ch, interp_pt = interp_pt, "Set CFD interpolation point");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(ch = ch, error = %e, "Failed to read CFD settings register");
+                        }
+                    }
+                }
+            }
         }
 
         Ok(applied)

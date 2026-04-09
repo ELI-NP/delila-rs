@@ -14,8 +14,8 @@
 pub mod digitizer;
 
 pub use digitizer::{
-    BoardConfig, CaenParameter, ChannelConfig, DigitizerConfig, DigitizerConfigError, FirmwareType,
-    SyncConfig,
+    BoardConfig, CaenParameter, ChannelConfig, DigitizerConfig, DigitizerConfigError, FineTsMode,
+    FirmwareType, SyncConfig,
 };
 
 use serde::Deserialize;
@@ -259,6 +259,12 @@ pub enum SourceType {
     /// DELILA AMax firmware (Trapezoidal Filter MCA, custom DPP_OPEN)
     #[serde(alias = "AMax", alias = "AMAX")]
     AMax,
+    /// V1743 Charge Integration mode (CAENDigitizer Library)
+    #[serde(alias = "X743CI", alias = "x743ci")]
+    X743CI,
+    /// V1743 Standard waveform mode (CAENDigitizer Library)
+    #[serde(alias = "X743Std", alias = "x743std")]
+    X743Std,
 }
 
 impl SourceType {
@@ -269,6 +275,8 @@ impl SourceType {
             SourceType::Psd2 => Some(FirmwareType::PSD2),
             SourceType::Pha1 => Some(FirmwareType::PHA1),
             SourceType::AMax => Some(FirmwareType::AMax),
+            SourceType::X743CI => Some(FirmwareType::X743CI),
+            SourceType::X743Std => Some(FirmwareType::X743Std),
             _ => None,
         }
     }
@@ -283,6 +291,8 @@ impl std::fmt::Display for SourceType {
             SourceType::Pha1 => write!(f, "PHA1"),
             SourceType::Zle => write!(f, "ZLE"),
             SourceType::AMax => write!(f, "AMax"),
+            SourceType::X743CI => write!(f, "X743CI"),
+            SourceType::X743Std => write!(f, "X743Std"),
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Common types for decoder module
 
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 /// Raw data from digitizer
 #[derive(Debug, Clone)]
@@ -8,6 +9,9 @@ pub struct RawData {
     pub data: Vec<u8>,
     pub size: usize,
     pub n_events: u32,
+    /// Host PC time when this aggregate was received (for SW Fine TS rollover safety net)
+    #[allow(dead_code)]
+    pub host_receive_time: Option<Instant>,
 }
 
 impl RawData {
@@ -18,6 +22,7 @@ impl RawData {
             data,
             size,
             n_events: 0,
+            host_receive_time: None,
         }
     }
 }
@@ -28,6 +33,81 @@ impl From<crate::reader::caen::RawData> for RawData {
             data: raw.data,
             size: raw.size,
             n_events: raw.n_events,
+            host_receive_time: None,
+        }
+    }
+}
+
+/// Tracks Board Aggregate Time Tag rollovers for SW Fine TS timestamp reconstruction.
+///
+/// When using SW Fine TS (Extra option 0b101), the 16-bit Extended Timestamp is lost,
+/// leaving only the 31-bit Trigger Time Tag (~4.29s rollover at 2ns/tick for x730).
+///
+/// This tracker uses the 32-bit Board Aggregate Time Tag (same FPGA clock) to reconstruct
+/// the full 64-bit timestamp, with Host PC time as a safety net for detecting missed rollovers.
+pub struct TimestampTracker {
+    prev_board_time_tag: u32,
+    board_rollover_count: u64,
+    run_start_time: Instant,
+    time_step_ns: f64,
+}
+
+impl TimestampTracker {
+    pub fn new(time_step_ns: f64) -> Self {
+        Self {
+            prev_board_time_tag: 0,
+            board_rollover_count: 0,
+            run_start_time: Instant::now(),
+            time_step_ns,
+        }
+    }
+
+    /// Update with a new Board Aggregate Time Tag (32-bit).
+    /// Returns the 64-bit extended board time.
+    /// `host_now` is used as a safety net to detect missed 32-bit rollovers.
+    pub fn update_board_time(&mut self, board_time_tag: u32, host_now: Instant) -> u64 {
+        // Primary: sequential rollover detection
+        if board_time_tag < self.prev_board_time_tag {
+            self.board_rollover_count += 1;
+        }
+        self.prev_board_time_tag = board_time_tag;
+        let extended = (self.board_rollover_count << 32) | board_time_tag as u64;
+
+        // Safety net: Host PC time sanity check
+        let board_ns = (extended as f64) * self.time_step_ns;
+        let host_ns = host_now.duration_since(self.run_start_time).as_nanos() as f64;
+        let drift = (host_ns - board_ns).abs();
+
+        const SANITY_THRESHOLD_NS: f64 = 2_000_000_000.0; // 2 seconds
+        if drift > SANITY_THRESHOLD_NS {
+            let rollover_period_ns = (1u64 << 32) as f64 * self.time_step_ns;
+            let board_tag_ns = (board_time_tag as f64) * self.time_step_ns;
+            let corrected =
+                ((host_ns - board_tag_ns) / rollover_period_ns).round().max(0.0) as u64;
+
+            tracing::warn!(
+                board_s = board_ns / 1e9,
+                host_s = host_ns / 1e9,
+                old_count = self.board_rollover_count,
+                new_count = corrected,
+                "Board time drift detected, correcting rollover count"
+            );
+            self.board_rollover_count = corrected;
+            return (corrected << 32) | board_time_tag as u64;
+        }
+
+        extended
+    }
+
+    /// Reconstruct a full 64-bit timestamp from a 31-bit Event TTT.
+    /// Uses the extended board time as reference (events always precede their aggregate).
+    pub fn reconstruct_ttt(&self, extended_board_time: u64, ttt: u32) -> u64 {
+        let ttt = (ttt & 0x7FFF_FFFF) as u64;
+        let candidate = (extended_board_time & !0x7FFF_FFFF) | ttt;
+        if candidate > extended_board_time {
+            candidate.wrapping_sub(1u64 << 31)
+        } else {
+            candidate
         }
     }
 }

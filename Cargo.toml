@@ -71,6 +71,7 @@ crossbeam-channel = "0.5"
 [features]
 default = []
 root = ["oxyroot"]
+x743 = []  # CAENDigitizer Library for V1743 (Linux only)
 
 [build-dependencies]
 bindgen = "0.70"
@@ -180,6 +181,10 @@ name = "psd1_raw_dump"
 path = "src/bin/psd1_raw_dump.rs"
 
 [[bin]]
+name = "fine_ts_verify"
+path = "src/bin/fine_ts_verify.rs"
+
+[[bin]]
 name = "node_agent"
 path = "src/bin/node_agent.rs"
 
@@ -199,6 +204,11 @@ path = "src/bin/trigger_loss_test.rs"
 [[bin]]
 name = "trigger_loss_test_dig2"
 path = "src/bin/trigger_loss_test_dig2.rs"
+
+[[bin]]
+name = "x743_test"
+path = "src/bin/x743_test.rs"
+required-features = ["x743"]
 
 [[example]]
 name = "test_oxyroot"

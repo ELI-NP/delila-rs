@@ -427,6 +427,7 @@ fn test_decode_test_pulse_events() {
                     data: raw.data,
                     size: raw.size,
                     n_events: raw.n_events,
+                    host_receive_time: None,
                 };
 
                 let events = decoder.decode(&decoder_raw);
@@ -659,6 +660,7 @@ fn test_ch4_pulser_signal() {
                     data: raw.data,
                     size: raw.size,
                     n_events: raw.n_events,
+                    host_receive_time: None,
                 };
                 let events = decoder.decode(&decoder_raw);
                 for event in events {

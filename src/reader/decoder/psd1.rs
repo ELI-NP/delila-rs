@@ -183,14 +183,21 @@ impl Default for Psd1Config {
 pub struct Psd1Decoder {
     config: Psd1Config,
     last_aggregate_counter: u32,
+    /// TimestampTracker for SW Fine TS rollover handling
+    ts_tracker: super::common::TimestampTracker,
+    /// Current extended board time (updated per board aggregate)
+    extended_board_time: u64,
 }
 
 impl Psd1Decoder {
     /// Create a new PSD1 decoder with given configuration
     pub fn new(config: Psd1Config) -> Self {
+        let time_step = config.time_step_ns;
         Self {
             config,
             last_aggregate_counter: 0,
+            ts_tracker: super::common::TimestampTracker::new(time_step),
+            extended_board_time: 0,
         }
     }
 
@@ -312,6 +319,12 @@ impl Psd1Decoder {
             );
         }
         self.last_aggregate_counter = header.aggregate_counter;
+
+        // Update TimestampTracker with board_time_tag (for SW Fine TS rollover handling)
+        let host_now = std::time::Instant::now();
+        self.extended_board_time =
+            self.ts_tracker
+                .update_board_time(header.board_time_tag, host_now);
 
         if header.board_fail && self.config.dump_enabled {
             println!("[PSD1] Board fail bit set!");
@@ -489,13 +502,30 @@ impl Psd1Decoder {
         let mut extended_time: u16 = 0;
         let mut fine_time: u16 = 0;
         let mut flags: u32 = 0;
+        let mut sw_fine_fraction: Option<f64> = None;
         if ch_header.extras_enabled {
             let w = read_u32(data, *offset);
             *offset += constants::WORD_SIZE;
-            let (ext, ft, fl) = decode_extras_word(w, ch_header.extra_option);
-            extended_time = ext;
-            fine_time = ft;
-            flags = fl;
+            match decode_extras_word(w, ch_header.extra_option) {
+                ExtrasDecoded::HwFineTs {
+                    extended_time: ext,
+                    fine_time: ft,
+                    flags: fl,
+                } => {
+                    extended_time = ext;
+                    fine_time = ft;
+                    flags = fl;
+                }
+                ExtrasDecoded::SwFineTs {
+                    before_zc,
+                    after_zc,
+                } => {
+                    let frac = calculate_sw_fine_fraction_psd(before_zc, after_zc);
+                    fine_time = (frac * 1024.0).clamp(0.0, 1023.0) as u16;
+                    sw_fine_fraction = Some(frac);
+                    // No extended_time or flags in this mode
+                }
+            }
         }
 
         // 4. Charge
@@ -513,8 +543,17 @@ impl Psd1Decoder {
         }
 
         let channel = pair_index * 2 + channel_flag;
-        let timestamp_ns =
-            calculate_timestamp(&self.config, trigger_time_tag, extended_time, fine_time);
+
+        // Calculate timestamp based on mode
+        let timestamp_ns = if let Some(frac) = sw_fine_fraction {
+            // SW Fine TS: use TimestampTracker for rollover-safe coarse time
+            let full_ttt = self
+                .ts_tracker
+                .reconstruct_ttt(self.extended_board_time, trigger_time_tag);
+            (full_ttt as f64) * self.config.time_step_ns + frac * self.config.time_step_ns
+        } else {
+            calculate_timestamp(&self.config, trigger_time_tag, extended_time, fine_time)
+        };
 
         if self.config.dump_enabled {
             println!("--- PSD1 Event ---");
@@ -634,29 +673,82 @@ fn read_u32(data: &[u8], offset: usize) -> u32 {
         .unwrap_or(0)
 }
 
-/// Decode extras word based on extra_option
-///
-/// Returns (extended_time, fine_time, flags)
-fn decode_extras_word(word: u32, extra_option: u8) -> (u16, u16, u32) {
-    let extended_time = ((word >> constants::event::EXTENDED_TIME_SHIFT)
-        & constants::event::EXTENDED_TIME_MASK) as u16;
+/// Result of decoding the EXTRAS word
+enum ExtrasDecoded {
+    /// HW Fine TS modes (options 0-2): extended_time, fine_time, flags
+    HwFineTs {
+        extended_time: u16,
+        fine_time: u16,
+        flags: u32,
+    },
+    /// SW Fine TS mode (option 5): zero-crossing samples for software interpolation.
+    /// PSD1: values are 14-bit unsigned ADC (baseline = 8192).
+    SwFineTs {
+        before_zc: u16, // bits[31:16] - sample before zero crossing
+        after_zc: u16,  // bits[15:0] - sample after zero crossing
+    },
+}
 
+/// Decode extras word based on extra_option
+fn decode_extras_word(word: u32, extra_option: u8) -> ExtrasDecoded {
     match extra_option {
         // 0b010: Extended time + flags + fine time
         2 => {
+            let extended_time = ((word >> constants::event::EXTENDED_TIME_SHIFT)
+                & constants::event::EXTENDED_TIME_MASK) as u16;
             let flags = (word >> constants::event::FLAGS_SHIFT) & constants::event::FLAGS_MASK;
             let fine_time = (word & constants::event::FINE_TIME_MASK) as u16;
-            (extended_time, fine_time, flags)
+            ExtrasDecoded::HwFineTs {
+                extended_time,
+                fine_time,
+                flags,
+            }
+        }
+        // 0b101: SAZC/SBZC zero-crossing samples (SW Fine TS)
+        // Verified by fine_ts_verify: bits[31:16]=Before ZC, bits[15:0]=After ZC
+        5 => {
+            let before_zc = ((word >> 16) & 0xFFFF) as u16;
+            let after_zc = (word & 0xFFFF) as u16;
+            ExtrasDecoded::SwFineTs {
+                before_zc,
+                after_zc,
+            }
         }
         // 0b001: Extended time + flags (16-bit)
         1 => {
+            let extended_time = ((word >> constants::event::EXTENDED_TIME_SHIFT)
+                & constants::event::EXTENDED_TIME_MASK) as u16;
             let flags = word & 0xFFFF;
-            (extended_time, 0, flags)
+            ExtrasDecoded::HwFineTs {
+                extended_time,
+                fine_time: 0,
+                flags,
+            }
         }
         // 0b000: Extended time + baseline×4
-        0 => (extended_time, 0, 0),
-        // Others: just extract extended time
-        _ => (extended_time, 0, 0),
+        _ => {
+            let extended_time = ((word >> constants::event::EXTENDED_TIME_SHIFT)
+                & constants::event::EXTENDED_TIME_MASK) as u16;
+            ExtrasDecoded::HwFineTs {
+                extended_time,
+                fine_time: 0,
+                flags: 0,
+            }
+        }
+    }
+}
+
+/// Calculate SW Fine TS fraction from PSD1 zero-crossing samples.
+/// PSD1 values are 14-bit unsigned ADC with baseline at 8192.
+fn calculate_sw_fine_fraction_psd(before_zc: u16, after_zc: u16) -> f64 {
+    const ADC_MIDPOINT: f64 = 8192.0;
+    let before = before_zc as f64;
+    let after = after_zc as f64;
+    let denom = before - after;
+    if denom.abs() > f64::EPSILON {
+        ((ADC_MIDPOINT - after) / denom).clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -1038,30 +1130,61 @@ mod tests {
         let fine_time: u16 = 500;
         let word = make_extras_word(ext_time, flags, fine_time);
 
-        let (ext, ft, fl) = decode_extras_word(word, 2);
-        assert_eq!(ext, ext_time);
-        assert_eq!(ft, fine_time);
-        assert_eq!(fl, flags as u32);
+        match decode_extras_word(word, 2) {
+            ExtrasDecoded::HwFineTs { extended_time: ext, fine_time: ft, flags: fl } => {
+                assert_eq!(ext, ext_time);
+                assert_eq!(ft, fine_time);
+                assert_eq!(fl, flags as u32);
+            }
+            _ => panic!("Expected HwFineTs"),
+        }
     }
 
     #[test]
     fn test_decode_extras_word_option0() {
         // Option 0b000: extended_time + baseline
         let word: u32 = (0xABCD_u32 << 16) | 0x1234;
-        let (ext, ft, fl) = decode_extras_word(word, 0);
-        assert_eq!(ext, 0xABCD);
-        assert_eq!(ft, 0);
-        assert_eq!(fl, 0);
+        match decode_extras_word(word, 0) {
+            ExtrasDecoded::HwFineTs { extended_time, fine_time, flags } => {
+                assert_eq!(extended_time, 0xABCD);
+                assert_eq!(fine_time, 0);
+                assert_eq!(flags, 0);
+            }
+            _ => panic!("Expected HwFineTs"),
+        }
     }
 
     #[test]
     fn test_decode_extras_word_option1() {
         // Option 0b001: extended_time + flags (16-bit)
         let word: u32 = (0x5678_u32 << 16) | 0x00FF;
-        let (ext, ft, fl) = decode_extras_word(word, 1);
-        assert_eq!(ext, 0x5678);
-        assert_eq!(ft, 0);
-        assert_eq!(fl, 0x00FF);
+        match decode_extras_word(word, 1) {
+            ExtrasDecoded::HwFineTs { extended_time, fine_time, flags } => {
+                assert_eq!(extended_time, 0x5678);
+                assert_eq!(fine_time, 0);
+                assert_eq!(flags, 0x00FF);
+            }
+            _ => panic!("Expected HwFineTs"),
+        }
+    }
+
+    #[test]
+    fn test_decode_extras_word_option5_sw_fine_ts() {
+        // Option 0b101: SAZC/SBZC zero-crossing samples
+        let before_zc: u16 = 8300; // Before ZC (above baseline)
+        let after_zc: u16 = 8100;  // After ZC (below baseline)
+        let word: u32 = ((before_zc as u32) << 16) | (after_zc as u32);
+        match decode_extras_word(word, 5) {
+            ExtrasDecoded::SwFineTs { before_zc: b, after_zc: a } => {
+                assert_eq!(b, before_zc);
+                assert_eq!(a, after_zc);
+                // Verify fraction calculation
+                let frac = calculate_sw_fine_fraction_psd(b, a);
+                // (8192 - 8100) / (8300 - 8100) = 92 / 200 = 0.46
+                assert!((frac - 0.46).abs() < 0.01);
+            }
+            _ => panic!("Expected SwFineTs"),
+        }
     }
 
     // -----------------------------------------------------------------------

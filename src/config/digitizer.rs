@@ -205,16 +205,23 @@ pub enum FirmwareType {
     PHA1,
     /// DELILA AMax firmware (Trapezoidal Filter MCA, custom DPP_OPEN on VX2730)
     AMax,
+    /// V1743 Charge Integration mode (CAENDigitizer Library)
+    X743CI,
+    /// V1743 Standard waveform mode (CAENDigitizer Library)
+    X743Std,
 }
 
 impl FirmwareType {
-    /// Get the URL scheme prefix for this firmware
+    /// Get the URL scheme prefix for this firmware (FELib only)
     pub fn url_scheme(&self) -> &'static str {
         match self {
             FirmwareType::PSD1 => "dig1://",
             FirmwareType::PSD2 => "dig2://",
-            FirmwareType::PHA1 => "dig1://", // PHA1 uses dig1 (same as PSD1)
-            FirmwareType::AMax => "dig2://", // AMax uses dig2 (VX2730 with DPP_OPEN)
+            FirmwareType::PHA1 => "dig1://",
+            FirmwareType::AMax => "dig2://",
+            FirmwareType::X743CI | FirmwareType::X743Std => {
+                panic!("x743 does not use FELib URL scheme")
+            }
         }
     }
 
@@ -224,10 +231,37 @@ impl FirmwareType {
         matches!(self, FirmwareType::PSD2 | FirmwareType::AMax)
     }
 
-    /// Whether this firmware uses the DIG1 (legacy) protocol.
+    /// Whether this firmware uses the DIG1 (legacy FELib) protocol.
     pub fn is_dig1(&self) -> bool {
         matches!(self, FirmwareType::PSD1 | FirmwareType::PHA1)
     }
+
+    /// Whether this firmware uses the CAENDigitizer Library (not FELib).
+    pub fn is_legacy_api(&self) -> bool {
+        matches!(self, FirmwareType::X743CI | FirmwareType::X743Std)
+    }
+
+    /// Whether this firmware uses group-based channel structure (2ch/group).
+    pub fn is_group_based(&self) -> bool {
+        matches!(self, FirmwareType::X743CI | FirmwareType::X743Std)
+    }
+
+    /// Whether this firmware uses FELib (modern API).
+    pub fn is_felib(&self) -> bool {
+        !self.is_legacy_api()
+    }
+}
+
+/// Fine Timestamp calculation mode (DIG1 only: PSD1/PHA1)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FineTsMode {
+    /// Use FPGA-computed 10-bit Fine TS (Extra option 0b010). Default.
+    #[default]
+    Hardware,
+    /// Use raw zero-crossing samples (SAZC/SBZC) for software Fine TS (Extra option 0b101).
+    /// Eliminates FPGA integer rounding errors but loses 6-bit event flags.
+    Software,
 }
 
 /// Board-level configuration parameters
@@ -314,6 +348,11 @@ pub struct BoardConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coinc_trgout: Option<u32>,
 
+    /// Fine Timestamp mode (DIG1 only: PSD1/PHA1).
+    /// "hardware" = FPGA Fine TS (default), "software" = SAZC/SBZC zero-crossing samples.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fine_ts_mode: Option<FineTsMode>,
+
     /// Additional board parameters as key-value pairs
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
@@ -377,6 +416,11 @@ pub struct ChannelConfig {
     /// CFD fraction (PSD2: "25","50","75","100")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cfd_fraction: Option<String>,
+    /// CFD interpolation point for Fine TS (DIG1 only: PSD1/PHA1).
+    /// 0=1st sample (highest resolution), 1=2nd, 2=3rd, 3=4th (most stable).
+    /// No FELib DevTree parameter — set via direct register write (0x1n3C bits[11:10]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cfd_interpolation_point: Option<u8>,
     /// Trigger holdoff in ns (all FW). PSD1/PHA1: converted to samples at apply time.
     #[serde(skip_serializing_if = "Option::is_none", alias = "trigger_holdoff")]
     pub trigger_holdoff_ns: Option<u32>,
@@ -611,6 +655,7 @@ impl DigitizerConfig {
         let sw_value = match self.firmware {
             FirmwareType::PSD1 | FirmwareType::PHA1 => "START_MODE_SW",
             FirmwareType::PSD2 | FirmwareType::AMax => "SWcmd",
+            FirmwareType::X743CI | FirmwareType::X743Std => return, // x743 uses SW_CONTROLLED via CAENDigitizer API
         };
         self.board.start_source = Some(sw_value.to_string());
         // SyncConfig.start_source takes priority over BoardConfig in to_caen_parameters(),
@@ -658,6 +703,7 @@ impl DigitizerConfig {
         let num_channels = match firmware {
             FirmwareType::PSD1 => 8,
             FirmwareType::PSD2 | FirmwareType::PHA1 | FirmwareType::AMax => 32,
+            FirmwareType::X743CI | FirmwareType::X743Std => 16, // 8 groups × 2 ch/group
         };
 
         Self {
@@ -730,6 +776,7 @@ impl DigitizerConfig {
             merge_field!(trigger_threshold);
             merge_field!(cfd_delay_ns);
             merge_field!(cfd_fraction);
+            merge_field!(cfd_interpolation_point);
             merge_field!(trigger_holdoff_ns);
             merge_field!(smoothing_factor);
             merge_field!(time_filter_smoothing);
@@ -934,6 +981,8 @@ impl DigitizerConfig {
                 "ch_coinc_trgsw",
                 "ch_pu_flag_en",
             ]),
+            // x743 does not use FELib DevTree parameters
+            FirmwareType::X743CI | FirmwareType::X743Std => HashSet::new(),
         }
     }
 
@@ -1528,6 +1577,8 @@ impl DigitizerConfig {
                     push_str!("ch_pu_flag_en", v);
                 }
             }
+            // x743 does not use FELib DevTree channel parameters
+            FirmwareType::X743CI | FirmwareType::X743Std => {}
         }
 
         // Extra parameters (for any remaining/future params)
