@@ -131,6 +131,15 @@ impl DecoderKind {
             }
         }
     }
+
+    /// Reset decoder state for a new run (SW Fine TS rollover tracking)
+    fn reset_for_new_run(&mut self) {
+        match self {
+            Self::Psd1(d) => d.reset_for_new_run(),
+            Self::Pha1(d) => d.reset_for_new_run(),
+            Self::Psd2(_) | Self::AMax(_) => {} // No run-level state to reset
+        }
+    }
 }
 
 /// Reader configuration
@@ -1983,7 +1992,8 @@ impl Reader {
                                     info!("Received START signal from digitizer");
                                     sequence_number = 0;
                                     heartbeat_counter = 0;
-                                    info!("Sequence number reset to 0 on Start");
+                                    decoder.reset_for_new_run();
+                                    info!("Sequence number and decoder state reset on Start");
                                 }
                                 DataType::Stop => {
                                     info!("Received STOP signal from digitizer");
@@ -2049,7 +2059,8 @@ impl Reader {
                             info!("Received START signal from ReadLoop");
                             sequence_number = 0;
                             heartbeat_counter = 0;
-                            info!("Sequence number reset to 0 on Start");
+                            decoder.reset_for_new_run();
+                            info!("Sequence number and decoder state reset on Start");
                         }
 
                         Some(ReadLoopOutput::Stop) => {

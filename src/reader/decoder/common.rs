@@ -62,6 +62,16 @@ impl TimestampTracker {
         }
     }
 
+    /// Reset for a new run. Must be called at Run start so Host PC time
+    /// safety net uses the correct reference. Without this, the drift check
+    /// compares board time (from run start) against host time (from decoder
+    /// creation), causing false rollover corrections.
+    pub fn reset(&mut self) {
+        self.prev_board_time_tag = 0;
+        self.board_rollover_count = 0;
+        self.run_start_time = Instant::now();
+    }
+
     /// Update with a new Board Aggregate Time Tag (32-bit).
     /// Returns the 64-bit extended board time.
     /// `host_now` is used as a safety net to detect missed 32-bit rollovers.

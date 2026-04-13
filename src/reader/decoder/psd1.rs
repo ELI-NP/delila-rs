@@ -211,6 +211,13 @@ impl Psd1Decoder {
         self.config.dump_enabled = enabled;
     }
 
+    /// Reset state for a new run (required for SW Fine TS rollover tracking)
+    pub fn reset_for_new_run(&mut self) {
+        self.last_aggregate_counter = 0;
+        self.ts_tracker.reset();
+        self.extended_board_time = 0;
+    }
+
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
