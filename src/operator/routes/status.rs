@@ -130,6 +130,8 @@ pub(super) async fn configure(
         .with_results(results);
 
     let status = if response.success {
+        // Reload configs from disk so edits since Operator start take effect
+        state.reload_digitizer_configs().await;
         // Push digitizer configs to remote Readers
         let configs = state.digitizer_configs.read().await;
         for comp in &state.components {
@@ -573,6 +575,11 @@ pub(super) async fn run_start(
         }
         Ok(_) => {}
     }
+
+    // Reload digitizer configs from disk so Phase 1.5 uses fresh values.
+    // Without this, edits to JSON files (e.g. fine_ts_mode) after Operator start
+    // would be overwritten by stale in-memory configs.
+    state.reload_digitizer_configs().await;
 
     // Phase 1.5: Apply digitizer configs to remote Readers
     // This pushes configs over ZMQ so remote Readers don't need local config files

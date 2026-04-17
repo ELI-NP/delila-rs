@@ -74,6 +74,8 @@ pub struct AppState {
     pub digitizer_configs: RwLock<HashMap<u32, DigitizerConfig>>,
     /// Directory for storing digitizer config files
     pub config_dir: PathBuf,
+    /// Source-specific config file paths (for reloading from disk at run start)
+    pub config_files: Vec<(u32, PathBuf)>,
     /// Run repository for MongoDB storage (optional)
     pub run_repo: Option<RunRepository>,
     /// Digitizer config repository for MongoDB (optional)
@@ -178,6 +180,19 @@ impl AppState {
             }
         }
         registrations
+    }
+
+    /// Reload digitizer configs from disk (JSON files).
+    /// Called at run_start to ensure Phase 1.5 uses fresh configs.
+    pub(super) async fn reload_digitizer_configs(&self) {
+        let fresh = if self.config_files.is_empty() {
+            load_digitizer_configs_from_dir(&self.config_dir).unwrap_or_default()
+        } else {
+            load_digitizer_configs_from_files(&self.config_files)
+        };
+        let count = fresh.len();
+        *self.digitizer_configs.write().await = fresh;
+        tracing::info!(count, "Reloaded digitizer configs from disk");
     }
 
     /// Find the Monitor component address from the component list.
@@ -403,7 +418,8 @@ impl RouterBuilder {
             components: self.components,
             config: self.config,
             digitizer_configs: RwLock::new(digitizer_configs),
-            config_dir: self.config_dir,
+            config_dir: self.config_dir.clone(),
+            config_files: self.config_files,
             run_repo: self.run_repo,
             digitizer_repo: self.digitizer_repo,
             event_builder_repo: self.event_builder_repo,
