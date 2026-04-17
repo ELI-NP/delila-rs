@@ -336,45 +336,89 @@ fn init_param_values(defs: &[RegisterDef], saved: &HashMap<String, u32>) -> Hash
     values
 }
 
+/// Data source for 2D histogram axes
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlotSource {
+    Energy,
+    UserInfo0,
+    UserInfo1,
+    UserInfo2,
+    UserInfo3,
+}
+
+impl PlotSource {
+    const ALL: [PlotSource; 5] = [
+        PlotSource::Energy,
+        PlotSource::UserInfo0,
+        PlotSource::UserInfo1,
+        PlotSource::UserInfo2,
+        PlotSource::UserInfo3,
+    ];
+
+    fn label(&self) -> &'static str {
+        match self {
+            PlotSource::Energy => "Energy",
+            PlotSource::UserInfo0 => "user_info[0]",
+            PlotSource::UserInfo1 => "user_info[1]",
+            PlotSource::UserInfo2 => "user_info[2]",
+            PlotSource::UserInfo3 => "user_info[3]",
+        }
+    }
+
+    fn default_max(&self) -> f64 {
+        match self {
+            PlotSource::Energy => 65536.0,
+            _ => 16384.0,
+        }
+    }
+
+    fn extract(&self, energy: u16, user_info: &[u64]) -> f64 {
+        match self {
+            PlotSource::Energy => energy as f64,
+            PlotSource::UserInfo0 => *user_info.first().unwrap_or(&0) as f64,
+            PlotSource::UserInfo1 => *user_info.get(1).unwrap_or(&0) as f64,
+            PlotSource::UserInfo2 => *user_info.get(2).unwrap_or(&0) as f64,
+            PlotSource::UserInfo3 => *user_info.get(3).unwrap_or(&0) as f64,
+        }
+    }
+}
+
 /// 2D Histogram data
 #[derive(Clone)]
 struct Histogram2D {
     bins: Vec<Vec<u32>>,
-    energy_bins: usize,
-    amax_bins: usize,
-    energy_min: f64,
-    energy_max: f64,
-    amax_min: f64,
-    amax_max: f64,
+    x_bins: usize,
+    y_bins: usize,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
     total_events: u64,
 }
 
 impl Histogram2D {
-    fn new(energy_bins: usize, amax_bins: usize) -> Self {
+    fn new(x_bins: usize, y_bins: usize, x_max: f64, y_max: f64) -> Self {
         Self {
-            bins: vec![vec![0u32; amax_bins]; energy_bins],
-            energy_bins,
-            amax_bins,
-            energy_min: 0.0,
-            energy_max: 65536.0,
-            amax_min: 0.0,
-            amax_max: 16384.0,
+            bins: vec![vec![0u32; y_bins]; x_bins],
+            x_bins,
+            y_bins,
+            x_min: 0.0,
+            x_max,
+            y_min: 0.0,
+            y_max,
             total_events: 0,
         }
     }
 
-    fn fill(&mut self, energy: u16, amax: u64) {
-        let e = energy as f64;
-        let a = amax as f64;
+    fn fill(&mut self, x: f64, y: f64) {
+        if x >= self.x_min && x < self.x_max && y >= self.y_min && y < self.y_max {
+            let x_bin =
+                ((x - self.x_min) / (self.x_max - self.x_min) * self.x_bins as f64) as usize;
+            let y_bin =
+                ((y - self.y_min) / (self.y_max - self.y_min) * self.y_bins as f64) as usize;
 
-        if e >= self.energy_min && e < self.energy_max && a >= self.amax_min && a < self.amax_max {
-            let e_bin = ((e - self.energy_min) / (self.energy_max - self.energy_min)
-                * self.energy_bins as f64) as usize;
-            let a_bin = ((a - self.amax_min) / (self.amax_max - self.amax_min)
-                * self.amax_bins as f64) as usize;
-
-            if e_bin < self.energy_bins && a_bin < self.amax_bins {
-                self.bins[e_bin][a_bin] = self.bins[e_bin][a_bin].saturating_add(1);
+            if x_bin < self.x_bins && y_bin < self.y_bins {
+                self.bins[x_bin][y_bin] = self.bins[x_bin][y_bin].saturating_add(1);
                 self.total_events += 1;
             }
         }
@@ -389,11 +433,11 @@ impl Histogram2D {
         self.total_events = 0;
     }
 
-    fn resize(&mut self, energy_bins: usize, amax_bins: usize) {
-        if energy_bins != self.energy_bins || amax_bins != self.amax_bins {
-            self.energy_bins = energy_bins;
-            self.amax_bins = amax_bins;
-            self.bins = vec![vec![0u32; amax_bins]; energy_bins];
+    fn resize(&mut self, x_bins: usize, y_bins: usize) {
+        if x_bins != self.x_bins || y_bins != self.y_bins {
+            self.x_bins = x_bins;
+            self.y_bins = y_bins;
+            self.bins = vec![vec![0u32; y_bins]; x_bins];
             self.total_events = 0;
         }
     }
@@ -409,18 +453,18 @@ impl Histogram2D {
 
     fn to_texture(&self) -> egui::ColorImage {
         let max = self.max_count().max(1) as f32;
-        let mut pixels = Vec::with_capacity(self.energy_bins * self.amax_bins);
+        let mut pixels = Vec::with_capacity(self.x_bins * self.y_bins);
 
-        for a_bin in (0..self.amax_bins).rev() {
-            for e_bin in 0..self.energy_bins {
-                let count = self.bins[e_bin][a_bin] as f32;
+        for y_bin in (0..self.y_bins).rev() {
+            for x_bin in 0..self.x_bins {
+                let count = self.bins[x_bin][y_bin] as f32;
                 let intensity = (count / max).sqrt();
                 pixels.push(colormap(intensity));
             }
         }
 
         egui::ColorImage {
-            size: [self.energy_bins, self.amax_bins],
+            size: [self.x_bins, self.y_bins],
             pixels,
         }
     }
@@ -439,9 +483,9 @@ struct ChannelData {
 }
 
 impl ChannelData {
-    fn new(energy_bins: usize, amax_bins: usize) -> Self {
+    fn new(x_bins: usize, y_bins: usize, x_max: f64, y_max: f64) -> Self {
         Self {
-            histogram: Histogram2D::new(energy_bins, amax_bins),
+            histogram: Histogram2D::new(x_bins, y_bins, x_max, y_max),
             waveform_buffer: vec![0u16; 8192],
             waveform_len: 0,
             latest_waveform_energy: 0,
@@ -521,6 +565,10 @@ struct SharedState {
     test_pulse_active: bool,
     /// Set to true by GUI when test_pulse_active toggled; cleared by acq thread after applying
     test_pulse_toggle_requested: bool,
+    /// X-axis data source for 2D histogram
+    x_source: PlotSource,
+    /// Y-axis data source for 2D histogram
+    y_source: PlotSource,
 }
 
 struct AmaxViewerApp {
@@ -571,7 +619,13 @@ impl AmaxViewerApp {
 
         let param_values = init_param_values(&register_defs, &settings.param_values);
 
-        let channels: Vec<ChannelData> = (0..32).map(|_| ChannelData::new(512, 512)).collect();
+        let x_source = PlotSource::Energy;
+        let y_source = PlotSource::UserInfo0;
+        let channels: Vec<ChannelData> = (0..32)
+            .map(|_| {
+                ChannelData::new(512, 512, x_source.default_max(), y_source.default_max())
+            })
+            .collect();
 
         let shared = Arc::new(Mutex::new(SharedState {
             channels,
@@ -593,6 +647,8 @@ impl AmaxViewerApp {
             test_pulse_params_dirty: false,
             test_pulse_active: test_pulse,
             test_pulse_toggle_requested: false,
+            x_source,
+            y_source,
         }));
 
         let selected_channel = settings.selected_channel.min(31);
@@ -850,123 +906,164 @@ impl eframe::App for AmaxViewerApp {
                     }
                     self.was_recording = is_recording;
 
-                    ui.separator();
-                    ui.heading("Parameters");
+                    // ---- Parameters (collapsible) ----
+                    egui::CollapsingHeader::new("Parameters")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            let mut current_section = String::new();
+                            for reg in &self.register_defs {
+                                if reg.section != current_section {
+                                    ui.separator();
+                                    ui.strong(&reg.section);
+                                    current_section = reg.section.clone();
+                                }
+                                let value = state
+                                    .param_values
+                                    .entry(reg.name.clone())
+                                    .or_insert(reg.default);
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{}:", reg.name));
+                                    if reg.readonly {
+                                        ui.label(format!("{}", *value));
+                                    } else {
+                                        ui.add(egui::DragValue::new(value).range(reg.min..=reg.max));
+                                    }
+                                });
+                            }
 
-                    // Dynamic UI from register_defs
-                    let mut current_section = String::new();
-                    for reg in &self.register_defs {
-                        if reg.section != current_section {
-                            ui.separator();
-                            ui.heading(&reg.section);
-                            current_section = reg.section.clone();
-                        }
-                        let value = state
-                            .param_values
-                            .entry(reg.name.clone())
-                            .or_insert(reg.default);
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{}:", reg.name));
-                            if reg.readonly {
-                                ui.label(format!("{}", *value));
+                            ui.add_space(10.0);
+                            if thread_active {
+                                if ui.button("Restart to Apply").clicked() {
+                                    stop_clicked = true;
+                                    start_clicked = true;
+                                }
+                                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    stop_clicked = true;
+                                    start_clicked = true;
+                                }
+                                ui.label("(or press Enter)");
                             } else {
-                                ui.add(egui::DragValue::new(value).range(reg.min..=reg.max));
+                                ui.label("Press Start to begin");
                             }
                         });
+
+                    // ---- 2D Histogram Settings (collapsible) ----
+                    let mut axes_changed = false;
+                    egui::CollapsingHeader::new("2D Histogram")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            // Axis source selection
+                            ui.horizontal(|ui| {
+                                ui.label("X axis:");
+                                egui::ComboBox::from_id_salt("x_source")
+                                    .selected_text(state.x_source.label())
+                                    .show_ui(ui, |ui| {
+                                        for src in PlotSource::ALL {
+                                            if ui.selectable_value(&mut state.x_source, src, src.label()).changed() {
+                                                axes_changed = true;
+                                            }
+                                        }
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Y axis:");
+                                egui::ComboBox::from_id_salt("y_source")
+                                    .selected_text(state.y_source.label())
+                                    .show_ui(ui, |ui| {
+                                        for src in PlotSource::ALL {
+                                            if ui.selectable_value(&mut state.y_source, src, src.label()).changed() {
+                                                axes_changed = true;
+                                            }
+                                        }
+                                    });
+                            });
+
+                            ui.separator();
+                            let sel = self.selected_channel as usize;
+
+                            // Range
+                            ui.horizontal(|ui| {
+                                ui.label("X Max:");
+                                let mut max = state.channels[sel].histogram.x_max as u32;
+                                if ui
+                                    .add(egui::DragValue::new(&mut max).range(1000..=65536))
+                                    .changed()
+                                {
+                                    let max_f = max as f64;
+                                    for ch_data in &mut state.channels {
+                                        ch_data.histogram.x_max = max_f;
+                                        ch_data.histogram_dirty = true;
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Y Max:");
+                                let mut max = state.channels[sel].histogram.y_max as u32;
+                                if ui
+                                    .add(egui::DragValue::new(&mut max).range(1000..=65536))
+                                    .changed()
+                                {
+                                    let max_f = max as f64;
+                                    for ch_data in &mut state.channels {
+                                        ch_data.histogram.y_max = max_f;
+                                        ch_data.histogram_dirty = true;
+                                    }
+                                }
+                            });
+
+                            ui.separator();
+
+                            // Bins
+                            let current_x_bins = state.channels[sel].histogram.x_bins;
+                            let current_y_bins = state.channels[sel].histogram.y_bins;
+                            ui.horizontal(|ui| {
+                                ui.label("X Bins:");
+                                let mut bins = current_x_bins as u32;
+                                if ui
+                                    .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
+                                    .changed()
+                                {
+                                    for ch_data in &mut state.channels {
+                                        ch_data.histogram.resize(bins as usize, current_y_bins);
+                                        ch_data.histogram_dirty = true;
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Y Bins:");
+                                let mut bins = current_y_bins as u32;
+                                if ui
+                                    .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
+                                    .changed()
+                                {
+                                    for ch_data in &mut state.channels {
+                                        ch_data.histogram.resize(current_x_bins, bins as usize);
+                                        ch_data.histogram_dirty = true;
+                                    }
+                                }
+                            });
+
+                            let x_width = (state.channels[sel].histogram.x_max
+                                - state.channels[sel].histogram.x_min)
+                                / current_x_bins as f64;
+                            let y_width = (state.channels[sel].histogram.y_max
+                                - state.channels[sel].histogram.y_min)
+                                / current_y_bins as f64;
+                            ui.label(format!("X bin width: {:.1}", x_width));
+                            ui.label(format!("Y bin width: {:.1}", y_width));
+                        });
+
+                    // Apply axis source change (after collapsible scope)
+                    if axes_changed {
+                        let x_max = state.x_source.default_max();
+                        let y_max = state.y_source.default_max();
+                        for ch_data in &mut state.channels {
+                            ch_data.histogram.x_max = x_max;
+                            ch_data.histogram.y_max = y_max;
+                            ch_data.histogram.clear();
+                            ch_data.histogram_dirty = true;
+                        }
                     }
-
-                    ui.add_space(10.0);
-                    if thread_active {
-                        if ui.button("Restart to Apply").clicked() {
-                            stop_clicked = true;
-                            start_clicked = true;
-                        }
-                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            stop_clicked = true;
-                            start_clicked = true;
-                        }
-                        ui.label("(or press Enter)");
-                    } else {
-                        ui.label("Press Start to begin");
-                    }
-
-                    ui.separator();
-                    ui.heading("Histogram Range");
-
-                    // Read current values from selected channel
-                    let sel = self.selected_channel as usize;
-                    ui.horizontal(|ui| {
-                        ui.label("Energy Max:");
-                        let mut max = state.channels[sel].histogram.energy_max as u32;
-                        if ui
-                            .add(egui::DragValue::new(&mut max).range(1000..=65536))
-                            .changed()
-                        {
-                            let max_f = max as f64;
-                            for ch_data in &mut state.channels {
-                                ch_data.histogram.energy_max = max_f;
-                                ch_data.histogram_dirty = true;
-                            }
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("AMax Max:");
-                        let mut max = state.channels[sel].histogram.amax_max as u32;
-                        if ui
-                            .add(egui::DragValue::new(&mut max).range(1000..=65536))
-                            .changed()
-                        {
-                            let max_f = max as f64;
-                            for ch_data in &mut state.channels {
-                                ch_data.histogram.amax_max = max_f;
-                                ch_data.histogram_dirty = true;
-                            }
-                        }
-                    });
-
-                    ui.separator();
-                    ui.heading("Bin Settings");
-
-                    let current_energy_bins = state.channels[sel].histogram.energy_bins;
-                    let current_amax_bins = state.channels[sel].histogram.amax_bins;
-
-                    ui.horizontal(|ui| {
-                        ui.label("Energy Bins:");
-                        let mut bins = current_energy_bins as u32;
-                        if ui
-                            .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
-                            .changed()
-                        {
-                            for ch_data in &mut state.channels {
-                                ch_data.histogram.resize(bins as usize, current_amax_bins);
-                                ch_data.histogram_dirty = true;
-                            }
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("AMax Bins:");
-                        let mut bins = current_amax_bins as u32;
-                        if ui
-                            .add(egui::DragValue::new(&mut bins).range(16..=4096).speed(16.0))
-                            .changed()
-                        {
-                            for ch_data in &mut state.channels {
-                                ch_data.histogram.resize(current_energy_bins, bins as usize);
-                                ch_data.histogram_dirty = true;
-                            }
-                        }
-                    });
-
-                    let energy_width = (state.channels[sel].histogram.energy_max
-                        - state.channels[sel].histogram.energy_min)
-                        / current_energy_bins as f64;
-                    let amax_width = (state.channels[sel].histogram.amax_max
-                        - state.channels[sel].histogram.amax_min)
-                        / current_amax_bins as f64;
-                    ui.label(format!("Energy bin width: {:.1}", energy_width));
-                    ui.label(format!("AMax bin width: {:.1}", amax_width));
                 }); // ScrollArea
             });
 
@@ -1021,13 +1118,12 @@ impl eframe::App for AmaxViewerApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let sel = self.selected_channel as usize;
-            ui.heading(format!("AMax vs Energy (Ch {})", self.selected_channel));
 
             let channel_changed = self.selected_channel != self.prev_selected_channel;
             self.prev_selected_channel = self.selected_channel;
 
             // Check if texture needs regeneration (short lock, no clone yet)
-            let (needs_update, energy_max, amax_max) = {
+            let (needs_update, x_max, y_max, x_label, y_label) = {
                 let mut state = self.shared.lock().unwrap();
                 let ch_data = &mut state.channels[sel];
                 let dirty = ch_data.histogram_dirty;
@@ -1037,10 +1133,14 @@ impl eframe::App for AmaxViewerApp {
                 }
                 (
                     needs,
-                    ch_data.histogram.energy_max,
-                    ch_data.histogram.amax_max,
+                    ch_data.histogram.x_max,
+                    ch_data.histogram.y_max,
+                    state.x_source.label(),
+                    state.y_source.label(),
                 )
             };
+
+            ui.heading(format!("{} vs {} (Ch {})", y_label, x_label, self.selected_channel));
 
             // Clone and generate texture only when needed
             if needs_update {
@@ -1056,13 +1156,13 @@ impl eframe::App for AmaxViewerApp {
             if let Some(texture) = &self.texture {
                 Plot::new("histogram_plot")
                     .data_aspect(1.0)
-                    .x_axis_label("Energy")
-                    .y_axis_label("AMax")
+                    .x_axis_label(x_label)
+                    .y_axis_label(y_label)
                     .show(ui, |plot_ui| {
                         let image = PlotImage::new(
                             texture,
-                            PlotPoint::new(energy_max / 2.0, amax_max / 2.0),
-                            [energy_max as f32, amax_max as f32],
+                            PlotPoint::new(x_max / 2.0, y_max / 2.0),
+                            [x_max as f32, y_max as f32],
                         );
                         plot_ui.image(image);
                     });
@@ -1277,15 +1377,16 @@ fn acquisition_thread(
                 consecutive_nones = 0;
 
                 let ch_idx = event.channel as usize;
-                let amax = *event.user_info.first().unwrap_or(&0);
 
                 {
                     let mut state = shared.lock().unwrap();
 
                     // Fill per-channel histogram (always, regardless of UI selection)
                     if ch_idx < state.channels.len() {
+                        let x_val = state.x_source.extract(event.energy, &event.user_info);
+                        let y_val = state.y_source.extract(event.energy, &event.user_info);
                         let ch_data = &mut state.channels[ch_idx];
-                        ch_data.histogram.fill(event.energy, amax);
+                        ch_data.histogram.fill(x_val, y_val);
                         ch_data.histogram_dirty = true;
                         ch_data.events_since_last_tick += 1;
 
