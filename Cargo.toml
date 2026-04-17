@@ -210,6 +210,11 @@ name = "x743_test"
 path = "src/bin/x743_test.rs"
 required-features = ["x743"]
 
+[[bin]]
+name = "x743_ci_probe"
+path = "src/bin/x743_ci_probe.rs"
+required-features = ["x743"]
+
 [[example]]
 name = "test_oxyroot"
 required-features = ["root"]

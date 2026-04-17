@@ -17,6 +17,14 @@ pub struct DigitizerError {
 }
 
 impl DigitizerError {
+    /// Create a custom error with a context message (uses GenericError code)
+    pub fn new(_code: i32, context: &str) -> Self {
+        Self {
+            code: ErrorCode::CAEN_DGTZ_GenericError,
+            context: context.to_string(),
+        }
+    }
+
     /// Check a CAENDigitizer return code, converting non-Success to Err
     pub fn check(ret: ErrorCode, context: &str) -> Result<(), Self> {
         if matches!(ret, ErrorCode::CAEN_DGTZ_Success) {

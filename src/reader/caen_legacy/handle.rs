@@ -5,6 +5,7 @@
 
 use super::error::DigitizerError;
 use super::ffi;
+use crate::config::digitizer::{DigitizerConfig, X743Config};
 use std::ffi::CStr;
 use tracing::{debug, info, warn};
 
@@ -479,6 +480,612 @@ impl X743Handle {
             event,
         })
     }
+
+    /// Apply Standard mode configuration from DigitizerConfig + X743Config.
+    /// Follows WaveDemo ProgramBoard() sequence.
+    pub fn apply_config_standard(&self, config: &DigitizerConfig) -> Result<(), DigitizerError> {
+        let x743 = config
+            .x743
+            .as_ref()
+            .ok_or_else(|| DigitizerError::new(-1, "Missing x743 config section"))?;
+
+        info!("Applying V1743 configuration...");
+
+        // 1. Reset
+        self.reset()?;
+
+        // 2. Group enable mask
+        self.set_group_enable_mask(x743.group_enable_mask)?;
+
+        // 3. SAM post-trigger size (per group)
+        let num_groups = x743.group_enable_mask.count_ones();
+        for g in 0..MAX_GROUPS as u32 {
+            if x743.group_enable_mask & (1 << g) != 0 {
+                self.set_sam_post_trigger_size(g, x743.post_trigger_size)?;
+            }
+        }
+        debug!("Post-trigger size set for {} groups", num_groups);
+
+        // 4. SAM sampling frequency
+        let freq = parse_sam_frequency(&x743.sampling_frequency)?;
+        self.set_sam_sampling_frequency(freq)?;
+
+        // 5. Pulse generator
+        if x743.pulse_gen_enabled {
+            let source = parse_pulse_source(&x743.pulse_source)?;
+            for ch in 0..MAX_CHANNELS as u32 {
+                self.enable_sam_pulse_gen(ch, x743.pulse_pattern, source)?;
+            }
+        } else {
+            for ch in 0..MAX_CHANNELS as u32 {
+                self.disable_sam_pulse_gen(ch)?;
+            }
+        }
+
+        // 6. Per-channel settings (threshold, dc_offset, polarity, self-trigger)
+        self.apply_channel_config(config, x743)?;
+
+        // 7. Trigger source
+        match x743.trigger_source.as_str() {
+            "software" | "sw" => {
+                self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
+                self.set_ext_trigger_input_mode(TriggerMode::Disabled)?;
+            }
+            "external" | "ext" => {
+                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
+            }
+            "self" => {
+                // Self-trigger is configured per-channel above
+                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_ext_trigger_input_mode(TriggerMode::Disabled)?;
+            }
+            "all" => {
+                self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
+                self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
+            }
+            other => {
+                warn!("Unknown trigger source '{}', defaulting to external", other);
+                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
+            }
+        }
+
+        // 8. SAM correction level
+        let correction = parse_correction_level(&x743.correction_level)?;
+        self.set_sam_correction_level(correction)?;
+
+        // 9. Max events per BLT
+        self.set_max_num_events_blt(x743.max_num_events_blt)?;
+
+        // 10. Record length
+        self.set_record_length(x743.record_length)?;
+
+        // 11. I/O level
+        let io = parse_io_level(&x743.io_level)?;
+        self.set_io_level(io)?;
+
+        // 12. Acquisition mode (always SW controlled for delila-rs)
+        self.set_acquisition_mode(AcqMode::SWControlled)?;
+
+        info!("V1743 configuration applied successfully");
+        Ok(())
+    }
+
+    /// Apply per-channel settings from DigitizerConfig defaults + overrides.
+    fn apply_channel_config(
+        &self,
+        config: &DigitizerConfig,
+        x743: &X743Config,
+    ) -> Result<(), DigitizerError> {
+        let defaults = &config.channel_defaults;
+        let mut self_trigger_mask: u32 = 0;
+
+        for ch in 0..config.num_channels as u32 {
+            let group = ch / CHANNELS_PER_GROUP as u32;
+            // Skip if group is not enabled
+            if x743.group_enable_mask & (1 << group) == 0 {
+                continue;
+            }
+
+            let ch_config = config.channel_overrides.get(&(ch as u8));
+
+            // DC Offset: convert percentage (0-100%) to DAC value (0-65535)
+            let dc_offset_pct = ch_config
+                .and_then(|c| c.dc_offset)
+                .or(defaults.dc_offset)
+                .unwrap_or(50.0);
+            let dc_offset_dac = ((dc_offset_pct / 100.0) * 65535.0) as u32;
+            self.set_channel_dc_offset(ch, dc_offset_dac)?;
+
+            // Trigger threshold (raw DAC value, 0-65535)
+            if let Some(threshold) = ch_config
+                .and_then(|c| c.trigger_threshold)
+                .or(defaults.trigger_threshold)
+            {
+                self.set_channel_trigger_threshold(ch, threshold)?;
+            }
+
+            // Trigger polarity
+            let polarity_str = ch_config
+                .and_then(|c| c.polarity.as_deref())
+                .or(defaults.polarity.as_deref());
+            if let Some(pol) = polarity_str {
+                let polarity = match pol.to_lowercase().as_str() {
+                    "positive" | "rising" | "risingedge" => TriggerPolarity::RisingEdge,
+                    _ => TriggerPolarity::FallingEdge,
+                };
+                self.set_trigger_polarity(ch, polarity)?;
+            }
+
+            // Self-trigger mask
+            let enabled = ch_config
+                .and_then(|c| c.enabled.as_deref())
+                .or(defaults.enabled.as_deref())
+                .map(|s| s.eq_ignore_ascii_case("true"))
+                .unwrap_or(true);
+            let self_trig = ch_config
+                .and_then(|c| c.self_trigger.as_deref())
+                .or(defaults.self_trigger.as_deref())
+                .map(|s| s.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if enabled && self_trig {
+                self_trigger_mask |= 1 << ch;
+            }
+        }
+
+        // Apply self-trigger mask
+        if self_trigger_mask != 0 {
+            self.set_channel_self_trigger(TriggerMode::AcqOnly, self_trigger_mask)?;
+        }
+
+        Ok(())
+    }
+
+    /// Get device info as JSON (for Detect response)
+    pub fn get_device_info_json(&self) -> Result<serde_json::Value, DigitizerError> {
+        let info = self.board_info.as_ref().ok_or_else(|| {
+            DigitizerError::new(-1, "Board info not available")
+        })?;
+        Ok(serde_json::json!({
+            "model": info.model_name,
+            "serial_number": info.serial_number.to_string(),
+            "channels": info.channels,
+            "adc_bits": info.adc_nbits,
+            "roc_firmware": info.roc_firmware,
+            "amc_firmware": info.amc_firmware,
+            "form_factor": info.form_factor,
+            "family_code": info.family_code,
+            "sam_correction_loaded": info.sam_correction_loaded,
+        }))
+    }
+
+    // ---- DPP-CI specific methods ----
+
+    /// Set SAM acquisition mode (Standard waveform vs DPP-CI charge integration)
+    pub fn set_sam_acquisition_mode(
+        &self,
+        mode: SamAcquisitionMode,
+    ) -> Result<(), DigitizerError> {
+        info!("SetSAMAcquisitionMode: {:?}", mode);
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetSAMAcquisitionMode(self.handle, mode.to_ffi())
+        };
+        DigitizerError::check(ret, "SetSAMAcquisitionMode")
+    }
+
+    /// Set DPP parameters for all channels (DPP-CI mode)
+    pub fn set_dpp_parameters(
+        &self,
+        channel_mask: u32,
+        params: &mut ffi::CAEN_DGTZ_DPP_CI_Params_t,
+    ) -> Result<(), DigitizerError> {
+        info!("SetDPPParameters: channel_mask=0x{:04X}", channel_mask);
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetDPPParameters(
+                self.handle,
+                channel_mask,
+                params as *mut ffi::CAEN_DGTZ_DPP_CI_Params_t as *mut std::ffi::c_void,
+            )
+        };
+        DigitizerError::check(ret, "SetDPPParameters")
+    }
+
+    /// Set pulse polarity for DPP firmware (per channel)
+    pub fn set_channel_pulse_polarity(
+        &self,
+        channel: u32,
+        polarity: PulsePolarity,
+    ) -> Result<(), DigitizerError> {
+        debug!("SetChannelPulsePolarity: ch={}, {:?}", channel, polarity);
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetChannelPulsePolarity(self.handle, channel, polarity.to_ffi())
+        };
+        DigitizerError::check(ret, &format!("SetChannelPulsePolarity(ch={})", channel))
+    }
+
+    /// Set DPP acquisition mode (Oscilloscope/List/Mixed) and save parameter
+    pub fn set_dpp_acquisition_mode(
+        &self,
+        mode: DppAcqMode,
+        save: DppSaveParam,
+    ) -> Result<(), DigitizerError> {
+        info!("SetDPPAcquisitionMode: {:?}, {:?}", mode, save);
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetDPPAcquisitionMode(self.handle, mode.to_ffi(), save.to_ffi())
+        };
+        DigitizerError::check(ret, "SetDPPAcquisitionMode")
+    }
+
+    /// Set DPP event aggregation parameters
+    pub fn set_dpp_event_aggregation(
+        &self,
+        threshold: i32,
+        maxsize: i32,
+    ) -> Result<(), DigitizerError> {
+        debug!(
+            "SetDPPEventAggregation: threshold={}, maxsize={}",
+            threshold, maxsize
+        );
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetDPPEventAggregation(self.handle, threshold, maxsize)
+        };
+        DigitizerError::check(ret, "SetDPPEventAggregation")
+    }
+
+    /// Set DPP pre-trigger size (channel=-1 for all channels)
+    pub fn set_dpp_pre_trigger_size(
+        &self,
+        channel: i32,
+        samples: u32,
+    ) -> Result<(), DigitizerError> {
+        debug!(
+            "SetDPPPreTriggerSize: ch={}, samples={}",
+            channel, samples
+        );
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetDPPPreTriggerSize(self.handle, channel, samples)
+        };
+        DigitizerError::check(ret, "SetDPPPreTriggerSize")
+    }
+
+    /// Set channel pair trigger logic (AND/OR with coincidence window)
+    pub fn set_channel_pair_trigger_logic(
+        &self,
+        channel_a: u32,
+        channel_b: u32,
+        logic: TriggerLogic,
+        coincidence_window: u16,
+    ) -> Result<(), DigitizerError> {
+        debug!(
+            "SetChannelPairTriggerLogic: chA={}, chB={}, {:?}, window={}ns",
+            channel_a, channel_b, logic, coincidence_window
+        );
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetChannelPairTriggerLogic(
+                self.handle,
+                channel_a,
+                channel_b,
+                logic.to_ffi(),
+                coincidence_window,
+            )
+        };
+        DigitizerError::check(ret, "SetChannelPairTriggerLogic")
+    }
+
+    /// Set board-level trigger logic (OR/AND/Majority)
+    pub fn set_trigger_logic(
+        &self,
+        logic: TriggerLogic,
+        majority_level: u32,
+    ) -> Result<(), DigitizerError> {
+        info!(
+            "SetTriggerLogic: {:?}, majority_level={}",
+            logic, majority_level
+        );
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_SetTriggerLogic(self.handle, logic.to_ffi(), majority_level)
+        };
+        DigitizerError::check(ret, "SetTriggerLogic")
+    }
+
+    /// Allocate DPP event buffers (per-channel matrix)
+    pub fn malloc_dpp_events(&self) -> Result<DppEventBuffer, DigitizerError> {
+        let mut events: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut size: u32 = 0;
+
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_MallocDPPEvents(
+                self.handle,
+                &mut events as *mut *mut std::ffi::c_void,
+                &mut size,
+            )
+        };
+        DigitizerError::check(ret, "MallocDPPEvents")?;
+
+        debug!("DPP event buffer allocated: {} bytes", size);
+
+        Ok(DppEventBuffer {
+            handle: self.handle,
+            events,
+            _allocated_size: size,
+        })
+    }
+
+    /// Read DPP events from readout buffer. Returns per-channel event counts.
+    pub fn get_dpp_events(
+        &self,
+        buf: &ReadoutBuffer,
+        data_size: u32,
+        dpp_buf: &mut DppEventBuffer,
+    ) -> Result<Vec<u32>, DigitizerError> {
+        let mut num_events = vec![0u32; MAX_CHANNELS];
+
+        let ret = unsafe {
+            ffi::CAEN_DGTZ_GetDPPEvents(
+                self.handle,
+                buf.buffer,
+                data_size,
+                &mut dpp_buf.events as *mut *mut std::ffi::c_void,
+                num_events.as_mut_ptr(),
+            )
+        };
+        DigitizerError::check(ret, "GetDPPEvents")?;
+
+        Ok(num_events)
+    }
+
+    /// Apply DPP-CI configuration. Follows the programming sequence from
+    /// docs/x743_dpp_ci_parameters.md Section 16.
+    pub fn apply_config_dpp_ci(&self, config: &DigitizerConfig) -> Result<(), DigitizerError> {
+        let x743 = config
+            .x743
+            .as_ref()
+            .ok_or_else(|| DigitizerError::new(-1, "Missing x743 config section"))?;
+
+        info!("Applying V1743 DPP-CI configuration...");
+
+        // 1. Reset
+        self.reset()?;
+
+        // 2. Set SAM acquisition mode to DPP-CI
+        info!("Setting SAM acquisition mode to DPP-CI...");
+        match self.set_sam_acquisition_mode(SamAcquisitionMode::DppCI) {
+            Ok(()) => info!("SetSAMAcquisitionMode(DPP_CI) succeeded"),
+            Err(ref e) => {
+                warn!("SetSAMAcquisitionMode(DPP_CI) failed: {}. This board's FW may not support DPP-CI mode. Falling back without mode switch.", e);
+                // Continue without DPP-CI mode switch — some V1743 FW versions may not support it
+            }
+        }
+
+        // 3. Build DPP_CI_Params_t and call SetDPPParameters
+        let mut params: ffi::CAEN_DGTZ_DPP_CI_Params_t = unsafe { std::mem::zeroed() };
+        let defaults = &config.channel_defaults;
+
+        // Fill per-group arrays (DPP_CI_Params_t uses MAX_DPP_CI_CHANNEL_SIZE = 8 groups)
+        let num_groups = MAX_GROUPS.min(8); // DPP_CI_Params_t arrays are [8]
+        for g in 0..num_groups {
+            // Use the first channel in the group for overrides
+            let ch = (g * CHANNELS_PER_GROUP) as u8;
+            let ch_config = config.channel_overrides.get(&ch);
+
+            params.thr[g] = ch_config
+                .and_then(|c| c.trigger_threshold)
+                .or(defaults.trigger_threshold)
+                .or(x743.dpp_ci_threshold)
+                .unwrap_or(100) as i32;
+
+            params.gate[g] = x743.dpp_ci_gate.unwrap_or(50) as i32;
+            params.pgate[g] = x743.dpp_ci_pgate.unwrap_or(5) as i32;
+            params.csens[g] = x743.dpp_ci_csens.unwrap_or(0) as i32;
+            params.nsbl[g] = x743.dpp_ci_nsbl.unwrap_or(2) as i32;
+            params.tvaw[g] = x743.dpp_ci_tvaw.unwrap_or(50) as i32;
+
+            // Self-trigger: from channel config or global trigger_source
+            let self_trig = ch_config
+                .and_then(|c| c.self_trigger.as_deref())
+                .or(defaults.self_trigger.as_deref())
+                .map(|s| s.eq_ignore_ascii_case("true"))
+                .unwrap_or(x743.trigger_source == "self");
+            params.selft[g] = if self_trig { 1 } else { 0 };
+
+            // trgc is deprecated but must be set to 1 (per-group array)
+            params.trgc[g] = 1;
+        }
+        // Scalar fields
+        params.trgho = x743.dpp_ci_trgho.unwrap_or(100) as i32;
+
+        // DPP_CI_Params_t arrays are indexed by group (MAX_DPP_CI_CHANNEL_SIZE=8).
+        // channelMask for SetDPPParameters should be the group enable mask.
+        let channel_mask = x743.group_enable_mask;
+        info!(
+            "SetDPPParameters: channel_mask=0x{:04X}, thr[0]={}, gate[0]={}, csens[0]={}, nsbl[0]={}, trgho={}",
+            channel_mask, params.thr[0], params.gate[0], params.csens[0], params.nsbl[0], params.trgho
+        );
+        self.set_dpp_parameters(channel_mask, &mut params)?;
+
+        // 4. Set pulse polarity per channel
+        let polarity = match x743
+            .pulse_polarity
+            .as_deref()
+            .unwrap_or("negative")
+            .to_lowercase()
+            .as_str()
+        {
+            "positive" | "pos" => PulsePolarity::Positive,
+            _ => PulsePolarity::Negative,
+        };
+        for ch in 0..config.num_channels as u32 {
+            self.set_channel_pulse_polarity(ch, polarity)?;
+        }
+
+        // 5. DC offset per channel
+        for ch in 0..config.num_channels as u32 {
+            let ch_config = config.channel_overrides.get(&(ch as u8));
+            let dc_offset_pct = ch_config
+                .and_then(|c| c.dc_offset)
+                .or(defaults.dc_offset)
+                .unwrap_or(50.0);
+            let dc_offset_dac = ((dc_offset_pct / 100.0) * 65535.0) as u32;
+            self.set_channel_dc_offset(ch, dc_offset_dac)?;
+        }
+
+        // 6. Group enable mask
+        self.set_group_enable_mask(x743.group_enable_mask)?;
+
+        // 7. RecordLength — skip for List mode (no waveforms)
+
+        // 8. DPP pre-trigger (all channels)
+        if let Some(pre_trigger) = x743.dpp_ci_pre_trigger {
+            self.set_dpp_pre_trigger_size(-1, pre_trigger)?;
+        }
+
+        // 9. DPP acquisition mode: List + EnergyAndTime
+        self.set_dpp_acquisition_mode(DppAcqMode::List, DppSaveParam::EnergyAndTime)?;
+
+        // 10-11. Event aggregation (auto)
+        self.set_dpp_event_aggregation(0, 0)?;
+
+        // 12. SAM sampling frequency
+        let freq = parse_sam_frequency(&x743.sampling_frequency)?;
+        self.set_sam_sampling_frequency(freq)?;
+
+        // 13. SAM correction level
+        let correction = parse_correction_level(&x743.correction_level)?;
+        self.set_sam_correction_level(correction)?;
+
+        // 14. SAM post-trigger size per group
+        for g in 0..MAX_GROUPS as u32 {
+            if x743.group_enable_mask & (1 << g) != 0 {
+                self.set_sam_post_trigger_size(g, x743.post_trigger_size)?;
+            }
+        }
+
+        // 15. Pair trigger logic
+        let pair_logic = match x743
+            .pair_trigger_logic
+            .as_deref()
+            .unwrap_or("or")
+            .to_lowercase()
+            .as_str()
+        {
+            "and" => TriggerLogic::And,
+            _ => TriggerLogic::Or,
+        };
+        let pair_window = x743.pair_coincidence_window.unwrap_or(15);
+        for g in 0..MAX_GROUPS {
+            let ch_a = (g * CHANNELS_PER_GROUP) as u32;
+            let ch_b = ch_a + 1;
+            if x743.group_enable_mask & (1 << g) != 0 {
+                self.set_channel_pair_trigger_logic(ch_a, ch_b, pair_logic, pair_window)?;
+            }
+        }
+
+        // 16. Board trigger logic
+        let board_logic = match x743
+            .board_trigger_logic
+            .as_deref()
+            .unwrap_or("or")
+            .to_lowercase()
+            .as_str()
+        {
+            "and" => TriggerLogic::And,
+            "majority" | "maj" => TriggerLogic::Majority,
+            _ => TriggerLogic::Or,
+        };
+        let majority = x743.board_majority_level.unwrap_or(0);
+        self.set_trigger_logic(board_logic, majority)?;
+
+        // 17. Trigger source
+        match x743.trigger_source.as_str() {
+            "software" | "sw" => {
+                self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
+                self.set_ext_trigger_input_mode(TriggerMode::Disabled)?;
+            }
+            "external" | "ext" => {
+                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
+            }
+            "self" => {
+                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_ext_trigger_input_mode(TriggerMode::Disabled)?;
+            }
+            _ => {
+                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
+            }
+        }
+
+        // 18. I/O level
+        let io = parse_io_level(&x743.io_level)?;
+        self.set_io_level(io)?;
+
+        // 19. Acquisition mode (always SW controlled)
+        self.set_acquisition_mode(AcqMode::SWControlled)?;
+
+        // 20. Pulse generator
+        if x743.pulse_gen_enabled {
+            let source = parse_pulse_source(&x743.pulse_source)?;
+            for ch in 0..MAX_CHANNELS as u32 {
+                self.enable_sam_pulse_gen(ch, x743.pulse_pattern, source)?;
+            }
+        }
+
+        info!("V1743 DPP-CI configuration applied successfully");
+        Ok(())
+    }
+}
+
+/// Parse sampling frequency string to enum
+fn parse_sam_frequency(s: &str) -> Result<SamFrequency, DigitizerError> {
+    match s.to_lowercase().as_str() {
+        "3.2ghz" | "3200mhz" => Ok(SamFrequency::Ghz3_2),
+        "1.6ghz" | "1600mhz" => Ok(SamFrequency::Ghz1_6),
+        "800mhz" | "0.8ghz" => Ok(SamFrequency::Mhz800),
+        "400mhz" | "0.4ghz" => Ok(SamFrequency::Mhz400),
+        _ => Err(DigitizerError::new(
+            -1,
+            &format!("Unknown sampling frequency: {}", s),
+        )),
+    }
+}
+
+/// Parse correction level string to enum
+fn parse_correction_level(s: &str) -> Result<SamCorrectionLevel, DigitizerError> {
+    match s.to_lowercase().as_str() {
+        "all" | "full" => Ok(SamCorrectionLevel::All),
+        "pedestal_only" | "pedestal" => Ok(SamCorrectionLevel::PedestalOnly),
+        "inl" => Ok(SamCorrectionLevel::INL),
+        "disabled" | "none" => Ok(SamCorrectionLevel::Disabled),
+        _ => Err(DigitizerError::new(
+            -1,
+            &format!("Unknown correction level: {}", s),
+        )),
+    }
+}
+
+/// Parse I/O level string to enum
+fn parse_io_level(s: &str) -> Result<IOLevel, DigitizerError> {
+    match s.to_lowercase().as_str() {
+        "nim" => Ok(IOLevel::NIM),
+        "ttl" => Ok(IOLevel::TTL),
+        _ => Err(DigitizerError::new(
+            -1,
+            &format!("Unknown IO level: {}", s),
+        )),
+    }
+}
+
+/// Parse pulse source string to enum
+fn parse_pulse_source(s: &str) -> Result<SamPulseSource, DigitizerError> {
+    match s.to_lowercase().as_str() {
+        "software" | "sw" => Ok(SamPulseSource::Software),
+        "continuous" | "cont" => Ok(SamPulseSource::Continuous),
+        _ => Err(DigitizerError::new(
+            -1,
+            &format!("Unknown pulse source: {}", s),
+        )),
+    }
 }
 
 impl Drop for X743Handle {
@@ -710,6 +1317,144 @@ impl SamPulseSource {
                 ffi::CAEN_DGTZ_SAMPulseSourceType_t::CAEN_DGTZ_SAMPulseSoftware
             }
             Self::Continuous => ffi::CAEN_DGTZ_SAMPulseSourceType_t::CAEN_DGTZ_SAMPulseCont,
+        }
+    }
+}
+
+// --- DPP-CI specific enums ---
+
+/// SAM acquisition mode (Standard waveform vs DPP-CI charge integration)
+#[derive(Debug, Clone, Copy)]
+pub enum SamAcquisitionMode {
+    Standard,
+    DppCI,
+}
+
+impl SamAcquisitionMode {
+    fn to_ffi(self) -> ffi::CAEN_DGTZ_AcquisitionMode_t {
+        match self {
+            Self::Standard => ffi::CAEN_DGTZ_AcquisitionMode_t::CAEN_DGTZ_AcquisitionMode_STANDARD,
+            Self::DppCI => ffi::CAEN_DGTZ_AcquisitionMode_t::CAEN_DGTZ_AcquisitionMode_DPP_CI,
+        }
+    }
+}
+
+/// Pulse polarity for DPP firmware
+#[derive(Debug, Clone, Copy)]
+pub enum PulsePolarity {
+    Positive,
+    Negative,
+}
+
+impl PulsePolarity {
+    fn to_ffi(self) -> ffi::CAEN_DGTZ_PulsePolarity_t {
+        match self {
+            Self::Positive => ffi::CAEN_DGTZ_PulsePolarity_t_CAEN_DGTZ_PulsePolarityPositive,
+            Self::Negative => ffi::CAEN_DGTZ_PulsePolarity_t_CAEN_DGTZ_PulsePolarityNegative,
+        }
+    }
+}
+
+/// DPP acquisition mode (what data to acquire)
+#[derive(Debug, Clone, Copy)]
+pub enum DppAcqMode {
+    Oscilloscope,
+    List,
+    Mixed,
+}
+
+impl DppAcqMode {
+    fn to_ffi(self) -> ffi::CAEN_DGTZ_DPP_AcqMode_t {
+        match self {
+            Self::Oscilloscope => ffi::CAEN_DGTZ_DPP_AcqMode_t_CAEN_DGTZ_DPP_ACQ_MODE_Oscilloscope,
+            Self::List => ffi::CAEN_DGTZ_DPP_AcqMode_t_CAEN_DGTZ_DPP_ACQ_MODE_List,
+            Self::Mixed => ffi::CAEN_DGTZ_DPP_AcqMode_t_CAEN_DGTZ_DPP_ACQ_MODE_Mixed,
+        }
+    }
+}
+
+/// DPP save parameter (what to save per event)
+#[derive(Debug, Clone, Copy)]
+pub enum DppSaveParam {
+    EnergyOnly,
+    TimeOnly,
+    EnergyAndTime,
+    None,
+}
+
+impl DppSaveParam {
+    fn to_ffi(self) -> ffi::CAEN_DGTZ_DPP_SaveParam_t {
+        match self {
+            Self::EnergyOnly => ffi::CAEN_DGTZ_DPP_SaveParam_t_CAEN_DGTZ_DPP_SAVE_PARAM_EnergyOnly,
+            Self::TimeOnly => ffi::CAEN_DGTZ_DPP_SaveParam_t_CAEN_DGTZ_DPP_SAVE_PARAM_TimeOnly,
+            Self::EnergyAndTime => ffi::CAEN_DGTZ_DPP_SaveParam_t_CAEN_DGTZ_DPP_SAVE_PARAM_EnergyAndTime,
+            Self::None => ffi::CAEN_DGTZ_DPP_SaveParam_t_CAEN_DGTZ_DPP_SAVE_PARAM_None,
+        }
+    }
+}
+
+/// Trigger logic for channel pairs and board level
+#[derive(Debug, Clone, Copy)]
+pub enum TriggerLogic {
+    Or,
+    And,
+    Majority,
+}
+
+impl TriggerLogic {
+    fn to_ffi(self) -> ffi::CAEN_DGTZ_TrigerLogic_t {
+        match self {
+            Self::Or => ffi::CAEN_DGTZ_TrigerLogic_t::CAEN_DGTZ_LOGIC_OR,
+            Self::And => ffi::CAEN_DGTZ_TrigerLogic_t::CAEN_DGTZ_LOGIC_AND,
+            Self::Majority => ffi::CAEN_DGTZ_TrigerLogic_t::CAEN_DGTZ_LOGIC_MAJORITY,
+        }
+    }
+}
+
+// --- DPP Event Buffer (RAII) ---
+
+/// DPP event buffer allocated by MallocDPPEvents.
+/// Owns the per-channel event matrix and frees it on drop.
+pub struct DppEventBuffer {
+    handle: i32,
+    events: *mut std::ffi::c_void,
+    _allocated_size: u32,
+}
+
+impl DppEventBuffer {
+    /// Access decoded DPP-CI events for a specific channel.
+    ///
+    /// # Safety
+    /// Only valid after a successful `get_dpp_events()` call.
+    /// `count` must not exceed the value returned by `get_dpp_events()` for this channel.
+    pub unsafe fn get_channel_events(
+        &self,
+        channel: usize,
+        count: u32,
+    ) -> &[ffi::CAEN_DGTZ_DPP_CI_Event_t] {
+        let events_ptr = self.events as *mut *mut ffi::CAEN_DGTZ_DPP_CI_Event_t;
+        let ch_ptr = *events_ptr.add(channel);
+        std::slice::from_raw_parts(ch_ptr, count as usize)
+    }
+
+    /// Get the raw events pointer (for FFI calls)
+    pub fn as_mut_ptr(&mut self) -> *mut std::ffi::c_void {
+        self.events
+    }
+}
+
+impl Drop for DppEventBuffer {
+    fn drop(&mut self) {
+        if !self.events.is_null() {
+            let ret = unsafe {
+                ffi::CAEN_DGTZ_FreeDPPEvents(
+                    self.handle,
+                    &mut self.events as *mut *mut std::ffi::c_void,
+                )
+            };
+            if !DigitizerError::is_success(ret) {
+                warn!("CAEN_DGTZ_FreeDPPEvents failed: {:?}", ret);
+            }
         }
     }
 }

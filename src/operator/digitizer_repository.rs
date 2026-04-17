@@ -353,6 +353,7 @@ mod tests {
             channel_defaults: ChannelConfig::default(),
             channel_overrides: std::collections::HashMap::new(),
             channel_names: None,
+            x743: None,
         }
     }
 

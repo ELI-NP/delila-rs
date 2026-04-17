@@ -166,6 +166,170 @@ pub struct DigitizerConfig {
         deserialize_with = "opt_string_key_map::deserialize"
     )]
     pub channel_names: Option<HashMap<u32, String>>,
+
+    /// V1743-specific configuration (CAENDigitizer Library).
+    /// Only used when firmware is X743CI or X743Std.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x743: Option<X743Config>,
+}
+
+/// V1743-specific configuration parameters
+///
+/// Controls SAM correction, sampling frequency, acquisition mode,
+/// and other V1743-specific settings not shared with FELib digitizers.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct X743Config {
+    /// Connection type: "optical" or "usb"
+    #[serde(default = "X743Config::default_link_type")]
+    pub link_type: String,
+
+    /// Link/port number (0 for first optical port)
+    #[serde(default)]
+    pub link_num: u32,
+
+    /// CONET daisy chain node (0 for first/only board)
+    #[serde(default)]
+    pub conet_node: u32,
+
+    /// VME base address (0 for auto)
+    #[serde(default)]
+    pub vme_base_address: u32,
+
+    /// SAM sampling frequency: "3.2ghz", "1.6ghz", "800mhz", "400mhz"
+    #[serde(default = "X743Config::default_sampling_frequency")]
+    pub sampling_frequency: String,
+
+    /// SAM correction level: "all", "pedestal_only", "inl", "disabled"
+    #[serde(default = "X743Config::default_correction_level")]
+    pub correction_level: String,
+
+    /// Record length in samples (16-1024, step 16)
+    #[serde(default = "X743Config::default_record_length")]
+    pub record_length: u32,
+
+    /// Post-trigger size per group (1-255, SAMLONG write clock units)
+    #[serde(default = "X743Config::default_post_trigger_size")]
+    pub post_trigger_size: u32,
+
+    /// Max events per block transfer
+    #[serde(default = "X743Config::default_max_num_events_blt")]
+    pub max_num_events_blt: u32,
+
+    /// I/O level: "nim" or "ttl"
+    #[serde(default = "X743Config::default_io_level")]
+    pub io_level: String,
+
+    /// Trigger source: "software", "external", "self"
+    #[serde(default = "X743Config::default_trigger_source")]
+    pub trigger_source: String,
+
+    /// Group enable mask (0xFF = all 8 groups enabled)
+    #[serde(default = "X743Config::default_group_enable_mask")]
+    pub group_enable_mask: u32,
+
+    /// Enable test pulse generator
+    #[serde(default)]
+    pub pulse_gen_enabled: bool,
+
+    /// Pulse generator pattern (16-bit)
+    #[serde(default = "X743Config::default_pulse_pattern")]
+    pub pulse_pattern: u16,
+
+    /// Pulse generator source: "software" or "continuous"
+    #[serde(default = "X743Config::default_pulse_source")]
+    pub pulse_source: String,
+
+    // ---- DPP-CI parameters (used when firmware == X743CI) ----
+
+    /// Trigger threshold (LSB, 0-65535). Applied to all channels as default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_threshold: Option<u32>,
+
+    /// Charge integration gate width (samples)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_gate: Option<u32>,
+
+    /// Gate offset / pre-gate (samples before trigger)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_pgate: Option<u32>,
+
+    /// Charge sensitivity: 0=40, 1=160, 2=640, 3=2560 fC/LSB
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_csens: Option<u32>,
+
+    /// Number of samples for baseline mean: 0=FIXED, 1=8, 2=32, 3=128
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_nsbl: Option<u32>,
+
+    /// Trigger hold-off (samples)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_trgho: Option<u32>,
+
+    /// Trigger validation acceptance window (samples, for coincidence mode)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_tvaw: Option<u32>,
+
+    /// DPP pre-trigger size (samples, applied to all channels)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpp_ci_pre_trigger: Option<u32>,
+
+    /// Pulse polarity for DPP mode: "positive" or "negative"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pulse_polarity: Option<String>,
+
+    // ---- Trigger logic ----
+
+    /// Pair trigger logic: "or" or "and"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_trigger_logic: Option<String>,
+
+    /// Pair coincidence window in ns (for AND mode, >=15, multiple of 5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_coincidence_window: Option<u16>,
+
+    /// Board trigger logic: "or", "and", or "majority"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_trigger_logic: Option<String>,
+
+    /// Majority level (0 = at least 1 pair fires)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_majority_level: Option<u32>,
+}
+
+impl X743Config {
+    fn default_link_type() -> String {
+        "optical".to_string()
+    }
+    fn default_sampling_frequency() -> String {
+        "3.2ghz".to_string()
+    }
+    fn default_correction_level() -> String {
+        "all".to_string()
+    }
+    fn default_record_length() -> u32 {
+        256
+    }
+    fn default_post_trigger_size() -> u32 {
+        20
+    }
+    fn default_max_num_events_blt() -> u32 {
+        1000
+    }
+    fn default_io_level() -> String {
+        "nim".to_string()
+    }
+    fn default_trigger_source() -> String {
+        "external".to_string()
+    }
+    fn default_group_enable_mask() -> u32 {
+        0xFF
+    }
+    fn default_pulse_pattern() -> u16 {
+        0xFFFF
+    }
+    fn default_pulse_source() -> String {
+        "continuous".to_string()
+    }
 }
 
 /// Synchronization configuration for Master/Slave setups
@@ -719,6 +883,7 @@ impl DigitizerConfig {
             channel_defaults: ChannelConfig::default(),
             channel_overrides: HashMap::new(),
             channel_names: None,
+            x743: None,
         }
     }
 

@@ -64,8 +64,7 @@ enum ReadLoopOutput {
     Raw(decoder::RawData),
     /// Already decoded event from OpenDPP (AMax)
     Decoded(decoder::EventData),
-    /// Start signal from digitizer (reserved for future use)
-    #[allow(dead_code)]
+    /// Start signal — triggers decoder state reset (TimestampTracker etc.)
     Start,
     /// Stop signal — triggers EOS publication in DecodeLoop
     Stop,
@@ -197,7 +196,6 @@ impl ReaderConfig {
     /// Returns None if source_id is not found or source has no digitizer_url
     pub fn from_config(config: &crate::config::Config, source_id: u32) -> Option<Self> {
         let source = config.get_source(source_id)?;
-        let url = source.digitizer_url.as_ref()?;
 
         let firmware = match source.source_type {
             crate::config::SourceType::Psd2 => FirmwareType::PSD2,
@@ -210,8 +208,15 @@ impl ReaderConfig {
             _ => return None,
         };
 
+        // x743 doesn't use FELib URL — connection is via X743Config (link_type/link_num/conet_node)
+        let url = if firmware.is_legacy_api() {
+            source.digitizer_url.clone().unwrap_or_default()
+        } else {
+            source.digitizer_url.as_ref()?.clone()
+        };
+
         Some(Self {
-            url: url.clone(),
+            url,
             data_address: source.data_address(config.network.port_base_data),
             command_address: source.command_address_with_base(config.network.port_base_command),
             source_id,
@@ -1115,6 +1120,9 @@ impl Reader {
                     *hw_state.lock().unwrap() = ComponentState::Running;
                     // Reset DIG2 poll state for new run
                     dig2_poll.reset();
+                    // Signal decode_loop to reset decoder state (TimestampTracker etc.)
+                    // DIG1 has no Start signal in the data stream, so we must send it here.
+                    let _ = tx.try_send(ReadLoopOutput::Start);
                 }
 
                 // Stop needed? (target dropped below Running)
@@ -1777,6 +1785,700 @@ impl Reader {
         Ok(())
     }
 
+    /// ReadLoop for V1743 digitizers (CAENDigitizer Library).
+    ///
+    /// Unlike the FELib read loops, this performs ReadData → DecodeEvent → EventData
+    /// conversion entirely within the read loop because CAENDigitizer's DecodeEvent
+    /// requires the handle (not thread-safe). x743 is low-rate (~7 kHz) so this is fine.
+    #[cfg(feature = "x743")]
+    fn read_loop_x743_std(
+        config: ReaderConfig,
+        tx: mpsc::Sender<ReadLoopOutput>,
+        state_rx: watch::Receiver<ComponentState>,
+        _state_tx: watch::Sender<ComponentState>,
+        metrics: Arc<ReaderMetrics>,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+        request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
+        hw_state: Arc<std::sync::Mutex<ComponentState>>,
+    ) -> Result<(), ReaderError> {
+        use crate::reader::caen_legacy::*;
+
+        info!(
+            source_id = config.source_id,
+            "ReadLoop (x743) starting"
+        );
+
+        // Load digitizer config to get X743Config (connection params)
+        let dig_config = config
+            .config_file
+            .as_ref()
+            .and_then(|path| {
+                crate::config::digitizer::DigitizerConfig::load(path)
+                    .map_err(|e| warn!("Failed to load digitizer config: {}", e))
+                    .ok()
+            });
+
+        // Connection state
+        let mut handle: Option<X743Handle> = None;
+        let mut readout_buf: Option<ReadoutBuffer> = None;
+        let mut event_buf: Option<EventBuffer> = None;
+        let mut hw_configured = false;
+        let mut hw_armed = false;
+        let mut hw_running = false;
+        let mut reconnect_cooldown = RECONNECT_INITIAL;
+        let mut last_connect_attempt: Option<Instant> = None;
+
+        // Try to connect
+        let try_connect = |dig_config: &Option<crate::config::digitizer::DigitizerConfig>| -> Option<X743Handle> {
+            let x743_cfg = dig_config.as_ref()?.x743.as_ref()?;
+            let link_type = match x743_cfg.link_type.as_str() {
+                "usb" => ConnectionType::USB,
+                _ => ConnectionType::OpticalLink,
+            };
+            match X743Handle::open(link_type, x743_cfg.link_num, x743_cfg.conet_node, x743_cfg.vme_base_address) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    warn!("Failed to open V1743: {}", e);
+                    None
+                }
+            }
+        };
+
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Lazy connection with backoff
+            if handle.is_none() {
+                let should_try = match last_connect_attempt {
+                    None => true,
+                    Some(last) => last.elapsed() >= reconnect_cooldown,
+                };
+                if should_try {
+                    last_connect_attempt = Some(Instant::now());
+                    if let Some(h) = try_connect(&dig_config) {
+                        // Allocate buffers
+                        match (h.malloc_readout_buffer(), h.allocate_event()) {
+                            (Ok(rb), Ok(eb)) => {
+                                info!("V1743 connected, buffers allocated");
+                                readout_buf = Some(rb);
+                                event_buf = Some(eb);
+                                handle = Some(h);
+                                reconnect_cooldown = RECONNECT_INITIAL;
+                            }
+                            (Err(e), _) | (_, Err(e)) => {
+                                warn!("V1743 buffer allocation failed: {}", e);
+                                // h dropped here → CloseDigitizer
+                            }
+                        }
+                    } else {
+                        let (cooldown, next_base) = next_reconnect_cooldown(reconnect_cooldown);
+                        reconnect_cooldown = next_base;
+                        debug!("Next reconnect attempt in {}ms", cooldown.as_millis());
+                    }
+                }
+                if handle.is_none() {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            }
+
+            let h = handle.as_ref().unwrap();
+            let target_state = *state_rx.borrow();
+            let target_rank = state_rank(target_state);
+
+            // === State synchronization ===
+
+            // Configure
+            if target_rank >= state_rank(ComponentState::Configured) && !hw_configured {
+                if let Some(ref dc) = dig_config {
+                    match h.apply_config_standard(dc) {
+                        Ok(()) => {
+                            info!("V1743 configured successfully");
+                            hw_configured = true;
+                            *hw_state.lock().unwrap() = ComponentState::Configured;
+                        }
+                        Err(e) => {
+                            error!("V1743 configure failed: {}", e);
+                            // Drop handle to reconnect fresh
+                            handle = None;
+                            readout_buf = None;
+                            event_buf = None;
+                            hw_configured = false;
+                            hw_armed = false;
+                            hw_running = false;
+                            continue;
+                        }
+                    }
+                } else {
+                    warn!("No digitizer config loaded — cannot configure V1743");
+                }
+            }
+
+            // Arm (V1743: nothing to do — acquisition starts with SWStartAcquisition)
+            if target_rank >= state_rank(ComponentState::Armed) && hw_configured && !hw_armed {
+                info!("V1743 armed (ready for start)");
+                hw_armed = true;
+                *hw_state.lock().unwrap() = ComponentState::Armed;
+            }
+
+            // Start
+            if target_rank >= state_rank(ComponentState::Running) && hw_armed && !hw_running {
+                match h.clear_data().and_then(|_| h.sw_start_acquisition()) {
+                    Ok(()) => {
+                        info!("V1743 acquisition started");
+                        hw_running = true;
+                        *hw_state.lock().unwrap() = ComponentState::Running;
+                    }
+                    Err(e) => {
+                        error!("V1743 start failed: {}", e);
+                    }
+                }
+            }
+
+            // Stop
+            if target_rank < state_rank(ComponentState::Running) && hw_running {
+                info!("V1743 stopping acquisition");
+                if let Err(e) = h.sw_stop_acquisition() {
+                    warn!("V1743 stop acquisition error: {}", e);
+                }
+
+                // Drain remaining events from board buffer
+                if let (Some(ref mut rb), Some(ref mut eb)) = (&mut readout_buf, &mut event_buf) {
+                    let mut drained = 0u32;
+                    loop {
+                        match h.read_data(rb) {
+                            Ok(0) => break,
+                            Ok(data_size) => {
+                                if let Ok(n) = h.get_num_events(rb, data_size) {
+                                    for i in 0..n {
+                                        if let Ok((info, ptr)) = h.get_event_info(rb, data_size, i) {
+                                            if h.decode_event(ptr, eb).is_ok() {
+                                                let events = Self::x743_std_event_to_event_data(
+                                                    eb.event(),
+                                                    &info,
+                                                    config.module_id,
+                                                );
+                                                for event in events {
+                                                    let _ = tx.blocking_send(
+                                                        ReadLoopOutput::Decoded(event),
+                                                    );
+                                                }
+                                                drained += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if drained > 0 {
+                        info!("Drained {} events after stop", drained);
+                    }
+                }
+
+                // Send Stop signal → decode_loop publishes EOS
+                let _ = tx.blocking_send(ReadLoopOutput::Stop);
+
+                hw_running = false;
+                hw_armed = false; // V1743: must re-arm after stop
+                *hw_state.lock().unwrap() = ComponentState::Configured;
+            }
+
+            // Reset to Idle
+            if target_state == ComponentState::Idle && (hw_armed || hw_configured) {
+                info!("V1743 resetting to Idle");
+                if let Err(e) = h.reset() {
+                    warn!("V1743 reset error: {}", e);
+                }
+                hw_configured = false;
+                hw_armed = false;
+                hw_running = false;
+                *hw_state.lock().unwrap() = ComponentState::Idle;
+            }
+
+            // === Handle requests (Detect, ApplyConfig) ===
+            if let Ok(req) = request_rx.try_recv() {
+                match req {
+                    ReadLoopRequest::Detect { response_tx } => {
+                        let result = h.get_device_info_json().map_err(|e| e.to_string());
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfig { config: new_config, response_tx } => {
+                        let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                        if result.is_ok() {
+                            hw_configured = true;
+                        }
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfigRunning { config: new_config, response_tx } => {
+                        // V1743 doesn't support parameter changes while running
+                        // but we can try re-applying if needed
+                        let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                        let _ = response_tx.send(result);
+                    }
+                }
+            }
+
+            // === Data readout (only while Running) ===
+            if !hw_running {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            if let (Some(ref mut rb), Some(ref mut eb)) = (&mut readout_buf, &mut event_buf) {
+                match h.read_data(rb) {
+                    Ok(0) => {
+                        // No data available, continue polling
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Ok(data_size) => {
+                        let num_events = match h.get_num_events(rb, data_size) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                warn!("GetNumEvents error: {}", e);
+                                continue;
+                            }
+                        };
+
+                        metrics
+                            .bytes_read
+                            .fetch_add(data_size as u64, Ordering::Relaxed);
+
+                        for evt_idx in 0..num_events {
+                            let (info, ptr) = match h.get_event_info(rb, data_size, evt_idx) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    warn!("GetEventInfo error: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            if let Err(e) = h.decode_event(ptr, eb) {
+                                warn!("DecodeEvent error: {}", e);
+                                continue;
+                            }
+
+                            let events = Self::x743_std_event_to_event_data(
+                                eb.event(),
+                                &info,
+                                config.module_id,
+                            );
+
+                            for event in events {
+                                metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+                                if tx.blocking_send(ReadLoopOutput::Decoded(event)).is_err() {
+                                    warn!("ReadLoop channel closed");
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // CAENDigitizer ReadData error — check if it's timeout-like
+                        debug!("ReadData error: {} (may be timeout)", e);
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            }
+        }
+
+        // Cleanup
+        if let Some(ref h) = handle {
+            if hw_running {
+                let _ = h.sw_stop_acquisition();
+            }
+        }
+        // Dropping handle, readout_buf, event_buf triggers RAII cleanup
+        info!("ReadLoop (x743) stopped");
+        Ok(())
+    }
+
+    /// Convert a CAEN_DGTZ_X743_EVENT_t to a Vec of decoder::EventData.
+    ///
+    /// Each present group produces up to 2 EventData entries (one per channel in the group).
+    /// For DPP_CI mode: TDC × 5ns → timestamp, Charge → energy.
+    #[cfg(feature = "x743")]
+    fn x743_std_event_to_event_data(
+        event: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t,
+        _info: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t,
+        module_id: u8,
+    ) -> Vec<decoder::EventData> {
+        let mut events = Vec::new();
+
+        for g in 0..caen_legacy::MAX_GROUPS {
+            if event.GrPresent[g] == 0 {
+                continue;
+            }
+            let group = &event.DataGroup[g];
+
+            // TDC is 40-bit, 5ns resolution
+            let tdc_ns = group.TDC as f64 * 5.0;
+
+            for ch_in_group in 0..caen_legacy::CHANNELS_PER_GROUP {
+                let channel = (g * caen_legacy::CHANNELS_PER_GROUP + ch_in_group) as u8;
+
+                // Charge is float (pC) — convert to u16 for energy field.
+                // Use absolute value to handle negative charge values.
+                let charge = group.Charge.abs();
+                let energy = if charge > u16::MAX as f32 {
+                    u16::MAX
+                } else {
+                    charge as u16
+                };
+
+                // Pack Peak (lower 16 bits) and Baseline (upper 16 bits) into flags
+                let peak_u16 = group.Peak.abs().min(u16::MAX as f32) as u32;
+                let baseline_u16 = group.Baseline.abs().min(u16::MAX as f32) as u32;
+                let flags = peak_u16 | (baseline_u16 << 16);
+
+                events.push(decoder::EventData {
+                    timestamp_ns: tdc_ns,
+                    module: module_id,
+                    channel,
+                    energy,
+                    energy_short: 0,
+                    fine_time: 0, // PosEdgeTimeStamp could go here if available
+                    flags,
+                    waveform: None,
+                });
+            }
+        }
+
+        events
+    }
+
+    /// ReadLoop for V1743 DPP-CI (Charge Integration) mode.
+    ///
+    /// Uses GetDPPEvents for per-channel event readout instead of
+    /// GetNumEvents/GetEventInfo/DecodeEvent used in Standard mode.
+    #[cfg(feature = "x743")]
+    fn read_loop_x743_ci(
+        config: ReaderConfig,
+        tx: mpsc::Sender<ReadLoopOutput>,
+        state_rx: watch::Receiver<ComponentState>,
+        _state_tx: watch::Sender<ComponentState>,
+        metrics: Arc<ReaderMetrics>,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+        request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
+        hw_state: Arc<std::sync::Mutex<ComponentState>>,
+    ) -> Result<(), ReaderError> {
+        use crate::reader::caen_legacy::*;
+
+        info!(
+            source_id = config.source_id,
+            "ReadLoop (x743 DPP-CI) starting"
+        );
+
+        let dig_config = config
+            .config_file
+            .as_ref()
+            .and_then(|path| {
+                crate::config::digitizer::DigitizerConfig::load(path)
+                    .map_err(|e| warn!("Failed to load digitizer config: {}", e))
+                    .ok()
+            });
+
+        let mut handle: Option<X743Handle> = None;
+        let mut readout_buf: Option<ReadoutBuffer> = None;
+        let mut dpp_events: Option<DppEventBuffer> = None;
+        let mut hw_configured = false;
+        let mut hw_armed = false;
+        let mut hw_running = false;
+        let mut reconnect_cooldown = RECONNECT_INITIAL;
+        let mut last_connect_attempt: Option<Instant> = None;
+
+        let try_connect = |dig_config: &Option<crate::config::digitizer::DigitizerConfig>| -> Option<X743Handle> {
+            let x743_cfg = dig_config.as_ref()?.x743.as_ref()?;
+            let link_type = match x743_cfg.link_type.as_str() {
+                "usb" => ConnectionType::USB,
+                _ => ConnectionType::OpticalLink,
+            };
+            match X743Handle::open(link_type, x743_cfg.link_num, x743_cfg.conet_node, x743_cfg.vme_base_address) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    warn!("Failed to open V1743: {}", e);
+                    None
+                }
+            }
+        };
+
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Lazy connection with backoff
+            if handle.is_none() {
+                let should_try = match last_connect_attempt {
+                    None => true,
+                    Some(last) => last.elapsed() >= reconnect_cooldown,
+                };
+                if should_try {
+                    last_connect_attempt = Some(Instant::now());
+                    if let Some(h) = try_connect(&dig_config) {
+                        // Allocate readout buffer only (DPP events allocated at configure time)
+                        match h.malloc_readout_buffer() {
+                            Ok(rb) => {
+                                info!("V1743 DPP-CI connected, readout buffer allocated");
+                                readout_buf = Some(rb);
+                                handle = Some(h);
+                                reconnect_cooldown = RECONNECT_INITIAL;
+                            }
+                            Err(e) => {
+                                warn!("V1743 readout buffer allocation failed: {}", e);
+                            }
+                        }
+                    } else {
+                        let (_, next_base) = next_reconnect_cooldown(reconnect_cooldown);
+                        reconnect_cooldown = next_base;
+                    }
+                }
+                if handle.is_none() {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            }
+
+            let h = handle.as_ref().unwrap();
+            let target_state = *state_rx.borrow();
+            let target_rank = state_rank(target_state);
+
+            // === State synchronization ===
+
+            // Configure (DPP-CI mode)
+            if target_rank >= state_rank(ComponentState::Configured) && !hw_configured {
+                if let Some(ref dc) = dig_config {
+                    match h.apply_config_dpp_ci(dc) {
+                        Ok(()) => {
+                            // Allocate DPP event buffer after configure (Gemini recommendation)
+                            match h.malloc_dpp_events() {
+                                Ok(dpp_buf) => {
+                                    info!("V1743 DPP-CI configured, event buffer allocated");
+                                    dpp_events = Some(dpp_buf);
+                                    hw_configured = true;
+                                    *hw_state.lock().unwrap() = ComponentState::Configured;
+                                }
+                                Err(e) => {
+                                    error!("V1743 DPP event buffer allocation failed: {}", e);
+                                    handle = None;
+                                    readout_buf = None;
+                                    dpp_events = None;
+                                    hw_configured = false;
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("V1743 DPP-CI configure failed: {}", e);
+                            handle = None;
+                            readout_buf = None;
+                            dpp_events = None;
+                            hw_configured = false;
+                            hw_armed = false;
+                            hw_running = false;
+                            continue;
+                        }
+                    }
+                } else {
+                    warn!("No digitizer config loaded — cannot configure V1743 DPP-CI");
+                }
+            }
+
+            // Arm
+            if target_rank >= state_rank(ComponentState::Armed) && hw_configured && !hw_armed {
+                info!("V1743 DPP-CI armed (ready for start)");
+                hw_armed = true;
+                *hw_state.lock().unwrap() = ComponentState::Armed;
+            }
+
+            // Start
+            if target_rank >= state_rank(ComponentState::Running) && hw_armed && !hw_running {
+                match h.clear_data().and_then(|_| h.sw_start_acquisition()) {
+                    Ok(()) => {
+                        info!("V1743 DPP-CI acquisition started");
+                        hw_running = true;
+                        *hw_state.lock().unwrap() = ComponentState::Running;
+                    }
+                    Err(e) => {
+                        error!("V1743 DPP-CI start failed: {}", e);
+                    }
+                }
+            }
+
+            // Stop
+            if target_rank < state_rank(ComponentState::Running) && hw_running {
+                info!("V1743 DPP-CI stopping acquisition");
+                if let Err(e) = h.sw_stop_acquisition() {
+                    warn!("V1743 DPP-CI stop error: {}", e);
+                }
+
+                // Drain remaining DPP events
+                if let (Some(ref mut rb), Some(ref mut dpp_buf)) = (&mut readout_buf, &mut dpp_events) {
+                    let mut drained = 0u32;
+                    loop {
+                        match h.read_data(rb) {
+                            Ok(0) => break,
+                            Ok(data_size) => {
+                                if let Ok(num_events_arr) = h.get_dpp_events(rb, data_size, dpp_buf) {
+                                    for ch in 0..MAX_CHANNELS {
+                                        let n = num_events_arr[ch];
+                                        if n == 0 { continue; }
+                                        let events = unsafe { dpp_buf.get_channel_events(ch, n) };
+                                        for evt in events {
+                                            let event_data = Self::x743_dpp_ci_event_to_event_data(
+                                                evt, ch as u8, config.module_id,
+                                            );
+                                            let _ = tx.blocking_send(ReadLoopOutput::Decoded(event_data));
+                                        }
+                                        drained += n;
+                                    }
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if drained > 0 {
+                        info!("Drained {} DPP-CI events after stop", drained);
+                    }
+                }
+
+                let _ = tx.blocking_send(ReadLoopOutput::Stop);
+
+                hw_running = false;
+                hw_armed = false;
+                // Free DPP events — will be reallocated on next configure
+                dpp_events = None;
+                *hw_state.lock().unwrap() = ComponentState::Configured;
+            }
+
+            // Reset to Idle
+            if target_state == ComponentState::Idle && (hw_armed || hw_configured) {
+                info!("V1743 DPP-CI resetting to Idle");
+                if let Err(e) = h.reset() {
+                    warn!("V1743 reset error: {}", e);
+                }
+                hw_configured = false;
+                hw_armed = false;
+                hw_running = false;
+                dpp_events = None;
+                *hw_state.lock().unwrap() = ComponentState::Idle;
+            }
+
+            // === Handle requests (Detect, ApplyConfig) ===
+            if let Ok(req) = request_rx.try_recv() {
+                match req {
+                    ReadLoopRequest::Detect { response_tx } => {
+                        let result = h.get_device_info_json().map_err(|e| e.to_string());
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfig { config: new_config, response_tx } => {
+                        let result = h.apply_config_dpp_ci(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                        if result.is_ok() {
+                            // Reallocate DPP events after reconfigure
+                            dpp_events = None;
+                            match h.malloc_dpp_events() {
+                                Ok(buf) => { dpp_events = Some(buf); }
+                                Err(e) => { warn!("DPP event buffer realloc failed: {}", e); }
+                            }
+                            hw_configured = true;
+                        }
+                        let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ApplyConfigRunning { config: new_config, response_tx } => {
+                        let result = h.apply_config_dpp_ci(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                        let _ = response_tx.send(result);
+                    }
+                }
+            }
+
+            // === Data readout (DPP-CI, only while Running) ===
+            if !hw_running {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            if let (Some(ref mut rb), Some(ref mut dpp_buf)) = (&mut readout_buf, &mut dpp_events) {
+                match h.read_data(rb) {
+                    Ok(0) => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Ok(data_size) => {
+                        metrics.bytes_read.fetch_add(data_size as u64, Ordering::Relaxed);
+
+                        match h.get_dpp_events(rb, data_size, dpp_buf) {
+                            Ok(num_events_arr) => {
+                                for ch in 0..MAX_CHANNELS {
+                                    let n = num_events_arr[ch];
+                                    if n == 0 { continue; }
+
+                                    let events = unsafe { dpp_buf.get_channel_events(ch, n) };
+                                    for evt in events {
+                                        let event_data = Self::x743_dpp_ci_event_to_event_data(
+                                            evt, ch as u8, config.module_id,
+                                        );
+                                        metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+                                        if tx.blocking_send(ReadLoopOutput::Decoded(event_data)).is_err() {
+                                            warn!("ReadLoop channel closed");
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("GetDPPEvents error: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("ReadData error: {} (may be timeout)", e);
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            }
+        }
+
+        // Cleanup
+        if let Some(ref h) = handle {
+            if hw_running {
+                let _ = h.sw_stop_acquisition();
+            }
+        }
+        info!("ReadLoop (x743 DPP-CI) stopped");
+        Ok(())
+    }
+
+    /// Convert a DPP_CI_Event_t to EventData.
+    #[cfg(feature = "x743")]
+    fn x743_dpp_ci_event_to_event_data(
+        event: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_DPP_CI_Event_t,
+        channel: u8,
+        module_id: u8,
+    ) -> decoder::EventData {
+        // TimeTag: 10ns resolution from 100MHz trigger clock (to be verified on hardware)
+        let timestamp_ns = event.TimeTag as f64 * 10.0;
+
+        // Charge: int16_t, use absolute value for energy
+        let energy = (event.Charge as i16).unsigned_abs();
+
+        // Pack Baseline into upper 16 bits of flags
+        let baseline_u16 = (event.Baseline as i16).unsigned_abs() as u32;
+        let flags = baseline_u16 << 16;
+
+        decoder::EventData {
+            timestamp_ns,
+            module: module_id,
+            channel,
+            energy,
+            energy_short: 0,
+            fine_time: 0,
+            flags,
+            waveform: None,
+        }
+    }
+
     /// DecodeLoop task - decodes raw data and publishes via ZMQ
     async fn decode_loop(
         config: ReaderConfig,
@@ -1832,7 +2534,15 @@ impl Reader {
                 DecoderKind::AMax(AMaxDecoder::new(amax_config))
             }
             FirmwareType::X743CI | FirmwareType::X743Std => {
-                unreachable!("x743 uses its own read loop, not the FELib decode pipeline")
+                // x743 only uses the Decoded path (no Raw data to decode).
+                // Create a dummy decoder that won't be called.
+                let psd2_config = Psd2Config {
+                    time_step_ns: 0.3125, // x743 TDC is 5ns but unused here
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 16,
+                };
+                DecoderKind::Psd2(Psd2Decoder::new(psd2_config))
             }
         };
 
@@ -2170,10 +2880,47 @@ impl Reader {
         let read_state_rx = self.state_rx.clone();
         let read_metrics = self.metrics.clone();
         let use_opendpp = self.config.firmware == FirmwareType::AMax;
+        let use_x743 = self.config.firmware.is_legacy_api();
 
         let read_state_tx = self.state_tx.clone();
         let read_handle = tokio::task::spawn_blocking(move || {
-            if use_opendpp {
+            if use_x743 {
+                #[cfg(feature = "x743")]
+                {
+                    if read_config.firmware == FirmwareType::X743CI {
+                        info!("Using CAENDigitizer Library for V1743 DPP-CI");
+                        Self::read_loop_x743_ci(
+                            read_config,
+                            data_tx,
+                            read_state_rx,
+                            read_state_tx,
+                            read_metrics,
+                            read_shutdown_clone,
+                            request_rx,
+                            hw_state_for_read,
+                        )
+                    } else {
+                        info!("Using CAENDigitizer Library for V1743 Standard");
+                        Self::read_loop_x743_std(
+                            read_config,
+                            data_tx,
+                            read_state_rx,
+                            read_state_tx,
+                            read_metrics,
+                            read_shutdown_clone,
+                            request_rx,
+                            hw_state_for_read,
+                        )
+                    }
+                }
+                #[cfg(not(feature = "x743"))]
+                {
+                    error!("x743 firmware selected but 'x743' feature not enabled");
+                    Err(ReaderError::Config(
+                        "x743 feature not enabled at compile time".to_string(),
+                    ))
+                }
+            } else if use_opendpp {
                 info!("Using OpenDPP endpoint for AMax firmware");
                 Self::read_loop_opendpp(
                     read_config,

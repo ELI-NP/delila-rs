@@ -38,6 +38,7 @@ services:
     container_name: delila_influxdb
     restart: unless-stopped
     user: "${DAO_UID:-1000}:${DAO_GID:-1000}"
+    stop_grace_period: 30s
     ports:
       - "8086:8181"
     volumes:
@@ -71,7 +72,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: delila
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./data/grafana:/var/lib/grafana

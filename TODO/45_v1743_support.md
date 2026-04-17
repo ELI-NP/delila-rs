@@ -5,7 +5,10 @@
 **設計書:** `docs/plans/x743_integration.md` (2026-02-19)
 **リファレンス:**
 - `legacy/UM2750_V1743_User_Manual_rev5.pdf` (Rev.5, 2025-05-26, FW 4.29_2.24)
+- `legacy/UM1935_CAENDigitizer_U_&_R_Manual_rev17.pdf` (Rev.17, CAENDigitizer Library API)
 - `legacy/caenwavedemo_x743-1.2.1/` (CAEN WaveDemo ソース)
+- `docs/x743_dpp_ci_parameters.md` — **Charge Mode パラメータリファレンス + 実機テスト結果** (2026-04-15)
+- `src/bin/x743_ci_probe.rs` — API 互換性テストツール
 
 ---
 
@@ -261,11 +264,11 @@ typedef struct {
 
 ## 6. 未確認事項 (実機テストで確認)
 
-1. DPP_CI モードの `CAEN_DGTZ_X743_EVENT_t` 出力内容 (WaveDemo は STANDARD のみ)
-2. `PosEdgeTimeStamp` / `NegEdgeTimeStamp` の DPP_CI 時の値
-3. libCAENDigitizer.so が 172.18.4.147 にインストールされているか
+1. ~~DPP_CI モードの `CAEN_DGTZ_X743_EVENT_t` 出力内容~~ → **確認済み** (x743_ci_probe で検証。Standard パスで Charge/Baseline/Peak/TDC 出力)
+2. `PosEdgeTimeStamp` / `NegEdgeTimeStamp` の Charge Mode 時の値
+3. ~~libCAENDigitizer.so が 172.18.4.147 にインストールされているか~~ → **確認済み** (Phase 1 で接続成功)
 4. Charge 値の単位と範囲 (23-bit 2の補数, pC)
-5. V1743 実機の FW バージョンと CONET/USB 接続方式
+5. ~~V1743 実機の FW バージョンと CONET/USB 接続方式~~ → **確認済み** (VX1743 SN:25, ROC 04.29, AMC 1.02.24, Optical Link)
 
 ---
 

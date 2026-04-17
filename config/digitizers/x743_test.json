@@ -1,0 +1,32 @@
+{
+  "digitizer_id": 0,
+  "name": "V1743 CI Test (VX1743 SN:25)",
+  "firmware": "X743CI",
+  "serial_number": "25",
+  "model": "VX1743",
+  "num_channels": 16,
+  "is_master": false,
+  "board": {},
+  "channel_defaults": {
+    "enabled": "True",
+    "dc_offset": 50.0,
+    "trigger_threshold": 3000
+  },
+  "x743": {
+    "link_type": "optical",
+    "link_num": 0,
+    "conet_node": 0,
+    "vme_base_address": 0,
+    "sampling_frequency": "3.2ghz",
+    "correction_level": "all",
+    "record_length": 256,
+    "post_trigger_size": 20,
+    "max_num_events_blt": 1000,
+    "io_level": "nim",
+    "trigger_source": "external",
+    "group_enable_mask": 255,
+    "pulse_gen_enabled": false,
+    "pulse_pattern": 65535,
+    "pulse_source": "continuous"
+  }
+}

@@ -8,11 +8,14 @@
 //! All code in this module requires `feature = "x743"`.
 
 mod error;
-mod ffi;
+pub mod ffi;
 mod handle;
 
 pub use error::{DigitizerError, ErrorCode};
 pub use handle::{
     AcqMode, BoardInfo, ConnectionType, EventBuffer, IOLevel, ReadoutBuffer, SamCorrectionLevel,
     SamFrequency, SamPulseSource, TriggerMode, TriggerPolarity, X743Handle,
+    MAX_CHANNELS, MAX_GROUPS, CHANNELS_PER_GROUP,
+    // DPP-CI types
+    DppEventBuffer, SamAcquisitionMode, PulsePolarity, DppAcqMode, DppSaveParam, TriggerLogic,
 };

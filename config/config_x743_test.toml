@@ -1,0 +1,39 @@
+# DELILA DAQ Configuration - V1743 (Charge Integration) Test
+# Hardware: VX1743 (SN:25, SAMLONG 12-bit, 8ch/4groups, Optical Link)
+# Host: 172.18.4.147
+# Usage: ./scripts/start_daq.sh config/config_x743_test.toml
+
+[operator]
+experiment_name = "X743_CI_Test"
+port = 9092
+
+[network]
+# V1743 digitizer (Optical Link via A3818)
+[[network.sources]]
+id = 0
+name = "x743-vx1743"
+type = "x743ci"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+config_file = "config/digitizers/x743_test.json"
+pipeline_order = 1
+
+# Merger
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+# Recorder
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+# Monitor
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

@@ -8,6 +8,7 @@ tools/*/target/
 # Data output files
 /data/
 docker/data/
+docker/.env
 legacy
 
 # Logs
@@ -24,6 +25,7 @@ devtree.json
 
 # CAEN library archives
 external/*.tar
+external/*.tgz
 external/*.tar.gz
 
 # AMax
