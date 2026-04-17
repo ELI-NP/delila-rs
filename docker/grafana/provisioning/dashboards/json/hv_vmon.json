@@ -1,0 +1,194 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "title": "Slot 0 — GL0/GL1/GL2/GL3",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '0' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 1 — GL3/GL4",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '1' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 4 — GL4/GL5/NL2",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '4' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 5 — NL2/NL3/NL5",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '5' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 7 — NL3/NL4",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '7' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 8 — NL4/NL5",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '8' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 11 — NL6/NL7/NL8",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '11' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    },
+    {
+      "title": "Slot 13 — NL2/NL5/NL6",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 56 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": false }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"] }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+        "rawSql": "SELECT time, vmon, name FROM sy5527_hv WHERE time >= $__timeFrom AND time <= $__timeTo AND slot = '13' AND pw = 1 ORDER BY time",
+        "format": "time_series"
+      }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["delila", "hv", "sy5527"],
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "HV VMon (SY5527)",
+  "uid": "sy5527-hv-vmon",
+  "version": 1
+}

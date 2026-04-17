@@ -1,0 +1,17 @@
+# HV Monitor Launcher Configuration
+# Each monitor runs as an independent subprocess with auto-restart.
+
+base_dir: "/home/daq/delila-rs/tools/hv_monitor"
+
+monitors:
+  - name: "N1408"
+    script: "hv_monitor.py"
+    config: "config.yaml"
+    enabled: true
+
+  - name: "SY5527"
+    script: "sy5527_monitor.py"
+    config: "sy5527_config.yaml"
+    enabled: true
+    env:
+      LD_LIBRARY_PATH: "/usr/lib/lise-app/lib"

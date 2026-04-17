@@ -1,0 +1,13 @@
+[Unit]
+Description=HV Monitor Launcher (N1408 + SY5527)
+After=network.target
+
+[Service]
+User=daq
+WorkingDirectory=/home/daq/delila-rs/tools/hv_monitor
+ExecStart=/usr/bin/python3 -u hv_launcher.py --config launcher_config.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

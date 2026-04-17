@@ -1,0 +1,15 @@
+# SY5527 HV Monitor Configuration
+hv_host: "172.18.5.215"
+hv_username: "admin"
+hv_password: "eli-np"
+lib_path: "/usr/lib64/libcaenhvwrapper.so"
+
+# Active slots in the crate
+slots: [0, 1, 4, 5, 7, 8, 10, 11, 13, 14]
+channels_per_slot: 12
+
+# Polling interval (seconds)
+poll_interval_sec: 5.0
+
+# InfluxDB write endpoint
+influx_url: "http://localhost:8086/api/v3/write_lp?db=delila"
