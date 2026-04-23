@@ -183,20 +183,23 @@ impl Default for Psd1Config {
 pub struct Psd1Decoder {
     config: Psd1Config,
     last_aggregate_counter: u32,
-    /// TimestampTracker for SW Fine TS rollover handling
-    ts_tracker: super::common::TimestampTracker,
-    /// Current extended board time (updated per board aggregate)
+    /// 32-bit Board Aggregate TimeTag rollover tracker. Pure modulo arithmetic
+    /// — no host-clock dependency. Replaced the earlier `TimestampTracker`
+    /// whose `Instant`-based drift safety net mis-fired on startup latency
+    /// (measured on DT5730 @ 147, 2026-04-23). See
+    /// `memory/layering_principle_clock_sync.md`.
+    tracker: super::rollover::RolloverTracker,
+    /// Current extended board time in 2 ns ticks (updated per board aggregate).
     extended_board_time: u64,
 }
 
 impl Psd1Decoder {
     /// Create a new PSD1 decoder with given configuration
     pub fn new(config: Psd1Config) -> Self {
-        let time_step = config.time_step_ns;
         Self {
             config,
             last_aggregate_counter: 0,
-            ts_tracker: super::common::TimestampTracker::new(time_step),
+            tracker: super::rollover::RolloverTracker::new(32),
             extended_board_time: 0,
         }
     }
@@ -211,10 +214,11 @@ impl Psd1Decoder {
         self.config.dump_enabled = enabled;
     }
 
-    /// Reset state for a new run (required for SW Fine TS rollover tracking)
+    /// Reset state for a new run. Must be called when the hardware counter is
+    /// known to have been cleared (CAEN SW Start Acquisition).
     pub fn reset_for_new_run(&mut self) {
         self.last_aggregate_counter = 0;
-        self.ts_tracker.reset();
+        self.tracker.reset();
         self.extended_board_time = 0;
     }
 
@@ -327,11 +331,25 @@ impl Psd1Decoder {
         }
         self.last_aggregate_counter = header.aggregate_counter;
 
-        // Update TimestampTracker with board_time_tag (for SW Fine TS rollover handling)
-        let host_now = std::time::Instant::now();
-        self.extended_board_time =
-            self.ts_tracker
-                .update_board_time(header.board_time_tag, host_now);
+        // Extend the 32-bit board_time_tag to 64-bit ticks via pure modulo
+        // rollover tracking. On the very first event after reset the tracker
+        // seeds prev_raw unconditionally; on later events Underflow is only
+        // possible if the same btt value jumps backward by more than half a
+        // period, which should not happen at production rates. If it does, we
+        // fall back to the previous extended value rather than poisoning
+        // downstream sort invariants.
+        let prev_extended = self.extended_board_time;
+        self.extended_board_time = self
+            .tracker
+            .extend(header.board_time_tag as u64)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    btt = header.board_time_tag,
+                    error = ?e,
+                    "PSD1 rollover tracker underflow — falling back to previous extended time"
+                );
+                prev_extended
+            });
 
         if header.board_fail && self.config.dump_enabled {
             println!("[PSD1] Board fail bit set!");
@@ -403,7 +421,7 @@ impl Psd1Decoder {
     // -----------------------------------------------------------------------
 
     fn decode_dual_channel_block(
-        &self,
+        &mut self,
         data: &[u8],
         offset: &mut usize,
         pair_index: u8,
@@ -476,7 +494,7 @@ impl Psd1Decoder {
     // -----------------------------------------------------------------------
 
     fn decode_event(
-        &self,
+        &mut self,
         data: &[u8],
         offset: &mut usize,
         ch_header: &DualChannelHeader,
@@ -553,10 +571,14 @@ impl Psd1Decoder {
 
         // Calculate timestamp based on mode
         let timestamp_ns = if let Some(frac) = sw_fine_fraction {
-            // SW Fine TS: use TimestampTracker for rollover-safe coarse time
-            let full_ttt = self
-                .ts_tracker
-                .reconstruct_ttt(self.extended_board_time, trigger_time_tag);
+            // SW Fine TS: reconstruct the 31-bit event TTT against the
+            // 32-bit BoardAggregate context so roll-overs line up. The
+            // fraction contributes a sub-tick offset.
+            let full_ttt = self.tracker.reconstruct_subcounter(
+                self.extended_board_time,
+                trigger_time_tag as u64,
+                31,
+            );
             (full_ttt as f64) * self.config.time_step_ns + frac * self.config.time_step_ns
         } else {
             calculate_timestamp(&self.config, trigger_time_tag, extended_time, fine_time)
@@ -1765,5 +1787,69 @@ mod tests {
     #[test]
     fn test_constants_header_type() {
         assert_eq!(constants::board_header::TYPE_DATA, 0xA);
+    }
+
+    // -----------------------------------------------------------------------
+    // Rollover tracker integration (Step 3-6)
+    // -----------------------------------------------------------------------
+    //
+    // Decoder-level assertions; exhaustive rollover semantics are covered by
+    // unit tests in `src/reader/decoder/rollover.rs`.
+
+    /// Build a minimal 1-event aggregate with a specific `board_time_tag`.
+    fn make_aggregate_with_btt(btt: u32) -> Vec<u8> {
+        let ch_flags = DualChFlags::default();
+        let ch_size = 2 + 3; // header + 1 event (time + extras + charge)
+        let total_size = 4 + ch_size;
+
+        let mut buf = Vec::new();
+        // Board header word 0: type=0xA + size
+        push_u32(&mut buf, (0xA << 28) | (total_size as u32 & 0x0FFF_FFFF));
+        // Word 1: board_id + mask (0x01 → pair 0)
+        push_u32(&mut buf, 0x01);
+        // Word 2: aggregate counter (arbitrary)
+        push_u32(&mut buf, 1);
+        // Word 3: board_time_tag
+        push_u32(&mut buf, btt);
+
+        buf.extend(make_dual_channel_header(ch_size as u32, &ch_flags));
+        buf.extend(make_event(1000, false, 0, 0, 0, 100, 50));
+        buf
+    }
+
+    /// Feeding a monotonic sequence of board-time-tags must produce a
+    /// monotonically non-decreasing `extended_board_time` and never panic.
+    #[test]
+    fn test_tracker_monotonic_in_epoch() {
+        let mut dec = default_decoder();
+        dec.reset_for_new_run();
+
+        let mut last = 0u64;
+        for btt in [1_000u32, 2_000, 10_000, 100_000, 1_000_000, 10_000_000] {
+            let events = dec.decode(&RawData::new(make_aggregate_with_btt(btt)));
+            assert!(!events.is_empty());
+            assert!(dec.extended_board_time >= last);
+            last = dec.extended_board_time;
+        }
+    }
+
+    /// `reset_for_new_run` must return the decoder to a zero state; a new
+    /// sequence after reset is independent of what came before.
+    #[test]
+    fn test_tracker_resets_cleanly() {
+        let mut dec = default_decoder();
+        dec.reset_for_new_run();
+        for btt in [100u32, 200, 300] {
+            let _ = dec.decode(&RawData::new(make_aggregate_with_btt(btt)));
+        }
+        assert_eq!(dec.extended_board_time, 300);
+
+        dec.reset_for_new_run();
+        assert_eq!(dec.extended_board_time, 0);
+
+        for btt in [50u32, 500, 5_000] {
+            let _ = dec.decode(&RawData::new(make_aggregate_with_btt(btt)));
+        }
+        assert_eq!(dec.extended_board_time, 5_000);
     }
 }

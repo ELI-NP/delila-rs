@@ -1001,7 +1001,7 @@ mod tests {
         assert_eq!(tc.priority(0, 0), 0);
         assert_eq!(tc.coincidence_window_ns, 500.0);
         assert_eq!(tc.ac_pairs.get(&(0, 1)), Some(&(1, 0)));
-        assert!(tc.ac_pairs.get(&(0, 0)).is_none()); // no AC
+        assert!(!tc.ac_pairs.contains_key(&(0, 0))); // no AC
     }
 
     #[test]

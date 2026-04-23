@@ -337,7 +337,6 @@ fn test_data_readout(handle: &CaenHandle, decode_enabled: bool) {
                         data: raw_data.data,
                         size: raw_data.size,
                         n_events: raw_data.n_events,
-                        host_receive_time: None,
                     };
                     let events = dec.decode(&decoder_raw);
 

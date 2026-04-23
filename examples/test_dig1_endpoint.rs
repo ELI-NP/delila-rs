@@ -72,7 +72,6 @@ fn main() {
                     data: raw.data[..raw.size].to_vec(),
                     size: raw.size,
                     n_events: 0, // DIG1 doesn't provide this
-                    host_receive_time: None,
                 };
 
                 // Decode

@@ -470,7 +470,6 @@ mod tests {
             data: start_data.to_vec(),
             size: 32,
             n_events: 1,
-            host_receive_time: None,
         };
 
         assert!(matches!(decoder.classify(&raw), DataType::Start));
@@ -523,7 +522,6 @@ mod tests {
             data: event_data.to_vec(),
             size: 32,
             n_events: 1,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);

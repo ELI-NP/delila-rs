@@ -706,7 +706,6 @@ mod tests {
             data: vec![0; 8], // Too small (< 16 bytes = 2 words)
             size: 8,
             n_events: 0,
-            host_receive_time: None,
         };
         assert_eq!(decoder.classify(&raw), DataType::Unknown);
     }
@@ -719,7 +718,6 @@ mod tests {
             data: vec![0; 16],
             size: 16,
             n_events: 0,
-            host_receive_time: None,
         };
         // Not a start/stop signal, so should be Event
         assert_eq!(decoder.classify(&raw), DataType::Event);
@@ -738,7 +736,6 @@ mod tests {
             data,
             size: 24,
             n_events: 0,
-            host_receive_time: None,
         };
         assert_eq!(decoder.classify(&raw), DataType::Stop);
     }
@@ -754,7 +751,6 @@ mod tests {
             data,
             size: 32,
             n_events: 0,
-            host_receive_time: None,
         };
         assert_eq!(decoder.classify(&raw), DataType::Start);
     }
@@ -785,7 +781,6 @@ mod tests {
             data: vec![0; 8], // Too small
             size: 8,
             n_events: 0,
-            host_receive_time: None,
         };
         let events = decoder.decode(&raw);
         assert!(events.is_empty());
@@ -800,7 +795,6 @@ mod tests {
             data,
             size: 24,
             n_events: 0,
-            host_receive_time: None,
         };
         let events = decoder.decode(&raw);
         assert!(events.is_empty());
@@ -815,7 +809,6 @@ mod tests {
             data,
             size: 32,
             n_events: 0,
-            host_receive_time: None,
         };
         let events = decoder.decode(&raw);
         assert!(events.is_empty());
@@ -832,7 +825,6 @@ mod tests {
             data,
             size: 24,
             n_events: 0,
-            host_receive_time: None,
         };
         let events = decoder.decode(&raw);
         assert!(events.is_empty());
@@ -874,7 +866,6 @@ mod tests {
             data,
             size: 24,
             n_events: 1,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -983,7 +974,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 1,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1015,7 +1005,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 1,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1042,7 +1031,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 2,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1066,7 +1054,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 1,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1102,7 +1089,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 2,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1167,7 +1153,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 2,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1253,7 +1238,6 @@ mod tests {
             size: data.len(),
             data,
             n_events: 3,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
@@ -1312,7 +1296,6 @@ mod tests {
             data,
             size: 40,
             n_events: 2,
-            host_receive_time: None,
         };
 
         let events = decoder.decode(&raw);
