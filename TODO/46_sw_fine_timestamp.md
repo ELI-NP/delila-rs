@@ -1,9 +1,10 @@
 # TODO #46: DIG1 Software Fine Timestamp (SW Fine TS)
 
-**Status: PLANNED**
+**Status: IMPLEMENTED (feature live) / tracker migrated in Step 3**
 **Priority: Medium**
 **Related: GitHub Issue #21 (Fine TS)**
 **Created: 2026-04-09**
+**Updated: 2026-04-23** — PSD1/PHA1 に実装済 (`fine_ts_mode=Software` で選択可能)。ロールオーバーは本 TODO で設計した `TimestampTracker` で長期間稼働後、2026-04-23 に汎用 `RolloverTracker` (pure modulo, `Instant` 依存なし) に置換完了 ([TODO/47 Step 3](47_v1743_standard_mode_redesign.md))。本文中の `TimestampTracker` 設計は歴史的記録として残す。
 
 ## 概要
 

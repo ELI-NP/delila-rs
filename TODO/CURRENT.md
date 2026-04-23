@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-04-08
+**Updated:** 2026-04-23
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,7 +15,8 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **1** | [45_v1743_support.md](45_v1743_support.md) | **🔧 Phase 1 完了** | V1743 (SAMLONG 3.2GS/s) サポート — Phase 1: FFI+接続 ✅, Phase 2: DPP_CI 次 |
+| **1** | [47_v1743_standard_mode_redesign.md](47_v1743_standard_mode_redesign.md) | **🎯 Step 1-3 完了 (2026-04-23) / Step 4-7 (多台同期 + S1 較正 + 5 ps RMS) はハードウェア拡張待ち** | V1743 Standard mode 再設計 — RolloverTracker 統一 + V1743 組込 + PSD1/PHA1 移行 + 旧 TimestampTracker 削除 + **95 min 長時間ランで 40-bit TDC rollover 通過確認** (120M events) |
+| 1-old | [45_v1743_support.md](45_v1743_support.md) | **⚠️ Phase 2 は 47 に移管** | V1743 Phase 1 (FFI+接続) ✅。Phase 2 以降は 47 へ |
 | **2** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **✅ MVP達成** | 3月MVP: 全Goal達成 — 全FW DAQ稼働 + Grafana + ELOG |
 | **3** | [26_multi_digitizer_scaling.md](26_multi_digitizer_scaling.md) | **📋 計画中** | 10+ デジタイザ対応スケーリング — ポストMVP |
 | **4** | [24_l2_filter_implementation.md](24_l2_filter_implementation.md) | **📋 計画中** | L2 Filter — 3-4月実験では不要。将来タスク |
@@ -37,6 +38,14 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| — | 2026-04-23 夜 | **V1743 Step 3 完全完了**: 95 分連続ラン (run 6001) で 40-bit TDC rollover (91.63 min) 通過確認。120M events, rollover_count 0→1, backward=0, ERROR=0。副次発見: パルサー vs V1743 水晶の温度由来 ~65 min 周期うねり (~1500 ppm pp)、1D Δt 分布の "2 peak" の原因。V1743 energy は flat-top broadening あるが timing 用途なので simple amplitude 維持の判断。メモリ: [rollover_tracker_validated_2026-04-23.md](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/rollover_tracker_validated_2026-04-23.md), [v1743_pulser_clock_beat.md](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/v1743_pulser_clock_beat.md), [v1743_energy_known_limitation.md](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/v1743_energy_known_limitation.md) |
+| — | 2026-04-23 昼 | **V1743 Step 3-6 (PSD1/PHA1 shadow 検証 + 旧 TimestampTracker 完全削除)**: 本番 DT5730 で旧 `TimestampTracker` の host-clock safety net が startup latency を "drift" と誤解釈して off-by-one を注入する実測証拠を shadow mode で取得。旧実装を削除し、PSD1/PHA1 を新 `RolloverTracker` 単独に移行。151 単体テスト緑、実機 safety_net_fires=0。設計原則: [layering_principle_clock_sync.md](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/layering_principle_clock_sync.md) — ソフト時刻で hw 時刻を補正しない |
+| — | 2026-04-23 朝 | **V1743 Step 3 (RolloverTracker 実装 + 組込)**: `src/reader/decoder/rollover.rs` 新規 (21 単体テスト + proptest)。V1743 `x743_std_event_to_event_data` に per-group 8 tracker 組込、SW Start で reset。実機 run3001 = 421 MB, 21 kHz 100%, underflow ログ 0 件 |
+| — | 2026-04-22 夕 | **V1743 Step 2 実機確認**: SN:25 @ 172.18.4.147 で 10 kHz パルサ 100% 取得。record_length=256, post_trigger=40, threshold=45874 (-0.5V) 確定。波形 peak@33ns/80ns窓、E ヒスト FWHM 8 bins、run2001 = 448MB |
+| — | 2026-04-22 夕 | **V1743 Step 3 設計確定**: Rollover tracker 統一設計 ([docs/plans/rollover_tracker_design.md](../docs/plans/rollover_tracker_design.md))。Gemini 2.5 Pro 協議反映: u64 内部/modulo 演算/per-group 4 tracker/late arrival 対応。SW Fine TS と共用。明日実装着手可 |
+| — | 2026-04-22 | **V1743 Step 2 実装完了**: `x743_std_event_to_event_data` を Standard mode 専用に刷新 — `timestamp_ns = TDC*5 + PosEdge/NegEdge ns` 合成、`fine_time` 10-bit packing、`energy = Charge*scale + offset` クランプ、`save_waveform` で `DataChannel[ch]` → i16 コピー、`X743DecodeParams` を ReadLoop にキャッシュ、`X743Config` に `fine_time_source`/`energy_source`/`energy_scale`/`energy_offset`/`save_waveform` 追加。ユニットテスト 4 本 (fine_time / neg_edge / energy_clamp / absent_event) 追加。`cargo clippy --features x743 --tests -- -D warnings` OK。**SN:25 実機でのパルサ E スペクトル + TDC 線形性確認は Linux host で要実施** |
+| — | 2026-04-22 | **V1743 Step 1 完了**: DPP-CI (Charge Mode) コード全削除 — `apply_config_dpp_ci`/`read_loop_x743_ci`/`x743_dpp_ci_event_to_event_data` 削除、`X743Config` から `dpp_ci_*`/`pair_*`/`board_*` 除去、`x743_ci_probe` binary 削除、`SourceType::X743CI` → `FirmwareType::X743Std` に warn + マップ。`cargo clippy --features x743 -- -D warnings` OK |
+| — | 2026-04-20 | **V1743 DPP-CI 撤退決定**: CAEN App Note 精読で DPP-CI 実装バグ (x720/x743 構造体ミスマッチ) + 設計限界 (TimeTag 無し) を発見。Standard mode 一本化へ方針転換 (TDC 40-bit + Charge float)。設計書: [x743_standard_mode_design.md](../docs/plans/x743_standard_mode_design.md), TODO: [47](47_v1743_standard_mode_redesign.md) |
 | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | 2026-03-13 | **MVP 達成**: 全FW DAQ稼働 (PSD2+PSD1+PHA1) + Grafana + ELOG自動投稿 |
 | [37_grafana_monitoring.md](37_grafana_monitoring.md) | 2026-03-12 | Grafana モニタリング: InfluxDB v3 Core + Grafana, DAQ Overview + Channel Rate ダッシュボード, 192.168.147.98 デプロイ済 |
 | — | 2026-03-12 | `is_master` 削除: TOML/Operator config から冗長な `is_master` を除去、Reader の `startmode` に一元化 (SSOT)。3MV config Start タイムアウト修正 |
@@ -109,6 +118,8 @@ Claudeセッション開始時に必ず読み込まれます。
 - PHA1 実機稼働 (VX1730B 光リンク, 全FW DAQ完成)
 - ELOG 統合 (Docker + Rust クライアント + Run Stop 自動投稿)
 - A3818 scheduling-while-atomic 修正 (spin_lock→mutex, 76デプロイ済)
+- V1743 Standard mode 単体構成 (VX1743 SN:25, optical link, CFD soft fine time, 95 min long-run で 40-bit TDC rollover 通過確認)
+- RolloverTracker 統一実装 (PSD1/PHA1 SW Fine TS + V1743 TDC を modulo 演算で共通処理, 旧 Instant-ベース TimestampTracker 完全削除)
 
 ---
 
@@ -159,9 +170,9 @@ Claudeセッション開始時に必ず読み込まれます。
 - **現在のフェーズ:** ポスト MVP — 安定運用中、改善・拡張フェーズ
 - **実機確認済み:**
   - VX2730 (Serial: 52621, DPP_PSD2, 32ch, Ethernet, 172.18.4.57)
-  - DT5730B (Serial: 990, DPP_PSD1/PHA1, 16ch, USB)
+  - DT5730B (Serial: 990, DPP_PSD1/PHA1, 16ch, USB) — ライセンス 30 min 制限あり
   - 5x VX1730B (PSD1, 16ch each) + 1x VX2730 (PSD2, 32ch) on 172.18.4.76
-  - VX1743 (Serial: 25, SAMLONG 12-bit, 8ch/4groups, Optical Link) on 172.18.4.147
+  - VX1743 (Serial: 25, SAMLONG 12-bit, 8ch/4groups, Optical Link) on 172.18.4.147 — Standard mode + 95 min long-run 完了 (2026-04-23)
 - **動作環境:** Linux (Ubuntu, Rust 1.93.0) + macOS (クロスマシン統合)
 
 ## Reference Documents

@@ -1,8 +1,15 @@
 # V1743 デジタイザサポート (GitHub #6)
 
+> **⚠️ Phase 2 以降は [47_v1743_standard_mode_redesign.md](47_v1743_standard_mode_redesign.md) に移管 (2026-04-20)**
+>
+> DPP-CI 実装にバグ + 設計限界（TimeTag 無し）が判明。Standard mode 一本化に方針転換。
+> - Phase 1 (FFI + 接続 + Standard mode 基礎): ✅ 本 TODO で完了
+> - Phase 2 以降 (DPP-CI 実装 + 実機検証): ⚠️ 撤退、新 TODO で Standard mode 再設計
+> - 詳細: [docs/plans/x743_standard_mode_design.md](../docs/plans/x743_standard_mode_design.md)
+
 **作成日:** 2026-04-06
-**ステータス:** Phase 1 完了 → Phase 2 実装中
-**設計書:** `docs/plans/x743_integration.md` (2026-02-19)
+**ステータス:** Phase 1 完了 / Phase 2 以降は [47](47_v1743_standard_mode_redesign.md) に置換
+**設計書:** `docs/plans/x743_integration.md` (2026-02-19) + `docs/plans/x743_standard_mode_design.md` (2026-04-20 改訂)
 **リファレンス:**
 - `legacy/UM2750_V1743_User_Manual_rev5.pdf` (Rev.5, 2025-05-26, FW 4.29_2.24)
 - `legacy/UM1935_CAENDigitizer_U_&_R_Manual_rev17.pdf` (Rev.17, CAENDigitizer Library API)
