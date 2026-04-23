@@ -58,7 +58,7 @@
 |------|----|--------|------|
 | `experiment_name` | string | `"DefaultExp"` | 実験名。サーバー側で固定 (UI から変更不可)。ROOT ファイル名などに使用 |
 | `port` | u16 | `9090` | REST API / Web UI の HTTP ポート。Swagger は `http://localhost:PORT/swagger-ui/` |
-| `web_ui_dir` | string | 自動検出 | Angular ビルド済みディレクトリ。省略時 `web/operator-ui/dist/operator-ui/browser/` |
+| `web_ui_dir` | string | 自動検出 | Angular ビルド済みディレクトリ。省略時 `web/operator-ui/dist/operator-ui/browser/`。**`dist/` はリポジトリにコミット済みなので Node.js なしで動く**（UI を書き換えた開発者は `cd web/operator-ui && npm run build` 後に `dist/` も commit）|
 | `configure_timeout_ms` | u64 | `5000` | Configure フェーズのタイムアウト (ms) |
 | `arm_timeout_ms` | u64 | `5000` | Arm フェーズのタイムアウト (ms) |
 | `start_timeout_ms` | u64 | `5000` | Start フェーズのタイムアウト (ms) |
@@ -439,38 +439,113 @@ http_port = 8081
 
 ## 14. デジタイザ URL リファレンス
 
-`digitizer_url` の形式は type によって決まる。
+**権威ソース:** [legacy/GD9764_FELib_User_Guide.pdf](../legacy/GD9764_FELib_User_Guide.pdf) Rev.2 Chap 6
 
-| type | プレフィックス | ライブラリ |
-|------|--------------|------------|
-| `psd1` / `pha1` | `dig1://` | CAENDigitizer (FELib v1 互換) |
-| `psd2` / `amax` | `dig2://` | dig2 (FELib v2) |
-| `x743ci` / `x743std` | (不要) | CAENDigitizer。config_file で接続指定 |
+URL は RFC 3986 形式: `<scheme>://<authority>/<path>?<queries>`。大文字小文字区別なし。
+Query は `&` で連結可。
 
-### dig1:// (USB)
+### 14.1 スキーム早見表
+
+| type | プレフィックス | 実装ライブラリ | 対応世代 |
+|------|--------------|------------|---------|
+| `psd1` / `pha1` | `dig1://` | CAEN Dig1 (FELib v1 compat) | V17xx / VX17xx / DT57xx (FW 1.0) |
+| `psd2` / `amax` | `dig2://` | CAEN Dig2 (FELib v2) | V27xx / VX27xx / DT27xx (FW 2.0) |
+| `x743ci` / `x743std` | **(URL 不要)** | CAENDigitizer 直呼び | V1743 — `[x743]` セクションで接続指定 |
+
+**重要**: デジタイザごとに**同時 1 接続のみ**。`CAEN_FELib_Open()` を別プロセスから呼ぶと
+既存セッションが強制切断される。同一プロセスなら `DeviceAlreadyOpen` が返る。
+
+---
+
+### 14.2 `dig2://` (Digitizer 2.0)
+
+Authority が IP/ホスト名または予約オーソリティ `caen.internal`。
+
+| 接続形態 | URL 例 | 備考 |
+|---|---|---|
+| **Ethernet (IPv4)** | `dig2://192.0.2.1` | 最も標準的。IP 直指定を推奨 |
+| **Ethernet (IPv6)** | `dig2://[2001:db8::1]` | 角括弧必須 |
+| **Ethernet (mDNS)** | `dig2://caendgtz-eth-<pid>` | OS 依存（Linux では `.local` が必要）。非推奨、IP 推奨 |
+| **USB (short form)** | `dig2://caendgtz-usb-<pid>` | `<pid>` = デジタイザ S/N |
+| **USB (`caen.internal`)** | `dig2://caen.internal/usb/<pid>` | 上記の別表記 |
+| **OpenARM (組込 ARM)** | `dig2://caen.internal/openarm` | DT27xx 内蔵 ARM から使用。172.17.0.1 を指定せずこれを使う |
+
+実例:
+```
+dig2://172.18.4.56           # VX2730 on LAN
+dig2://caendgtz-usb-52622    # same box via USB 3.0
+```
+
+---
+
+### 14.3 `dig1://` (Digitizer 1.0)
+
+`path` が **接続タイプ**を表し、CAEN_DGTZ_ConnectionType enum にマップされる。
+Query parameters で接続先を詳細指定。
+
+| path | enum (CAEN_DGTZ_*) | 意味 | Authority |
+|---|---|---|---|
+| `/usb` | `USB` | USB 2.0 直結（V1720 / V1730 USB ポート等） | `caen.internal` |
+| `/optical_link` | `OpticalLink` | A2818 / A3818 PCIe カード + 光リンク (CONET) | `caen.internal` |
+| `/usb_a4818` | `USB_A4818` | USB → A4818 → 光リンク → デジタイザ | `caen.internal` |
+| `/usb_a4818_v2718` | `USB_A4818_V2718` | A4818 → V2718 VME bridge | `caen.internal` |
+| `/usb_a4818_v3718` | `USB_A4818_V3718` | A4818 → V3718 VME bridge | `caen.internal` |
+| `/usb_a4818_v4718` | `USB_A4818_V4718` | A4818 → V4718 VME bridge | `caen.internal` |
+| `/eth_v4718` | `ETH_V4718` | Ethernet → V4718 VME bridge | **V4718 の IP** |
+| `/usb_v4718` | `USB_V4718` | USB → V4718 VME bridge | `caen.internal` |
+
+#### Query parameters
+
+| キー | 用途 | 対応 path |
+|---|---|---|
+| `link_num=<N>` | A3818/A4818/USB のリンク番号。A4818/USB V4718 では PID | `/optical_link`, `/usb`, `/usb_a4818*`, `/usb_v4718` |
+| `conet_node=<N>` | CONET デイジーチェーンのノード番号 (0–7) | `/optical_link`, A4818 bridge 系 |
+| `vme_base_address=<addr>` | VME ベースアドレス (0x 形式 OK) | VME bridge 経由時 (V17xx VME モジュール) |
+
+#### URL 例
 
 ```
-dig1://caen.internal/usb?link_num=<N>
+# USB ダイレクト（DT5730B, V1720 USB ポート等）
+dig1://caen.internal/usb?link_num=0
+
+# A3818 PCIe 光リンク、リンク 0、デイジーチェーンの 0 ノード目
+dig1://caen.internal/optical_link?link_num=0&conet_node=0
+
+# A3818 リンク 2 → V3718 VME bridge → VME アドレス 0x32100000 の V1730
+dig1://caen.internal/optical_link?link_num=2&vme_base_address=0x32100000
+
+# A4818 USB bridge 経由で光リンク先のデジタイザ
+dig1://caen.internal/usb_a4818?link_num=<A4818_PID>&conet_node=0
+
+# V4718 Ethernet bridge (IP 10.1.2.3) 経由で VME V1730
+dig1://10.1.2.3/eth_v4718?vme_base_address=0x00100000
+
+# V4718 USB bridge 経由
+dig1://caen.internal/usb_v4718?link_num=<V4718_PID>&vme_base_address=0x00100000
 ```
 
-- `link_num` — USB デバイス番号 (0 始まり)
+---
 
-### dig1:// (光リンク / A3818)
+### 14.4 接続方式早見チャート
 
-```
-dig1://caen.internal/optical_link?link_num=<N>&conet_node=<M>
-```
+| ハードウェア | 推奨 URL |
+|---|---|
+| **DT5730B (USB)** | `dig1://caen.internal/usb?link_num=0` |
+| **V1730 (光リンク + A3818 PCIe)** | `dig1://caen.internal/optical_link?link_num=<port>&conet_node=<node>` |
+| **VX1730B (光リンク + A3818)** | 同上 |
+| **V1730 VME モジュール (A3818 光 → V3718 VME)** | `dig1://caen.internal/optical_link?link_num=<port>&vme_base_address=<addr>` |
+| **VX2730 (Ethernet)** | `dig2://<IP>` |
+| **VX2730 (USB 3.0)** | `dig2://caendgtz-usb-<SN>` |
+| **DT2730 OpenARM 組込** | `dig2://caen.internal/openarm` |
+| **V1743** (DPP-CI/Standard) | `digitizer_url` 不使用 — `[x743]` セクションで `link_num` / `conet_node` / `connection_type` 指定 |
 
-- `link_num` — A3818 のポート番号 (0–3)
-- `conet_node` — デイジーチェーン上のノード番号 (0–7)
+### 14.5 注意事項
 
-### dig2:// (Ethernet)
-
-```
-dig2://<IP-or-hostname>
-```
-
-例: `dig2://172.18.4.56`
+- **1 接続/デジタイザ**: 既に接続済みのデジタイザに別プロセスから `CAEN_FELib_Open()` すると既存側が切断される。これが不意に発生すると DAQ が Error 状態になる
+- **`caen.internal` は予約オーソリティ**: 実際の IP やホスト名ではない。USB / 光 / VME bridge 系の「非ネットワーク」接続時のプレースホルダー
+- **A3818 ドライバ**: Linux ではカーネルモジュール (`a3818.ko`) と `/etc/udev/rules.d/` ルールが必要。DELILA では `v1.6.12-delila1` パッチ版を使用（→ `docs/a3818_driver_analysis.md`）
+- **Ethernet デジタイザの検索**: mDNS (`caendgtz-eth-<pid>`) は OS 依存で動かないことがある。**IP 直指定が最も確実**
+- **大文字小文字**: URL は区別なし（`DIG2://` も `dig2://` も同じ）
 
 ---
 

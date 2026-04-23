@@ -58,7 +58,7 @@ The startup script iterates over `[[network.sources]]` and launches either an em
 |-----|------|---------|-------------|
 | `experiment_name` | string | `"DefaultExp"` | Experiment name. Server-authoritative (not editable from UI). Used for ROOT filenames, etc. |
 | `port` | u16 | `9090` | HTTP port for REST API / Web UI. Swagger at `http://localhost:PORT/swagger-ui/` |
-| `web_ui_dir` | string | auto-detect | Directory with built Angular UI. If omitted, uses `web/operator-ui/dist/operator-ui/browser/` |
+| `web_ui_dir` | string | auto-detect | Directory with built Angular UI. If omitted, uses `web/operator-ui/dist/operator-ui/browser/`. **`dist/` is committed to this repo — no Node.js needed on deploy targets.** Developers who modify UI `src/` must rebuild (`cd web/operator-ui && npm run build`) and commit `dist/` together. |
 | `configure_timeout_ms` | u64 | `5000` | Timeout for the Configure phase (ms) |
 | `arm_timeout_ms` | u64 | `5000` | Timeout for the Arm phase (ms) |
 | `start_timeout_ms` | u64 | `5000` | Timeout for the Start phase (ms) |
@@ -439,38 +439,114 @@ Startup:
 
 ## 14. Digitizer URL Reference
 
-The format of `digitizer_url` depends on `type`.
+**Authoritative source:** [legacy/GD9764_FELib_User_Guide.pdf](../legacy/GD9764_FELib_User_Guide.pdf) Rev.2 Chapter 6
 
-| type | Prefix | Library |
-|------|--------|---------|
-| `psd1` / `pha1` | `dig1://` | CAENDigitizer (FELib v1 compatible) |
-| `psd2` / `amax` | `dig2://` | dig2 (FELib v2) |
-| `x743ci` / `x743std` | (not needed) | CAENDigitizer. Connection specified in config_file |
+URLs follow RFC 3986: `<scheme>://<authority>/<path>?<queries>`. Case-insensitive.
+Multiple queries are joined with `&`.
 
-### dig1:// (USB)
+### 14.1 Scheme Overview
+
+| type | Prefix | Implementing library | Supported hardware |
+|------|--------|---------|---------|
+| `psd1` / `pha1` | `dig1://` | CAEN Dig1 (FELib v1 compat) | V17xx / VX17xx / DT57xx (FW 1.0) |
+| `psd2` / `amax` | `dig2://` | CAEN Dig2 (FELib v2) | V27xx / VX27xx / DT27xx (FW 2.0) |
+| `x743ci` / `x743std` | **(no URL)** | CAENDigitizer (direct) | V1743 — connection set in `[x743]` section |
+
+**Important:** Only **one connection per digitizer** at a time. `CAEN_FELib_Open()`
+from another process forcibly disconnects the existing session. Within the same process,
+`DeviceAlreadyOpen` is returned.
+
+---
+
+### 14.2 `dig2://` (Digitizer 2.0)
+
+Authority is an IP / hostname or the reserved `caen.internal`.
+
+| Connection | URL example | Notes |
+|---|---|---|
+| **Ethernet (IPv4)** | `dig2://192.0.2.1` | Most common. Prefer explicit IP |
+| **Ethernet (IPv6)** | `dig2://[2001:db8::1]` | Brackets required |
+| **Ethernet (mDNS)** | `dig2://caendgtz-eth-<pid>` | OS-dependent (Linux needs `.local`). Not recommended |
+| **USB (short form)** | `dig2://caendgtz-usb-<pid>` | `<pid>` = device S/N |
+| **USB (`caen.internal`)** | `dig2://caen.internal/usb/<pid>` | Alternative form |
+| **OpenARM (embedded ARM)** | `dig2://caen.internal/openarm` | Used from DT27xx on-board ARM instead of 172.17.0.1 |
+
+Examples:
+```
+dig2://172.18.4.56           # VX2730 on LAN
+dig2://caendgtz-usb-52622    # same box via USB 3.0
+```
+
+---
+
+### 14.3 `dig1://` (Digitizer 1.0)
+
+The `path` encodes the **connection type**, mapping to `CAEN_DGTZ_ConnectionType` enum.
+Query parameters specify the target.
+
+| Path | enum (CAEN_DGTZ_*) | Meaning | Authority |
+|---|---|---|---|
+| `/usb` | `USB` | Direct USB 2.0 (V1720 / V1730 USB port, etc.) | `caen.internal` |
+| `/optical_link` | `OpticalLink` | A2818 / A3818 PCIe + optical CONET | `caen.internal` |
+| `/usb_a4818` | `USB_A4818` | USB → A4818 → optical → digitizer | `caen.internal` |
+| `/usb_a4818_v2718` | `USB_A4818_V2718` | A4818 → V2718 VME bridge | `caen.internal` |
+| `/usb_a4818_v3718` | `USB_A4818_V3718` | A4818 → V3718 VME bridge | `caen.internal` |
+| `/usb_a4818_v4718` | `USB_A4818_V4718` | A4818 → V4718 VME bridge | `caen.internal` |
+| `/eth_v4718` | `ETH_V4718` | Ethernet → V4718 VME bridge | **V4718's IP** |
+| `/usb_v4718` | `USB_V4718` | USB → V4718 VME bridge | `caen.internal` |
+
+#### Query parameters
+
+| Key | Meaning | Applicable paths |
+|---|---|---|
+| `link_num=<N>` | A3818/A4818/USB link number. For A4818 / USB V4718: the bridge's PID | `/optical_link`, `/usb`, `/usb_a4818*`, `/usb_v4718` |
+| `conet_node=<N>` | CONET daisy-chain node number (0–7) | `/optical_link`, A4818 bridges |
+| `vme_base_address=<addr>` | VME base address (0x-prefixed OK) | VME bridge paths (V17xx VME modules) |
+
+#### URL examples
 
 ```
-dig1://caen.internal/usb?link_num=<N>
+# Direct USB (DT5730B, V1720 USB port, ...)
+dig1://caen.internal/usb?link_num=0
+
+# A3818 PCIe optical, port 0, first node on daisy chain
+dig1://caen.internal/optical_link?link_num=0&conet_node=0
+
+# A3818 port 2 → V3718 VME bridge → V1730 at VME base 0x32100000
+dig1://caen.internal/optical_link?link_num=2&vme_base_address=0x32100000
+
+# A4818 USB bridge to an optical digitizer
+dig1://caen.internal/usb_a4818?link_num=<A4818_PID>&conet_node=0
+
+# V4718 Ethernet bridge (IP 10.1.2.3) → VME V1730
+dig1://10.1.2.3/eth_v4718?vme_base_address=0x00100000
+
+# V4718 USB bridge
+dig1://caen.internal/usb_v4718?link_num=<V4718_PID>&vme_base_address=0x00100000
 ```
 
-- `link_num` — USB device number (0-based)
+---
 
-### dig1:// (Optical link / A3818)
+### 14.4 Connection Quick Reference
 
-```
-dig1://caen.internal/optical_link?link_num=<N>&conet_node=<M>
-```
+| Hardware | Recommended URL |
+|---|---|
+| **DT5730B (USB)** | `dig1://caen.internal/usb?link_num=0` |
+| **V1730 (optical + A3818 PCIe)** | `dig1://caen.internal/optical_link?link_num=<port>&conet_node=<node>` |
+| **VX1730B (optical + A3818)** | same |
+| **V1730 VME module (A3818 → V3718 VME)** | `dig1://caen.internal/optical_link?link_num=<port>&vme_base_address=<addr>` |
+| **VX2730 (Ethernet)** | `dig2://<IP>` |
+| **VX2730 (USB 3.0)** | `dig2://caendgtz-usb-<SN>` |
+| **DT2730 OpenARM embedded** | `dig2://caen.internal/openarm` |
+| **V1743** (DPP-CI/Standard) | `digitizer_url` unused — set `link_num` / `conet_node` / `connection_type` in `[x743]` |
 
-- `link_num` — A3818 port number (0–3)
-- `conet_node` — node number on the daisy chain (0–7)
+### 14.5 Notes
 
-### dig2:// (Ethernet)
-
-```
-dig2://<IP-or-hostname>
-```
-
-Example: `dig2://172.18.4.56`
+- **One connection per digitizer**: If another process `CAEN_FELib_Open()`s an already-connected board, the existing side is disconnected. Can cause unexpected DAQ Error states
+- **`caen.internal` is a reserved authority**: not a real IP/hostname. Used as a placeholder for non-network connections (USB / optical / VME bridges)
+- **A3818 driver**: on Linux requires kernel module (`a3818.ko`) and `/etc/udev/rules.d/`. DELILA uses patched `v1.6.12-delila1` (see `docs/a3818_driver_analysis.md`)
+- **Ethernet digitizer discovery**: mDNS (`caendgtz-eth-<pid>`) is OS-dependent and may not work. Prefer direct IP
+- **Case sensitivity**: URLs are NOT case-sensitive (`DIG2://` == `dig2://`)
 
 ---
 
