@@ -1,59 +1,81 @@
 # OperatorUi
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 20.2.0.
+Angular 20 standalone app that serves as the DELILA-rs Operator control panel.
+Built by `@angular/build:application`, 3.2 GSa/s DAQ control + Run history + Tune Up + Settings.
 
-## Development server
+## Deployment policy (IMPORTANT)
 
-To start a local development server, run:
+**`dist/` is committed to this repository.** Users who only want to run DELILA do **not** need Node.js.
+Rust (`cargo build --release --bin operator`) serves the pre-built UI via `ServeDir` at `web/operator-ui/dist/operator-ui/browser/`.
 
+**Developers who modify `src/` must rebuild and commit `dist/` together**:
+
+```bash
+cd web/operator-ui
+npm install          # once, or when package.json changes
+npm run build        # ng build (production config, outputHashing: "media")
+git add dist/
+git commit ...
+```
+
+Then redeploy with the usual rsync. No Node.js needed on the lab machine.
+
+**Stable filenames:** entry chunks (`main.js`, `polyfills.js`, `styles.css`, `index.html`) are
+hash-free. Lazy chunks keep content-based hashes (`chunk-XXXXXXXX.js`), so they only change
+when their content actually changes — git diffs stay clean.
+
+---
+
+## Development
+
+### Dev server (hot reload)
 ```bash
 ng serve
 ```
+http://localhost:4200/ — auto-reloads on file change. Proxy to Operator backend is configured
+in `proxy.conf.json` (default target `http://localhost:9090`).
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+### Build (for commit/deploy)
+```bash
+npm run build
+```
+Output: `dist/operator-ui/browser/` (~2.6 MB). **Commit this directory.**
 
-## Code scaffolding
+### Watch mode (dev build + rebuild on change)
+```bash
+npm run watch
+```
 
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
-
+### Code scaffolding
 ```bash
 ng generate component component-name
 ```
+For a complete list, run `ng generate --help`.
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
-
+### Lint
 ```bash
-ng generate --help
+npm run lint
 ```
 
-## Building
-
-To build the project run:
-
+### Tests
 ```bash
-ng build
+npm test        # Karma unit tests (not currently used in CI)
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+---
 
-## Running unit tests
+## Deployment pre-check (optional CI task)
 
-To execute unit tests with the [Karma](https://karma-runner.github.io) test runner, use the following command:
-
+To verify `dist/` is in sync with `src/`, run `ng build` and diff — any output means the
+committer forgot to rebuild:
 ```bash
-ng test
+npm run build && git diff --exit-code dist/
 ```
 
-## Running end-to-end tests
+---
 
-For end-to-end (e2e) testing, run:
+## Links
 
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+- [Angular CLI Overview](https://angular.dev/tools/cli)
+- DELILA-rs [CLAUDE.md](../../CLAUDE.md) — project overview and conventions
+- Operator backend: [src/bin/operator.rs](../../src/bin/operator.rs)

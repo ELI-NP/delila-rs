@@ -40,6 +40,11 @@ Rust 2021 + tokio + tmq (ZMQ) + serde/rmp-serde (MessagePack) + axum (REST) + An
 - `Result<T, E>` + `?` で伝播。`.unwrap()` 禁止（production）
 - `cargo fmt && cargo clippy -- -D warnings && cargo test` をコミット前に通す
 
+## Frontend Deployment Policy
+- **`web/operator-ui/dist/` はリポジトリにコミット済み**。ユーザーは Rust のみでデプロイ可能、Node.js 不要
+- UI (`web/operator-ui/src/`) を変更した開発者は `cd web/operator-ui && npm run build` → `dist/` も同じ commit に含める
+- CI/pre-commit でチェックする場合は `git diff --exit-code dist/` で検証可能
+
 ## System Testing
 | Command | Description |
 |---------|-------------|

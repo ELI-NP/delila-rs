@@ -1,7 +1,9 @@
 # See https://docs.github.com/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
 # Compiled output
-/dist
+# NOTE: dist/ is intentionally COMMITTED so users can deploy without Node.js.
+# Rebuild with `npm run build` after modifying src/ — see README.md.
+# /dist
 /tmp
 /out-tsc
 /bazel-out
