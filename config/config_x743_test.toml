@@ -1,10 +1,36 @@
-# DELILA DAQ Configuration - V1743 (Charge Integration) Test
-# Hardware: VX1743 (SN:25, SAMLONG 12-bit, 8ch/4groups, Optical Link)
+# DELILA DAQ Configuration - V1743 Standard Mode Test
+# Hardware: VX1743 (SN:25, SAMLONG 12-bit, 16ch/8groups, Optical Link)
 # Host: 172.18.4.147
 # Usage: ./scripts/start_daq.sh config/config_x743_test.toml
+#
+# Verified pulser setup (2026-04-22, pulser 10 kHz):
+#   - Negative pulser on ch0 → 10 kHz @ 100% captured
+#   - Only group 0 enabled (group_enable_mask=1) → acquires ch0 + ch1
+#   - ch0 self-triggered, polarity=Negative → FallingEdge discriminator
+#   - ch1 inactive (self_trigger=False) — ignore in the rate/spectrum
+#   - record_length=256 samples @ 3.2 GHz = 80 ns window
+#   - post_trigger_size=40 → pulse peak lands inside the 256-sample window
+#   - trigger_threshold=45874 (≈ -0.5 V) — pulse amplitude ~0.9 V negative
+#   - fine_time_source in JSON is DEPRECATED; fine time is always computed by
+#     the Rust-side software CFD (CAEN lib does not populate PosEdge in Standard mode)
+#   - energy_source = "amplitude" → |peak - baseline| from Rust post-processor
+#   - save_waveform = true while validating the decoder
+#
+# Tuning hints:
+#   - record_length (samples) × 0.3125 ns = acquisition window at 3.2 GSa/s.
+#     256 = 80 ns, 1024 = 320 ns. Shorter window = more SRAM buffer depth (manual 10.3).
+#   - post_trigger_size shifts trigger position in the buffer (larger = earlier trigger,
+#     more post-trigger samples captured). Tune so the pulse peak fits inside the window.
+#   - Trigger threshold is a raw 16-bit DAC. WaveDemo conversion
+#     (legacy/wavedemo_test/src/WaveDemo.c:1192, "Inverted Range"):
+#         reg_val = (1.25 - (V_thr + V_dc_offset)) / 2.5 * 65535
+#     V_thr=-0.5V, V_dc_offset=0V → reg_val = 45874.
+#     Lower V_thr = higher DAC code. Range: 0 → +1.25V, 65535 → -1.25V.
+#   - DPP-CI (Charge Mode) was retired 2026-04-20 because its wire format
+#     has no TDC field — see TODO/47_v1743_standard_mode_redesign.md.
 
 [operator]
-experiment_name = "X743_CI_Test"
+experiment_name = "X743_Standard_Test"
 port = 9092
 
 [network]
@@ -12,7 +38,7 @@ port = 9092
 [[network.sources]]
 id = 0
 name = "x743-vx1743"
-type = "x743ci"
+type = "x743std"
 bind = "tcp://*:5555"
 command = "tcp://*:5560"
 config_file = "config/digitizers/x743_test.json"

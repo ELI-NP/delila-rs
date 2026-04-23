@@ -1,7 +1,36 @@
 # V1743 Charge Mode パラメータリファレンス
 
+> **⚠️ SUPERSEDED (2026-04-20)**
+>
+> DPP-CI (Charge Mode) は DELILA では撤退しました。本ドキュメントは記録として保存しています。
+>
+> **決定的根拠:** [UM2750 V1743 User Manual Rev.5](../legacy/UM2750_V1743_User_Manual_rev5.pdf) Fig 10.9
+> "Group Data Format in Charge Mode" より、Charge Mode のワイヤフォーマットは
+> `[REF_CELL_COLUMN | CHARGE]` のみで **TDC が存在しない**。
+> 同マニュアル Sec 10.10.3.1 太字注記が「物理時刻は Standard mode の 40-bit TDC のみ」と明示。
+> 本プロジェクトは時間情報から 2D 位置計算する要件のため、Charge Mode は物理的に使用不可。
+>
+> **撤退理由 (全要約):**
+> 1. **User Manual Fig 10.9 が Charge Mode に TDC 無しと明示** — 位置計算要件を満たせない
+> 2. 実装に構造体ミスマッチバグあり（x720 用 `DPP_CI_Params_t` を x743 に誤流用、`DPP_X743_Params_t` が正解）
+> 3. `DPP_X743_Event_t` は `float Charge; int StartIndexCell;` のみで **TimeTag を持たない** → マルチデジタイザ間時刻相関不可
+> 4. CAEN App Note `docs/Setting_CHARGE_MODE_for_the_x743_modules.pdf` と異なる API 呼び出し順序・構造体を使用
+>
+> **⚠️ 既知の矛盾:** 本ドキュメント §0（2026-04-15 実機 probe 結果）は「DPP_CI 切替後も `DecodeEvent → X743_EVENT_t` で
+> Charge/TDC が取れる」と主張しているが、User Manual Fig 10.9 のワイヤフォーマットに TDC ビットが無い以上、
+> 仮に実機で `X743_EVENT_t.TDC` に値が入っても：
+> - 未初期化メモリ or 前 Run の残骸
+> - 現 FW の undocumented な副作用
+>
+> のいずれかで信頼性なし。**本 probe 結果の TDC 部分は採用しない**。
+>
+> **置換設計:** Standard mode 一本化（`CAEN_DGTZ_X743_GROUP_t.TDC` 40-bit @ 5ns + lib 算出 `Charge` float）
+> - [docs/plans/x743_standard_mode_design.md](plans/x743_standard_mode_design.md)
+> - [TODO/47_v1743_standard_mode_redesign.md](../TODO/47_v1743_standard_mode_redesign.md)
+
 **作成日:** 2026-04-15
 **更新日:** 2026-04-15 — 実機テスト結果反映
+**SUPERSEDED:** 2026-04-20
 **ソース:** UM1935 Rev.17 (CAENDigitizer Library), UM2750 Rev.5 (V1743 User Manual)
 **実機:** VX1743 SN:25, ROC FW 04.29, AMC FW 1.02.24 (Standard FW)
 

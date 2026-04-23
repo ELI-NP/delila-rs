@@ -239,61 +239,53 @@ pub struct X743Config {
     #[serde(default = "X743Config::default_pulse_source")]
     pub pulse_source: String,
 
-    // ---- DPP-CI parameters (used when firmware == X743CI) ----
+    // ---- Event decode parameters (Standard mode) ----
 
-    /// Trigger threshold (LSB, 0-65535). Applied to all channels as default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_threshold: Option<u32>,
+    /// **DEPRECATED** — the CAEN lib does not populate `PosEdgeTimeStamp`
+    /// or `NegEdgeTimeStamp` in V1743 Standard mode (only TDC + waveform),
+    /// so fine timing is always computed by the Rust-side software CFD.
+    /// Kept for TOML backward-compatibility.
+    #[serde(default = "X743Config::default_fine_time_source")]
+    pub fine_time_source: String,
 
-    /// Charge integration gate width (samples)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_gate: Option<u32>,
+    /// Energy source:
+    /// - "amplitude" (default) — `|peak − baseline|` from the Rust post-processor.
+    /// - "charge" — CAEN-lib `Charge` field (always 0 in Standard mode; don't use).
+    /// - "soft" — reserved for a future proper charge-integration implementation.
+    #[serde(default = "X743Config::default_energy_source")]
+    pub energy_source: String,
 
-    /// Gate offset / pre-gate (samples before trigger)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_pgate: Option<u32>,
+    /// Linear scale applied to the amplitude before clamping to u16 energy.
+    #[serde(default = "X743Config::default_energy_scale")]
+    pub energy_scale: f32,
 
-    /// Charge sensitivity: 0=40, 1=160, 2=640, 3=2560 fC/LSB
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_csens: Option<u32>,
+    /// Linear offset applied after `energy_scale`. Final value is clamped to [0, 65535].
+    #[serde(default)]
+    pub energy_offset: f32,
 
-    /// Number of samples for baseline mean: 0=FIXED, 1=8, 2=32, 3=128
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_nsbl: Option<u32>,
+    /// Record a copy of `DataChannel[ch]` as the waveform alongside the event.
+    /// Off by default — 256 float samples × 16 ch is heavy on PC bandwidth.
+    #[serde(default)]
+    pub save_waveform: bool,
 
-    /// Trigger hold-off (samples)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_trgho: Option<u32>,
+    /// Pre-trigger samples averaged for the baseline estimate.
+    #[serde(default = "X743Config::default_baseline_samples")]
+    pub baseline_samples: u32,
 
-    /// Trigger validation acceptance window (samples, for coincidence mode)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_tvaw: Option<u32>,
+    /// Software-CFD delay in samples. For PMT-like pulses (< 10 ns rise time)
+    /// at 3.2 GSa/s, `4` (≈1.25 ns) is a good starting point; shorten for
+    /// faster pulses, lengthen for slower ones.
+    #[serde(default = "X743Config::default_cfd_delay_samples")]
+    pub cfd_delay_samples: u32,
 
-    /// DPP pre-trigger size (samples, applied to all channels)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dpp_ci_pre_trigger: Option<u32>,
+    /// Software-CFD fraction. Typical range 0.2–0.5; `0.3` works well for PMTs.
+    #[serde(default = "X743Config::default_cfd_fraction")]
+    pub cfd_fraction: f32,
 
-    /// Pulse polarity for DPP mode: "positive" or "negative"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pulse_polarity: Option<String>,
-
-    // ---- Trigger logic ----
-
-    /// Pair trigger logic: "or" or "and"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pair_trigger_logic: Option<String>,
-
-    /// Pair coincidence window in ns (for AND mode, >=15, multiple of 5)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pair_coincidence_window: Option<u16>,
-
-    /// Board trigger logic: "or", "and", or "majority"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub board_trigger_logic: Option<String>,
-
-    /// Majority level (0 = at least 1 pair fires)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub board_majority_level: Option<u32>,
+    // DPP-CI (Charge Mode) fields were removed 2026-04-20.
+    // See TODO/47_v1743_standard_mode_redesign.md — Charge Mode wire format has no TDC,
+    // so V1743 is now Standard-mode only. Any legacy dpp_ci_*/pair_*/board_* keys in TOML
+    // are ignored via serde's default-on-unknown behavior.
 }
 
 impl X743Config {
@@ -329,6 +321,24 @@ impl X743Config {
     }
     fn default_pulse_source() -> String {
         "continuous".to_string()
+    }
+    fn default_fine_time_source() -> String {
+        "cfd_soft".to_string()
+    }
+    fn default_energy_source() -> String {
+        "amplitude".to_string()
+    }
+    fn default_energy_scale() -> f32 {
+        1.0
+    }
+    fn default_baseline_samples() -> u32 {
+        32
+    }
+    fn default_cfd_delay_samples() -> u32 {
+        4
+    }
+    fn default_cfd_fraction() -> f32 {
+        0.3
     }
 }
 

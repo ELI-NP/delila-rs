@@ -1,16 +1,26 @@
 {
   "digitizer_id": 0,
-  "name": "V1743 CI Test (VX1743 SN:25)",
-  "firmware": "X743CI",
+  "name": "V1743 Standard Mode Test (VX1743 SN:25)",
+  "firmware": "X743Std",
   "serial_number": "25",
   "model": "VX1743",
   "num_channels": 16,
   "is_master": false,
   "board": {},
   "channel_defaults": {
-    "enabled": "True",
+    "enabled": "False",
     "dc_offset": 50.0,
-    "trigger_threshold": 3000
+    "polarity": "Negative",
+    "self_trigger": "False"
+  },
+  "channel_overrides": {
+    "0": {
+      "enabled": "True",
+      "self_trigger": "True",
+      "polarity": "Negative",
+      "dc_offset": 50.0,
+      "trigger_threshold": 45874
+    }
   },
   "x743": {
     "link_type": "optical",
@@ -20,13 +30,21 @@
     "sampling_frequency": "3.2ghz",
     "correction_level": "all",
     "record_length": 256,
-    "post_trigger_size": 20,
+    "post_trigger_size": 40,
     "max_num_events_blt": 1000,
     "io_level": "nim",
-    "trigger_source": "external",
-    "group_enable_mask": 255,
+    "trigger_source": "self",
+    "group_enable_mask": 1,
     "pulse_gen_enabled": false,
     "pulse_pattern": 65535,
-    "pulse_source": "continuous"
+    "pulse_source": "continuous",
+    "fine_time_source": "cfd_soft",
+    "energy_source": "amplitude",
+    "energy_scale": 1.0,
+    "energy_offset": 0.0,
+    "save_waveform": true,
+    "baseline_samples": 32,
+    "cfd_delay_samples": 4,
+    "cfd_fraction": 0.3
   }
 }

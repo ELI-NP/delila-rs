@@ -275,8 +275,10 @@ impl SourceType {
             SourceType::Psd2 => Some(FirmwareType::PSD2),
             SourceType::Pha1 => Some(FirmwareType::PHA1),
             SourceType::AMax => Some(FirmwareType::AMax),
-            SourceType::X743CI => Some(FirmwareType::X743CI),
-            SourceType::X743Std => Some(FirmwareType::X743Std),
+            // SourceType::X743CI is kept for TOML backward compatibility but maps to
+            // FirmwareType::X743Std — DPP-CI (Charge Mode) was retired 2026-04-20 because
+            // UM2750 Rev.5 Fig 10.9 shows no TDC field in Charge Mode.
+            SourceType::X743CI | SourceType::X743Std => Some(FirmwareType::X743Std),
             _ => None,
         }
     }

@@ -10,6 +10,265 @@ pub mod caen;
 pub mod caen_legacy;
 pub mod decoder;
 
+/// Per-event decode parameters cached by the V1743 ReadLoop so
+/// `x743_std_event_to_event_data` never touches `DigitizerConfig` on the hot path.
+///
+/// The CAEN lib in Standard mode only populates `TDC` and `DataChannel[]` on
+/// `CAEN_DGTZ_X743_GROUP_t`; `Charge`/`Peak`/`Baseline`/`PosEdgeTimeStamp` stay
+/// zero. We run a tiny Rust post-processor on each waveform to extract baseline,
+/// amplitude and a software-CFD fine time — the latter is where the 5 ps RMS
+/// time-resolution comes from.
+#[cfg(feature = "x743")]
+#[derive(Debug, Clone)]
+struct X743DecodeParams {
+    energy_scale: f32,
+    energy_offset: f32,
+    save_waveform: bool,
+    ns_per_sample: f64,
+    /// Sample count used for baseline averaging (from the start of the waveform).
+    baseline_samples: usize,
+    /// CFD delay in samples.
+    cfd_delay_samples: usize,
+    /// CFD fraction (typ. 0.2–0.5 for PMT-like pulses).
+    cfd_fraction: f32,
+    /// Per-channel polarity: `true` = negative pulse (pulse dips below baseline).
+    channel_negative: [bool; caen_legacy::MAX_CHANNELS],
+}
+
+/// Result of the Rust-side V1743 waveform post-processor. See `analyze()`.
+#[cfg(feature = "x743")]
+#[derive(Debug, Clone, Copy)]
+struct X743WaveformStats {
+    /// Mean of the pre-trigger samples (ADC units). Kept for diagnostics/tests.
+    #[allow(dead_code)]
+    baseline: f32,
+    /// Signed peak extremum (min for negative pulses, max for positive).
+    /// Kept for diagnostics/tests.
+    #[allow(dead_code)]
+    peak: f32,
+    /// `|peak − baseline|` — pulse amplitude.
+    amplitude: f32,
+    /// Sub-sample leading-edge time in ns, measured from sample 0 of the waveform.
+    /// Computed from the zero-crossing of the CFD signal `f·s[i] − s[i − delay]`
+    /// between sample `floor(edge)` and `floor(edge)+1`.
+    cfd_time_ns: f64,
+    /// Index of the peak sample (for diagnostics, flags packing).
+    peak_index: u16,
+    /// `true` if the CFD zero-crossing search succeeded. `false` events fall back
+    /// to sample-quantised timing so they are still usable but shouldn't be used
+    /// for resolution measurement.
+    cfd_valid: bool,
+}
+
+#[cfg(feature = "x743")]
+impl X743WaveformStats {
+    /// Run the Rust-side post-processor. Returns `None` only if `samples` is too
+    /// short to contain a meaningful baseline + pulse.
+    ///
+    /// Parameters:
+    /// - `samples`: ADC samples from `CAEN_DGTZ_X743_GROUP_t.DataChannel[ch]`
+    ///   (float, already corrected by `correction_level="all"`).
+    /// - `ns_per_sample`: 1 / sampling frequency (e.g. 0.3125 ns @ 3.2 GSa/s).
+    /// - `negative_pulse`: polarity of the pulse. Flips peak direction and the
+    ///   CFD zero-crossing slope sign but keeps all sums/amplitudes positive.
+    /// - `baseline_n`: pre-trigger samples averaged for baseline.
+    /// - `cfd_delay`: delay `d` used in the CFD `f·s[i] − s[i − d]` signal.
+    /// - `cfd_fraction`: `f` used in the CFD signal.
+    fn analyze(
+        samples: &[f32],
+        ns_per_sample: f64,
+        negative_pulse: bool,
+        baseline_n: usize,
+        cfd_delay: usize,
+        cfd_fraction: f32,
+    ) -> Option<Self> {
+        let n = samples.len();
+        if n < baseline_n + cfd_delay + 4 {
+            return None;
+        }
+
+        // Baseline = simple mean of the first `baseline_n` samples. SAMLONG
+        // correction_level="all" already removes cell-by-cell Line Offset and
+        // Individual Pedestal, so a scalar mean is sufficient.
+        let n_bl = baseline_n.min(n / 2);
+        let baseline: f32 = samples[..n_bl].iter().sum::<f32>() / n_bl as f32;
+
+        // Signed extremum over the post-baseline region.
+        let (peak_index, peak) = if negative_pulse {
+            samples[n_bl..]
+                .iter()
+                .enumerate()
+                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, &v)| (i + n_bl, v))?
+        } else {
+            samples[n_bl..]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, &v)| (i + n_bl, v))?
+        };
+        let amplitude = (peak - baseline).abs();
+
+        // Software CFD on the baseline-subtracted waveform.
+        //   d[i] = f · x[i] − x[i − delay]           (baseline-subtracted x, 0 < f < 1)
+        //   Zero-crossing on the leading edge is our timing.
+        //
+        // Signs (walk through with baseline=0):
+        //   Positive pulse rising from 0 to +A over `delay` samples:
+        //     - Pre-pulse: x=0 everywhere → d = 0
+        //     - Leading edge: x[i]=+a, x[i−delay]=0 → d = f·a − 0 = +f·a (positive)
+        //     - At peak: x[i]=+A, x[i−delay]=+a → d = f·A − a; once a > f·A, d < 0
+        //     - So d goes 0 → positive → NEGATIVE = **POS→NEG crossing** on leading edge
+        //   Negative pulse falling from 0 to −A:
+        //     - Leading edge: x[i]=−a, x[i−delay]=0 → d = f·(−a) = negative
+        //     - At peak: x[i]=−A, x[i−delay]=−a → d = f·(−A) − (−a) = −f·A + a; flips positive
+        //     - So d goes 0 → negative → POSITIVE = **NEG→POS crossing** on leading edge
+        let crossing_is_pos_to_neg = !negative_pulse;
+        let cfd = |i: usize| -> f32 {
+            cfd_fraction * (samples[i] - baseline) - (samples[i - cfd_delay] - baseline)
+        };
+
+        // Search backwards from the peak so we find the crossing adjacent to the
+        // real leading edge instead of a noise-driven crossing deep in the
+        // pre-trigger baseline region. We require the crossing to lie within a
+        // few rise-times of the peak so long pre-trigger windows don't pollute
+        // the result.
+        let min_start = n_bl.max(cfd_delay + 1);
+        let end = peak_index.min(n - 1);
+        // Look back at most 4× the CFD delay — that's enough to span the rising
+        // edge for any reasonable pulse (< 4·delay samples rise time).
+        let search_span = (cfd_delay * 4).max(16);
+        let start = end.saturating_sub(search_span).max(min_start);
+
+        let mut crossing: Option<(usize, f32, f32)> = None; // (i, prev_d, curr_d)
+        let mut next_d = cfd(end);
+        for i in (start + 1..end).rev() {
+            let curr_d = cfd(i);
+            let is_match = if crossing_is_pos_to_neg {
+                // Scanning backwards: "POS→NEG on leading edge" means when moving
+                // forward d transitions from positive (earlier) to negative (later).
+                // Backward iteration sees: next_d (later) ≤ 0 and curr_d (earlier) > 0.
+                curr_d > 0.0 && next_d <= 0.0
+            } else {
+                curr_d < 0.0 && next_d >= 0.0
+            };
+            if is_match {
+                crossing = Some((i + 1, curr_d, next_d));
+                break;
+            }
+            next_d = curr_d;
+        }
+
+        let (cfd_time_ns, cfd_valid) = if let Some((i, prev_d, curr_d)) = crossing {
+            let denom = curr_d - prev_d;
+            // Linear interpolation of the zero of the CFD signal between samples
+            // (i-1, i). This is the sub-sample precision — every ~pulse amplitude
+            // of noise here costs ~(noise/slope) ns of timing RMS.
+            let frac = if denom.abs() < f32::EPSILON {
+                0.0_f64
+            } else {
+                (-prev_d / denom) as f64
+            };
+            let idx = (i - 1) as f64 + frac;
+            (idx * ns_per_sample, true)
+        } else {
+            // No zero-crossing found (very low amplitude, baseline-only, etc.).
+            // Fall back to the peak position — sample-quantised timing at best.
+            ((peak_index as f64) * ns_per_sample, false)
+        };
+
+        Some(Self {
+            baseline,
+            peak,
+            amplitude,
+            cfd_time_ns,
+            peak_index: peak_index.min(u16::MAX as usize) as u16,
+            cfd_valid,
+        })
+    }
+}
+
+#[cfg(feature = "x743")]
+impl X743DecodeParams {
+    /// Build from a loaded `DigitizerConfig`. Returns conservative defaults if
+    /// no config / no `[x743]` section is present so the ReadLoop can still
+    /// decode (TDC-only resolution, no fine-time correction).
+    fn from_config(dig_config: Option<&crate::config::digitizer::DigitizerConfig>) -> Self {
+        let mut p = Self {
+            energy_scale: 1.0,
+            energy_offset: 0.0,
+            save_waveform: false,
+            ns_per_sample: Self::ns_per_sample("3.2ghz"),
+            baseline_samples: 32,
+            cfd_delay_samples: 4,
+            cfd_fraction: 0.3,
+            channel_negative: [true; caen_legacy::MAX_CHANNELS],
+        };
+        let Some(dc) = dig_config else {
+            return p;
+        };
+
+        // Per-channel polarity table, derived from channel_defaults +
+        // channel_overrides so the decoder doesn't touch the config on the hot path.
+        let default_is_neg = dc
+            .channel_defaults
+            .polarity
+            .as_deref()
+            .map(Self::polarity_is_negative)
+            .unwrap_or(true);
+        for ch in 0..caen_legacy::MAX_CHANNELS {
+            let per_ch = dc
+                .channel_overrides
+                .get(&(ch as u8))
+                .and_then(|c| c.polarity.as_deref())
+                .map(Self::polarity_is_negative);
+            p.channel_negative[ch] = per_ch.unwrap_or(default_is_neg);
+        }
+
+        let Some(x743) = dc.x743.as_ref() else {
+            return p;
+        };
+        if x743.energy_source.eq_ignore_ascii_case("charge") {
+            tracing::warn!(
+                "x743 energy_source=\"charge\" selected but the CAEN lib does not populate \
+                 Charge in Standard mode; energy will be 0. Use \"amplitude\" (default) instead."
+            );
+        } else if x743.energy_source.eq_ignore_ascii_case("soft") {
+            tracing::warn!(
+                "x743 energy_source=\"soft\" is reserved for a future step; \
+                 falling back to amplitude."
+            );
+        }
+        p.energy_scale = x743.energy_scale;
+        p.energy_offset = x743.energy_offset;
+        p.save_waveform = x743.save_waveform;
+        p.ns_per_sample = Self::ns_per_sample(&x743.sampling_frequency);
+        p.baseline_samples = x743.baseline_samples.max(4) as usize;
+        p.cfd_delay_samples = x743.cfd_delay_samples.max(1) as usize;
+        p.cfd_fraction = x743.cfd_fraction.clamp(0.01, 0.99);
+        p
+    }
+
+    fn polarity_is_negative(s: &str) -> bool {
+        // Treat anything that isn't explicitly positive/rising as negative.
+        // Matches the convention used by `apply_channel_config` in handle.rs.
+        !matches!(
+            s.to_lowercase().as_str(),
+            "positive" | "pos" | "rising" | "risingedge"
+        )
+    }
+
+    fn ns_per_sample(freq: &str) -> f64 {
+        match freq.to_lowercase().as_str() {
+            "3.2ghz" | "3200mhz" => 1.0 / 3.2,
+            "1.6ghz" | "1600mhz" => 1.0 / 1.6,
+            "800mhz" | "0.8ghz" => 1.0 / 0.8,
+            "400mhz" | "0.4ghz" => 1.0 / 0.4,
+            _ => 1.0 / 3.2,
+        }
+    }
+}
+
 // Re-exports
 pub use crate::config::FirmwareType;
 pub use caen::{CaenError, CaenHandle, EndpointHandle, OpenDppEvent};
@@ -64,7 +323,7 @@ enum ReadLoopOutput {
     Raw(decoder::RawData),
     /// Already decoded event from OpenDPP (AMax)
     Decoded(decoder::EventData),
-    /// Start signal — triggers decoder state reset (TimestampTracker etc.)
+    /// Start signal — triggers decoder state reset (RolloverTracker etc.)
     Start,
     /// Stop signal — triggers EOS publication in DecodeLoop
     Stop,
@@ -202,7 +461,13 @@ impl ReaderConfig {
             crate::config::SourceType::Psd1 => FirmwareType::PSD1,
             crate::config::SourceType::Pha1 => FirmwareType::PHA1,
             crate::config::SourceType::AMax => FirmwareType::AMax,
-            crate::config::SourceType::X743CI => FirmwareType::X743CI,
+            crate::config::SourceType::X743CI => {
+                tracing::warn!(
+                    "SourceType::X743CI (DPP-CI Charge Mode) is deprecated — no TDC available. \
+                     Falling back to Standard mode. Update TOML to source_type = \"x743_std\"."
+                );
+                FirmwareType::X743Std
+            }
             crate::config::SourceType::X743Std => FirmwareType::X743Std,
             // Emulator/Zle sources shouldn't create a Reader — caller should handle
             _ => return None,
@@ -1120,7 +1385,7 @@ impl Reader {
                     *hw_state.lock().unwrap() = ComponentState::Running;
                     // Reset DIG2 poll state for new run
                     dig2_poll.reset();
-                    // Signal decode_loop to reset decoder state (TimestampTracker etc.)
+                    // Signal decode_loop to reset decoder state (RolloverTracker etc.)
                     // DIG1 has no Start signal in the data stream, so we must send it here.
                     let _ = tx.try_send(ReadLoopOutput::Start);
                 }
@@ -1791,6 +2056,7 @@ impl Reader {
     /// conversion entirely within the read loop because CAENDigitizer's DecodeEvent
     /// requires the handle (not thread-safe). x743 is low-rate (~7 kHz) so this is fine.
     #[cfg(feature = "x743")]
+    #[allow(clippy::too_many_arguments)]
     fn read_loop_x743_std(
         config: ReaderConfig,
         tx: mpsc::Sender<ReadLoopOutput>,
@@ -1817,6 +2083,26 @@ impl Reader {
                     .map_err(|e| warn!("Failed to load digitizer config: {}", e))
                     .ok()
             });
+        let mut decode_params = X743DecodeParams::from_config(dig_config.as_ref());
+        info!(
+            "V1743 decode params: save_waveform={} amp_scale={} amp_offset={} baseline_samples={} cfd_delay={} cfd_frac={} ns_per_sample={}",
+            decode_params.save_waveform,
+            decode_params.energy_scale,
+            decode_params.energy_offset,
+            decode_params.baseline_samples,
+            decode_params.cfd_delay_samples,
+            decode_params.cfd_fraction,
+            decode_params.ns_per_sample,
+        );
+
+        // Per-group TDC rollover trackers. V1743 TDC is 40-bit @ 5 ns (rollover
+        // ~91 min). Each SAMLONG group has its own FIFO and may re-order
+        // slightly around the wrap boundary, so we track each of the 8 possible
+        // groups independently — cheap and removes a failure mode.
+        let mut tdc_trackers: Vec<decoder::RolloverTracker> =
+            (0..caen_legacy::MAX_GROUPS)
+                .map(|_| decoder::RolloverTracker::new(40))
+                .collect();
 
         // Connection state
         let mut handle: Option<X743Handle> = None;
@@ -1928,6 +2214,12 @@ impl Reader {
                 match h.clear_data().and_then(|_| h.sw_start_acquisition()) {
                     Ok(()) => {
                         info!("V1743 acquisition started");
+                        // Reset TDC rollover trackers — hardware TDC zeroes on
+                        // SWStartAcquisition, so any prior run's rollover_count
+                        // must be cleared before the first event comes in.
+                        for t in tdc_trackers.iter_mut() {
+                            t.reset();
+                        }
                         hw_running = true;
                         *hw_state.lock().unwrap() = ComponentState::Running;
                     }
@@ -1959,6 +2251,8 @@ impl Reader {
                                                     eb.event(),
                                                     &info,
                                                     config.module_id,
+                                                    &decode_params,
+                                                    &mut tdc_trackers,
                                                 );
                                                 for event in events {
                                                     let _ = tx.blocking_send(
@@ -2009,6 +2303,7 @@ impl Reader {
                     ReadLoopRequest::ApplyConfig { config: new_config, response_tx } => {
                         let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
                         if result.is_ok() {
+                            decode_params = X743DecodeParams::from_config(Some(&new_config));
                             hw_configured = true;
                         }
                         let _ = response_tx.send(result);
@@ -2017,6 +2312,9 @@ impl Reader {
                         // V1743 doesn't support parameter changes while running
                         // but we can try re-applying if needed
                         let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                        if result.is_ok() {
+                            decode_params = X743DecodeParams::from_config(Some(&new_config));
+                        }
                         let _ = response_tx.send(result);
                     }
                 }
@@ -2061,10 +2359,49 @@ impl Reader {
                                 continue;
                             }
 
+                            // One-shot raw-field log so we can confirm what the CAEN lib fills in
+                            // Standard mode. `debug!` level to avoid spamming production logs.
+                            {
+                                static DEBUGGED: std::sync::atomic::AtomicBool =
+                                    std::sync::atomic::AtomicBool::new(false);
+                                if !DEBUGGED.swap(true, Ordering::Relaxed) {
+                                    let ev = eb.event();
+                                    for g in 0..caen_legacy::MAX_GROUPS {
+                                        if ev.GrPresent[g] == 0 {
+                                            continue;
+                                        }
+                                        let grp = &ev.DataGroup[g];
+                                        let ch0_null = grp.DataChannel[0].is_null();
+                                        let ch1_null = grp.DataChannel[1].is_null();
+                                        info!(
+                                            "V1743 first decoded event (Standard mode) group={} ChSize={} TDC={} Charge={} Peak={} Baseline={} PosEdge={} NegEdge={} PeakIdx={} TrgCnt=[{},{}] TimeCnt=[{},{}] StartCell={} ch0_null={} ch1_null={}",
+                                            g,
+                                            grp.ChSize,
+                                            grp.TDC,
+                                            grp.Charge,
+                                            grp.Peak,
+                                            grp.Baseline,
+                                            grp.PosEdgeTimeStamp,
+                                            grp.NegEdgeTimeStamp,
+                                            grp.PeakIndex,
+                                            grp.TriggerCount[0],
+                                            grp.TriggerCount[1],
+                                            grp.TimeCount[0],
+                                            grp.TimeCount[1],
+                                            grp.StartIndexCell,
+                                            ch0_null,
+                                            ch1_null,
+                                        );
+                                    }
+                                }
+                            }
+
                             let events = Self::x743_std_event_to_event_data(
                                 eb.event(),
                                 &info,
                                 config.module_id,
+                                &decode_params,
+                                &mut tdc_trackers,
                             );
 
                             for event in events {
@@ -2096,53 +2433,162 @@ impl Reader {
         Ok(())
     }
 
-    /// Convert a CAEN_DGTZ_X743_EVENT_t to a Vec of decoder::EventData.
+    /// Convert a `CAEN_DGTZ_X743_EVENT_t` into a Vec of `decoder::EventData`.
     ///
-    /// Each present group produces up to 2 EventData entries (one per channel in the group).
-    /// For DPP_CI mode: TDC × 5ns → timestamp, Charge → energy.
+    /// Each present group produces up to 2 events (one per channel). The CAEN
+    /// lib only fills `TDC` and `DataChannel[]` in Standard mode — baseline,
+    /// amplitude and fine time are computed in Rust by `X743WaveformStats`.
+    ///
+    /// Time model:
+    /// ```text
+    ///   timestamp_ns = TDC * 5  +  cfd_time_ns
+    /// ```
+    /// where `cfd_time_ns` is the sub-sample position of the CFD zero-crossing
+    /// inside the waveform, in ns from sample 0. A constant offset (trigger
+    /// position inside the window) drops out of cross-event Δt measurements.
+    ///
+    /// `flags` layout:
+    /// - bits 0..16: `peak_index` (sample count)
+    /// - bit 24: `cfd_valid`
+    /// - bit 25: `waveform_decode_failed` (too few samples / null ptr)
     #[cfg(feature = "x743")]
     fn x743_std_event_to_event_data(
         event: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t,
         _info: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t,
         module_id: u8,
+        params: &X743DecodeParams,
+        tdc_trackers: &mut [decoder::RolloverTracker],
     ) -> Vec<decoder::EventData> {
+        const TDC_NS: f64 = 5.0;
+        const FLAG_CFD_VALID: u32 = 1 << 24;
+        const FLAG_WF_DECODE_FAIL: u32 = 1 << 25;
+        const FLAG_TDC_UNDERFLOW: u32 = 1 << 26;
+
         let mut events = Vec::new();
 
-        for g in 0..caen_legacy::MAX_GROUPS {
+        for (g, tracker) in tdc_trackers
+            .iter_mut()
+            .enumerate()
+            .take(caen_legacy::MAX_GROUPS)
+        {
             if event.GrPresent[g] == 0 {
                 continue;
             }
             let group = &event.DataGroup[g];
 
-            // TDC is 40-bit, 5ns resolution
-            let tdc_ns = group.TDC as f64 * 5.0;
+            // Coarse time: 40-bit TDC @ 5 ns, extended to 64-bit ticks by the
+            // per-group rollover tracker (handles the ~91 min wrap and
+            // tolerates slight out-of-order delivery around the boundary).
+            // If the tracker refuses the value (shouldn't happen post-reset —
+            // first event is always accepted), fall back to the masked raw
+            // value so timestamps stay bounded and flag the event.
+            let (tdc_ticks, tdc_underflow) = match tracker.extend(group.TDC) {
+                Ok(t) => (t, false),
+                Err(e) => {
+                    warn!(group = g, error = ?e, "V1743 TDC rollover underflow (fallback to masked raw)");
+                    (group.TDC & 0xFF_FFFF_FFFF, true)
+                }
+            };
+            let tdc_ns = tdc_ticks as f64 * TDC_NS;
 
             for ch_in_group in 0..caen_legacy::CHANNELS_PER_GROUP {
                 let channel = (g * caen_legacy::CHANNELS_PER_GROUP + ch_in_group) as u8;
+                let negative = params
+                    .channel_negative
+                    .get(channel as usize)
+                    .copied()
+                    .unwrap_or(true);
 
-                // Charge is float (pC) — convert to u16 for energy field.
-                // Use absolute value to handle negative charge values.
-                let charge = group.Charge.abs();
-                let energy = if charge > u16::MAX as f32 {
-                    u16::MAX
+                let samples_f32 = Self::x743_waveform_samples_f32(group, ch_in_group);
+
+                let stats = X743WaveformStats::analyze(
+                    &samples_f32,
+                    params.ns_per_sample,
+                    negative,
+                    params.baseline_samples,
+                    params.cfd_delay_samples,
+                    params.cfd_fraction,
+                );
+
+                let (timestamp_ns, amplitude, peak_index, cfd_valid, decode_ok) =
+                    if let Some(s) = stats {
+                        (tdc_ns + s.cfd_time_ns, s.amplitude, s.peak_index, s.cfd_valid, true)
+                    } else {
+                        (tdc_ns, 0.0, 0, false, false)
+                    };
+
+                // Energy: amplitude → scale+offset → u16.
+                let energy_f = amplitude * params.energy_scale + params.energy_offset;
+                let energy = if energy_f.is_finite() {
+                    energy_f.clamp(0.0, u16::MAX as f32) as u16
                 } else {
-                    charge as u16
+                    0
                 };
 
-                // Pack Peak (lower 16 bits) and Baseline (upper 16 bits) into flags
-                let peak_u16 = group.Peak.abs().min(u16::MAX as f32) as u32;
-                let baseline_u16 = group.Baseline.abs().min(u16::MAX as f32) as u32;
-                let flags = peak_u16 | (baseline_u16 << 16);
+                // fine_time = fractional part of cfd_time_ns within a TDC tick,
+                // encoded as 10-bit (0..=1023) per the other decoders' convention.
+                let cfd_only_ns = timestamp_ns - tdc_ns;
+                let frac = (cfd_only_ns / TDC_NS).rem_euclid(1.0);
+                let fine_time = (frac * 1024.0).clamp(0.0, 1023.0) as u16;
+
+                let mut flags = (peak_index as u32) & 0xFFFF;
+                if cfd_valid {
+                    flags |= FLAG_CFD_VALID;
+                }
+                if !decode_ok {
+                    flags |= FLAG_WF_DECODE_FAIL;
+                }
+                if tdc_underflow {
+                    flags |= FLAG_TDC_UNDERFLOW;
+                }
+
+                // DEBUG (one-shot): confirm waveform emission path is taken.
+                {
+                    static WF_DEBUGGED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !WF_DEBUGGED.swap(true, Ordering::Relaxed) {
+                        tracing::info!(
+                            "V1743 waveform emission: save_waveform={}, samples_f32.len()={}",
+                            params.save_waveform,
+                            samples_f32.len(),
+                        );
+                    }
+                }
+                let waveform = if params.save_waveform && !samples_f32.is_empty() {
+                    let samples_i16: Vec<i16> = samples_f32
+                        .iter()
+                        .map(|&s| {
+                            if s.is_finite() {
+                                s.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                            } else {
+                                0
+                            }
+                        })
+                        .collect();
+                    Some(decoder::Waveform {
+                        analog_probe1: samples_i16,
+                        analog_probe2: Vec::new(),
+                        digital_probe1: Vec::new(),
+                        digital_probe2: Vec::new(),
+                        digital_probe3: Vec::new(),
+                        digital_probe4: Vec::new(),
+                        time_resolution: 0,
+                        trigger_threshold: 0,
+                        ns_per_sample: params.ns_per_sample,
+                    })
+                } else {
+                    None
+                };
 
                 events.push(decoder::EventData {
-                    timestamp_ns: tdc_ns,
+                    timestamp_ns,
                     module: module_id,
                     channel,
                     energy,
                     energy_short: 0,
-                    fine_time: 0, // PosEdgeTimeStamp could go here if available
+                    fine_time,
                     flags,
-                    waveform: None,
+                    waveform,
                 });
             }
         }
@@ -2150,334 +2596,32 @@ impl Reader {
         events
     }
 
-    /// ReadLoop for V1743 DPP-CI (Charge Integration) mode.
-    ///
-    /// Uses GetDPPEvents for per-channel event readout instead of
-    /// GetNumEvents/GetEventInfo/DecodeEvent used in Standard mode.
+    /// Copy the raw float waveform out of the CAEN-lib-owned buffer so our
+    /// analyser can use it without lifetime entanglement. Returns empty if
+    /// `ChSize == 0` or the `DataChannel[ch]` pointer is null.
     #[cfg(feature = "x743")]
-    fn read_loop_x743_ci(
-        config: ReaderConfig,
-        tx: mpsc::Sender<ReadLoopOutput>,
-        state_rx: watch::Receiver<ComponentState>,
-        _state_tx: watch::Sender<ComponentState>,
-        metrics: Arc<ReaderMetrics>,
-        shutdown: Arc<std::sync::atomic::AtomicBool>,
-        request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
-        hw_state: Arc<std::sync::Mutex<ComponentState>>,
-    ) -> Result<(), ReaderError> {
-        use crate::reader::caen_legacy::*;
-
-        info!(
-            source_id = config.source_id,
-            "ReadLoop (x743 DPP-CI) starting"
-        );
-
-        let dig_config = config
-            .config_file
-            .as_ref()
-            .and_then(|path| {
-                crate::config::digitizer::DigitizerConfig::load(path)
-                    .map_err(|e| warn!("Failed to load digitizer config: {}", e))
-                    .ok()
-            });
-
-        let mut handle: Option<X743Handle> = None;
-        let mut readout_buf: Option<ReadoutBuffer> = None;
-        let mut dpp_events: Option<DppEventBuffer> = None;
-        let mut hw_configured = false;
-        let mut hw_armed = false;
-        let mut hw_running = false;
-        let mut reconnect_cooldown = RECONNECT_INITIAL;
-        let mut last_connect_attempt: Option<Instant> = None;
-
-        let try_connect = |dig_config: &Option<crate::config::digitizer::DigitizerConfig>| -> Option<X743Handle> {
-            let x743_cfg = dig_config.as_ref()?.x743.as_ref()?;
-            let link_type = match x743_cfg.link_type.as_str() {
-                "usb" => ConnectionType::USB,
-                _ => ConnectionType::OpticalLink,
-            };
-            match X743Handle::open(link_type, x743_cfg.link_num, x743_cfg.conet_node, x743_cfg.vme_base_address) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    warn!("Failed to open V1743: {}", e);
-                    None
-                }
-            }
-        };
-
-        loop {
-            if shutdown.load(Ordering::Relaxed) {
-                break;
-            }
-
-            // Lazy connection with backoff
-            if handle.is_none() {
-                let should_try = match last_connect_attempt {
-                    None => true,
-                    Some(last) => last.elapsed() >= reconnect_cooldown,
-                };
-                if should_try {
-                    last_connect_attempt = Some(Instant::now());
-                    if let Some(h) = try_connect(&dig_config) {
-                        // Allocate readout buffer only (DPP events allocated at configure time)
-                        match h.malloc_readout_buffer() {
-                            Ok(rb) => {
-                                info!("V1743 DPP-CI connected, readout buffer allocated");
-                                readout_buf = Some(rb);
-                                handle = Some(h);
-                                reconnect_cooldown = RECONNECT_INITIAL;
-                            }
-                            Err(e) => {
-                                warn!("V1743 readout buffer allocation failed: {}", e);
-                            }
-                        }
-                    } else {
-                        let (_, next_base) = next_reconnect_cooldown(reconnect_cooldown);
-                        reconnect_cooldown = next_base;
-                    }
-                }
-                if handle.is_none() {
-                    std::thread::sleep(Duration::from_millis(100));
-                    continue;
-                }
-            }
-
-            let h = handle.as_ref().unwrap();
-            let target_state = *state_rx.borrow();
-            let target_rank = state_rank(target_state);
-
-            // === State synchronization ===
-
-            // Configure (DPP-CI mode)
-            if target_rank >= state_rank(ComponentState::Configured) && !hw_configured {
-                if let Some(ref dc) = dig_config {
-                    match h.apply_config_dpp_ci(dc) {
-                        Ok(()) => {
-                            // Allocate DPP event buffer after configure (Gemini recommendation)
-                            match h.malloc_dpp_events() {
-                                Ok(dpp_buf) => {
-                                    info!("V1743 DPP-CI configured, event buffer allocated");
-                                    dpp_events = Some(dpp_buf);
-                                    hw_configured = true;
-                                    *hw_state.lock().unwrap() = ComponentState::Configured;
-                                }
-                                Err(e) => {
-                                    error!("V1743 DPP event buffer allocation failed: {}", e);
-                                    handle = None;
-                                    readout_buf = None;
-                                    dpp_events = None;
-                                    hw_configured = false;
-                                    continue;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("V1743 DPP-CI configure failed: {}", e);
-                            handle = None;
-                            readout_buf = None;
-                            dpp_events = None;
-                            hw_configured = false;
-                            hw_armed = false;
-                            hw_running = false;
-                            continue;
-                        }
-                    }
-                } else {
-                    warn!("No digitizer config loaded — cannot configure V1743 DPP-CI");
-                }
-            }
-
-            // Arm
-            if target_rank >= state_rank(ComponentState::Armed) && hw_configured && !hw_armed {
-                info!("V1743 DPP-CI armed (ready for start)");
-                hw_armed = true;
-                *hw_state.lock().unwrap() = ComponentState::Armed;
-            }
-
-            // Start
-            if target_rank >= state_rank(ComponentState::Running) && hw_armed && !hw_running {
-                match h.clear_data().and_then(|_| h.sw_start_acquisition()) {
-                    Ok(()) => {
-                        info!("V1743 DPP-CI acquisition started");
-                        hw_running = true;
-                        *hw_state.lock().unwrap() = ComponentState::Running;
-                    }
-                    Err(e) => {
-                        error!("V1743 DPP-CI start failed: {}", e);
-                    }
-                }
-            }
-
-            // Stop
-            if target_rank < state_rank(ComponentState::Running) && hw_running {
-                info!("V1743 DPP-CI stopping acquisition");
-                if let Err(e) = h.sw_stop_acquisition() {
-                    warn!("V1743 DPP-CI stop error: {}", e);
-                }
-
-                // Drain remaining DPP events
-                if let (Some(ref mut rb), Some(ref mut dpp_buf)) = (&mut readout_buf, &mut dpp_events) {
-                    let mut drained = 0u32;
-                    loop {
-                        match h.read_data(rb) {
-                            Ok(0) => break,
-                            Ok(data_size) => {
-                                if let Ok(num_events_arr) = h.get_dpp_events(rb, data_size, dpp_buf) {
-                                    for ch in 0..MAX_CHANNELS {
-                                        let n = num_events_arr[ch];
-                                        if n == 0 { continue; }
-                                        let events = unsafe { dpp_buf.get_channel_events(ch, n) };
-                                        for evt in events {
-                                            let event_data = Self::x743_dpp_ci_event_to_event_data(
-                                                evt, ch as u8, config.module_id,
-                                            );
-                                            let _ = tx.blocking_send(ReadLoopOutput::Decoded(event_data));
-                                        }
-                                        drained += n;
-                                    }
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    if drained > 0 {
-                        info!("Drained {} DPP-CI events after stop", drained);
-                    }
-                }
-
-                let _ = tx.blocking_send(ReadLoopOutput::Stop);
-
-                hw_running = false;
-                hw_armed = false;
-                // Free DPP events — will be reallocated on next configure
-                dpp_events = None;
-                *hw_state.lock().unwrap() = ComponentState::Configured;
-            }
-
-            // Reset to Idle
-            if target_state == ComponentState::Idle && (hw_armed || hw_configured) {
-                info!("V1743 DPP-CI resetting to Idle");
-                if let Err(e) = h.reset() {
-                    warn!("V1743 reset error: {}", e);
-                }
-                hw_configured = false;
-                hw_armed = false;
-                hw_running = false;
-                dpp_events = None;
-                *hw_state.lock().unwrap() = ComponentState::Idle;
-            }
-
-            // === Handle requests (Detect, ApplyConfig) ===
-            if let Ok(req) = request_rx.try_recv() {
-                match req {
-                    ReadLoopRequest::Detect { response_tx } => {
-                        let result = h.get_device_info_json().map_err(|e| e.to_string());
-                        let _ = response_tx.send(result);
-                    }
-                    ReadLoopRequest::ApplyConfig { config: new_config, response_tx } => {
-                        let result = h.apply_config_dpp_ci(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
-                        if result.is_ok() {
-                            // Reallocate DPP events after reconfigure
-                            dpp_events = None;
-                            match h.malloc_dpp_events() {
-                                Ok(buf) => { dpp_events = Some(buf); }
-                                Err(e) => { warn!("DPP event buffer realloc failed: {}", e); }
-                            }
-                            hw_configured = true;
-                        }
-                        let _ = response_tx.send(result);
-                    }
-                    ReadLoopRequest::ApplyConfigRunning { config: new_config, response_tx } => {
-                        let result = h.apply_config_dpp_ci(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
-                        let _ = response_tx.send(result);
-                    }
-                }
-            }
-
-            // === Data readout (DPP-CI, only while Running) ===
-            if !hw_running {
-                std::thread::sleep(Duration::from_millis(10));
-                continue;
-            }
-
-            if let (Some(ref mut rb), Some(ref mut dpp_buf)) = (&mut readout_buf, &mut dpp_events) {
-                match h.read_data(rb) {
-                    Ok(0) => {
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                    Ok(data_size) => {
-                        metrics.bytes_read.fetch_add(data_size as u64, Ordering::Relaxed);
-
-                        match h.get_dpp_events(rb, data_size, dpp_buf) {
-                            Ok(num_events_arr) => {
-                                for ch in 0..MAX_CHANNELS {
-                                    let n = num_events_arr[ch];
-                                    if n == 0 { continue; }
-
-                                    let events = unsafe { dpp_buf.get_channel_events(ch, n) };
-                                    for evt in events {
-                                        let event_data = Self::x743_dpp_ci_event_to_event_data(
-                                            evt, ch as u8, config.module_id,
-                                        );
-                                        metrics.queue_length.fetch_add(1, Ordering::Relaxed);
-                                        if tx.blocking_send(ReadLoopOutput::Decoded(event_data)).is_err() {
-                                            warn!("ReadLoop channel closed");
-                                            return Ok(());
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("GetDPPEvents error: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        debug!("ReadData error: {} (may be timeout)", e);
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                }
-            }
+    fn x743_waveform_samples_f32(
+        group: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_GROUP_t,
+        ch_in_group: usize,
+    ) -> Vec<f32> {
+        let ch_size = group.ChSize as usize;
+        if ch_size == 0 {
+            return Vec::new();
         }
-
-        // Cleanup
-        if let Some(ref h) = handle {
-            if hw_running {
-                let _ = h.sw_stop_acquisition();
-            }
+        let ptr = group.DataChannel[ch_in_group];
+        if ptr.is_null() {
+            return Vec::new();
         }
-        info!("ReadLoop (x743 DPP-CI) stopped");
-        Ok(())
+        // Safety: CAEN lib guarantees `DataChannel[ch_in_group]` points to `ChSize` floats
+        // for the duration of this event decode; we copy them out immediately.
+        let raw = unsafe { std::slice::from_raw_parts(ptr, ch_size) };
+        raw.to_vec()
     }
 
-    /// Convert a DPP_CI_Event_t to EventData.
-    #[cfg(feature = "x743")]
-    fn x743_dpp_ci_event_to_event_data(
-        event: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_DPP_CI_Event_t,
-        channel: u8,
-        module_id: u8,
-    ) -> decoder::EventData {
-        // TimeTag: 10ns resolution from 100MHz trigger clock (to be verified on hardware)
-        let timestamp_ns = event.TimeTag as f64 * 10.0;
-
-        // Charge: int16_t, use absolute value for energy
-        let energy = (event.Charge as i16).unsigned_abs();
-
-        // Pack Baseline into upper 16 bits of flags
-        let baseline_u16 = (event.Baseline as i16).unsigned_abs() as u32;
-        let flags = baseline_u16 << 16;
-
-        decoder::EventData {
-            timestamp_ns,
-            module: module_id,
-            channel,
-            energy,
-            energy_short: 0,
-            fine_time: 0,
-            flags,
-            waveform: None,
-        }
-    }
+    // V1743 DPP-CI (Charge Mode) support was removed on 2026-04-20.
+    // See TODO/47_v1743_standard_mode_redesign.md — UM2750 Rev.5 Fig 10.9 has no TDC field
+    // in Charge Mode, so physical timestamps cannot be recovered. Standard mode is
+    // now the only supported V1743 path.
 
     /// DecodeLoop task - decodes raw data and publishes via ZMQ
     async fn decode_loop(
@@ -2887,31 +3031,17 @@ impl Reader {
             if use_x743 {
                 #[cfg(feature = "x743")]
                 {
-                    if read_config.firmware == FirmwareType::X743CI {
-                        info!("Using CAENDigitizer Library for V1743 DPP-CI");
-                        Self::read_loop_x743_ci(
-                            read_config,
-                            data_tx,
-                            read_state_rx,
-                            read_state_tx,
-                            read_metrics,
-                            read_shutdown_clone,
-                            request_rx,
-                            hw_state_for_read,
-                        )
-                    } else {
-                        info!("Using CAENDigitizer Library for V1743 Standard");
-                        Self::read_loop_x743_std(
-                            read_config,
-                            data_tx,
-                            read_state_rx,
-                            read_state_tx,
-                            read_metrics,
-                            read_shutdown_clone,
-                            request_rx,
-                            hw_state_for_read,
-                        )
-                    }
+                    info!("Using CAENDigitizer Library for V1743 Standard mode");
+                    Self::read_loop_x743_std(
+                        read_config,
+                        data_tx,
+                        read_state_rx,
+                        read_state_tx,
+                        read_metrics,
+                        read_shutdown_clone,
+                        request_rx,
+                        hw_state_for_read,
+                    )
                 }
                 #[cfg(not(feature = "x743"))]
                 {
@@ -3149,4 +3279,264 @@ mod tests {
         assert_eq!(cwf.trigger_threshold, 500);
         assert_eq!(cwf.ns_per_sample, 2.0);
     }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_decode_params_ns_per_sample() {
+        assert!((X743DecodeParams::ns_per_sample("3.2ghz") - 1.0 / 3.2).abs() < 1e-9);
+        assert!((X743DecodeParams::ns_per_sample("1.6GHz") - 1.0 / 1.6).abs() < 1e-9);
+        assert!((X743DecodeParams::ns_per_sample("800MHz") - 1.0 / 0.8).abs() < 1e-9);
+        assert!((X743DecodeParams::ns_per_sample("unknown") - 1.0 / 3.2).abs() < 1e-9);
+    }
+
+    /// Build a test-only `X743DecodeParams`. Avoids the big channel-table literal
+    /// from being spelled out in every test.
+    #[cfg(feature = "x743")]
+    fn x743_test_params(negative: bool) -> X743DecodeParams {
+        X743DecodeParams {
+            energy_scale: 1.0,
+            energy_offset: 0.0,
+            save_waveform: false,
+            ns_per_sample: 1.0 / 3.2,
+            baseline_samples: 16,
+            cfd_delay_samples: 2,
+            cfd_fraction: 0.5,
+            channel_negative: [negative; caen_legacy::MAX_CHANNELS],
+        }
+    }
+
+    /// Synthesize a simple linear-ramp pulse for CFD tests:
+    /// - `baseline` samples at 0.0
+    /// - linear rise of `rise_len` samples from 0.0 to ±`amp`
+    /// - `hold_len` samples at the peak
+    /// - flat back to 0 afterwards (if any room)
+    #[cfg(feature = "x743")]
+    fn x743_synth_pulse(
+        baseline: usize,
+        rise_len: usize,
+        hold_len: usize,
+        total: usize,
+        amp: f32,
+        negative: bool,
+    ) -> Vec<f32> {
+        let sign = if negative { -1.0 } else { 1.0 };
+        let mut v = vec![0.0f32; total];
+        for i in 0..rise_len {
+            let frac = (i + 1) as f32 / rise_len as f32;
+            v[baseline + i] = sign * amp * frac;
+        }
+        for i in 0..hold_len {
+            if baseline + rise_len + i < total {
+                v[baseline + rise_len + i] = sign * amp;
+            }
+        }
+        v
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_cfd_negative_pulse_sub_sample_timing() {
+        // 10 ns rise at 0.3125 ns/sample = 32 samples; baseline 64; peak hold 32.
+        let ns_per_sample = 1.0 / 3.2;
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
+        let stats = X743WaveformStats::analyze(&wf, ns_per_sample, true, 32, 4, 0.3)
+            .expect("analyzer returned None");
+        assert!(stats.cfd_valid, "CFD crossing should be found on a clean ramp");
+        assert!(stats.baseline.abs() < 1e-3, "baseline ≈ 0 for our synth");
+        assert!((stats.amplitude - 1000.0).abs() < 1e-3);
+        // For a linear ramp from 0 to −A over `rise_len` samples starting at sample 64,
+        // the CFD signal d[i] = f·x[i] − x[i − delay] with f=0.3, delay=4 crosses zero
+        // at x[i] = x[i−delay] / f → same-height point on a linear ramp happens when
+        //   delta_sample · (1/f − 1) = delay  →  delta = delay / (1/f − 1) = 4 / (10/3 − 1)
+        //   = 4 / (7/3) = 12/7 ≈ 1.714 samples past the start of the rise.
+        // So the zero-crossing ≈ sample 64 + 1.714 ≈ 65.714 → time ≈ 20.54 ns.
+        // Allow up to 1 sample (0.31 ns) of tolerance — the backward-search picks
+        // the bracketing samples and linear-interpolates, which on a linear ramp
+        // is accurate to well below that tolerance.
+        let expected_ns = (64.0 + 12.0 / 7.0) * ns_per_sample;
+        let diff = (stats.cfd_time_ns - expected_ns).abs();
+        assert!(
+            diff < 0.35,
+            "cfd_time_ns={} expected≈{} (diff={})",
+            stats.cfd_time_ns,
+            expected_ns,
+            diff
+        );
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_cfd_positive_pulse_finds_edge() {
+        let wf = x743_synth_pulse(48, 24, 16, 128, 800.0, false);
+        let stats = X743WaveformStats::analyze(&wf, 1.0 / 3.2, false, 32, 4, 0.3)
+            .expect("analyzer None");
+        assert!(stats.cfd_valid);
+        assert!((stats.amplitude - 800.0).abs() < 1e-3);
+        assert!(stats.peak_index >= 48 + 24 && (stats.peak_index as usize) < 128);
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_cfd_amplitude_walk_is_small() {
+        // With CFD the crossing time should NOT move meaningfully with amplitude
+        // as long as the pulse shape is identical. Compare amp=500 vs amp=2000 for
+        // the same rise length.
+        let ns_per_sample = 1.0 / 3.2;
+        let wf_a = x743_synth_pulse(48, 32, 32, 256, 500.0, true);
+        let wf_b = x743_synth_pulse(48, 32, 32, 256, 2000.0, true);
+        let a = X743WaveformStats::analyze(&wf_a, ns_per_sample, true, 32, 4, 0.3).unwrap();
+        let b = X743WaveformStats::analyze(&wf_b, ns_per_sample, true, 32, 4, 0.3).unwrap();
+        let walk = (a.cfd_time_ns - b.cfd_time_ns).abs();
+        assert!(
+            walk < 0.01,
+            "CFD amplitude walk too large: {:.3} ns for a 4x amplitude change",
+            walk
+        );
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_cfd_short_waveform_returns_none() {
+        // `None` when there aren't enough samples for baseline + CFD delay window.
+        assert!(X743WaveformStats::analyze(&[0.0f32; 3], 1.0 / 3.2, true, 32, 4, 0.3).is_none());
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_decode_params_polarity_lookup() {
+        use crate::config::digitizer::{ChannelConfig, DigitizerConfig, FirmwareType, X743Config};
+        use std::collections::HashMap;
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            3u8,
+            ChannelConfig {
+                polarity: Some("Positive".to_string()),
+                ..Default::default()
+            },
+        );
+        let dc = DigitizerConfig {
+            digitizer_id: 0,
+            name: "T".into(),
+            firmware: FirmwareType::X743Std,
+            serial_number: Some("0".into()),
+            model: Some("VX1743".into()),
+            num_channels: 16,
+            is_master: false,
+            board: Default::default(),
+            sync: None,
+            channel_defaults: ChannelConfig {
+                polarity: Some("Negative".to_string()),
+                ..Default::default()
+            },
+            channel_overrides: overrides,
+            channel_names: None,
+            x743: Some(X743Config {
+                link_type: "optical".into(),
+                link_num: 0,
+                conet_node: 0,
+                vme_base_address: 0,
+                sampling_frequency: "3.2ghz".into(),
+                correction_level: "all".into(),
+                record_length: 256,
+                post_trigger_size: 20,
+                max_num_events_blt: 1000,
+                io_level: "nim".into(),
+                trigger_source: "self".into(),
+                group_enable_mask: 1,
+                pulse_gen_enabled: false,
+                pulse_pattern: 0,
+                pulse_source: "continuous".into(),
+                fine_time_source: "cfd_soft".into(),
+                energy_source: "amplitude".into(),
+                energy_scale: 1.0,
+                energy_offset: 0.0,
+                save_waveform: false,
+                baseline_samples: 32,
+                cfd_delay_samples: 4,
+                cfd_fraction: 0.3,
+            }),
+        };
+        let p = X743DecodeParams::from_config(Some(&dc));
+        assert!(p.channel_negative[0], "ch0 defaults to Negative");
+        assert!(!p.channel_negative[3], "ch3 overridden to Positive");
+        assert!(p.channel_negative[15], "ch15 defaults to Negative");
+    }
+
+    #[cfg(feature = "x743")]
+    fn fresh_x743_trackers() -> Vec<decoder::RolloverTracker> {
+        (0..caen_legacy::MAX_GROUPS)
+            .map(|_| decoder::RolloverTracker::new(40))
+            .collect()
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_std_event_to_event_data_absent_event() {
+        let event = crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t::default();
+        let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
+        let params = x743_test_params(true);
+        let mut trackers = fresh_x743_trackers();
+        let events = Reader::x743_std_event_to_event_data(&event, &info, 7, &params, &mut trackers);
+        assert!(events.is_empty());
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_std_event_to_event_data_no_waveform_fallback() {
+        // GrPresent set but ChSize=0 / DataChannel null → analyzer returns None,
+        // events still emitted with amplitude=0 and WF_DECODE_FAIL flag.
+        let mut event = crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t::default();
+        event.GrPresent[0] = 1;
+        event.DataGroup[0].TDC = 100; // 500 ns coarse
+        let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
+        let params = x743_test_params(true);
+        let mut trackers = fresh_x743_trackers();
+        let events = Reader::x743_std_event_to_event_data(&event, &info, 0, &params, &mut trackers);
+        assert_eq!(events.len(), 2);
+        for e in &events {
+            assert!((e.timestamp_ns - 500.0).abs() < 1e-9);
+            assert_eq!(e.energy, 0);
+            assert_eq!(e.flags & (1 << 24), 0, "CFD_VALID must be clear");
+            assert_ne!(e.flags & (1 << 25), 0, "WF_DECODE_FAIL must be set");
+            assert_eq!(e.flags & (1 << 26), 0, "TDC_UNDERFLOW must be clear (first event)");
+        }
+    }
+
+    /// Regression test for TDC rollover: feed two events whose raw TDC values
+    /// wrap the 40-bit boundary and confirm the extended timestamp stays
+    /// monotonic and reflects the rollover (not the raw drop).
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_std_event_to_event_data_tdc_rollover() {
+        const TDC_MAX: u64 = (1u64 << 40) - 1;
+        let mut event = crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t::default();
+        let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
+        let params = x743_test_params(true);
+        let mut trackers = fresh_x743_trackers();
+
+        // Event 1: TDC near top of 40-bit range on group 0.
+        event.GrPresent[0] = 1;
+        event.DataGroup[0].TDC = TDC_MAX - 10;
+        let ev1 = Reader::x743_std_event_to_event_data(&event, &info, 0, &params, &mut trackers);
+        assert_eq!(ev1.len(), 2);
+        let ts1 = ev1[0].timestamp_ns;
+
+        // Event 2: small TDC after the wrap on the same group.
+        event.DataGroup[0].TDC = 5;
+        let ev2 = Reader::x743_std_event_to_event_data(&event, &info, 0, &params, &mut trackers);
+        assert_eq!(ev2.len(), 2);
+        let ts2 = ev2[0].timestamp_ns;
+
+        assert!(ts2 > ts1,
+            "post-wrap timestamp must be greater than pre-wrap (ts1={ts1}, ts2={ts2})");
+        // The gap must be ~(TDC_MAX - 10 to wrap to 5) * 5 ns, i.e. ~16 ticks * 5 ns = 80 ns,
+        // plus the full 2^40 * 5 ns period (~5497.5 s) for the rollover epoch.
+        let expected_gap_ns = ((1u64 << 40) + 5 - (TDC_MAX - 10)) as f64 * 5.0;
+        let gap = ts2 - ts1;
+        assert!((gap - expected_gap_ns).abs() < 1e-6,
+            "expected gap {expected_gap_ns} ns, got {gap} ns");
+        // No underflow flag on clean rollover.
+        assert_eq!(ev2[0].flags & (1 << 26), 0);
+    }
 }
+

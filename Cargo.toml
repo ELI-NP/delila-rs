@@ -80,6 +80,7 @@ cc = "1"
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
+proptest = "1"
 
 [[bin]]
 name = "emulator"
@@ -208,11 +209,6 @@ path = "src/bin/trigger_loss_test_dig2.rs"
 [[bin]]
 name = "x743_test"
 path = "src/bin/x743_test.rs"
-required-features = ["x743"]
-
-[[bin]]
-name = "x743_ci_probe"
-path = "src/bin/x743_ci_probe.rs"
 required-features = ["x743"]
 
 [[example]]
