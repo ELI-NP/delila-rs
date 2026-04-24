@@ -123,7 +123,7 @@ export interface ButtonStates {
 }
 
 // Firmware types for digitizer
-export type FirmwareType = 'PSD1' | 'PSD2' | 'PHA1';
+export type FirmwareType = 'PSD1' | 'PSD2' | 'PHA1' | 'X743Std';
 
 // Board-level configuration
 export interface BoardConfig {
@@ -231,6 +231,41 @@ export interface ChannelConfig {
   extra?: Record<string, unknown>;
 }
 
+// V1743 Standard Mode configuration (board-level, excluding connection params)
+// Connection params (link_type/link_num/conet_node/vme_base_address) are JSON-only.
+export interface X743Config {
+  // Connection (read-only in UI; set via JSON)
+  link_type?: string;
+  link_num?: number;
+  conet_node?: number;
+  vme_base_address?: number;
+  // SAM
+  sampling_frequency?: string; // "3.2ghz" | "1.6ghz" | "800mhz" | "400mhz"
+  correction_level?: string; // "all" | "pedestal_only" | "inl" | "disabled"
+  // Acquisition
+  record_length?: number;
+  post_trigger_size?: number;
+  max_num_events_blt?: number;
+  // I/O
+  io_level?: string; // "nim" | "ttl"
+  trigger_source?: string; // "software" | "external" | "self"
+  // Group enable (bitmask, bit i = group i, 2 ch/group)
+  group_enable_mask?: number;
+  // Test pulse
+  pulse_gen_enabled?: boolean;
+  pulse_pattern?: number;
+  pulse_source?: string; // "software" | "continuous"
+  // Decode (post-processing)
+  fine_time_source?: string; // kept in JSON but hidden in UI (currently "cfd_soft")
+  energy_source?: string; // "amplitude" (others not usable in Standard mode)
+  energy_scale?: number;
+  energy_offset?: number;
+  save_waveform?: boolean;
+  baseline_samples?: number;
+  cfd_delay_samples?: number;
+  cfd_fraction?: number;
+}
+
 // Digitizer configuration
 export interface DigitizerConfig {
   digitizer_id: number;
@@ -245,6 +280,8 @@ export interface DigitizerConfig {
   channel_defaults: ChannelConfig;
   channel_overrides?: Record<number, ChannelConfig>;
   channel_names?: Record<number, string>;
+  // V1743 Standard mode only (firmware === 'X743Std')
+  x743?: X743Config;
 }
 
 // Detected digitizer from hardware probe

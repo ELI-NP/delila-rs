@@ -45,6 +45,12 @@ const PHA1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 128, max: 4000, step: 8 },
 ];
 
+const X743STD_INPUT_PARAMS: ChannelParamDef[] = [
+  { key: 'enabled', label: 'Enable', type: 'boolean' },
+  { key: 'polarity', label: 'Polarity', type: 'enum', options: ['Positive', 'Negative'] },
+  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, step: 0.1 },
+];
+
 // --- Trigger -----------------------------------------------------------------
 
 const PSD2_TRIGGER_PARAMS: ChannelParamDef[] = [
@@ -71,6 +77,13 @@ const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'self_trigger', label: 'Self Trigger', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'global_trigger_gen', label: 'Global Trigger Gen', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
   { key: 'trigger_out_propagate', label: 'Trigger Out Prop.', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
+];
+
+const X743STD_TRIGGER_PARAMS: ChannelParamDef[] = [
+  // V1743 threshold is a 16-bit DAC (inverted range). WaveDemo: reg = (1.25 - V_thr) / 2.5 * 65535
+  // 0 → +1.25 V, 65535 → -1.25 V, 32768 → ~0 V. Lower V_thr = higher DAC code.
+  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'DAC', min: 0, max: 65535, step: 1 },
+  { key: 'self_trigger', label: 'Self Trigger', type: 'boolean' },
 ];
 
 const PHA1_TRIGGER_PARAMS: ChannelParamDef[] = [
@@ -192,6 +205,14 @@ const CATEGORY_PARAMS: Record<FirmwareType, Record<ChannelCategory, ChannelParam
     energy: PHA1_ENERGY_PARAMS,
     coincidence: PHA1_COINCIDENCE_PARAMS,
     waveform: PHA1_WAVEFORM_PARAMS,
+  },
+  // V1743 Standard mode: Energy/Coincidence/Waveform are board-level (handled in Settings component).
+  X743Std: {
+    input: X743STD_INPUT_PARAMS,
+    trigger: X743STD_TRIGGER_PARAMS,
+    energy: [],
+    coincidence: [],
+    waveform: [],
   },
 };
 

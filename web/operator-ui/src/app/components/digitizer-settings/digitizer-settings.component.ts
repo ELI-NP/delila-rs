@@ -7,6 +7,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatButtonModule } from '@angular/material/button';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatDividerModule } from '@angular/material/divider';
@@ -16,7 +17,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { firstValueFrom } from 'rxjs';
 import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
-import { FirmwareType } from '../../models/types';
+import { FirmwareType, X743Config } from '../../models/types';
 import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
 import {
   ChannelTableComponent,
@@ -36,6 +37,7 @@ import {
     MatFormFieldModule,
     MatButtonModule,
     MatSlideToggleModule,
+    MatCheckboxModule,
     MatIconModule,
     MatSnackBarModule,
     MatDividerModule,
@@ -105,6 +107,109 @@ import {
           <!-- Tab 1: Board Settings -->
           <mat-tab label="Board">
             <div class="tab-content">
+              @if (config.firmware === 'X743Std' && config.x743) {
+                <mat-card class="config-card">
+                  <mat-card-content>
+                    <h3 class="section-title">SAM (Switched-Capacitor)</h3>
+                    <div class="form-grid">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Sampling Frequency</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.sampling_frequency">
+                          <mat-option value="3.2ghz">3.2 GHz</mat-option>
+                          <mat-option value="1.6ghz">1.6 GHz</mat-option>
+                          <mat-option value="800mhz">800 MHz</mat-option>
+                          <mat-option value="400mhz">400 MHz</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Correction Level</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.correction_level">
+                          <mat-option value="all">All (Pedestal + INL + Timing)</mat-option>
+                          <mat-option value="pedestal_only">Pedestal Only</mat-option>
+                          <mat-option value="inl">INL Only</mat-option>
+                          <mat-option value="disabled">Disabled</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                    </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Acquisition</h3>
+                    <div class="form-grid">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Record Length (samples)</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.record_length" min="16" max="1024" step="16" (blur)="snapBoardValue($event, 16, 16, 1024)" />
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Post-Trigger Size</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.post_trigger_size" min="1" max="255" step="1" />
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Max Events / BLT</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.max_num_events_blt" min="1" />
+                      </mat-form-field>
+                    </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Trigger &amp; I/O</h3>
+                    <div class="form-grid">
+                      <mat-form-field appearance="outline">
+                        <mat-label>FPIO Level</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.io_level">
+                          <mat-option value="nim">NIM</mat-option>
+                          <mat-option value="ttl">TTL</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Trigger Source</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.trigger_source">
+                          <mat-option value="software">Software</mat-option>
+                          <mat-option value="external">External (TRG-IN)</mat-option>
+                          <mat-option value="self">Self Trigger</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                    </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Group Enable</h3>
+                    <p class="hint-text">Each group covers 2 channels. Channels within a disabled group are skipped.</p>
+                    <div class="group-grid">
+                      @for (g of [0,1,2,3,4,5,6,7]; track g) {
+                        <mat-checkbox
+                          [checked]="isGroupEnabled(config.x743.group_enable_mask, g)"
+                          (change)="toggleGroup(config.x743, g, $event.checked)"
+                        >
+                          Group {{ g }} (ch {{ g * 2 }}-{{ g * 2 + 1 }})
+                        </mat-checkbox>
+                      }
+                    </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Test Pulse Generator</h3>
+                    <div class="form-grid">
+                      <mat-slide-toggle [(ngModel)]="config.x743.pulse_gen_enabled">
+                        Enable Test Pulse
+                      </mat-slide-toggle>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Pulse Pattern (16-bit)</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.pulse_pattern" min="0" max="65535" step="1" />
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Pulse Source</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.pulse_source">
+                          <mat-option value="software">Software</mat-option>
+                          <mat-option value="continuous">Continuous</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                    </div>
+                  </mat-card-content>
+                </mat-card>
+              } @else {
               <mat-card class="config-card">
                 <mat-card-content>
                   <h3 class="section-title">Clock &amp; Sync</h3>
@@ -332,6 +437,7 @@ import {
 
                 </mat-card-content>
               </mat-card>
+              }
             </div>
           </mat-tab>
 
@@ -368,37 +474,107 @@ import {
           <!-- Tab 4: Energy -->
           <mat-tab label="Energy">
             <div class="tab-content">
-              <app-channel-table
-                [params]="energyParams()"
-                [numChannels]="config.num_channels"
-                [defaultValues]="defaultValues()"
-                [channelValues]="channelValues()"
-                [disabledKeys]="disabledKeys()"
-                (defaultChange)="onDefaultChange($event)"
-                (channelChange)="onChannelChange($event)"
-              />
+              @if (config.firmware === 'X743Std' && config.x743) {
+                <!-- V1743: board-level post-processing (amplitude from waveform) -->
+                <mat-card class="config-card">
+                  <mat-card-content>
+                    <h3 class="section-title">Energy Post-Processing</h3>
+                    <p class="hint-text">V1743 has no DPP energy; these settings control Rust-side amplitude extraction from the waveform.</p>
+                    <div class="form-grid">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Energy Source</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.energy_source">
+                          <mat-option value="amplitude">Amplitude (|peak − baseline|)</mat-option>
+                          <mat-option value="charge">Charge (unavailable in Standard mode)</mat-option>
+                          <mat-option value="soft">Soft Charge (reserved)</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Baseline Samples</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.baseline_samples" min="1" />
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Energy Scale</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.energy_scale" step="0.01" />
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>Energy Offset</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.energy_offset" step="0.01" />
+                      </mat-form-field>
+                    </div>
+                  </mat-card-content>
+                </mat-card>
+              } @else {
+                <app-channel-table
+                  [params]="energyParams()"
+                  [numChannels]="config.num_channels"
+                  [defaultValues]="defaultValues()"
+                  [channelValues]="channelValues()"
+                  [disabledKeys]="disabledKeys()"
+                  (defaultChange)="onDefaultChange($event)"
+                  (channelChange)="onChannelChange($event)"
+                />
+              }
             </div>
           </mat-tab>
 
           <!-- Tab 5: Coincidence -->
           <mat-tab label="Coincidence">
             <div class="tab-content">
-              <app-channel-table
-                [params]="coincidenceParams()"
-                [numChannels]="config.num_channels"
-                [defaultValues]="defaultValues()"
-                [channelValues]="channelValues()"
-                [disabledKeys]="disabledKeys()"
-                (defaultChange)="onDefaultChange($event)"
-                (channelChange)="onChannelChange($event)"
-              />
+              @if (config.firmware === 'X743Std') {
+                <mat-card class="config-card">
+                  <mat-card-content>
+                    <p class="na-message">Coincidence settings are not applicable for V1743 Standard mode.</p>
+                  </mat-card-content>
+                </mat-card>
+              } @else {
+                <app-channel-table
+                  [params]="coincidenceParams()"
+                  [numChannels]="config.num_channels"
+                  [defaultValues]="defaultValues()"
+                  [channelValues]="channelValues()"
+                  [disabledKeys]="disabledKeys()"
+                  (defaultChange)="onDefaultChange($event)"
+                  (channelChange)="onChannelChange($event)"
+                />
+              }
             </div>
           </mat-tab>
 
           <!-- Tab 6: Waveform -->
           <mat-tab label="Waveform">
             <div class="tab-content">
-              @if (waveformParams().length > 0) {
+              @if (config.firmware === 'X743Std' && config.x743) {
+                <!-- V1743: board-level waveform + software CFD -->
+                <mat-card class="config-card">
+                  <mat-card-content>
+                    <h3 class="section-title">Waveform Acquisition</h3>
+                    <div class="form-grid">
+                      <mat-slide-toggle [(ngModel)]="config.x743.save_waveform">
+                        Save Waveform
+                      </mat-slide-toggle>
+                    </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Software CFD (Fine Timestamp)</h3>
+                    <p class="hint-text">V1743 Standard mode has no hardware CFD; fine time is computed in Rust from the waveform.</p>
+                    <div class="form-grid">
+                      <mat-form-field appearance="outline">
+                        <mat-label>CFD Delay (samples)</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.cfd_delay_samples" min="1" step="1" />
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
+                        <mat-label>CFD Fraction</mat-label>
+                        <input matInput type="number" [(ngModel)]="config.x743.cfd_fraction" min="0.05" max="0.95" step="0.05" />
+                      </mat-form-field>
+                    </div>
+                  </mat-card-content>
+                </mat-card>
+              } @else if (waveformParams().length > 0) {
                 <!-- PSD2: Channel-level waveform settings -->
                 <app-channel-table
                   [params]="waveformParams()"
@@ -523,6 +699,25 @@ import {
     .firmware-badge.pha {
       background-color: #e8f5e9;
       color: #388e3c;
+    }
+
+    .firmware-badge.x743std {
+      background-color: #f3e5f5;
+      color: #7b1fa2;
+    }
+
+    .group-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 8px 16px;
+      padding: 8px 0;
+    }
+
+    .na-message {
+      padding: 24px;
+      text-align: center;
+      color: #999;
+      font-style: italic;
     }
 
     .serial-info {
@@ -834,6 +1029,21 @@ export class DigitizerSettingsComponent {
       this.digitizerService.loadDigitizers();
       this.snackBar.open('Configuration reset', 'OK', { duration: 2000 });
     }
+  }
+
+  // ===========================================================================
+  // X743Std Board helpers
+  // ===========================================================================
+
+  /** Check whether group `g` (0..7) is set in the X743 group_enable_mask */
+  isGroupEnabled(mask: number | undefined, g: number): boolean {
+    return ((mask ?? 0) & (1 << g)) !== 0;
+  }
+
+  /** Flip bit `g` (0..7) in the X743 group_enable_mask. Mutates x743 in place. */
+  toggleGroup(x743: X743Config, g: number, checked: boolean): void {
+    const mask = x743.group_enable_mask ?? 0;
+    x743.group_enable_mask = checked ? mask | (1 << g) : mask & ~(1 << g);
   }
 
   /** Snap a board-level number input to the nearest valid step on blur */
