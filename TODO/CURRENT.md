@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-04-23
+**Updated:** 2026-04-23 夜（退勤時）
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,6 +15,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
+| **0 (done)** | [48_v1743_tuneup_double_apply_crash.md](48_v1743_tuneup_double_apply_crash.md) | **✅ RESOLVED (2026-04-24)** | 真因は Reader が SIGTERM を handle してなかったこと（SIGINT のみ）→ pkill で Drop 走らず CAEN handle リーク → CAEN 内部状態破壊。修正: SIGTERM handler + Drop 強化 (SWStop+ClearData+Close) + PLL lock polling + Tune Up 2 段 Apply skip。Cold Start 5x / Tune Up 3x セッション全 PASS |
 | **1** | [47_v1743_standard_mode_redesign.md](47_v1743_standard_mode_redesign.md) | **🎯 Step 1-3 完了 (2026-04-23) / Step 4-7 (多台同期 + S1 較正 + 5 ps RMS) はハードウェア拡張待ち** | V1743 Standard mode 再設計 — RolloverTracker 統一 + V1743 組込 + PSD1/PHA1 移行 + 旧 TimestampTracker 削除 + **95 min 長時間ランで 40-bit TDC rollover 通過確認** (120M events) |
 | 1-old | [45_v1743_support.md](45_v1743_support.md) | **⚠️ Phase 2 は 47 に移管** | V1743 Phase 1 (FFI+接続) ✅。Phase 2 以降は 47 へ |
 | **2** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **✅ MVP達成** | 3月MVP: 全Goal達成 — 全FW DAQ稼働 + Grafana + ELOG |
