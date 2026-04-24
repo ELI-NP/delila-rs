@@ -39,6 +39,10 @@ services:
     restart: unless-stopped
     user: "${DAO_UID:-1000}:${DAO_GID:-1000}"
     stop_grace_period: 30s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
       - "8086:8181"
     volumes:
