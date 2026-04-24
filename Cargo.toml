@@ -211,6 +211,16 @@ name = "x743_test"
 path = "src/bin/x743_test.rs"
 required-features = ["x743"]
 
+[[bin]]
+name = "x743_cycle_test"
+path = "src/bin/x743_cycle_test.rs"
+required-features = ["x743"]
+
+[[bin]]
+name = "x743_stop"
+path = "src/bin/x743_stop.rs"
+required-features = ["x743"]
+
 [[example]]
 name = "test_oxyroot"
 required-features = ["root"]
