@@ -14,7 +14,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::common::{Command, ComponentState, RunConfig};
-use crate::config::DigitizerConfig;
+use crate::config::{DigitizerConfig, FirmwareType};
 
 use super::super::{ApiResponse, SystemState};
 use super::AppState;
@@ -144,6 +144,13 @@ pub(super) async fn tuneup_start(
     }
 
     // Apply digitizer config to Reader (same as Phase 1.5 in run_start)
+    //
+    // X743Std: skip this block. `configure_all_sync` above already applied the
+    // exact same config via the Reader's Configure path, and `force_software_trigger()`
+    // is a no-op for X743Std (see `src/config/digitizer.rs`). A second
+    // `apply_config_standard()` call within ~2s (Reset + full reconfigure + ADC cal)
+    // destabilizes libCAENDigitizer.so and triggers SIGSEGV at `SWStartAcquisition`.
+    // See TODO/48_v1743_tuneup_double_apply_crash.md for the crash analysis.
     {
         let configs = state.digitizer_configs.read().await;
         if let Some(config) = configs.get(&digitizer_id) {
@@ -151,6 +158,13 @@ pub(super) async fn tuneup_start(
                 .iter()
                 .find(|c| c.is_digitizer && c.source_id == Some(digitizer_id));
             if let Some(comp) = reader_comp {
+                if config.firmware == FirmwareType::X743Std {
+                    tracing::info!(
+                        digitizer_id,
+                        name = %comp.name,
+                        "X743Std: skipping redundant Tune Up Apply (configure_all_sync already applied identical config)"
+                    );
+                } else {
                 tracing::info!(
                     digitizer_id,
                     name = %comp.name,
@@ -200,6 +214,7 @@ pub(super) async fn tuneup_start(
                             ))),
                         );
                     }
+                }
                 }
             }
         } else {
