@@ -206,13 +206,26 @@ async fn main() -> anyhow::Result<()> {
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
 
-    // Handle Ctrl+C
+    // Handle Ctrl+C (SIGINT) AND SIGTERM. The latter is critical: `stop_daq.sh`
+    // sends SIGTERM via `pkill` (no `-9`), and without this handler tokio does
+    // not drive graceful shutdown for SIGTERM — the process dies before the
+    // `Reader` and `X743Handle` `Drop` impls run, leaving the CAEN driver with
+    // a dangling handle. The next `CAEN_DGTZ_OpenDigitizer` then returns
+    // CommError / DigitizerNotFound, or subsequent CAEN calls segfault.
+    // See TODO/48_v1743_tuneup_double_apply_crash.md.
     let shutdown_tx_clone = shutdown_tx.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to listen for Ctrl+C");
-        println!("\nReceived Ctrl+C, shutting down...");
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nReceived SIGINT, shutting down...");
+            }
+            _ = sigterm.recv() => {
+                println!("\nReceived SIGTERM, shutting down...");
+            }
+        }
         let _ = shutdown_tx_clone.send(());
     });
 

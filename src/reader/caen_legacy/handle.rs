@@ -7,7 +7,13 @@ use super::error::DigitizerError;
 use super::ffi;
 use crate::config::digitizer::{DigitizerConfig, X743Config};
 use std::ffi::CStr;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
+
+/// Poll interval while waiting for V1743 board readiness (Board Fail Status).
+const BOARD_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Maximum time to wait for PLL lock after Reset.
+const BOARD_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum number of groups in V1743
 pub const MAX_GROUPS: usize = 8;
@@ -151,6 +157,87 @@ impl X743Handle {
         let ret = unsafe { ffi::CAEN_DGTZ_ReadRegister(self.handle, address, &mut data) };
         DigitizerError::check(ret, &format!("ReadRegister(0x{:08X})", address))?;
         Ok(data)
+    }
+
+    /// One-shot read of V1743 Board Fail Status register (0x8178).
+    /// - Bits [3:0] non-zero → Internal Communication Timeout (fatal, hardware unusable)
+    /// - Bit 4 set → PLL is not locked to reference clock (fatal for SWStartAcquisition)
+    ///
+    /// Source: CAEN WaveDemo_x743 `ProgramBoard()` at `legacy/caenwavedemo_x743-1.2.1/src/WaveDemo.c:1144`.
+    /// Issuing any CAEN_DGTZ_* call (notably `SWStartAcquisition`) while either the
+    /// comm bits or the PLL bit are set causes libCAENDigitizer.so to segfault
+    /// without returning an error.
+    pub fn check_board_fail_status(&self, context: &str) -> Result<(), DigitizerError> {
+        let d32 = self.read_register(0x8178)?;
+        if d32 & 0xF != 0 {
+            return Err(DigitizerError::new(
+                -1,
+                &format!(
+                    "V1743 Board Fail Status {} = 0x{:08X} (comm timeout, lower 4 bits {:X}). \
+                     Hardware requires manual reset / power cycle.",
+                    context,
+                    d32,
+                    d32 & 0xF
+                ),
+            ));
+        }
+        if d32 & 0x10 != 0 {
+            return Err(DigitizerError::new(
+                -1,
+                &format!(
+                    "V1743 Board Fail Status {} = 0x{:08X} (PLL not locked). \
+                     SWStartAcquisition would segfault libCAENDigitizer.so.",
+                    context, d32
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Poll Board Fail Status (0x8178) until the board reports itself ready
+    /// (bits [4:0] all clear) or the timeout expires. PLL re-lock after Reset
+    /// typically takes tens to hundreds of milliseconds on V1743; sampling it
+    /// is better than a blind sleep because we return as soon as the hardware
+    /// is actually ready and fail loudly when it isn't.
+    pub fn wait_for_board_ready(&self, context: &str) -> Result<(), DigitizerError> {
+        let start = Instant::now();
+        let mut last_status = 0u32;
+        loop {
+            let d32 = self.read_register(0x8178)?;
+            last_status = d32;
+            if d32 & 0xF != 0 {
+                // Comm timeout is unrecoverable — bail immediately.
+                return Err(DigitizerError::new(
+                    -1,
+                    &format!(
+                        "V1743 Board Fail Status {} = 0x{:08X} (comm timeout bits {:X}). \
+                         Hardware requires manual reset / power cycle.",
+                        context,
+                        d32,
+                        d32 & 0xF
+                    ),
+                ));
+            }
+            if d32 & 0x10 == 0 {
+                let elapsed_ms = start.elapsed().as_millis();
+                debug!(
+                    "V1743 board ready ({}) after {} ms, status=0x{:08X}",
+                    context, elapsed_ms, d32
+                );
+                return Ok(());
+            }
+            if start.elapsed() >= BOARD_READY_TIMEOUT {
+                break;
+            }
+            std::thread::sleep(BOARD_READY_POLL_INTERVAL);
+        }
+        Err(DigitizerError::new(
+            -1,
+            &format!(
+                "V1743 PLL failed to lock within {:?} ({}), last status = 0x{:08X}",
+                BOARD_READY_TIMEOUT, context, last_status
+            ),
+        ))
     }
 
     /// Write a hardware register
@@ -336,8 +423,13 @@ impl X743Handle {
         DigitizerError::check(ret, &format!("DisableSAMPulseGen(ch={})", channel))
     }
 
-    /// Start acquisition
+    /// Start acquisition. Polls Board Fail Status (0x8178) via
+    /// `wait_for_board_ready` before issuing CAEN_DGTZ_SWStartAcquisition so
+    /// that transient PLL lock loss right after a Reset / apply has settled.
+    /// Calling SWStartAcquisition while the PLL-lock bit is set causes the
+    /// CAEN library to segfault instead of returning an error.
     pub fn sw_start_acquisition(&self) -> Result<(), DigitizerError> {
+        self.wait_for_board_ready("before SWStartAcquisition")?;
         info!("SWStartAcquisition (handle={})", self.handle);
         let ret = unsafe { ffi::CAEN_DGTZ_SWStartAcquisition(self.handle) };
         DigitizerError::check(ret, "SWStartAcquisition")
@@ -497,6 +589,14 @@ impl X743Handle {
         // 1. Reset
         self.reset()?;
 
+        // 1b. Wait for board to become ready after Reset.
+        // - Lower 4 bits of 0x8178 non-zero → comm timeout (fatal, bail now)
+        // - Bit 4 set → PLL not yet locked to reference clock
+        // Issuing SWStartAcquisition while PLL is unlocked segfaults libCAENDigitizer.so,
+        // so we must not return from apply_config_standard until the PLL settles.
+        // See TODO/48_v1743_tuneup_double_apply_crash.md.
+        self.wait_for_board_ready("after Reset")?;
+
         // 2. Group enable mask
         self.set_group_enable_mask(x743.group_enable_mask)?;
 
@@ -570,6 +670,11 @@ impl X743Handle {
 
         // 12. Acquisition mode (always SW controlled for delila-rs)
         self.set_acquisition_mode(AcqMode::SWControlled)?;
+
+        // Final sanity: re-verify readiness after the full configure sequence.
+        // PLL can drop again after certain register writes; wait for it to re-lock
+        // so the next SWStartAcquisition is safe.
+        self.wait_for_board_ready("after apply_config_standard")?;
 
         info!("V1743 configuration applied successfully");
         Ok(())
@@ -719,10 +824,33 @@ fn parse_pulse_source(s: &str) -> Result<SamPulseSource, DigitizerError> {
 
 impl Drop for X743Handle {
     fn drop(&mut self) {
+        // Best-effort hardware cleanup in the order WaveDemo uses
+        // (SWStopAcquisition → ClearData → CloseDigitizer). Missing any of
+        // these — especially CloseDigitizer — leaks state inside the CAEN
+        // kernel driver, causing the next CAEN_DGTZ_OpenDigitizer to return
+        // CommError / DigitizerNotFound and eventually segfaulting on
+        // SWStartAcquisition. See TODO/48_v1743_tuneup_double_apply_crash.md.
         info!("Closing V1743 (handle={})", self.handle);
+        let ret_stop = unsafe { ffi::CAEN_DGTZ_SWStopAcquisition(self.handle) };
+        if !DigitizerError::is_success(ret_stop) {
+            debug!(
+                "Drop: SWStopAcquisition returned {:?} (handle={}) — may already be stopped",
+                ret_stop, self.handle
+            );
+        }
+        let ret_clear = unsafe { ffi::CAEN_DGTZ_ClearData(self.handle) };
+        if !DigitizerError::is_success(ret_clear) {
+            debug!(
+                "Drop: ClearData returned {:?} (handle={})",
+                ret_clear, self.handle
+            );
+        }
         let ret = unsafe { ffi::CAEN_DGTZ_CloseDigitizer(self.handle) };
         if !DigitizerError::is_success(ret) {
-            warn!("CAEN_DGTZ_CloseDigitizer failed: {:?} (handle={})", ret, self.handle);
+            warn!(
+                "CAEN_DGTZ_CloseDigitizer failed: {:?} (handle={})",
+                ret, self.handle
+            );
         }
     }
 }
