@@ -2144,20 +2144,17 @@ impl Reader {
                 if should_try {
                     last_connect_attempt = Some(Instant::now());
                     if let Some(h) = try_connect(&dig_config) {
-                        // Allocate buffers
-                        match (h.malloc_readout_buffer(), h.allocate_event()) {
-                            (Ok(rb), Ok(eb)) => {
-                                info!("V1743 connected, buffers allocated");
-                                readout_buf = Some(rb);
-                                event_buf = Some(eb);
-                                handle = Some(h);
-                                reconnect_cooldown = RECONNECT_INITIAL;
-                            }
-                            (Err(e), _) | (_, Err(e)) => {
-                                warn!("V1743 buffer allocation failed: {}", e);
-                                // h dropped here → CloseDigitizer
-                            }
-                        }
+                        // Buffers are NOT allocated here — `CAEN_DGTZ_MallocReadoutBuffer`
+                        // sizes the buffer based on the digitizer's *current* state, so it
+                        // must be called AFTER `apply_config_standard` (which sets
+                        // record_length and max_num_events_blt). Pre-config alloc returns
+                        // a ~35 KB buffer (default state), but the configured DAQ needs
+                        // ~35 MB; the size mismatch causes DMA from the CAEN background
+                        // thread to overflow user memory and SIGSEGV after some cycles.
+                        // See plan: ~/.claude/plans/gemini-cli-peppy-turtle.md (T7).
+                        info!("V1743 connected (buffers will be allocated after configure)");
+                        handle = Some(h);
+                        reconnect_cooldown = RECONNECT_INITIAL;
                     } else {
                         let (cooldown, next_base) = next_reconnect_cooldown(reconnect_cooldown);
                         reconnect_cooldown = next_base;
@@ -2182,6 +2179,31 @@ impl Reader {
                     match h.apply_config_standard(dc) {
                         Ok(()) => {
                             info!("V1743 configured successfully");
+                            // Re-allocate readout buffer + event buffer NOW that the
+                            // digitizer is configured. The buffer size CAEN returns is
+                            // sized to the active record_length / max_num_events_blt,
+                            // so we must allocate *after* apply_config_standard. Drop
+                            // any prior buffers first (Rust drops the old `Some` value
+                            // before the assignment writes the new one — this is safe).
+                            // See plan: ~/.claude/plans/gemini-cli-peppy-turtle.md (T7).
+                            readout_buf = None;
+                            event_buf = None;
+                            match (h.malloc_readout_buffer(), h.allocate_event()) {
+                                (Ok(rb), Ok(eb)) => {
+                                    info!("V1743 buffers allocated post-configure (size={} bytes)", rb.allocated_size());
+                                    readout_buf = Some(rb);
+                                    event_buf = Some(eb);
+                                }
+                                (Err(e), _) | (_, Err(e)) => {
+                                    error!("V1743 post-configure buffer allocation failed: {}", e);
+                                    // Drop handle to reconnect fresh
+                                    handle = None;
+                                    hw_configured = false;
+                                    hw_armed = false;
+                                    hw_running = false;
+                                    continue;
+                                }
+                            }
                             hw_configured = true;
                             *hw_state.lock().unwrap() = ComponentState::Configured;
                         }
@@ -2305,6 +2327,20 @@ impl Reader {
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
                             hw_configured = true;
+                            // Re-allocate buffers — config change may shift record_length
+                            // / max_num_events_blt; buffer must match. See plan T7.
+                            readout_buf = None;
+                            event_buf = None;
+                            match (h.malloc_readout_buffer(), h.allocate_event()) {
+                                (Ok(rb), Ok(eb)) => {
+                                    info!("V1743 buffers re-allocated post-ApplyConfig (size={} bytes)", rb.allocated_size());
+                                    readout_buf = Some(rb);
+                                    event_buf = Some(eb);
+                                }
+                                (Err(e), _) | (_, Err(e)) => {
+                                    error!("V1743 post-ApplyConfig buffer realloc failed: {}", e);
+                                }
+                            }
                         }
                         let _ = response_tx.send(result);
                     }
@@ -2314,6 +2350,18 @@ impl Reader {
                         let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
+                            // Re-allocate buffers (best-effort; running mode is rare)
+                            readout_buf = None;
+                            event_buf = None;
+                            match (h.malloc_readout_buffer(), h.allocate_event()) {
+                                (Ok(rb), Ok(eb)) => {
+                                    readout_buf = Some(rb);
+                                    event_buf = Some(eb);
+                                }
+                                (Err(e), _) | (_, Err(e)) => {
+                                    error!("V1743 post-ApplyConfigRunning buffer realloc failed: {}", e);
+                                }
+                            }
                         }
                         let _ = response_tx.send(result);
                     }
