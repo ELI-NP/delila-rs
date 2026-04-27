@@ -5,6 +5,7 @@ use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, Json};
 
 use crate::common::{Command, RunConfig};
+use crate::config::FirmwareType;
 
 use super::super::{
     ApiResponse, ConfigureRequest, CurrentRunInfo, RunStats, RunStatus, StartRequest, SystemState,
@@ -583,6 +584,12 @@ pub(super) async fn run_start(
 
     // Phase 1.5: Apply digitizer configs to remote Readers
     // This pushes configs over ZMQ so remote Readers don't need local config files
+    //
+    // X743Std: skipped — same reason as tuneup_start. `configure_all_sync` above
+    // already invoked apply_config_standard() via the Reader's Configure path
+    // with identical config. A second apply within ~2s (Reset + full reconfigure
+    // + ADC cal) destabilizes libCAENDigitizer.so and triggers SIGSEGV after
+    // SWStartAcquisition. See TODO/48_v1743_tuneup_double_apply_crash.md.
     {
         let configs = state.digitizer_configs.read().await;
         for comp in &state.components {
@@ -590,6 +597,14 @@ pub(super) async fn run_start(
                 if let Some(source_id) = comp.source_id {
                     // digitizer_id == source_id by convention
                     if let Some(config) = configs.get(&source_id) {
+                        if config.firmware == FirmwareType::X743Std {
+                            tracing::info!(
+                                source_id,
+                                name = %comp.name,
+                                "X743Std: skipping redundant Phase 1.5 Apply (configure_all_sync already applied identical config)"
+                            );
+                            continue;
+                        }
                         tracing::info!(
                             source_id,
                             name = %comp.name,
