@@ -2233,7 +2233,14 @@ impl Reader {
 
             // Start
             if target_rank >= state_rank(ComponentState::Running) && hw_armed && !hw_running {
-                match h.clear_data().and_then(|_| h.sw_start_acquisition()) {
+                // UM1935 p.21: explicit ClearData is unnecessary because
+                // CAEN_DGTZ_SWStartAcquisition runs an automatic clear cycle.
+                // WaveDemo x743 v1.2.1 also calls SWStartAcquisition directly
+                // without a preceding ClearData, and the manual cautions that
+                // an explicit ClearData immediately before Start can occasionally
+                // cause an internal state-machine race that drops the first
+                // trigger of the run.
+                match h.sw_start_acquisition() {
                     Ok(()) => {
                         info!("V1743 acquisition started");
                         // Reset TDC rollover trackers — hardware TDC zeroes on

@@ -278,6 +278,31 @@ impl X743Handle {
         DigitizerError::check(ret, "SetSAMCorrectionLevel")
     }
 
+    /// Load all SAMLONG calibration values (Pedestal, Time INL, Trigger Threshold
+    /// DAC offset, Line offset) from on-board EEPROM. UM1935 p.55. Required for
+    /// `set_sam_correction_level` to actually apply meaningful corrections —
+    /// otherwise SetSAMCorrectionLevel selects which corrections to use but
+    /// the underlying calibration tables may be uninitialized.
+    ///
+    /// `OpenDigitizer` loads these automatically (verified via
+    /// `BoardInfo.SAMCorrectionDataLoaded`); whether `Reset` clears them is
+    /// undocumented, so we re-load defensively after every Reset.
+    pub fn load_sam_correction_data(&self) -> Result<(), DigitizerError> {
+        debug!("LoadSAMCorrectionData (handle={})", self.handle);
+        let ret = unsafe { ffi::CAEN_DGTZ_LoadSAMCorrectionData(self.handle) };
+        DigitizerError::check(ret, "LoadSAMCorrectionData")
+    }
+
+    /// Refresh the cached `SAMCorrectionDataLoaded` flag by re-calling GetInfo.
+    /// Useful for diagnostics — checks whether SAM correction tables are still
+    /// loaded at any point in the lifecycle.
+    pub fn sam_correction_loaded(&self) -> Result<bool, DigitizerError> {
+        let mut info: ffi::CAEN_DGTZ_BoardInfo_t = unsafe { std::mem::zeroed() };
+        let ret = unsafe { ffi::CAEN_DGTZ_GetInfo(self.handle, &mut info) };
+        DigitizerError::check(ret, "GetInfo (sam_correction_loaded)")?;
+        Ok(info.SAMCorrectionDataLoaded != 0)
+    }
+
     /// Set post-trigger size for a SAM group
     pub fn set_sam_post_trigger_size(
         &self,
@@ -597,6 +622,29 @@ impl X743Handle {
         // See TODO/48_v1743_tuneup_double_apply_crash.md.
         self.wait_for_board_ready("after Reset")?;
 
+        // 1c. Verify SAMLONG calibration tables are still loaded. OpenDigitizer
+        // auto-loads them (verified empirically on VX1743 SN:25), and Reset
+        // appears to preserve them — but the manual (UM1935 p.14) is silent on
+        // this. We check via GetInfo and re-load only when needed; an
+        // unconditional `LoadSAMCorrectionData` adds ~1.5 s to every Configure,
+        // which pushes the Operator's arm-timeout window into the danger zone.
+        match self.sam_correction_loaded() {
+            Ok(true) => {
+                debug!("SAM correction data still loaded after Reset");
+            }
+            Ok(false) => {
+                info!("SAM correction data was cleared by Reset; re-loading from EEPROM");
+                if let Err(e) = self.load_sam_correction_data() {
+                    // Non-fatal: log and continue. Without correction the
+                    // analog performance is degraded but acquisition still works.
+                    warn!("LoadSAMCorrectionData failed: {}", e);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to query SAMCorrectionDataLoaded after Reset: {}", e);
+            }
+        }
+
         // 2. Group enable mask
         self.set_group_enable_mask(x743.group_enable_mask)?;
 
@@ -628,19 +676,26 @@ impl X743Handle {
         // 6. Per-channel settings (threshold, dc_offset, polarity, self-trigger)
         self.apply_channel_config(config, x743)?;
 
-        // 7. Trigger source
+        // 7. Trigger source. Mirrors WaveDemo x743 v1.2.1 ProgramBoard
+        // (lines 1199-1225): SW trigger stays ACQ_ONLY in all modes so
+        // diagnostic SendSWTrigger calls continue to work; only the channel
+        // self-trigger and external trigger are reconfigured between modes.
         match x743.trigger_source.as_str() {
             "software" | "sw" => {
                 self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
                 self.set_ext_trigger_input_mode(TriggerMode::Disabled)?;
             }
             "external" | "ext" => {
-                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                // WaveDemo NORMAL EXTERNAL: keep SW trigger active and route
+                // self-triggers to ext-output (not as acquisition trigger).
+                self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
                 self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
             }
             "self" => {
-                // Self-trigger is configured per-channel above
-                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                // WaveDemo NORMAL self-trigger: SW remains ACQ_ONLY so
+                // SendSWTrigger still fires; per-channel self-trigger was
+                // configured in apply_channel_config.
+                self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
                 self.set_ext_trigger_input_mode(TriggerMode::Disabled)?;
             }
             "all" => {
@@ -649,7 +704,7 @@ impl X743Handle {
             }
             other => {
                 warn!("Unknown trigger source '{}', defaulting to external", other);
-                self.set_sw_trigger_mode(TriggerMode::Disabled)?;
+                self.set_sw_trigger_mode(TriggerMode::AcqOnly)?;
                 self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
             }
         }
@@ -686,6 +741,15 @@ impl X743Handle {
         config: &DigitizerConfig,
         x743: &X743Config,
     ) -> Result<(), DigitizerError> {
+        // Defensive: reset all channel self-triggers to DISABLED before applying
+        // the new mask. Mirrors WaveDemo x743 v1.2.1 ProgramBoard line 1199.
+        // apply_config_standard always Resets first which should suffice, but if
+        // the caller ever invokes this without a Reset, stale enabled bits would
+        // leak through (SetChannelSelfTrigger only writes the bits in the mask
+        // for the chosen mode; bits not in the mask are unchanged).
+        let all_channels_mask: u32 = (1u32 << config.num_channels) - 1;
+        self.set_channel_self_trigger(TriggerMode::Disabled, all_channels_mask)?;
+
         let defaults = &config.channel_defaults;
         let mut self_trigger_mask: u32 = 0;
 
