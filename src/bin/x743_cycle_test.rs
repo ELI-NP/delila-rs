@@ -80,6 +80,47 @@ struct Args {
     #[arg(long)]
     no_guard: bool,
 
+    /// Mirror production: after every read_data that returns >0 bytes, call
+    /// get_num_events + (get_event_info + decode_event) per event into a
+    /// pre-allocated EventBuffer. Standalone normally only calls read_data;
+    /// production always decodes. Tests Hyp H-Decode (P1).
+    /// See plan: ~/.claude/plans/gemini-cli-peppy-turtle.md (T1).
+    #[arg(long)]
+    decode_events: bool,
+
+    /// After every successful re-apply, free + re-malloc the readout buffer
+    /// (and the event buffer if --decode-events). Production allocates these
+    /// once at Open and never re-mallocs across Reset → may use stale internal
+    /// lib pointers. Tests Hyp H-Buf (P6). See plan T2.
+    #[arg(long)]
+    realloc_buf: bool,
+
+    /// Mirror production's double `CAEN_DGTZ_Reset` per cycle: in addition
+    /// to the Reset inside apply_config_standard, call h.reset() *before*
+    /// reapply (matches reader/mod.rs:2287 "Reset to Idle" block followed
+    /// by Configure → apply_config_standard's own Reset). Tests Hyp P2.
+    /// See plan T3.
+    #[arg(long)]
+    double_reset: bool,
+
+    /// Spawn a tokio runtime with multiple workers + a ZMQ PUB socket
+    /// publishing 1 MB random buffers at 50 Hz, plus a ZMQ REP socket
+    /// echoing on a side port. None of these touch the CAEN handle, but
+    /// they create scheduling pressure and ZMQ I/O activity that mirrors
+    /// production. Tests Hyp P3 (tokio + ZMQ noise destabilizes lib's
+    /// background thread). See plan T6.
+    #[arg(long)]
+    zmq_noise: bool,
+
+    /// Allocate readout buffer + event buffer BEFORE the first apply_config
+    /// (matches production reader/mod.rs:2148, which allocs immediately after
+    /// Open with default board state, then later applies config which changes
+    /// record_length and other DMA-relevant params). Standalone normally allocs
+    /// AFTER apply_config, sized for the actual record_length. Tests Hyp H-Buf
+    /// (P6) directly. See plan T7.
+    #[arg(long)]
+    alloc_before_apply: bool,
+
     /// Link type (optical/usb)
     #[arg(long, default_value = "optical")]
     link_type: String,
@@ -245,15 +286,29 @@ fn apply_minimal_config(h: &X743Handle) -> Result<(), DigitizerError> {
 fn drain_data(
     h: &X743Handle,
     buf: &mut ReadoutBuffer,
+    event_buf: Option<&mut EventBuffer>,
     label: &str,
 ) -> Result<u64, DigitizerError> {
     let mut total_bytes = 0u64;
+    let mut total_events = 0u64;
     let mut iters = 0u32;
+    let mut eb = event_buf;
     loop {
         match h.read_data(buf) {
             Ok(0) => break,
             Ok(n) => {
                 total_bytes += n as u64;
+                if let Some(ref mut ebuf) = eb {
+                    if let Ok(num) = h.get_num_events(buf, n) {
+                        for i in 0..num {
+                            if let Ok((_info, ptr)) = h.get_event_info(buf, n, i) {
+                                if h.decode_event(ptr, ebuf).is_ok() {
+                                    total_events += 1;
+                                }
+                            }
+                        }
+                    }
+                }
                 iters += 1;
                 if iters > 200 {
                     warn!("{}: drain loop exceeded 200 iters, breaking", label);
@@ -266,7 +321,65 @@ fn drain_data(
             }
         }
     }
+    if total_events > 0 {
+        info!("{}: drained {} events ({} bytes)", label, total_events, total_bytes);
+    }
     Ok(total_bytes)
+}
+
+/// T6 helper: spawn tokio runtime with ZMQ activity to simulate the production
+/// reader's tokio runtime + ZMQ data socket. Returns the runtime so the caller
+/// can keep it alive (drop = shutdown). All async tasks run on the runtime;
+/// the cycle test continues on the calling thread (std::thread).
+fn spawn_zmq_noise() -> Result<tokio::runtime::Runtime, Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()?;
+
+    // PUB socket: publish ~1 MB buffers @ 50 Hz, mirrors production data PUB
+    rt.spawn(async {
+        use futures::SinkExt;
+        use tmq::{publish, AsZmqSocket, Context};
+        let ctx = Context::new();
+        let mut socket = match publish(&ctx).bind("tcp://*:54330") {
+            Ok(s) => {
+                let _ = s.get_socket().set_sndhwm(0);
+                s
+            }
+            Err(e) => {
+                warn!("noise PUB bind failed: {}", e);
+                return;
+            }
+        };
+        let data = vec![0u8; 1024 * 1024];
+        loop {
+            let payload = data.clone();
+            let msg: tmq::Multipart = vec![tmq::Message::from(payload.as_slice())].into();
+            if let Err(e) = socket.send(msg).await {
+                warn!("noise PUB send: {}", e);
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        }
+    });
+
+    // CPU spinner: simulate scheduler pressure on tokio worker threads
+    for i in 0..2 {
+        rt.spawn(async move {
+            loop {
+                let mut sum: u64 = 0;
+                for k in 0..1_000_000u64 {
+                    sum = sum.wrapping_add(k.wrapping_mul(i + 1));
+                }
+                std::hint::black_box(sum);
+                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+            }
+        });
+    }
+
+    info!("ZMQ noise spawned: PUB tcp://*:54330 (50 Hz, 1MB) + 2 CPU spinners");
+    Ok(rt)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -293,6 +406,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reopen = args.reopen,
         "V1743 Start/Stop cycle test"
     );
+
+    // T6: optionally spawn tokio + ZMQ noise to mirror production reader's
+    // runtime activity. Kept alive for entire test (dropped at end of main).
+    let _noise_rt = if args.zmq_noise {
+        Some(spawn_zmq_noise()?)
+    } else {
+        None
+    };
 
     // Load production DigitizerConfig if requested; otherwise we'll use the
     // hardcoded minimal path.
@@ -321,6 +442,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let h = X743Handle::open(link_type, args.link_num, args.conet_node, 0)?;
 
+        // T7: with --alloc-before-apply, allocate buffers immediately after
+        // Open (with default board state), exactly like production's
+        // reader/mod.rs:2148. With this, the CAEN library sizes the buffer
+        // for default record_length, then apply_config_standard changes
+        // record_length — buffer may be undersized for the new DMA needs.
+        let pre_apply_buf = if args.alloc_before_apply {
+            let b = h.malloc_readout_buffer()?;
+            let eb = if args.decode_events {
+                Some(h.allocate_event()?)
+            } else {
+                None
+            };
+            info!("Pre-apply: ReadoutBuffer allocated_size={} bytes (BEFORE apply_config)", b.allocated_size());
+            Some((b, eb))
+        } else {
+            None
+        };
+
         if let Some(ref cfg) = prod_cfg {
             info!("Applying prod config via apply_config_standard");
             h.apply_config_standard(cfg)?;
@@ -328,9 +467,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             apply_minimal_config(&h)?;
         }
 
-        // Allocate readout buffer AFTER configuring so CAEN sizes it for the
-        // actual record_length / max_num_events_blt we just set.
-        let mut buf = h.malloc_readout_buffer()?;
+        let (mut buf, mut event_buf): (ReadoutBuffer, Option<EventBuffer>) = match pre_apply_buf {
+            Some((b, eb)) => {
+                info!("Post-apply: ReadoutBuffer allocated_size still={} bytes (alloc_before_apply, NOT re-mallocd after apply)", b.allocated_size());
+                (b, eb)
+            }
+            None => {
+                let b = h.malloc_readout_buffer()?;
+                let eb = if args.decode_events {
+                    Some(h.allocate_event()?)
+                } else {
+                    None
+                };
+                info!("Post-apply: ReadoutBuffer allocated_size={} bytes (AFTER apply_config)", b.allocated_size());
+                (b, eb)
+            }
+        };
 
         // Pre-cycle defensive stop+clear in case previous session left state.
         if let Err(e) = h.sw_stop_acquisition() {
@@ -354,6 +506,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..session_cycles {
             global_cycle += 1;
             let cycle = global_cycle;
+        // ---- (optional) DOUBLE RESET ----
+        // T3: production's state machine calls h.reset() in the "Reset to Idle"
+        // block (mod.rs:2287) when the operator's Phase 0 sends Reset, and then
+        // apply_config_standard does its own h.reset() (handle.rs:590) at the
+        // start of the Configure phase. The two Resets fire ~7 ms to ~1.7 s
+        // apart. Standalone normally has only one (apply's). This flag adds
+        // the outer Reset to mirror production exactly.
+        if args.double_reset {
+            h.reset()?;
+            log.record(cycle, "after_outer_reset", Some(read_status(&h)), "");
+        }
+
         // ---- (optional) RE-APPLY CONFIG ----
         // Simulates the Reader's behaviour where every Configure command or
         // every Tune Up Apply triggers apply_config_standard afresh.
@@ -364,6 +528,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 apply_minimal_config(&h)?;
             }
             log.record(cycle, "after_reapply", Some(read_status(&h)), "");
+
+            // T2: realloc readout buffer + event buffer to clear any stale
+            // lib-internal pointers that Reset may have invalidated.
+            if args.realloc_buf {
+                drop(buf);
+                buf = h.malloc_readout_buffer()?;
+                if event_buf.is_some() {
+                    event_buf = None; // drop old EventBuffer first
+                    event_buf = Some(h.allocate_event()?);
+                }
+                log.record(cycle, "after_realloc_buf", Some(read_status(&h)), "");
+            }
         }
 
         // ---- START ----
@@ -384,6 +560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ---- RUN ----
         let run_start = Instant::now();
         let mut total_bytes = 0u64;
+        let mut total_events = 0u64;
         let mut read_err: Option<String> = None;
         if args.fill_fifo {
             // Don't touch the buffer — let board FIFO fill / overflow.
@@ -392,7 +569,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             while run_start.elapsed() < run_dur {
                 match h.read_data(&mut buf) {
                     Ok(0) => std::thread::sleep(Duration::from_millis(5)),
-                    Ok(n) => total_bytes += n as u64,
+                    Ok(n) => {
+                        total_bytes += n as u64;
+                        // Mirror production: per-event get_event_info + decode_event
+                        if let Some(ref mut eb) = event_buf {
+                            match h.get_num_events(&buf, n) {
+                                Ok(num) => {
+                                    for i in 0..num {
+                                        match h.get_event_info(&buf, n, i) {
+                                            Ok((_info, ptr)) => {
+                                                if let Err(e) = h.decode_event(ptr, eb) {
+                                                    warn!("DecodeEvent cycle {} idx {}: {}", cycle, i, e);
+                                                } else {
+                                                    total_events += 1;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("GetEventInfo cycle {} idx {}: {}", cycle, i, e);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("GetNumEvents cycle {}: {}", cycle, e),
+                            }
+                        }
+                    }
                     Err(e) => {
                         // Non-fatal: board FIFO overflow (OutOfMemory) or transient.
                         // Log and break this cycle's read loop — we still want to
@@ -409,8 +610,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "run_done",
             Some(read_status(&h)),
             &format!(
-                "bytes_read={}{}",
+                "bytes_read={} events={}{}",
                 total_bytes,
+                total_events,
                 read_err
                     .as_deref()
                     .map(|s| format!(" err={}", s))
@@ -428,10 +630,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 h.clear_data()?;
             }
             Mode::B => {
-                drain_data(&h, &mut buf, "post_stop_drain")?;
+                drain_data(&h, &mut buf, event_buf.as_mut(), "post_stop_drain")?;
             }
             Mode::C => {
-                drain_data(&h, &mut buf, "post_stop_drain")?;
+                drain_data(&h, &mut buf, event_buf.as_mut(), "post_stop_drain")?;
                 h.clear_data()?;
             }
             Mode::D => {}
