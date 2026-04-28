@@ -131,6 +131,10 @@ name = "reader"
 path = "src/bin/reader.rs"
 
 [[bin]]
+name = "amax_codegen"
+path = "src/bin/amax_codegen.rs"
+
+[[bin]]
 name = "amax_register_test"
 path = "src/bin/amax_register_test.rs"
 

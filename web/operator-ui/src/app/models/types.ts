@@ -305,49 +305,12 @@ export interface RegisterWrite {
   comment?: string;
 }
 
-/**
- * AMax custom-firmware per-channel registers (CAEN VX2730 + DELILA AMax FW).
- * Mirrors `tools/amax_viewer/fw_params.json`. Each field is `Option<u32>` on
- * the Rust side (write only when explicitly set). Bit widths and reasonable
- * UI ranges are encoded in `models/channel-params.ts`.
- */
-export interface AMaxChannelConfig {
-  // --- Input / Trigger (MCA HLS) ---
-  polarity?: number;          // 1-bit: 0=neg, 1=pos
-  offset?: number;            // 16-bit DC offset
-  thrs?: number;              // 32-bit trigger threshold
-  trig_k?: number;            // 16-bit fast-trigger rise (samples)
-  trig_m?: number;            // 16-bit fast-trigger decay (samples)
-  run_cfg?: number;           // 1-bit run enable
-
-  // --- Energy / Trapezoidal Filter ---
-  trap_k?: number;            // 16-bit trap rise
-  trap_m?: number;            // 16-bit trap decay / flat top
-  deconv_m?: number;          // 24-bit deconvolution
-  trap_gain?: number;         // 24-bit digital gain
-  bl_len?: number;            // 4-bit baseline averaging length (log2 samples)
-  bl_inib?: number;           // 16-bit baseline inhibit
-  sample_pos?: number;        // 16-bit sample-pickoff position
-
-  // --- AMax (Amplitude Maximum HLS) ---
-  amax_window?: number;       // 32-bit AMax measurement window
-  amax_delay?: number;        // 32-bit AMax delay
-  amax_len?: number;          // 16-bit AMax averaging length
-  window_maxim?: number;      // 32-bit max-finder window
-
-  // --- Baseline (AMax HLS) ---
-  baseline_delay?: number;
-  baseline_len?: number;
-  baseline_offset?: number;
-
-  // --- Pre-trigger windows ---
-  pretrigger_input?: number;
-  pretrigger_trap?: number;
-  pretrigger_amax?: number;
-
-  // --- Misc ---
-  selector_wave?: number;     // 1-bit: 0=trapezoid, 1=raw input
-}
+// AMax custom-firmware per-channel writable register set.
+// The interface is auto-generated from RegisterFile.json + fw_params.json
+// — see `cargo run --bin amax_codegen`. Re-exported here so existing
+// imports (`./types`) keep working.
+import type { AMaxChannelConfig } from './amax-generated';
+export type { AMaxChannelConfig };
 
 // Digitizer configuration
 export interface DigitizerConfig {

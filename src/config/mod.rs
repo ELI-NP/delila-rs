@@ -11,6 +11,7 @@
 //! let merger_net = config.network.merger.as_ref().unwrap();
 //! ```
 
+pub mod amax_generated;
 pub mod digitizer;
 
 pub use digitizer::{

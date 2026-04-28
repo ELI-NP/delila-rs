@@ -403,102 +403,11 @@ where
     }
 }
 
-/// AMax custom-firmware per-channel registers (CAEN VX2730 + DELILA AMax FW).
-///
-/// Mirrors the writable register set from `tools/amax_viewer/fw_params.json`.
-/// Each channel has a register page at `0x800000 + channel * 0x40000`; field
-/// offsets within the page are listed in `src/reader/caen/amax_registers.rs`.
-///
-/// All fields are `Option<u32>` so that defaults / overrides merge cleanly
-/// (same convention as the rest of `ChannelConfig`). Bit widths are tracked
-/// on the UI side in `web/operator-ui/src/app/models/channel-params.ts`
-/// — backend just writes the raw u32 to the user register.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
-pub struct AMaxChannelConfig {
-    // ---- Input / Trigger (MCA HLS section) ----
-    /// 1-bit: 0 = negative, 1 = positive (input pulse polarity)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub polarity: Option<u32>,
-    /// 16-bit DC offset
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub offset: Option<u32>,
-    /// 32-bit trigger threshold (raw register value)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thrs: Option<u32>,
-    /// 16-bit fast-trigger rise time (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trig_k: Option<u32>,
-    /// 16-bit fast-trigger decay (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trig_m: Option<u32>,
-    /// 1-bit run enable
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_cfg: Option<u32>,
-
-    // ---- Energy / Trapezoidal Filter ----
-    /// 16-bit trapezoidal rise time (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trap_k: Option<u32>,
-    /// 16-bit trapezoidal decay / flat top (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trap_m: Option<u32>,
-    /// 24-bit deconvolution time constant
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deconv_m: Option<u32>,
-    /// 24-bit digital gain on the trapezoidal output
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trap_gain: Option<u32>,
-    /// 4-bit baseline averaging length (MCA HLS, log2 samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bl_len: Option<u32>,
-    /// 16-bit baseline inhibit (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bl_inib: Option<u32>,
-    /// 16-bit sample position (peak-pickoff index)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sample_pos: Option<u32>,
-
-    // ---- AMax (Amplitude Maximum HLS section) ----
-    /// 32-bit AMax measurement window (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub amax_window: Option<u32>,
-    /// 32-bit AMax delay (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub amax_delay: Option<u32>,
-    /// 16-bit AMax averaging length (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub amax_len: Option<u32>,
-    /// 32-bit max-finder window (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub window_maxim: Option<u32>,
-
-    // ---- Baseline (AMax HLS) ----
-    /// 32-bit baseline delay (samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub baseline_delay: Option<u32>,
-    /// 16-bit baseline length (AMax HLS, raw samples)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub baseline_len: Option<u32>,
-    /// 16-bit baseline offset
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub baseline_offset: Option<u32>,
-
-    // ---- Pre-trigger windows ----
-    /// 32-bit pre-trigger samples on the raw input
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pretrigger_input: Option<u32>,
-    /// 32-bit pre-trigger samples on the trapezoidal output
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pretrigger_trap: Option<u32>,
-    /// 32-bit pre-trigger samples on the AMax output
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pretrigger_amax: Option<u32>,
-
-    // ---- Misc ----
-    /// 1-bit: 0 = trapezoidal output, 1 = raw input (waveform multiplexer)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selector_wave: Option<u32>,
-}
+// AMax custom-firmware per-channel writable register set.
+// The struct itself is auto-generated from `RegisterFile.json` + `fw_params.json`
+// — see `cargo run --bin amax_codegen`. Re-exported here so existing imports
+// (`crate::config::digitizer::AMaxChannelConfig`) keep working.
+pub use super::amax_generated::AMaxChannelConfig;
 
 impl X743Config {
     fn default_link_type() -> String {
