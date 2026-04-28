@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-04-27 夜（V1743 WaveDemo パラメーター作業完了 → AMax FW 統合プラン策定、`feat/amax-fw-integration` ブランチで実装中）
+**Updated:** 2026-04-28（AMax Phase 1 完了 + codegen bridge → Phase 2 着手中：AxisSource enum + 2D 軸選択）
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,7 +15,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **0 (active)** | [49_amax_fw_integration.md](49_amax_fw_integration.md) | **🚧 Phase 1 実装中 (`feat/amax-fw-integration`、2026-04-27〜)** | AMax FW を `tools/amax_viewer/` から delila-rs 本体に移植。Phase 1 = MVP（AMaxChannelConfig + 24 params + EventData.user_info + Energy×UserInfo[0] 固定 2D ヒストグラム + 2 ch のみ）。Phase 2 で AxisSource enum + 軸 dropdown、Phase 3 で Lasso gate。プラン: `~/.claude/plans/valiant-napping-rabin.md` |
+| **0 (active)** | [49_amax_fw_integration.md](49_amax_fw_integration.md) | **🚧 Phase 2 実装中 (`feat/amax-fw-integration`)** | Phase 1 ✅ 完了 (2026-04-28、実機 VX2730 @ 172.18.4.56 で 47 params Apply + TestPulse 2ch 約 10 kHz + 1D/2D heatmap 確認、commits `c07c11e` `5185856` `68c3b5b` codegen bridge)。**Phase 2 = AxisSource enum (Energy/EnergyShort/FineTime/UserInfo0..3/Psd) + 2D 軸 dropdown + TTL eviction**。1D UserInfo + Reset-to-defaults + Hex tooltip も Phase 2 に含まれる。プラン: `~/.claude/plans/valiant-napping-rabin.md` |
 | **0 (done)** | [48_v1743_tuneup_double_apply_crash.md](48_v1743_tuneup_double_apply_crash.md) | **✅ FINAL RESOLUTION (2026-04-27)** | **真因**: `CAEN_DGTZ_MallocReadoutBuffer` を `apply_config_standard` の前に呼んでいた → 35 KB / 35 MB の 1000× サイズ食い違い → CAEN DMA が user buffer を踏み越え → libCAENDigitizer.so 内部破壊 → SIGSEGV。4/24 fix (SIGTERM + Apply skip) は症状緩和のみ。修正: `45bb325` (真因 fix) + `8f6ce55` `838dfbb` `d976daf` (関連 fix)。**1 セッション内 30/30 Run + 5/5 Tune Up cycles PASS** |
 | **0 (done)** | — (V1743 WaveDemo params, 2026-04-27) | **✅ デプロイ稼働確認** | trigger_edge / pulse_polarity 分離 + ttf_smoothing + extra_registers + DC-offset-aware V threshold (`trigger_threshold_v`)。ChannelConfig + ChannelParamDef + apply_channel_config + 4 unit test pass。172.18.4.147 SN:25 で稼働確認済。`start_daq.sh` の `cargo build --release --features x743` 修正済 (ビルド時 features 落ち再発防止) |
 | **1** | [47_v1743_standard_mode_redesign.md](47_v1743_standard_mode_redesign.md) | **🎯 Step 1-3 完了 (2026-04-23) / Step 4-7 (多台同期 + S1 較正 + 5 ps RMS) はハードウェア拡張待ち** | V1743 Standard mode 再設計 — RolloverTracker 統一 + V1743 組込 + PSD1/PHA1 移行 + 旧 TimestampTracker 削除 + **95 min 長時間ランで 40-bit TDC rollover 通過確認** (120M events) |
