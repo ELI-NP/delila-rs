@@ -9,15 +9,18 @@
     "test_pulse_period": 1000000,
     "test_pulse_width": 10,
     "test_pulse_low_level": 1000,
-    "test_pulse_high_level": 3000
+    "test_pulse_high_level": 3000,
+    "waveforms_enabled": true
   },
   "channel_defaults": {
     "enabled": "True",
     "dc_offset": 50.0,
     "amax": {
+      "selector_wave": 0,
+      "pretrigger_input": 600,
       "polarity": 1,
       "offset": 0,
-      "thrs": 100,
+      "thrs": 20,
       "trig_k": 10,
       "trig_m": 12,
       "run_cfg": 1,
@@ -27,14 +30,16 @@
       "trap_gain": 2500,
       "bl_len": 6,
       "bl_inib": 1200,
-      "sample_pos": 510,
+      "sample_pos": 1800,
       "amax_window": 1000,
-      "amax_delay": 4,
-      "amax_len": 2,
-      "window_maxim": 200,
+      "amax_delay": 32,
+      "window_maxim": 500,
+      "amax_len": 5,
       "baseline_delay": 200,
       "baseline_len": 6,
-      "baseline_offset": 1000
+      "baseline_offset": 1000,
+      "pretrigger_trap": 600,
+      "pretrigger_amax": 600
     }
   }
 }

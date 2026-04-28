@@ -641,7 +641,26 @@ import {
                   </mat-card-content>
                 </mat-card>
               } @else if (waveformParams().length > 0) {
-                <!-- PSD2: Channel-level waveform settings -->
+                @if (config.firmware === 'AMax') {
+                  <!-- AMax: board-level waveform toggle (controls OpenDPP endpoint format).
+                       Channel-level AMax probe registers (selector_wave / pretrigger_*) are in the table below. -->
+                  <mat-card class="config-card">
+                    <mat-card-content>
+                      <h3 class="section-title">Waveform Acquisition</h3>
+                      <p class="hint-text">
+                        Toggles the WAVEFORM field in the OpenDPP endpoint format. When off, the FW
+                        skips waveform DMA — useful for high-rate runs where only Energy / UserInfo
+                        are needed.
+                      </p>
+                      <div class="form-grid">
+                        <mat-slide-toggle [(ngModel)]="config.board.waveforms_enabled">
+                          Enable Waveforms
+                        </mat-slide-toggle>
+                      </div>
+                    </mat-card-content>
+                  </mat-card>
+                }
+                <!-- Channel-level waveform settings (PSD2 + AMax) -->
                 <app-channel-table
                   [params]="waveformParams()"
                   [numChannels]="config.num_channels"

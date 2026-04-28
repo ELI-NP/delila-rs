@@ -405,6 +405,24 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
         user_info[i] = *slot;
     }
 
+    // AMax OpenDPP delivers a single u16 sample stream — the FW developer
+    // currently emits one signal (no probe interleaving). Forward the raw
+    // 14-bit values into analog_probe1 to stay 1:1 with amax_viewer.
+    let waveform = event.waveform.as_ref().map(|samples| {
+        let analog_probe1 = samples.iter().map(|&v| (v & 0x3FFF) as i16).collect();
+        decoder::common::Waveform {
+            analog_probe1,
+            analog_probe2: Vec::new(),
+            digital_probe1: Vec::new(),
+            digital_probe2: Vec::new(),
+            digital_probe3: Vec::new(),
+            digital_probe4: Vec::new(),
+            time_resolution: 0,
+            trigger_threshold: 0,
+            ns_per_sample: TIME_STEP_NS,
+        }
+    });
+
     decoder::EventData {
         timestamp_ns,
         module: module_id,
@@ -414,7 +432,7 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
         fine_time: event.fine_timestamp,
         flags,
         user_info,
-        waveform: None, // AMax OpenDPP without waveform for now
+        waveform,
     }
 }
 
@@ -825,6 +843,10 @@ struct DeviceConnection {
     param_cache: Option<std::collections::HashMap<String, caen::handle::ParamInfo>>,
     /// Enabled channel indices (for DIG2 counter polling)
     enabled_channels: Vec<u8>,
+    /// Whether the (re)configured OpenDPP endpoint includes WAVEFORM
+    /// fields. Selects between `read_opendpp_event` and
+    /// `read_opendpp_event_with_waveform` on the read hot path.
+    include_waveform: bool,
 }
 
 /// Try to connect to a digitizer and configure the RAW endpoint.
@@ -854,6 +876,7 @@ fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection
                     auto_config_failed: false,
                     param_cache,
                     enabled_channels: Vec::new(),
+                    include_waveform: false, // RAW path doesn't use OpenDPP waveforms
                 })
             }
             Err(e) => {
@@ -870,9 +893,14 @@ fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection
 
 /// Try to connect to a digitizer and configure the OpenDPP endpoint.
 /// Returns None on failure (non-fatal — ReadLoop stays alive).
-fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
+///
+/// `include_waveform` mirrors `BoardConfig.waveforms_enabled`. AMax callers
+/// pass `true` whenever the loaded config asks for waveforms; we still
+/// fall back to `false` if no config has been loaded yet at connect time
+/// (the endpoint gets re-configured later in the Configure path).
+fn try_connect_opendpp(url: &str, include_waveform: bool) -> Option<DeviceConnection> {
     match CaenHandle::open(url) {
-        Ok(h) => match h.configure_opendpp_endpoint(false) {
+        Ok(h) => match h.configure_opendpp_endpoint(include_waveform) {
             Ok(ep) => {
                 info!("Connected to digitizer (OpenDPP endpoint)");
                 // Build param cache from DevTree (best-effort)
@@ -895,6 +923,7 @@ fn try_connect_opendpp(url: &str) -> Option<DeviceConnection> {
                     auto_config_failed: false,
                     param_cache,
                     enabled_channels: Vec::new(),
+                    include_waveform,
                 })
             }
             Err(e) => {
@@ -1752,13 +1781,19 @@ impl Reader {
     ) -> Result<(), ReaderError> {
         info!(url = %config.url, "ReadLoop (OpenDPP) starting");
 
-        // Lazy connection: try initial connect (non-fatal)
-        let mut connection = try_connect_opendpp(&config.url);
+        // Lazy connection: try initial connect (non-fatal). The endpoint
+        // gets reconfigured with the right waveform flag once we transition
+        // to Configured (see the `configure_opendpp_endpoint` call below).
+        let mut connection = try_connect_opendpp(&config.url, false);
         let mut last_connect_attempt = Instant::now();
         let mut reconnect_backoff = RECONNECT_INITIAL;
 
         // Buffer for user info words (FW caenlist max len = 1024)
         let mut user_info_buffer = [0u64; 1024];
+        // Buffer for OpenDPP waveform samples (used only when the endpoint
+        // was configured with `include_waveform=true`). Sized to amax_viewer's
+        // 8192-sample limit; FW writes up to its current record_length.
+        let mut waveform_buffer = [0u16; 8192];
 
         // Track consecutive read errors for retry logic (same as RAW loop)
         let mut read_error_since: Option<Instant> = None;
@@ -1776,7 +1811,7 @@ impl Reader {
                 let (cooldown, next_base) = next_reconnect_cooldown(reconnect_backoff);
                 if last_connect_attempt.elapsed() > cooldown {
                     last_connect_attempt = Instant::now();
-                    connection = try_connect_opendpp(&config.url);
+                    connection = try_connect_opendpp(&config.url, false);
                     if connection.is_some() {
                         info!("Reconnected successfully, resetting backoff");
                         reconnect_backoff = RECONNECT_INITIAL;
@@ -1807,12 +1842,30 @@ impl Reader {
                         Err(e) => warn!(error = %e, "Digitizer reset failed (non-fatal)"),
                     }
 
+                    // Pre-load the digitizer config so we can pick up
+                    // `waveforms_enabled` before configuring the endpoint —
+                    // the OpenDPP format JSON is locked in at endpoint setup
+                    // time (configure_opendpp_endpoint), not by per-channel
+                    // registers.
+                    let preload = config
+                        .config_file
+                        .as_deref()
+                        .and_then(|p| crate::config::digitizer::DigitizerConfig::load(p).ok());
+                    let include_waveform = preload
+                        .as_ref()
+                        .and_then(|c| c.board.waveforms_enabled)
+                        .unwrap_or(false);
+
                     // Re-configure endpoint after reset (/cmd/reset invalidates
                     // activeendpoint and data format — read_data returns DISABLED without this)
-                    match conn.handle.configure_opendpp_endpoint(false) {
+                    match conn.handle.configure_opendpp_endpoint(include_waveform) {
                         Ok(ep) => {
                             conn.endpoint = ep;
-                            info!("Endpoint reconfigured after reset");
+                            conn.include_waveform = include_waveform;
+                            info!(
+                                include_waveform,
+                                "Endpoint reconfigured after reset"
+                            );
                         }
                         Err(e) => error!(error = %e, "Failed to reconfigure endpoint after reset"),
                     }
@@ -1896,12 +1949,24 @@ impl Reader {
                     let _ = conn.handle.send_command("/cmd/disarmacquisition");
                     // Drain remaining buffered events before clearing
                     let mut drained = 0u64;
-                    while let Ok(Some(evt)) =
-                        conn.endpoint.read_opendpp_event(100, &mut user_info_buffer)
-                    {
-                        drained += 1;
-                        let event_data = opendpp_to_event_data(&evt, config.module_id);
-                        let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));
+                    loop {
+                        let drain = if conn.include_waveform {
+                            conn.endpoint.read_opendpp_event_with_waveform(
+                                100,
+                                &mut user_info_buffer,
+                                &mut waveform_buffer,
+                            )
+                        } else {
+                            conn.endpoint.read_opendpp_event(100, &mut user_info_buffer)
+                        };
+                        match drain {
+                            Ok(Some(evt)) => {
+                                drained += 1;
+                                let event_data = opendpp_to_event_data(&evt, config.module_id);
+                                let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));
+                            }
+                            _ => break,
+                        }
                     }
                     if drained > 0 {
                         info!(drained, "Drained remaining events after stop");
@@ -1934,7 +1999,7 @@ impl Reader {
                     ReadLoopRequest::Detect { response_tx } => {
                         // Try to connect on-demand for Detect
                         if connection.is_none() {
-                            connection = try_connect_opendpp(&config.url);
+                            connection = try_connect_opendpp(&config.url, false);
                             last_connect_attempt = Instant::now();
                         }
                         let result = match connection.as_ref() {
@@ -1952,7 +2017,7 @@ impl Reader {
                         response_tx,
                     } => {
                         if connection.is_none() {
-                            connection = try_connect_opendpp(&config.url);
+                            connection = try_connect_opendpp(&config.url, false);
                             last_connect_attempt = Instant::now();
                         }
                         let result = match connection.as_ref() {
@@ -2032,10 +2097,17 @@ impl Reader {
                     continue;
                 }
 
-                match conn
-                    .endpoint
-                    .read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer)
-                {
+                let read_result = if conn.include_waveform {
+                    conn.endpoint.read_opendpp_event_with_waveform(
+                        config.read_timeout_ms,
+                        &mut user_info_buffer,
+                        &mut waveform_buffer,
+                    )
+                } else {
+                    conn.endpoint
+                        .read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer)
+                };
+                match read_result {
                     Ok(Some(event)) => {
                         if let Some(since) = read_error_since.take() {
                             info!(
