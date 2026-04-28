@@ -15,6 +15,9 @@ import {
   ChannelSummary,
   XAxisLabel,
   HistogramType,
+  AxisSource,
+  AXIS_SOURCE_LABEL,
+  AXIS_SOURCE_OPTIONS,
   createDefaultSetupCell,
 } from '../../models/histogram.types';
 
@@ -108,12 +111,34 @@ import {
           >
             <mat-option value="energy">Energy</mat-option>
             <mat-option value="psd">PSD</mat-option>
-            <mat-option value="psd2d">PSD 2D</mat-option>
-            <mat-option value="amax2d">AMax 2D (E × UI[0])</mat-option>
+            <mat-option value="2d">2D Heatmap</mat-option>
           </mat-select>
         </mat-form-field>
 
-        @if (config.histogramType !== 'psd2d' && config.histogramType !== 'amax2d') {
+        @if (config.histogramType === '2d') {
+          <mat-form-field appearance="outline" class="axis-source-select">
+            <mat-label>X Axis</mat-label>
+            <mat-select
+              [value]="config.xAxis ?? 'energy'"
+              (selectionChange)="onXAxisChange($event.value)"
+            >
+              @for (opt of axisOptions; track opt) {
+                <mat-option [value]="opt">{{ axisLabel(opt) }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field appearance="outline" class="axis-source-select">
+            <mat-label>Y Axis</mat-label>
+            <mat-select
+              [value]="config.yAxis ?? 'psd'"
+              (selectionChange)="onYAxisChange($event.value)"
+            >
+              @for (opt of axisOptions; track opt) {
+                <mat-option [value]="opt">{{ axisLabel(opt) }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        } @else {
           <mat-form-field appearance="outline" class="axis-label-select">
             <mat-label>X-Axis</mat-label>
             <mat-select
@@ -306,12 +331,35 @@ export class SetupTabComponent {
     this.updateGridSize(this.config.gridRows, cols);
   }
 
+  /** AxisSource options shown in the X / Y dropdowns when type === '2d'. */
+  readonly axisOptions = AXIS_SOURCE_OPTIONS;
+
+  /** Pretty label for an `AxisSource` value (used in dropdown options). */
+  axisLabel(src: AxisSource): string {
+    return AXIS_SOURCE_LABEL[src];
+  }
+
   onHistogramTypeChange(value: HistogramType): void {
-    this.emitConfigChange({ histogramType: value });
+    // When switching to 2D, populate sensible default axes if the user hasn't
+    // chosen any yet — otherwise the heatmap would have no axis info to send.
+    const patch: Partial<SetupConfig> = { histogramType: value };
+    if (value === '2d') {
+      if (!this.config.xAxis) patch.xAxis = 'energy';
+      if (!this.config.yAxis) patch.yAxis = 'psd';
+    }
+    this.emitConfigChange(patch);
   }
 
   onXAxisLabelChange(value: XAxisLabel): void {
     this.emitConfigChange({ xAxisLabel: value });
+  }
+
+  onXAxisChange(value: AxisSource): void {
+    this.emitConfigChange({ xAxis: value });
+  }
+
+  onYAxisChange(value: AxisSource): void {
+    this.emitConfigChange({ yAxis: value });
   }
 
   private updateGridSize(rows: number, cols: number): void {

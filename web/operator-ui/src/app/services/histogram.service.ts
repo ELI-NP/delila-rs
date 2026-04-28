@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, interval, switchMap, catchError, of, tap, Subject, takeUntil } from 'rxjs';
 import {
+  AxisSource,
   Histogram1D,
   Histogram2D,
   HistogramListResponse,
@@ -145,18 +146,23 @@ export class HistogramService {
   }
 
   /**
-   * @param type Backend 2D histogram variant. Defaults to `'psd2d'` (Energy × PSD).
-   *             Pass `'amax2d'` for the AMax FW Energy × UserInfo[0] heatmap.
+   * Fetch a 2D histogram for `(moduleId, channelId)` with axes `(x, y)`.
+   * The plot is created lazily on the backend on first request and lives
+   * for ~60s after the last poll (TTL eviction); active subscribers keep
+   * it alive automatically by polling on a 1-second interval.
    */
   fetchHistogram2d(
     moduleId: number,
     channelId: number,
-    type: 'psd2d' | 'amax2d' = 'psd2d',
+    x: AxisSource = 'energy',
+    y: AxisSource = 'psd',
   ): Observable<Histogram2D | null> {
     const url = this.monitorBaseUrl();
     if (!url) return of(null);
     return this.http
-      .get<Histogram2D>(`${url}/histograms2d/${moduleId}/${channelId}`, { params: { type } })
+      .get<Histogram2D>(`${url}/histograms2d/${moduleId}/${channelId}`, {
+        params: { x, y },
+      })
       .pipe(catchError(() => of(null)));
   }
 

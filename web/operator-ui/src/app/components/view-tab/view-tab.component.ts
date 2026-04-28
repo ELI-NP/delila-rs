@@ -17,7 +17,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/histogram-chart.component';
 import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
 import { HistogramService } from '../../services/histogram.service';
-import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types';
+import { AxisSource, ViewTab, Histogram1D, Histogram2D, AXIS_SOURCE_LABEL } from '../../models/histogram.types';
 
 @Component({
   selector: 'app-view-tab',
@@ -106,7 +106,8 @@ import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types'
                   <app-heatmap-chart
                     [histogram]="histograms2d()[i] ?? null"
                     [logScale]="cell.logScale ?? true"
-                    [yAxisLabel]="histType() === 'amax2d' ? 'UserInfo[0]' : 'PSD'"
+                    [xAxisLabel]="axisLabel(xAxis())"
+                    [yAxisLabel]="axisLabel(yAxis())"
                   ></app-heatmap-chart>
                 }
               </div>
@@ -246,10 +247,19 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   readonly histograms2d = signal<(Histogram2D | null)[]>([]);
   readonly isSaving = signal(false);
   readonly histType = computed(() => this.tab.histogramType ?? 'energy');
+  /** Effective X / Y axis for 2D plots. Falls back to (energy, psd) so old
+   *  layout files written before Phase 2 still render something sensible. */
+  readonly xAxis = computed<AxisSource>(() => this.tab.xAxis ?? 'energy');
+  readonly yAxis = computed<AxisSource>(() => this.tab.yAxis ?? 'psd');
 
-  /** Heatmap-rendered histogram types (2D heatmap component instead of 1D bar). */
+  /** Heatmap-rendered histogram type (single 2D variant under the new model). */
   is2dHistType(t: string): boolean {
-    return t === 'psd2d' || t === 'amax2d';
+    return t === '2d';
+  }
+
+  /** Pretty label for an `AxisSource` used in chart titles + tooltips. */
+  axisLabel(src: AxisSource): string {
+    return AXIS_SOURCE_LABEL[src];
   }
 
   ngOnInit(): void {
@@ -304,10 +314,11 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   }
 
   private fetchAll2d() {
-    const type = this.histType() === 'amax2d' ? 'amax2d' : 'psd2d';
+    const x = this.xAxis();
+    const y = this.yAxis();
     const requests = this.tab.cells.map((cell) => {
       if (cell.isEmpty) return of(null);
-      return this.histogramService.fetchHistogram2d(cell.sourceId, cell.channelId, type).pipe(
+      return this.histogramService.fetchHistogram2d(cell.sourceId, cell.channelId, x, y).pipe(
         catchError(() => of(null))
       );
     });

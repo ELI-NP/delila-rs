@@ -8,13 +8,17 @@ import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/hi
 import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
 import { HistogramService } from '../../services/histogram.service';
 import { FittingService } from '../../services/fitting.service';
-import { ViewCell, ViewCellFitResult, Histogram1D, Histogram2D, XAxisLabel, HistogramType } from '../../models/histogram.types';
+import { ViewCell, ViewCellFitResult, Histogram1D, Histogram2D, XAxisLabel, HistogramType, AxisSource, AXIS_SOURCE_LABEL } from '../../models/histogram.types';
 
 export interface ExpandDialogData {
   cell: ViewCell;
   cellIndex: number;
   xAxisLabel: XAxisLabel;
   histogramType: HistogramType;
+  /** Required when `histogramType === '2d'`. Default: `'energy'`. */
+  xAxis?: AxisSource;
+  /** Required when `histogramType === '2d'`. Default: `'psd'`. */
+  yAxis?: AxisSource;
 }
 
 export interface ExpandDialogResult {
@@ -39,7 +43,7 @@ export interface ExpandDialogResult {
           Source {{ data.cell.sourceId }} / Channel {{ data.cell.channelId }}
         </span>
         <div class="header-actions">
-          @if (data.histogramType !== 'psd2d' && data.histogramType !== 'amax2d') {
+          @if (data.histogramType !== '2d') {
             <button
               mat-stroked-button
               (click)="onFit()"
@@ -83,7 +87,7 @@ export interface ExpandDialogResult {
 
       <div class="main-content">
         <div class="chart-container">
-          @if (data.histogramType !== 'psd2d' && data.histogramType !== 'amax2d') {
+          @if (data.histogramType !== '2d') {
             <app-histogram-chart
               [histogram]="histogram()"
               [xRange]="cell().xRange"
@@ -98,7 +102,8 @@ export interface ExpandDialogResult {
             <app-heatmap-chart
               [histogram]="histogram2d()"
               [logScale]="cell().logScale ?? true"
-              [yAxisLabel]="data.histogramType === 'amax2d' ? 'UserInfo[0]' : 'PSD'"
+              [xAxisLabel]="axisLabel(xAxis())"
+              [yAxisLabel]="axisLabel(yAxis())"
             ></app-heatmap-chart>
           }
         </div>
@@ -106,7 +111,7 @@ export interface ExpandDialogResult {
 
       <div class="dialog-footer">
         <div class="stats">
-          @if (data.histogramType !== 'psd2d' && data.histogramType !== 'amax2d') {
+          @if (data.histogramType !== '2d') {
             @if (histogram(); as hist) {
               <span>Total: {{ hist.total_counts | number }}</span>
               <span>Underflow: {{ hist.underflow | number }}</span>
@@ -120,10 +125,8 @@ export interface ExpandDialogResult {
           }
         </div>
         <div class="hint">
-          @if (data.histogramType === 'psd2d') {
-            Energy vs PSD 2D heatmap
-          } @else if (data.histogramType === 'amax2d') {
-            Energy vs UserInfo[0] (AMax peak) 2D heatmap
+          @if (data.histogramType === '2d') {
+            {{ axisLabel(xAxis()) }} vs {{ axisLabel(yAxis()) }} 2D heatmap
           } @else if (!isLocked()) {
             Drag to select fit range, Ctrl+Scroll for X-axis zoom
           } @else {
@@ -238,18 +241,19 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
     const { sourceId, channelId } = this.data.cell;
     const type = this.data.histogramType;
 
-    if (type === 'psd2d' || type === 'amax2d') {
-      // Poll 2D histogram (PSD or AMax variant — backend distinguishes via ?type=)
-      const variant = type;
+    if (type === '2d') {
+      // Poll 2D histogram with the (X, Y) axes the dialog was opened with.
+      const x = this.xAxis();
+      const y = this.yAxis();
       interval(this.refreshInterval)
         .pipe(
           takeUntil(this.destroy$),
-          switchMap(() => this.histogramService.fetchHistogram2d(sourceId, channelId, variant))
+          switchMap(() => this.histogramService.fetchHistogram2d(sourceId, channelId, x, y))
         )
         .subscribe((hist) => {
           if (hist) this.histogram2d.set(hist);
         });
-      this.histogramService.fetchHistogram2d(sourceId, channelId, variant)
+      this.histogramService.fetchHistogram2d(sourceId, channelId, x, y)
         .subscribe((hist) => {
           if (hist) this.histogram2d.set(hist);
         });
@@ -280,6 +284,21 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
 
   isLocked(): boolean {
     return this.cell().isLocked;
+  }
+
+  /** 2D X axis source (defaults to `'energy'` for legacy data). */
+  xAxis(): AxisSource {
+    return this.data.xAxis ?? 'energy';
+  }
+
+  /** 2D Y axis source (defaults to `'psd'` for legacy data). */
+  yAxis(): AxisSource {
+    return this.data.yAxis ?? 'psd';
+  }
+
+  /** Pretty label for an `AxisSource` used in chart titles + tooltips. */
+  axisLabel(src: AxisSource): string {
+    return AXIS_SOURCE_LABEL[src];
   }
 
   canFit(): boolean {

@@ -92,9 +92,81 @@ export interface MonitorState {
 // X-axis label type
 export type XAxisLabel = 'Channel' | 'keV' | 'MeV';
 
-// Histogram type for tab-level selection
-// 'amax2d' = AMax FW Energy × UserInfo[0] (peak value) 2D heatmap.
-export type HistogramType = 'energy' | 'psd' | 'psd2d' | 'amax2d';
+/**
+ * Source of a 2D plot axis. Mirrors the backend `AxisSource` enum 1:1
+ * (snake_case wire format). Used in REST query params and in `SetupConfig` /
+ * `ViewTab` to record which X/Y axes the user picked for a 2D plot.
+ */
+export type AxisSource =
+  | 'energy'
+  | 'energy_short'
+  | 'user_info0'
+  | 'user_info1'
+  | 'user_info2'
+  | 'user_info3'
+  | 'psd';
+
+/**
+ * Human-readable label for an axis (used as chart titles and in dropdowns).
+ */
+export const AXIS_SOURCE_LABEL: Record<AxisSource, string> = {
+  energy: 'Energy',
+  energy_short: 'Energy Short',
+  user_info0: 'UserInfo[0]',
+  user_info1: 'UserInfo[1]',
+  user_info2: 'UserInfo[2]',
+  user_info3: 'UserInfo[3]',
+  psd: 'PSD',
+};
+
+/** Order in which axes appear in dropdowns. */
+export const AXIS_SOURCE_OPTIONS: readonly AxisSource[] = [
+  'energy',
+  'energy_short',
+  'user_info0',
+  'user_info1',
+  'user_info2',
+  'user_info3',
+  'psd',
+];
+
+/**
+ * Histogram type for tab-level selection.
+ *
+ * - `'energy'` / `'psd'`: 1D plot of the named axis.
+ * - `'2d'`: 2D heatmap whose axes are taken from `SetupConfig.xAxis` /
+ *   `SetupConfig.yAxis` (or the same fields on `ViewTab`).
+ *
+ * The legacy `'psd2d'` and `'amax2d'` literals are migrated to `'2d'` with
+ * `(xAxis, yAxis) = ('energy', 'psd')` and `('energy', 'user_info0')`
+ * respectively — see `migrateHistogramType`.
+ */
+export type HistogramType = 'energy' | 'psd' | '2d';
+
+/** Returns true if the type is a 2D heatmap (needs `xAxis` / `yAxis`). */
+export function is2dHistogramType(t: HistogramType | undefined): boolean {
+  return t === '2d';
+}
+
+/**
+ * Migrate legacy localStorage / monitor_layout.json values
+ * (`'psd2d'`, `'amax2d'`) to the unified `'2d'` representation. Returns
+ * `null` if the value is not a known legacy alias (caller falls back to
+ * pre-existing fields).
+ */
+export function migrateLegacyHistType(legacy: string): {
+  histogramType: HistogramType;
+  xAxis: AxisSource;
+  yAxis: AxisSource;
+} | null {
+  if (legacy === 'psd2d') {
+    return { histogramType: '2d', xAxis: 'energy', yAxis: 'psd' };
+  }
+  if (legacy === 'amax2d') {
+    return { histogramType: '2d', xAxis: 'energy', yAxis: 'user_info0' };
+  }
+  return null;
+}
 
 // Setup tab configuration (template for creating views)
 export interface SetupConfig {
@@ -103,6 +175,10 @@ export interface SetupConfig {
   gridCols: number;
   xAxisLabel: XAxisLabel;
   histogramType: HistogramType;
+  /** Required when `histogramType === '2d'`. Default: `'energy'`. */
+  xAxis?: AxisSource;
+  /** Required when `histogramType === '2d'`. Default: `'psd'`. */
+  yAxis?: AxisSource;
   cells: SetupCell[];
 }
 
@@ -120,6 +196,10 @@ export interface ViewTab {
   gridCols: number;
   xAxisLabel: XAxisLabel;
   histogramType?: HistogramType; // optional for backward compat (default: 'energy')
+  /** 2D X axis (only meaningful when `histogramType === '2d'`). */
+  xAxis?: AxisSource;
+  /** 2D Y axis (only meaningful when `histogramType === '2d'`). */
+  yAxis?: AxisSource;
   cells: ViewCell[];
   lastModifiedCellIndex?: number;
 }
@@ -203,6 +283,8 @@ export function createDefaultSetupConfig(): SetupConfig {
     gridCols: 2,
     xAxisLabel: 'Channel',
     histogramType: 'energy',
+    xAxis: 'energy',
+    yAxis: 'psd',
     cells: Array(4)
       .fill(null)
       .map(() => createDefaultSetupCell()),
@@ -231,6 +313,8 @@ export function createViewTabFromSetup(setup: SetupConfig): ViewTab | null {
     gridCols: cols,
     xAxisLabel: setup.xAxisLabel,
     histogramType: setup.histogramType,
+    xAxis: setup.xAxis,
+    yAxis: setup.yAxis,
     cells: setup.cells.map((cell) => ({
       sourceId: cell.sourceId ?? 0,
       channelId: cell.channelId ?? 0,

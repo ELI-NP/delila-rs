@@ -19,6 +19,7 @@ import {
   ViewTab,
   createDefaultSetupConfig,
   createViewTabFromSetup,
+  migrateLegacyHistType,
 } from '../../models/histogram.types';
 
 const STORAGE_KEY = 'delila-monitor-state';
@@ -335,6 +336,8 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
       cellIndex,
       xAxisLabel: tab.xAxisLabel,
       histogramType: tab.histogramType ?? 'energy',
+      xAxis: tab.xAxis,
+      yAxis: tab.yAxis,
     };
 
     const dialogRef = this.dialog.open(HistogramExpandDialogComponent, {
@@ -396,9 +399,43 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
   }
 
   private applyState(state: MonitorState): void {
-    this.setupConfig.set(state.setupConfig ?? createDefaultSetupConfig());
-    this.viewTabs.set(state.viewTabs ?? []);
+    // Migrate Phase 1 legacy values (`histogramType: 'psd2d' | 'amax2d'`) into
+    // the Phase 2 representation (`'2d'` + explicit `xAxis` / `yAxis`). Pass-
+    // through anything that's already in the new shape.
+    const setup = MonitorPageComponent.migrateLegacyConfig(
+      state.setupConfig ?? createDefaultSetupConfig(),
+    );
+    const tabs = (state.viewTabs ?? []).map((t) => ({
+      ...MonitorPageComponent.migrateLegacyConfig(t),
+      cells: t.cells,
+      id: t.id,
+      lastModifiedCellIndex: t.lastModifiedCellIndex,
+    })) as ViewTab[];
+
+    this.setupConfig.set(setup as SetupConfig);
+    this.viewTabs.set(tabs);
     this.activeTabId.set(state.activeTabId ?? null);
+  }
+
+  /**
+   * Convert a Phase 1 setup/tab config (with `histogramType: 'psd2d'|'amax2d'`)
+   * to the unified `'2d'` form with explicit `xAxis` / `yAxis`. Anything
+   * already in the new shape is returned unchanged.
+   */
+  private static migrateLegacyConfig<T extends { histogramType?: string; xAxis?: unknown; yAxis?: unknown }>(
+    cfg: T,
+  ): T {
+    if (!cfg.histogramType) return cfg;
+    const migrated = migrateLegacyHistType(cfg.histogramType);
+    if (!migrated) return cfg;
+    return {
+      ...cfg,
+      histogramType: migrated.histogramType,
+      // Don't clobber an explicit xAxis/yAxis if the saved data already has one
+      // (in case a future user edits a partially-migrated layout file by hand).
+      xAxis: cfg.xAxis ?? migrated.xAxis,
+      yAxis: cfg.yAxis ?? migrated.yAxis,
+    };
   }
 
   private saveState(): void {
