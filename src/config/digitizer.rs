@@ -672,6 +672,14 @@ pub struct BoardConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub test_pulse_width: Option<u32>,
 
+    /// Test pulse low level (DAC counts)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_pulse_low_level: Option<u32>,
+
+    /// Test pulse high level (DAC counts)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_pulse_high_level: Option<u32>,
+
     /// Global trigger source (e.g., "SwTrg", "TestPulse", "ITLA")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_trigger_source: Option<String>,
@@ -1482,6 +1490,20 @@ impl DigitizerConfig {
         if let Some(v) = board.test_pulse_width {
             params.push(CaenParameter {
                 path: "/par/testpulsewidth".to_string(),
+                value: v.to_string(),
+            });
+        }
+
+        if let Some(v) = board.test_pulse_low_level {
+            params.push(CaenParameter {
+                path: "/par/testpulselowlevel".to_string(),
+                value: v.to_string(),
+            });
+        }
+
+        if let Some(v) = board.test_pulse_high_level {
+            params.push(CaenParameter {
+                path: "/par/testpulsehighlevel".to_string(),
                 value: v.to_string(),
             });
         }

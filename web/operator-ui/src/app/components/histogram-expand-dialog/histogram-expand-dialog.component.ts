@@ -98,6 +98,7 @@ export interface ExpandDialogResult {
             <app-heatmap-chart
               [histogram]="histogram2d()"
               [logScale]="cell().logScale ?? true"
+              [yAxisLabel]="data.histogramType === 'amax2d' ? 'UserInfo[0]' : 'PSD'"
             ></app-heatmap-chart>
           }
         </div>

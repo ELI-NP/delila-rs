@@ -1,6 +1,6 @@
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return generateUUID();
+    return crypto.randomUUID();
   }
   // Fallback for non-secure contexts (HTTP)
   return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) =>

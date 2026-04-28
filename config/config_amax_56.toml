@@ -1,0 +1,36 @@
+# DELILA DAQ Configuration - AMax FW VX2730 at 172.18.4.56
+# Phase 1 smoke test: no register writes (relies on amax_viewer for pre-config)
+
+[operator]
+experiment_name = "AMax_56"
+port = 9090
+
+[network]
+
+[[network.sources]]
+id = 0
+name = "amax-56"
+type = "amax"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig2://172.18.4.56"
+config_file = "config/digitizers/amax_56.json"
+pipeline_order = 1
+
+[network.merger]
+subscribe = ["tcp://localhost:5555"]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

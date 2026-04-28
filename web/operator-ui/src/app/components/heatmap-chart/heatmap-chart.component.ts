@@ -38,11 +38,15 @@ import { Histogram2D } from '../../models/histogram.types';
 export class HeatmapChartComponent implements OnChanges {
   @Input() histogram: Histogram2D | null = null;
   @Input() logScale = true;
+  @Input() yAxisLabel = 'PSD';
 
   readonly chartOptions = signal<EChartsCoreOption>(this.buildInitialOptions());
   readonly mergeOptions = signal<EChartsCoreOption>({});
 
   ngOnChanges(changes: SimpleChanges): void {
+    if (changes['yAxisLabel']) {
+      this.chartOptions.set(this.buildInitialOptions());
+    }
     if (changes['histogram'] || changes['logScale']) {
       this.updateChart();
     }
@@ -56,7 +60,7 @@ export class HeatmapChartComponent implements OnChanges {
         formatter: (params: { value?: number[] }) => {
           if (!params.value) return '';
           const [x, y, count] = params.value;
-          return `Energy: ${x}<br>PSD: ${y.toFixed(3)}<br>Counts: ${count}`;
+          return `Energy: ${x}<br>${this.yAxisLabel}: ${y.toFixed(3)}<br>Counts: ${count}`;
         },
       },
       toolbox: {
@@ -86,7 +90,7 @@ export class HeatmapChartComponent implements OnChanges {
       },
       yAxis: {
         type: 'category',
-        name: 'PSD',
+        name: this.yAxisLabel,
         nameLocation: 'middle',
         nameGap: 40,
         splitArea: { show: false },
@@ -194,8 +198,8 @@ export class HeatmapChartComponent implements OnChanges {
           const [xi, yi, rawVal] = params.value;
           const count = useLog ? Math.round(Math.pow(10, rawVal)) : rawVal;
           const energy = xLabels[xi] ?? xi;
-          const psd = yLabels[yi] ?? yi;
-          return `Energy: ${energy}<br>PSD: ${psd}<br>Counts: ${count}`;
+          const yVal = yLabels[yi] ?? yi;
+          return `Energy: ${energy}<br>${this.yAxisLabel}: ${yVal}<br>Counts: ${count}`;
         },
       },
       series: [{

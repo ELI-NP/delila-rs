@@ -91,7 +91,7 @@ impl Default for MonitorConfig {
                 max_value: 65536.0,
             },
             amax2d_y_config: HistogramConfig {
-                num_bins: 256,
+                num_bins: 512,
                 min_value: 0.0,
                 max_value: 16384.0,
             },

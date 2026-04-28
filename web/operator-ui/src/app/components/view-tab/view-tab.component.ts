@@ -106,6 +106,7 @@ import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types'
                   <app-heatmap-chart
                     [histogram]="histograms2d()[i] ?? null"
                     [logScale]="cell.logScale ?? true"
+                    [yAxisLabel]="histType() === 'amax2d' ? 'UserInfo[0]' : 'PSD'"
                   ></app-heatmap-chart>
                 }
               </div>
