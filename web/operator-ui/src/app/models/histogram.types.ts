@@ -93,7 +93,8 @@ export interface MonitorState {
 export type XAxisLabel = 'Channel' | 'keV' | 'MeV';
 
 // Histogram type for tab-level selection
-export type HistogramType = 'energy' | 'psd' | 'psd2d';
+// 'amax2d' = AMax FW Energy × UserInfo[0] (peak value) 2D heatmap.
+export type HistogramType = 'energy' | 'psd' | 'psd2d' | 'amax2d';
 
 // Setup tab configuration (template for creating views)
 export interface SetupConfig {

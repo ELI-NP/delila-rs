@@ -602,6 +602,7 @@ impl Psd1Decoder {
             energy_short: charge_short,
             fine_time,
             flags,
+            user_info: [0; 4],
             waveform,
         })
     }

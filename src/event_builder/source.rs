@@ -372,6 +372,7 @@ mod delila_integration_tests {
                     energy_short: 500,
                     timestamp_ns: 100.0,
                     flags: 0,
+                    user_info: [0; 4],
                     waveform: None,
                 },
                 EventData {
@@ -381,6 +382,7 @@ mod delila_integration_tests {
                     energy_short: 600,
                     timestamp_ns: 200.0,
                     flags: 0,
+                    user_info: [0; 4],
                     waveform: None,
                 },
             ],
@@ -396,6 +398,7 @@ mod delila_integration_tests {
                 energy_short: 700,
                 timestamp_ns: 300.0,
                 flags: 0,
+                user_info: [0; 4],
                 waveform: None,
             }],
         };
@@ -454,6 +457,7 @@ mod delila_integration_tests {
                     energy_short: 500,
                     timestamp_ns: (i as f64) * 100.0,
                     flags: 0,
+                    user_info: [0; 4],
                     waveform: None,
                 }],
             };

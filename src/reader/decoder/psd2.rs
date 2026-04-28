@@ -479,6 +479,7 @@ impl Psd2Decoder {
             energy_short,
             fine_time,
             flags,
+            user_info: [0; 4],
             waveform,
         })
     }
@@ -516,6 +517,7 @@ impl Psd2Decoder {
             energy_short: 0,
             fine_time: 0,
             flags,
+            user_info: [0; 4],
             waveform: None,
         })
     }

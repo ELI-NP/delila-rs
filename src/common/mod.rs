@@ -147,13 +147,20 @@ pub struct EventData {
     pub timestamp_ns: f64,
     /// Status/error flags (u64 for future extensibility)
     pub flags: u64,
+    /// Per-event user info slots (AMax: 4 × u64 from OpenDPP user words).
+    /// Slot 0 = AMax peak value (typical), 1 = baseline, 2-3 = FW-specific.
+    /// All slots are 0 for non-AMax firmware. `#[serde(default)]` keeps the
+    /// wire format backward compatible with older `.delila` files / consumers
+    /// that pre-date the AMax integration.
+    #[serde(default)]
+    pub user_info: [u64; 4],
     /// Optional waveform data (skipped in serialization when None)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub waveform: Option<Waveform>,
 }
 
 impl EventData {
-    /// Create a new EventData without waveform
+    /// Create a new EventData without waveform (user_info defaults to [0;4])
     pub fn new(
         module: u8,
         channel: u8,
@@ -169,11 +176,12 @@ impl EventData {
             energy_short,
             timestamp_ns,
             flags,
+            user_info: [0; 4],
             waveform: None,
         }
     }
 
-    /// Create a new EventData with waveform
+    /// Create a new EventData with waveform (user_info defaults to [0;4])
     pub fn with_waveform(
         module: u8,
         channel: u8,
@@ -190,6 +198,7 @@ impl EventData {
             energy_short,
             timestamp_ns,
             flags,
+            user_info: [0; 4],
             waveform: Some(waveform),
         }
     }
@@ -203,6 +212,7 @@ impl EventData {
             energy_short: 0,
             timestamp_ns: 0.0,
             flags: 0,
+            user_info: [0; 4],
             waveform: None,
         }
     }

@@ -396,6 +396,15 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
     // Combine flags (flags_a is 8 bits, flags_b is 12 bits)
     let flags = ((event.flags_a as u32) << 12) | (event.flags_b as u32);
 
+    // Copy first 4 user_info slots into the fixed-size array. AMax FW emits
+    // [0]=AMax peak, [1]=baseline, [2..=3]=FW-specific. Missing slots stay 0.
+    // Slots beyond 4 (rare) are dropped silently — they'd require a Vec on
+    // the hot path, defeating the zero-allocation guarantee.
+    let mut user_info = [0u64; 4];
+    for (i, slot) in event.user_info.iter().take(4).enumerate() {
+        user_info[i] = *slot;
+    }
+
     decoder::EventData {
         timestamp_ns,
         module: module_id,
@@ -404,6 +413,7 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
         energy_short: event.psd, // PSD value stored in energy_short
         fine_time: event.fine_timestamp,
         flags,
+        user_info,
         waveform: None, // AMax OpenDPP without waveform for now
     }
 }
@@ -1207,7 +1217,7 @@ impl Reader {
             event.flags as u64
         };
 
-        if let Some(wf) = event.waveform {
+        let mut common = if let Some(wf) = event.waveform {
             CommonEventData::with_waveform(
                 event.module,
                 event.channel,
@@ -1236,7 +1246,11 @@ impl Reader {
                 event.timestamp_ns,
                 flags,
             )
-        }
+        };
+        // Carry AMax user_info through to the wire format. Non-AMax firmwares
+        // leave [0;4] from the decoder, so this is effectively a no-op there.
+        common.user_info = event.user_info;
+        common
     }
 
     /// Publish a message via ZMQ
@@ -1806,16 +1820,29 @@ impl Reader {
                     if let Some(ref config_path) = config.config_file {
                         info!(path = %config_path, "Loading digitizer configuration");
                         match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                            Ok(dig_config) => match conn.handle.apply_config(&dig_config) {
-                                Ok(count) => {
-                                    info!(count, "Digitizer configuration applied");
+                            Ok(dig_config) => {
+                                let apply_result =
+                                    conn.handle.apply_config(&dig_config).and_then(|n| {
+                                        // AMax: also program per-channel user registers
+                                        if dig_config.firmware == FirmwareType::AMax {
+                                            conn.handle
+                                                .apply_amax_channel_config(&dig_config)
+                                                .map(|m| n + m)
+                                        } else {
+                                            Ok(n)
+                                        }
+                                    });
+                                match apply_result {
+                                    Ok(count) => {
+                                        info!(count, "Digitizer configuration applied");
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "Auto-configure from JSON failed — \
+                                            awaiting Operator ApplyDigitizerConfig");
+                                        conn.auto_config_failed = true;
+                                    }
                                 }
-                                Err(e) => {
-                                    warn!(error = %e, "Auto-configure from JSON failed — \
-                                        awaiting Operator ApplyDigitizerConfig");
-                                    conn.auto_config_failed = true;
-                                }
-                            },
+                            }
                             Err(e) => {
                                 error!(error = %e, path = %config_path, "Failed to load config file");
                                 // Mark as configured anyway — digitizer keeps its current settings
@@ -1930,7 +1957,7 @@ impl Reader {
                         }
                         let result = match connection.as_ref() {
                             Some(conn) => {
-                                if let Some(ref cache) = conn.param_cache {
+                                let felib = if let Some(ref cache) = conn.param_cache {
                                     conn.handle
                                         .apply_config_validated(&dig_config, cache)
                                         .map(|r| r.ok + r.adjusted)
@@ -1939,6 +1966,21 @@ impl Reader {
                                     conn.handle
                                         .apply_config(&dig_config)
                                         .map_err(|e| format!("Failed to apply config: {}", e))
+                                };
+                                // AMax: also program per-channel user registers after the
+                                // FELib step. Sums into the same params_applied count so
+                                // the operator UI reports both sources.
+                                if dig_config.firmware == FirmwareType::AMax {
+                                    felib.and_then(|n| {
+                                        conn.handle
+                                            .apply_amax_channel_config(&dig_config)
+                                            .map(|m| n + m)
+                                            .map_err(|e| {
+                                                format!("Failed to apply AMax registers: {}", e)
+                                            })
+                                    })
+                                } else {
+                                    felib
                                 }
                             }
                             None => Err("Not connected to digitizer".to_string()),
@@ -2738,6 +2780,7 @@ impl Reader {
                     energy_short: 0,
                     fine_time,
                     flags,
+                    user_info: [0; 4],
                     waveform,
                 });
             }
@@ -3314,6 +3357,7 @@ mod tests {
             energy_short: 800,
             fine_time: 512,
             flags: 0x01,
+            user_info: [0; 4],
             waveform: None,
         };
 
@@ -3420,6 +3464,7 @@ mod tests {
             energy_short: 1500,
             fine_time: 100,
             flags: 0x00,
+            user_info: [0; 4],
             waveform: Some(wf),
         };
 

@@ -578,10 +578,7 @@ impl X743Handle {
     /// Follows WaveDemo ProgramBoard() sequence. Returns the number of parameters
     /// actually written to hardware (board-level + per-channel + extra_registers),
     /// which the Operator surfaces in the "Applied N parameters" toast.
-    pub fn apply_config_standard(
-        &self,
-        config: &DigitizerConfig,
-    ) -> Result<usize, DigitizerError> {
+    pub fn apply_config_standard(&self, config: &DigitizerConfig) -> Result<usize, DigitizerError> {
         let x743 = config
             .x743
             .as_ref()
@@ -798,8 +795,7 @@ impl X743Handle {
                 .and_then(|c| c.trigger_threshold_v)
                 .or(defaults.trigger_threshold_v);
             if let Some(v_input) = threshold_v {
-                let dac =
-                    crate::config::digitizer::x743_threshold_v_to_dac(v_input, dc_offset_pct);
+                let dac = crate::config::digitizer::x743_threshold_v_to_dac(v_input, dc_offset_pct);
                 self.set_channel_trigger_threshold(ch, dac)?;
                 count += 1;
             } else if let Some(threshold) = ch_config

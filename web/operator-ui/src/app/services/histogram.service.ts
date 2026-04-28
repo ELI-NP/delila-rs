@@ -144,11 +144,19 @@ export class HistogramService {
       .pipe(catchError(() => of(null)));
   }
 
-  fetchHistogram2d(moduleId: number, channelId: number): Observable<Histogram2D | null> {
+  /**
+   * @param type Backend 2D histogram variant. Defaults to `'psd2d'` (Energy × PSD).
+   *             Pass `'amax2d'` for the AMax FW Energy × UserInfo[0] heatmap.
+   */
+  fetchHistogram2d(
+    moduleId: number,
+    channelId: number,
+    type: 'psd2d' | 'amax2d' = 'psd2d',
+  ): Observable<Histogram2D | null> {
     const url = this.monitorBaseUrl();
     if (!url) return of(null);
     return this.http
-      .get<Histogram2D>(`${url}/histograms2d/${moduleId}/${channelId}`)
+      .get<Histogram2D>(`${url}/histograms2d/${moduleId}/${channelId}`, { params: { type } })
       .pipe(catchError(() => of(null)));
   }
 

@@ -109,10 +109,11 @@ import {
             <mat-option value="energy">Energy</mat-option>
             <mat-option value="psd">PSD</mat-option>
             <mat-option value="psd2d">PSD 2D</mat-option>
+            <mat-option value="amax2d">AMax 2D (E × UI[0])</mat-option>
           </mat-select>
         </mat-form-field>
 
-        @if (config.histogramType !== 'psd2d') {
+        @if (config.histogramType !== 'psd2d' && config.histogramType !== 'amax2d') {
           <mat-form-field appearance="outline" class="axis-label-select">
             <mat-label>X-Axis</mat-label>
             <mat-select

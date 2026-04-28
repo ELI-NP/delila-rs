@@ -27,7 +27,7 @@ import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types'
     <div class="view-container">
       <!-- Toolbar -->
       <div class="view-toolbar">
-        @if (histType() !== 'psd2d') {
+        @if (!is2dHistType(histType())) {
           <button
             mat-stroked-button
             (click)="onApplyRangeToAll()"
@@ -64,7 +64,7 @@ import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types'
           <mat-icon>save_alt</mat-icon>
           {{ isSaving() ? 'Saving...' : 'Save Image' }}
         </button>
-        @if (histType() !== 'psd2d') {
+        @if (!is2dHistType(histType())) {
           <span class="toolbar-hint">
             Drag to select range, Ctrl+Scroll for X-axis zoom
           </span>
@@ -91,7 +91,7 @@ import { ViewTab, Histogram1D, Histogram2D } from '../../models/histogram.types'
                 }
               </div>
               <div class="chart-wrapper">
-                @if (histType() !== 'psd2d') {
+                @if (!is2dHistType(histType())) {
                   <app-histogram-chart
                     #chartRef
                     [histogram]="histograms()[i] ?? null"
@@ -246,12 +246,17 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   readonly isSaving = signal(false);
   readonly histType = computed(() => this.tab.histogramType ?? 'energy');
 
+  /** Heatmap-rendered histogram types (2D heatmap component instead of 1D bar). */
+  is2dHistType(t: string): boolean {
+    return t === 'psd2d' || t === 'amax2d';
+  }
+
   ngOnInit(): void {
     const cellCount = this.tab.cells.length;
     this.histograms.set(new Array(cellCount).fill(null));
     this.histograms2d.set(new Array(cellCount).fill(null));
 
-    if (this.histType() === 'psd2d') {
+    if (this.is2dHistType(this.histType())) {
       // Poll 2D histograms
       interval(this.refreshInterval)
         .pipe(
@@ -298,9 +303,10 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   }
 
   private fetchAll2d() {
+    const type = this.histType() === 'amax2d' ? 'amax2d' : 'psd2d';
     const requests = this.tab.cells.map((cell) => {
       if (cell.isEmpty) return of(null);
-      return this.histogramService.fetchHistogram2d(cell.sourceId, cell.channelId).pipe(
+      return this.histogramService.fetchHistogram2d(cell.sourceId, cell.channelId, type).pipe(
         catchError(() => of(null))
       );
     });

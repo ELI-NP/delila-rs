@@ -2,6 +2,7 @@
 //!
 //! Safe Rust bindings for CAEN digitizer access via FELib.
 
+pub mod amax_registers;
 pub mod error;
 pub mod ffi;
 pub mod handle;

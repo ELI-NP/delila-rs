@@ -811,6 +811,115 @@ impl CaenHandle {
         Ok(applied)
     }
 
+    /// Apply AMax-firmware per-channel registers via direct user-register writes.
+    ///
+    /// Walks `config.channel_overrides` (falling back to `channel_defaults`) and
+    /// writes each `AMaxChannelConfig` field that is `Some(_)` to the FELib via
+    /// `set_user_register`. Channel addresses are computed by
+    /// [`amax_registers::channel_register_byte_addr`].
+    ///
+    /// Returns the count of successful register writes (the operator surfaces
+    /// this as "Applied N parameters to hardware").
+    ///
+    /// Errors: on the first failed write the function bails out; partial state
+    /// stays on the hardware (callers should treat AMax apply failures as a
+    /// hard error and investigate).
+    pub fn apply_amax_channel_config(
+        &self,
+        config: &crate::config::digitizer::DigitizerConfig,
+    ) -> Result<usize, CaenError> {
+        use super::amax_registers as r;
+        use crate::config::digitizer::AMaxChannelConfig;
+        use tracing::{debug, info};
+
+        let mut count: usize = 0;
+        let defaults_amax: Option<&AMaxChannelConfig> = config.channel_defaults.amax.as_ref();
+
+        for ch in 0..config.num_channels {
+            let override_amax = config
+                .channel_overrides
+                .get(&ch)
+                .and_then(|c| c.amax.as_ref());
+            // Resolve each field: override channel beats defaults.
+            macro_rules! resolve {
+                ($field:ident) => {
+                    override_amax
+                        .and_then(|c| c.$field)
+                        .or_else(|| defaults_amax.and_then(|c| c.$field))
+                };
+            }
+
+            // List the (offset, value) pairs that are explicitly set for this channel.
+            let writes: [(u32, Option<u32>, &'static str); 24] = [
+                (
+                    r::REG_SELECTOR_WAVE,
+                    resolve!(selector_wave),
+                    "selector_wave",
+                ),
+                (
+                    r::REG_PRETRIGGER_INPUT,
+                    resolve!(pretrigger_input),
+                    "pretrigger_input",
+                ),
+                (r::REG_POLARITY, resolve!(polarity), "polarity"),
+                (r::REG_OFFSET, resolve!(offset), "offset"),
+                (r::REG_THRS, resolve!(thrs), "thrs"),
+                (r::REG_TRIG_K, resolve!(trig_k), "trig_k"),
+                (r::REG_TRIG_M, resolve!(trig_m), "trig_m"),
+                (r::REG_TRAP_K, resolve!(trap_k), "trap_k"),
+                (r::REG_TRAP_M, resolve!(trap_m), "trap_m"),
+                (r::REG_DECONV_M, resolve!(deconv_m), "deconv_m"),
+                (r::REG_TRAP_GAIN, resolve!(trap_gain), "trap_gain"),
+                (r::REG_BL_LEN, resolve!(bl_len), "bl_len"),
+                (r::REG_BL_INIB, resolve!(bl_inib), "bl_inib"),
+                (r::REG_SAMPLE_POS, resolve!(sample_pos), "sample_pos"),
+                (r::REG_RUN_CFG, resolve!(run_cfg), "run_cfg"),
+                (r::REG_AMAX_WINDOW, resolve!(amax_window), "amax_window"),
+                (r::REG_AMAX_DELAY, resolve!(amax_delay), "amax_delay"),
+                (r::REG_WINDOW_MAXIM, resolve!(window_maxim), "window_maxim"),
+                (r::REG_AMAX_LEN, resolve!(amax_len), "amax_len"),
+                (
+                    r::REG_BASELINE_DELAY,
+                    resolve!(baseline_delay),
+                    "baseline_delay",
+                ),
+                (r::REG_BASELINE_LEN, resolve!(baseline_len), "baseline_len"),
+                (
+                    r::REG_BASELINE_OFFSET,
+                    resolve!(baseline_offset),
+                    "baseline_offset",
+                ),
+                (
+                    r::REG_PRETRIGGER_TRAP,
+                    resolve!(pretrigger_trap),
+                    "pretrigger_trap",
+                ),
+                (
+                    r::REG_PRETRIGGER_AMAX,
+                    resolve!(pretrigger_amax),
+                    "pretrigger_amax",
+                ),
+            ];
+
+            for (offset, value, name) in writes {
+                let Some(v) = value else { continue };
+                let byte_addr = r::channel_register_byte_addr(ch, offset);
+                debug!(
+                    channel = ch,
+                    register = name,
+                    addr = format_args!("0x{:08X}", byte_addr),
+                    value = v,
+                    "[AMax] WriteUserRegister"
+                );
+                self.set_user_register(byte_addr, v)?;
+                count += 1;
+            }
+        }
+
+        info!(applied = count, "AMax channel config applied");
+        Ok(count)
+    }
+
     /// Apply only SetInRun parameters (safe to call while Running)
     ///
     /// Filters parameters to only those the hardware supports changing

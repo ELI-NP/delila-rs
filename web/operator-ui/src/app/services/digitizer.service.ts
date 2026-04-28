@@ -86,6 +86,70 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   'digital_probe_3',
 ];
 
+/**
+ * AMax dotted-path keys. The backend stores these inside a nested
+ * `ChannelConfig.amax: AMaxChannelConfig` struct; the channel-table UI uses
+ * the dotted form so a single ChannelParamDef[] can address either flat or
+ * nested fields. expand/compress walk these explicitly.
+ */
+const AMAX_DOTTED_KEYS: readonly string[] = [
+  'amax.polarity',
+  'amax.offset',
+  'amax.thrs',
+  'amax.trig_k',
+  'amax.trig_m',
+  'amax.run_cfg',
+  'amax.trap_k',
+  'amax.trap_m',
+  'amax.deconv_m',
+  'amax.trap_gain',
+  'amax.bl_len',
+  'amax.bl_inib',
+  'amax.sample_pos',
+  'amax.amax_window',
+  'amax.amax_delay',
+  'amax.amax_len',
+  'amax.window_maxim',
+  'amax.baseline_delay',
+  'amax.baseline_len',
+  'amax.baseline_offset',
+  'amax.pretrigger_input',
+  'amax.pretrigger_trap',
+  'amax.pretrigger_amax',
+  'amax.selector_wave',
+];
+
+/** Read a possibly-dotted key from a ChannelConfig, returning undefined when
+ *  any segment is missing. Only `amax.<field>` is supported today. */
+function readDottedFromChannel(cfg: ChannelConfig | undefined, dotted: string): unknown {
+  if (!cfg) return undefined;
+  const parts = dotted.split('.');
+  let cur: unknown = cfg;
+  for (const p of parts) {
+    if (cur && typeof cur === 'object' && p in (cur as Record<string, unknown>)) {
+      cur = (cur as Record<string, unknown>)[p];
+    } else {
+      return undefined;
+    }
+  }
+  return cur;
+}
+
+/** Write a value at a dotted path inside a ChannelConfig, creating
+ *  intermediate `amax: {}` objects on demand. Mirror of `readDottedFromChannel`. */
+function writeDottedToChannel(cfg: ChannelConfig, dotted: string, value: unknown): void {
+  const parts = dotted.split('.');
+  let obj: Record<string, unknown> = cfg as unknown as Record<string, unknown>;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (!(p in obj) || typeof obj[p] !== 'object' || obj[p] === null) {
+      obj[p] = {};
+    }
+    obj = obj[p] as Record<string, unknown>;
+  }
+  obj[parts[parts.length - 1]] = value;
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -260,6 +324,13 @@ export class DigitizerService {
         // Use override if defined, else default
         values[key] = overrideVal !== undefined ? overrideVal : defaultVal;
       }
+      // Dotted (nested) keys — currently only `amax.<field>`. The flat-key
+      // map above misses these because they live inside ChannelConfig.amax.
+      for (const dotted of AMAX_DOTTED_KEYS) {
+        const overrideVal = readDottedFromChannel(override, dotted);
+        const defaultVal = readDottedFromChannel(defaults, dotted);
+        values[dotted] = overrideVal !== undefined ? overrideVal : defaultVal;
+      }
 
       result.push(values);
     }
@@ -274,6 +345,9 @@ export class DigitizerService {
     const result: Record<string, unknown> = {};
     for (const key of CHANNEL_PARAM_KEYS) {
       result[key] = config.channel_defaults[key];
+    }
+    for (const dotted of AMAX_DOTTED_KEYS) {
+      result[dotted] = readDottedFromChannel(config.channel_defaults, dotted);
     }
     return result;
   }
@@ -299,6 +373,12 @@ export class DigitizerService {
         (channel_defaults as Record<string, unknown>)[key] = val;
       }
     }
+    for (const dotted of AMAX_DOTTED_KEYS) {
+      const val = defaultValues[dotted];
+      if (val !== undefined && val !== null) {
+        writeDottedToChannel(channel_defaults, dotted, val);
+      }
+    }
 
     // Build channel_overrides: only store values that differ from defaults
     const channel_overrides: Record<number, ChannelConfig> = {};
@@ -313,6 +393,14 @@ export class DigitizerService {
         // If channel value differs from default, it's an override
         if (chVal !== defVal && chVal !== undefined) {
           (overrideConfig as Record<string, unknown>)[key] = chVal;
+          hasOverride = true;
+        }
+      }
+      for (const dotted of AMAX_DOTTED_KEYS) {
+        const chVal = chValues[dotted];
+        const defVal = defaultValues[dotted];
+        if (chVal !== defVal && chVal !== undefined) {
+          writeDottedToChannel(overrideConfig, dotted, chVal);
           hasOverride = true;
         }
       }

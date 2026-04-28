@@ -606,6 +606,7 @@ impl Pha1Decoder {
             energy_short: extra_data, // PHA1: extra_data stored in energy_short field
             fine_time,
             flags,
+            user_info: [0; 4],
             waveform,
         })
     }

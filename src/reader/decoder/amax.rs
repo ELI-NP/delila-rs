@@ -235,10 +235,14 @@ impl AMaxDecoder {
         // Combine flags
         let flags = ((flags_a as u32) << 12) | (flags_b as u32);
 
-        // Read User Words (AMax value, baseline, etc.)
-        let mut amax_value: Option<u64> = None;
-        let mut baseline: Option<u64> = None;
-        let mut user_word_index = 0;
+        // Read User Words. AMax FW emits up to 4 user words per event:
+        // [0] = AMax peak value, [1] = baseline, [2..=3] = FW-specific.
+        // We pack all 4 into the EventData.user_info fixed-size array;
+        // slots beyond 4 are dropped silently (rare; would force a Vec
+        // on the hot path otherwise). `amax_value` / `baseline` aliases
+        // are retained for legacy callers via `AMaxEventData`.
+        let mut user_info = [0u64; 4];
+        let mut user_word_index = 0usize;
 
         if !data_is_last && !has_waveform {
             while *word_index < total_words {
@@ -248,30 +252,14 @@ impl AMaxDecoder {
                 let is_last = (user_word >> constants::USER_LAST_WORD_SHIFT) & 0x1 != 0;
                 let user_data = user_word & constants::USER_DATA_MASK;
 
-                // Assign user words to AMax-specific fields
-                // Based on observed data: user word 0 might be AMax, user word 1 is baseline
-                match user_word_index {
-                    0 => {
-                        if user_data != 0 {
-                            amax_value = Some(user_data);
-                        }
-                    }
-                    1 => {
-                        if user_data != 0 || amax_value.is_none() {
-                            baseline = Some(user_data);
-                        }
-                    }
-                    _ => {
-                        // Additional user words - log if debug enabled
-                        if self.config.dump_enabled {
-                            println!(
-                                "[AMax] Extra user word {}: 0x{:016X}",
-                                user_word_index, user_data
-                            );
-                        }
-                    }
+                if user_word_index < user_info.len() {
+                    user_info[user_word_index] = user_data;
+                } else if self.config.dump_enabled {
+                    println!(
+                        "[AMax] Extra user word {} (dropped): 0x{:016X}",
+                        user_word_index, user_data
+                    );
                 }
-
                 user_word_index += 1;
 
                 if is_last {
@@ -279,6 +267,11 @@ impl AMaxDecoder {
                 }
             }
         }
+
+        // Legacy aliases: preserve the previous semantics (None when slot=0)
+        // so existing AMaxEventData consumers don't see ghost zero values.
+        let amax_value = (user_info[0] != 0).then_some(user_info[0]);
+        let baseline = (user_info[1] != 0 || amax_value.is_none()).then_some(user_info[1]);
 
         // Handle waveform if present
         let waveform = if has_waveform {
@@ -309,6 +302,7 @@ impl AMaxDecoder {
                 energy_short: psd, // Use energy_short for PSD value
                 fine_time,
                 flags,
+                user_info,
                 waveform,
             },
             amax_value,

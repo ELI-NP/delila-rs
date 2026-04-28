@@ -53,6 +53,10 @@ pub struct MonitorConfig {
     pub psd2d_x_config: HistogramConfig,
     /// PSD 2D Y axis (PSD ratio) configuration
     pub psd2d_y_config: HistogramConfig,
+    /// AMax 2D X axis (Energy) configuration
+    pub amax2d_x_config: HistogramConfig,
+    /// AMax 2D Y axis (UserInfo[0] = AMax peak value) configuration
+    pub amax2d_y_config: HistogramConfig,
     /// Internal channel capacity
     pub channel_capacity: usize,
 }
@@ -78,6 +82,18 @@ impl Default for MonitorConfig {
                 num_bins: 200,
                 min_value: -0.2,
                 max_value: 1.2,
+            },
+            // AMax 2D defaults follow tools/amax_viewer/MANUAL.md:
+            // X = Energy (16-bit ADC, 0..65536), Y = AMax peak (0..16384).
+            amax2d_x_config: HistogramConfig {
+                num_bins: 512,
+                min_value: 0.0,
+                max_value: 65536.0,
+            },
+            amax2d_y_config: HistogramConfig {
+                num_bins: 256,
+                min_value: 0.0,
+                max_value: 16384.0,
             },
             channel_capacity: 1000,
         }
@@ -283,6 +299,10 @@ pub struct MonitorState {
     pub histograms: HashMap<ChannelKey, Histogram1D>,
     pub psd_histograms: HashMap<ChannelKey, Histogram1D>,
     pub psd2d_histograms: HashMap<ChannelKey, Histogram2D>,
+    /// AMax 2D histograms: X = energy, Y = user_info[0] (AMax peak value).
+    /// Populated only for events whose `user_info[0] != 0` (avoids spurious
+    /// zero-bin counts from non-AMax FW that leaves the slot at 0).
+    pub amax2d_histograms: HashMap<ChannelKey, Histogram2D>,
     pub latest_waveforms: HashMap<ChannelKey, LatestWaveform>,
     pub total_events: u64,
     pub start_time: Option<Instant>,
@@ -290,6 +310,8 @@ pub struct MonitorState {
     pub psd_histogram_config: HistogramConfig,
     pub psd2d_x_config: HistogramConfig,
     pub psd2d_y_config: HistogramConfig,
+    pub amax2d_x_config: HistogramConfig,
+    pub amax2d_y_config: HistogramConfig,
     /// Pre-registered channels from Operator (preserved across Clear, cleared on Reset)
     pub registered_channels: Vec<ChannelRegistration>,
     /// Channel display names lookup (built from registered_channels)
@@ -302,6 +324,7 @@ impl MonitorState {
             histograms: HashMap::new(),
             psd_histograms: HashMap::new(),
             psd2d_histograms: HashMap::new(),
+            amax2d_histograms: HashMap::new(),
             latest_waveforms: HashMap::new(),
             total_events: 0,
             start_time: None,
@@ -309,6 +332,8 @@ impl MonitorState {
             psd_histogram_config: config.psd_histogram_config,
             psd2d_x_config: config.psd2d_x_config,
             psd2d_y_config: config.psd2d_y_config,
+            amax2d_x_config: config.amax2d_x_config,
+            amax2d_y_config: config.amax2d_y_config,
             registered_channels: Vec::new(),
             channel_names: HashMap::new(),
         }
@@ -356,6 +381,21 @@ impl MonitorState {
             psd2d.fill(event.energy as f32, psd);
         }
 
+        // 2c. AMax 2D Energy vs UserInfo[0]. Skip when user_info[0]==0 to
+        // avoid creating empty histograms for non-AMax firmware (PSD2/PSD1/PHA1
+        // leave the slot at 0 by default).
+        if event.user_info[0] != 0 {
+            let amax2d = self.amax2d_histograms.entry(key).or_insert_with(|| {
+                Histogram2D::new(
+                    event.module as u32,
+                    event.channel as u32,
+                    self.amax2d_x_config,
+                    self.amax2d_y_config,
+                )
+            });
+            amax2d.fill(event.energy as f32, event.user_info[0] as f32);
+        }
+
         // 3. Store latest waveform if present (move, not clone)
         if let Some(wf) = event.waveform {
             self.latest_waveforms.insert(
@@ -384,6 +424,7 @@ impl MonitorState {
         self.histograms.clear();
         self.psd_histograms.clear();
         self.psd2d_histograms.clear();
+        self.amax2d_histograms.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
         // Re-create empty histograms for registered channels
@@ -395,6 +436,7 @@ impl MonitorState {
         self.histograms.clear();
         self.psd_histograms.clear();
         self.psd2d_histograms.clear();
+        self.amax2d_histograms.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
         self.registered_channels.clear();
@@ -590,6 +632,8 @@ enum HistogramMessage {
     GetPsdHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
     /// Get PSD 2D histogram for a channel
     GetPsd2dHistogram(ChannelKey, oneshot::Sender<Option<Histogram2D>>),
+    /// Get AMax 2D histogram for a channel (X = Energy, Y = UserInfo[0])
+    GetAmax2dHistogram(ChannelKey, oneshot::Sender<Option<Histogram2D>>),
     /// Get latest waveform for a channel
     GetWaveform(ChannelKey, oneshot::Sender<Option<LatestWaveform>>),
     /// List all available waveforms (union of actual waveforms + registered channels)
@@ -711,16 +755,34 @@ async fn get_histogram(
     }
 }
 
-/// GET /api/histograms2d/:module/:channel - Get 2D Energy vs PSD histogram
+/// Query parameters for the 2D histogram endpoint.
+#[derive(Debug, Deserialize)]
+struct Histogram2dQuery {
+    /// 2D plot variant: "psd2d" (default, Energy × PSD ratio) or "amax2d"
+    /// (Energy × UserInfo[0] = AMax peak value, populated only when the
+    /// firmware emits user_info).
+    #[serde(default = "default_histogram2d_type")]
+    r#type: String,
+}
+
+fn default_histogram2d_type() -> String {
+    "psd2d".to_string()
+}
+
+/// GET /api/histograms2d/:module/:channel?type=psd2d|amax2d - Get a 2D histogram
 async fn get_histogram2d(
     State(state): State<AppState>,
     axum::extract::Path((module_id, channel_id)): axum::extract::Path<(u32, u32)>,
+    axum::extract::Query(query): axum::extract::Query<Histogram2dQuery>,
 ) -> Result<Json<Histogram2D>, StatusCode> {
     let (tx, rx) = oneshot::channel();
     let key = ChannelKey::new(module_id, channel_id);
-    let _ = state
-        .histogram_tx
-        .send(HistogramMessage::GetPsd2dHistogram(key, tx));
+
+    let msg = match query.r#type.as_str() {
+        "amax2d" => HistogramMessage::GetAmax2dHistogram(key, tx),
+        _ => HistogramMessage::GetPsd2dHistogram(key, tx),
+    };
+    let _ = state.histogram_tx.send(msg);
 
     match rx.await {
         Ok(Some(hist)) => Ok(Json(hist)),
@@ -1246,6 +1308,9 @@ impl Monitor {
                         Some(HistogramMessage::GetPsd2dHistogram(key, tx)) => {
                             let _ = tx.send(state.psd2d_histograms.get(&key).cloned());
                         }
+                        Some(HistogramMessage::GetAmax2dHistogram(key, tx)) => {
+                            let _ = tx.send(state.amax2d_histograms.get(&key).cloned());
+                        }
                         Some(HistogramMessage::GetWaveform(key, tx)) => {
                             let _ = tx.send(state.latest_waveforms.get(&key).cloned());
                         }
@@ -1410,6 +1475,7 @@ mod tests {
             energy_short: 500,
             timestamp_ns: 0.0,
             flags: 0,
+            user_info: [0; 4],
             waveform: None,
         };
 
@@ -1436,6 +1502,7 @@ mod tests {
             energy_short: 300,
             timestamp_ns: 0.0,
             flags: 0,
+            user_info: [0; 4],
             waveform: None,
         };
         state.process_event(event);
@@ -1464,6 +1531,7 @@ mod tests {
             energy_short: 0,
             timestamp_ns: 0.0,
             flags: 0,
+            user_info: [0; 4],
             waveform: None,
         };
         state.process_event(event);

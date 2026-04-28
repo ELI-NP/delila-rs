@@ -39,7 +39,7 @@ export interface ExpandDialogResult {
           Source {{ data.cell.sourceId }} / Channel {{ data.cell.channelId }}
         </span>
         <div class="header-actions">
-          @if (data.histogramType !== 'psd2d') {
+          @if (data.histogramType !== 'psd2d' && data.histogramType !== 'amax2d') {
             <button
               mat-stroked-button
               (click)="onFit()"
@@ -83,7 +83,7 @@ export interface ExpandDialogResult {
 
       <div class="main-content">
         <div class="chart-container">
-          @if (data.histogramType !== 'psd2d') {
+          @if (data.histogramType !== 'psd2d' && data.histogramType !== 'amax2d') {
             <app-histogram-chart
               [histogram]="histogram()"
               [xRange]="cell().xRange"
@@ -105,7 +105,7 @@ export interface ExpandDialogResult {
 
       <div class="dialog-footer">
         <div class="stats">
-          @if (data.histogramType !== 'psd2d') {
+          @if (data.histogramType !== 'psd2d' && data.histogramType !== 'amax2d') {
             @if (histogram(); as hist) {
               <span>Total: {{ hist.total_counts | number }}</span>
               <span>Underflow: {{ hist.underflow | number }}</span>
@@ -121,6 +121,8 @@ export interface ExpandDialogResult {
         <div class="hint">
           @if (data.histogramType === 'psd2d') {
             Energy vs PSD 2D heatmap
+          } @else if (data.histogramType === 'amax2d') {
+            Energy vs UserInfo[0] (AMax peak) 2D heatmap
           } @else if (!isLocked()) {
             Drag to select fit range, Ctrl+Scroll for X-axis zoom
           } @else {
@@ -235,17 +237,18 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
     const { sourceId, channelId } = this.data.cell;
     const type = this.data.histogramType;
 
-    if (type === 'psd2d') {
-      // Poll 2D histogram
+    if (type === 'psd2d' || type === 'amax2d') {
+      // Poll 2D histogram (PSD or AMax variant — backend distinguishes via ?type=)
+      const variant = type;
       interval(this.refreshInterval)
         .pipe(
           takeUntil(this.destroy$),
-          switchMap(() => this.histogramService.fetchHistogram2d(sourceId, channelId))
+          switchMap(() => this.histogramService.fetchHistogram2d(sourceId, channelId, variant))
         )
         .subscribe((hist) => {
           if (hist) this.histogram2d.set(hist);
         });
-      this.histogramService.fetchHistogram2d(sourceId, channelId)
+      this.histogramService.fetchHistogram2d(sourceId, channelId, variant)
         .subscribe((hist) => {
           if (hist) this.histogram2d.set(hist);
         });

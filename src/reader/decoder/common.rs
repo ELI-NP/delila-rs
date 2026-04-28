@@ -105,6 +105,13 @@ pub struct EventData {
     pub fine_time: u16,
     /// Flags (high priority + low priority)
     pub flags: u32,
+    /// Per-event user info slots (AMax: 4 × u64 from OpenDPP user words).
+    /// Slot 0 = AMax peak value (typical), 1 = baseline, 2-3 = FW-specific.
+    /// All slots are 0 for non-AMax firmware. Fixed-size to avoid hot-path
+    /// heap alloc; serde defaults to [0;4] when the field is absent in
+    /// older `.delila` files.
+    #[serde(default)]
+    pub user_info: [u64; 4],
     /// Waveform data (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waveform: Option<Waveform>,
@@ -145,6 +152,7 @@ impl Default for EventData {
             energy_short: 0,
             fine_time: 0,
             flags: 0,
+            user_info: [0; 4],
             waveform: None,
         }
     }

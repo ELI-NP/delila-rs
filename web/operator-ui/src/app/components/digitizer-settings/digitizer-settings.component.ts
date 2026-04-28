@@ -760,6 +760,11 @@ import {
       color: #7b1fa2;
     }
 
+    .firmware-badge.amax {
+      background-color: #e0f2f1;
+      color: #00796b;
+    }
+
     .group-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
