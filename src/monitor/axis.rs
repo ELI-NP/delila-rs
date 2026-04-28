@@ -11,20 +11,23 @@
 //!
 //! `Psd` is a derived value, not a raw field — `(energy - energy_short) /
 //! energy`, undefined when energy == 0.
+//!
+//! `fine_time` is intentionally absent: it is folded into `timestamp_ns`
+//! inside the reader before the event hits the pipeline, so the Monitor
+//! never sees it as a separate field.
 
-use crate::reader::decoder::common::EventData;
+use crate::common::EventData;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Source of a 2D histogram axis. Variants serialize as snake_case strings
-/// (`"energy"`, `"energy_short"`, `"fine_time"`, `"user_info0".."user_info3"`,
-/// `"psd"`) for use in REST query parameters and TS code.
+/// (`"energy"`, `"energy_short"`, `"user_info0".."user_info3"`, `"psd"`) for
+/// use in REST query parameters and TS code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AxisSource {
     Energy,
     EnergyShort,
-    FineTime,
     UserInfo0,
     UserInfo1,
     UserInfo2,
@@ -36,10 +39,9 @@ pub enum AxisSource {
 
 impl AxisSource {
     /// All variants, in the order they should appear in UI dropdowns.
-    pub const ALL: [AxisSource; 8] = [
+    pub const ALL: [AxisSource; 7] = [
         AxisSource::Energy,
         AxisSource::EnergyShort,
-        AxisSource::FineTime,
         AxisSource::UserInfo0,
         AxisSource::UserInfo1,
         AxisSource::UserInfo2,
@@ -54,7 +56,6 @@ impl AxisSource {
         match self {
             AxisSource::Energy => Some(event.energy as f64),
             AxisSource::EnergyShort => Some(event.energy_short as f64),
-            AxisSource::FineTime => Some(event.fine_time as f64),
             AxisSource::UserInfo0 => Some(event.user_info[0] as f64),
             AxisSource::UserInfo1 => Some(event.user_info[1] as f64),
             AxisSource::UserInfo2 => Some(event.user_info[2] as f64),
@@ -78,15 +79,16 @@ impl AxisSource {
         match self {
             // 16-bit raw ADC counts.
             AxisSource::Energy | AxisSource::EnergyShort => (0.0, 65536.0, 512),
-            // 10-bit fractional sample.
-            AxisSource::FineTime => (0.0, 1024.0, 256),
             // amax_viewer convention (matches Phase 1 amax2d default).
             AxisSource::UserInfo0
             | AxisSource::UserInfo1
             | AxisSource::UserInfo2
             | AxisSource::UserInfo3 => (0.0, 16384.0, 512),
-            // Psd ratio is bounded [0, 1] when defined.
-            AxisSource::Psd => (0.0, 1.0, 256),
+            // Psd ratio is bounded [0, 1] in theory but noise pushes events
+            // slightly outside both ends — we keep the same -0.2..1.2 / 200-bin
+            // window the legacy psd2d_y_config used so existing users see no
+            // visible change.
+            AxisSource::Psd => (-0.2, 1.2, 200),
         }
     }
 
@@ -95,7 +97,6 @@ impl AxisSource {
         match self {
             AxisSource::Energy => "Energy",
             AxisSource::EnergyShort => "Energy Short",
-            AxisSource::FineTime => "Fine Time",
             AxisSource::UserInfo0 => "UserInfo[0]",
             AxisSource::UserInfo1 => "UserInfo[1]",
             AxisSource::UserInfo2 => "UserInfo[2]",
@@ -108,16 +109,15 @@ impl AxisSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reader::decoder::common::EventData;
+    use crate::common::EventData;
 
-    fn event(energy: u16, energy_short: u16, fine_time: u16, user: [u64; 4]) -> EventData {
+    fn event(energy: u16, energy_short: u16, user: [u64; 4]) -> EventData {
         EventData {
             timestamp_ns: 0.0,
             module: 0,
             channel: 0,
             energy,
             energy_short,
-            fine_time,
             flags: 0,
             user_info: user,
             waveform: None,
@@ -126,10 +126,9 @@ mod tests {
 
     #[test]
     fn extract_basic_axes() {
-        let e = event(1000, 200, 42, [123, 456, 789, 1000]);
+        let e = event(1000, 200, [123, 456, 789, 1000]);
         assert_eq!(AxisSource::Energy.extract(&e), Some(1000.0));
         assert_eq!(AxisSource::EnergyShort.extract(&e), Some(200.0));
-        assert_eq!(AxisSource::FineTime.extract(&e), Some(42.0));
         assert_eq!(AxisSource::UserInfo0.extract(&e), Some(123.0));
         assert_eq!(AxisSource::UserInfo1.extract(&e), Some(456.0));
         assert_eq!(AxisSource::UserInfo2.extract(&e), Some(789.0));
@@ -138,14 +137,14 @@ mod tests {
 
     #[test]
     fn psd_is_undefined_when_energy_is_zero() {
-        let e = event(0, 0, 0, [0; 4]);
+        let e = event(0, 0, [0; 4]);
         assert_eq!(AxisSource::Psd.extract(&e), None);
     }
 
     #[test]
     fn psd_ratio_matches_definition() {
         // (1000 - 200) / 1000 = 0.8
-        let e = event(1000, 200, 0, [0; 4]);
+        let e = event(1000, 200, [0; 4]);
         let psd = AxisSource::Psd.extract(&e).expect("psd defined");
         assert!((psd - 0.8).abs() < 1e-12, "psd = {}", psd);
     }

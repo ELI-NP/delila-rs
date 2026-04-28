@@ -8,7 +8,7 @@
 use clap::Parser;
 use delila_rs::common::{setup_shutdown_with_message, MonitorArgs};
 use delila_rs::config::Config;
-use delila_rs::monitor::{HistogramConfig, Monitor, MonitorConfig};
+use delila_rs::monitor::{AxisSource, HistogramConfig, Monitor, MonitorConfig};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -46,16 +46,26 @@ async fn main() -> anyhow::Result<()> {
             min_value: monitor.psd_min,
             max_value: monitor.psd_max,
         };
-        monitor_config.psd2d_x_config = HistogramConfig {
-            num_bins: monitor.psd2d_x_bins,
-            min_value: 0.0,
-            max_value: 65536.0,
-        };
-        monitor_config.psd2d_y_config = HistogramConfig {
-            num_bins: monitor.psd2d_y_bins,
-            min_value: monitor.psd_min,
-            max_value: monitor.psd_max,
-        };
+        // The legacy TOML knobs `psd2d_x_bins` / `psd2d_y_bins` only ever
+        // tuned the Energy and Psd axes; under the AxisSource model we plumb
+        // them through `histogram2d_overrides` so users get the same effect
+        // when they look at any 2D plot whose axis is Energy or Psd.
+        monitor_config.histogram2d_overrides.insert(
+            AxisSource::Energy,
+            HistogramConfig {
+                num_bins: monitor.psd2d_x_bins,
+                min_value: 0.0,
+                max_value: 65536.0,
+            },
+        );
+        monitor_config.histogram2d_overrides.insert(
+            AxisSource::Psd,
+            HistogramConfig {
+                num_bins: monitor.psd2d_y_bins,
+                min_value: monitor.psd_min,
+                max_value: monitor.psd_max,
+            },
+        );
     }
 
     // CLI overrides config file

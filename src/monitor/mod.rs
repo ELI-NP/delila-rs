@@ -52,14 +52,12 @@ pub struct MonitorConfig {
     pub histogram_config: HistogramConfig,
     /// PSD 1D histogram configuration
     pub psd_histogram_config: HistogramConfig,
-    /// PSD 2D X axis (Energy) configuration
-    pub psd2d_x_config: HistogramConfig,
-    /// PSD 2D Y axis (PSD ratio) configuration
-    pub psd2d_y_config: HistogramConfig,
-    /// AMax 2D X axis (Energy) configuration
-    pub amax2d_x_config: HistogramConfig,
-    /// AMax 2D Y axis (UserInfo[0] = AMax peak value) configuration
-    pub amax2d_y_config: HistogramConfig,
+    /// Per-axis range/bin overrides for 2D plots. Any axis not present here
+    /// falls back to `AxisSource::default_axis()`. Used to honor the legacy
+    /// `monitor.psd2d_x_bins` / `monitor.psd2d_y_bins` TOML knobs (see
+    /// `bin/monitor.rs`) and to let operators tune ranges without
+    /// recompiling.
+    pub histogram2d_overrides: HashMap<AxisSource, HistogramConfig>,
     /// Internal channel capacity
     pub channel_capacity: usize,
 }
@@ -76,28 +74,7 @@ impl Default for MonitorConfig {
                 min_value: -0.2,
                 max_value: 1.2,
             },
-            psd2d_x_config: HistogramConfig {
-                num_bins: 512,
-                min_value: 0.0,
-                max_value: 65536.0,
-            },
-            psd2d_y_config: HistogramConfig {
-                num_bins: 200,
-                min_value: -0.2,
-                max_value: 1.2,
-            },
-            // AMax 2D defaults follow tools/amax_viewer/MANUAL.md:
-            // X = Energy (16-bit ADC, 0..65536), Y = AMax peak (0..16384).
-            amax2d_x_config: HistogramConfig {
-                num_bins: 512,
-                min_value: 0.0,
-                max_value: 65536.0,
-            },
-            amax2d_y_config: HistogramConfig {
-                num_bins: 512,
-                min_value: 0.0,
-                max_value: 16384.0,
-            },
+            histogram2d_overrides: HashMap::new(),
             channel_capacity: 1000,
         }
     }
@@ -296,25 +273,30 @@ pub struct LatestWaveform {
     pub waveform: Waveform,
 }
 
+/// One on-demand 2D histogram entry. `last_accessed` drives the TTL evictor
+/// (see `evict_stale_plots`).
+#[derive(Debug)]
+pub struct PlotEntry {
+    pub hist: Histogram2D,
+    pub last_accessed: Instant,
+}
+
 /// Monitor state containing all histograms (owned by histogram task)
 #[derive(Debug, Default)]
 pub struct MonitorState {
     pub histograms: HashMap<ChannelKey, Histogram1D>,
     pub psd_histograms: HashMap<ChannelKey, Histogram1D>,
-    pub psd2d_histograms: HashMap<ChannelKey, Histogram2D>,
-    /// AMax 2D histograms: X = energy, Y = user_info[0] (AMax peak value).
-    /// Populated only for events whose `user_info[0] != 0` (avoids spurious
-    /// zero-bin counts from non-AMax FW that leaves the slot at 0).
-    pub amax2d_histograms: HashMap<ChannelKey, Histogram2D>,
+    /// On-demand 2D histograms keyed by `(channel, x_axis, y_axis)`. Created
+    /// lazily on first REST `GET /api/histograms2d/...?x=&y=` and evicted by
+    /// `evict_stale_plots` after the TTL expires.
+    pub histograms2d: HashMap<(ChannelKey, AxisSource, AxisSource), PlotEntry>,
     pub latest_waveforms: HashMap<ChannelKey, LatestWaveform>,
     pub total_events: u64,
     pub start_time: Option<Instant>,
     pub histogram_config: HistogramConfig,
     pub psd_histogram_config: HistogramConfig,
-    pub psd2d_x_config: HistogramConfig,
-    pub psd2d_y_config: HistogramConfig,
-    pub amax2d_x_config: HistogramConfig,
-    pub amax2d_y_config: HistogramConfig,
+    /// Per-axis overrides for 2D plot ranges (see `MonitorConfig`).
+    pub histogram2d_overrides: HashMap<AxisSource, HistogramConfig>,
     /// Pre-registered channels from Operator (preserved across Clear, cleared on Reset)
     pub registered_channels: Vec<ChannelRegistration>,
     /// Channel display names lookup (built from registered_channels)
@@ -326,20 +308,71 @@ impl MonitorState {
         Self {
             histograms: HashMap::new(),
             psd_histograms: HashMap::new(),
-            psd2d_histograms: HashMap::new(),
-            amax2d_histograms: HashMap::new(),
+            histograms2d: HashMap::new(),
             latest_waveforms: HashMap::new(),
             total_events: 0,
             start_time: None,
             histogram_config: config.histogram_config,
             psd_histogram_config: config.psd_histogram_config,
-            psd2d_x_config: config.psd2d_x_config,
-            psd2d_y_config: config.psd2d_y_config,
-            amax2d_x_config: config.amax2d_x_config,
-            amax2d_y_config: config.amax2d_y_config,
+            histogram2d_overrides: config.histogram2d_overrides.clone(),
             registered_channels: Vec::new(),
             channel_names: HashMap::new(),
         }
+    }
+
+    /// Resolve the histogram axis configuration for a single `AxisSource`,
+    /// preferring an explicit override and falling back to
+    /// `AxisSource::default_axis()`.
+    fn axis_config(&self, axis: AxisSource) -> HistogramConfig {
+        if let Some(cfg) = self.histogram2d_overrides.get(&axis) {
+            return *cfg;
+        }
+        let (min, max, bins) = axis.default_axis();
+        HistogramConfig {
+            num_bins: bins,
+            min_value: min,
+            max_value: max,
+        }
+    }
+
+    /// Look up (or create) the 2D plot for `(key, x, y)` and return an
+    /// immutable reference to the histogram. Updates `last_accessed` so the
+    /// plot survives the TTL evictor on the next sweep.
+    pub fn ensure_plot(
+        &mut self,
+        key: ChannelKey,
+        x: AxisSource,
+        y: AxisSource,
+    ) -> &Histogram2D {
+        let plot_key = (key, x, y);
+        if !self.histograms2d.contains_key(&plot_key) {
+            let x_cfg = self.axis_config(x);
+            let y_cfg = self.axis_config(y);
+            let hist = Histogram2D::new(key.module_id, key.channel_id, x_cfg, y_cfg);
+            self.histograms2d.insert(
+                plot_key,
+                PlotEntry {
+                    hist,
+                    last_accessed: Instant::now(),
+                },
+            );
+        }
+        let entry = self
+            .histograms2d
+            .get_mut(&plot_key)
+            .expect("just inserted");
+        entry.last_accessed = Instant::now();
+        &entry.hist
+    }
+
+    /// Drop 2D plots whose `last_accessed` is older than `ttl`. Returns the
+    /// number of evicted entries (for the caller's logging).
+    pub fn evict_stale_plots(&mut self, ttl: std::time::Duration) -> usize {
+        let now = Instant::now();
+        let before = self.histograms2d.len();
+        self.histograms2d
+            .retain(|_, entry| now.duration_since(entry.last_accessed) <= ttl);
+        before - self.histograms2d.len()
     }
 
     /// Process an event and update histograms (consumes event for zero-copy waveform move)
@@ -358,11 +391,9 @@ impl MonitorState {
         });
         histogram.fill(event.energy as f32);
 
-        // 2. PSD calculation (only when energy > 0 to avoid division by zero)
+        // 2. PSD 1D histogram (only when energy > 0 to avoid division by zero)
         if event.energy > 0 {
             let psd = (event.energy as f32 - event.energy_short as f32) / event.energy as f32;
-
-            // 2a. 1D PSD histogram
             let psd_hist = self.psd_histograms.entry(key).or_insert_with(|| {
                 Histogram1D::new(
                     event.module as u32,
@@ -371,32 +402,18 @@ impl MonitorState {
                 )
             });
             psd_hist.fill(psd);
-
-            // 2b. 2D Energy vs PSD histogram
-            let psd2d = self.psd2d_histograms.entry(key).or_insert_with(|| {
-                Histogram2D::new(
-                    event.module as u32,
-                    event.channel as u32,
-                    self.psd2d_x_config,
-                    self.psd2d_y_config,
-                )
-            });
-            psd2d.fill(event.energy as f32, psd);
         }
 
-        // 2c. AMax 2D Energy vs UserInfo[0]. Skip when user_info[0]==0 to
-        // avoid creating empty histograms for non-AMax firmware (PSD2/PSD1/PHA1
-        // leave the slot at 0 by default).
-        if event.user_info[0] != 0 {
-            let amax2d = self.amax2d_histograms.entry(key).or_insert_with(|| {
-                Histogram2D::new(
-                    event.module as u32,
-                    event.channel as u32,
-                    self.amax2d_x_config,
-                    self.amax2d_y_config,
-                )
-            });
-            amax2d.fill(event.energy as f32, event.user_info[0] as f32);
+        // 3. 2D fills: walk the on-demand plot map and fill any plot for this
+        // channel whose axes both extract a defined value. With at most a
+        // handful of live plots per channel this stays O(N) where N is small.
+        for ((plot_key, x_src, y_src), entry) in self.histograms2d.iter_mut() {
+            if plot_key.module_id != key.module_id || plot_key.channel_id != key.channel_id {
+                continue;
+            }
+            if let (Some(x), Some(y)) = (x_src.extract(&event), y_src.extract(&event)) {
+                entry.hist.fill(x as f32, y as f32);
+            }
         }
 
         // 3. Store latest waveform if present (move, not clone)
@@ -426,8 +443,7 @@ impl MonitorState {
     pub fn clear(&mut self) {
         self.histograms.clear();
         self.psd_histograms.clear();
-        self.psd2d_histograms.clear();
-        self.amax2d_histograms.clear();
+        self.histograms2d.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
         // Re-create empty histograms for registered channels
@@ -438,8 +454,7 @@ impl MonitorState {
     pub fn reset(&mut self) {
         self.histograms.clear();
         self.psd_histograms.clear();
-        self.psd2d_histograms.clear();
-        self.amax2d_histograms.clear();
+        self.histograms2d.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
         self.registered_channels.clear();
@@ -459,7 +474,8 @@ impl MonitorState {
         self.ensure_registered_histograms();
     }
 
-    /// Ensure all registered channels have histogram entries (Energy, PSD 1D, PSD 2D).
+    /// Ensure all registered channels have 1D histogram entries (Energy + PSD).
+    /// 2D histograms are created lazily on first request — see `ensure_plot`.
     fn ensure_registered_histograms(&mut self) {
         for ch in &self.registered_channels {
             let key = ChannelKey::new(ch.module_id, ch.channel_id);
@@ -468,14 +484,6 @@ impl MonitorState {
             });
             self.psd_histograms.entry(key).or_insert_with(|| {
                 Histogram1D::new(ch.module_id, ch.channel_id, self.psd_histogram_config)
-            });
-            self.psd2d_histograms.entry(key).or_insert_with(|| {
-                Histogram2D::new(
-                    ch.module_id,
-                    ch.channel_id,
-                    self.psd2d_x_config,
-                    self.psd2d_y_config,
-                )
             });
         }
     }
@@ -633,10 +641,17 @@ enum HistogramMessage {
     GetHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
     /// Get PSD 1D histogram for a channel
     GetPsdHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
-    /// Get PSD 2D histogram for a channel
-    GetPsd2dHistogram(ChannelKey, oneshot::Sender<Option<Histogram2D>>),
-    /// Get AMax 2D histogram for a channel (X = Energy, Y = UserInfo[0])
-    GetAmax2dHistogram(ChannelKey, oneshot::Sender<Option<Histogram2D>>),
+    /// Get a 2D histogram for `(channel, x_axis, y_axis)`. Creates the plot
+    /// on-demand if it doesn't exist yet (returns the empty histogram so the
+    /// frontend has something to render until events start arriving).
+    Get2dHistogram(
+        ChannelKey,
+        AxisSource,
+        AxisSource,
+        oneshot::Sender<Histogram2D>,
+    ),
+    /// Run the TTL evictor (called periodically by a background task).
+    EvictStalePlots(std::time::Duration),
     /// Get latest waveform for a channel
     GetWaveform(ChannelKey, oneshot::Sender<Option<LatestWaveform>>),
     /// List all available waveforms (union of actual waveforms + registered channels)
@@ -759,37 +774,52 @@ async fn get_histogram(
 }
 
 /// Query parameters for the 2D histogram endpoint.
+///
+/// Preferred form is `?x=<axis>&y=<axis>` where each axis is an
+/// `AxisSource` snake_case literal. `?type=psd2d|amax2d` is kept as a
+/// backward-compatible alias for the two Phase 1 fixed plots.
 #[derive(Debug, Deserialize)]
 struct Histogram2dQuery {
-    /// 2D plot variant: "psd2d" (default, Energy × PSD ratio) or "amax2d"
-    /// (Energy × UserInfo[0] = AMax peak value, populated only when the
-    /// firmware emits user_info).
-    #[serde(default = "default_histogram2d_type")]
-    r#type: String,
+    x: Option<AxisSource>,
+    y: Option<AxisSource>,
+    /// Legacy alias — `psd2d` → (Energy, Psd), `amax2d` → (Energy, UserInfo0).
+    /// Frontends should migrate to `?x=&y=`; we keep this so existing
+    /// links/scripts don't break overnight.
+    r#type: Option<String>,
 }
 
-fn default_histogram2d_type() -> String {
-    "psd2d".to_string()
+/// Resolve `(x, y)` from the query, applying the legacy `?type=` alias.
+/// Returns 400 BadRequest if the caller gave us neither axis pair nor a
+/// recognised legacy alias.
+fn resolve_axes(query: &Histogram2dQuery) -> Result<(AxisSource, AxisSource), StatusCode> {
+    if let (Some(x), Some(y)) = (query.x, query.y) {
+        return Ok((x, y));
+    }
+    match query.r#type.as_deref() {
+        Some("psd2d") | None => Ok((AxisSource::Energy, AxisSource::Psd)),
+        Some("amax2d") => Ok((AxisSource::Energy, AxisSource::UserInfo0)),
+        Some(_) => Err(StatusCode::BAD_REQUEST),
+    }
 }
 
-/// GET /api/histograms2d/:module/:channel?type=psd2d|amax2d - Get a 2D histogram
+/// GET /api/histograms2d/:module/:channel?x=<axis>&y=<axis> — fetch a 2D
+/// histogram for a channel. Plots are created on demand on first request and
+/// kept alive while polled (TTL eviction in the background).
 async fn get_histogram2d(
     State(state): State<AppState>,
     axum::extract::Path((module_id, channel_id)): axum::extract::Path<(u32, u32)>,
     axum::extract::Query(query): axum::extract::Query<Histogram2dQuery>,
 ) -> Result<Json<Histogram2D>, StatusCode> {
+    let (x_axis, y_axis) = resolve_axes(&query)?;
     let (tx, rx) = oneshot::channel();
     let key = ChannelKey::new(module_id, channel_id);
 
-    let msg = match query.r#type.as_str() {
-        "amax2d" => HistogramMessage::GetAmax2dHistogram(key, tx),
-        _ => HistogramMessage::GetPsd2dHistogram(key, tx),
-    };
-    let _ = state.histogram_tx.send(msg);
+    let _ = state
+        .histogram_tx
+        .send(HistogramMessage::Get2dHistogram(key, x_axis, y_axis, tx));
 
     match rx.await {
-        Ok(Some(hist)) => Ok(Json(hist)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Ok(hist) => Ok(Json(hist)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -1137,6 +1167,32 @@ impl Monitor {
             .await
         });
 
+        // Spawn TTL evictor: every 30s, drop on-demand 2D plots that haven't
+        // been polled for >60s. Without this, idle browser tabs would keep
+        // every (X, Y) pair alive forever.
+        const PLOT_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+        const EVICT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        let evictor_tx = hist_tx.clone();
+        let mut evictor_shutdown = shutdown.resubscribe();
+        let evict_handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(EVICT_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        if evictor_tx
+                            .send(HistogramMessage::EvictStalePlots(PLOT_TTL))
+                            .is_err()
+                        {
+                            // histogram_task gone; nothing to do.
+                            break;
+                        }
+                    }
+                    _ = evictor_shutdown.recv() => break,
+                }
+            }
+        });
+
         info!(state = %self.state(), "Monitor ready, waiting for commands");
 
         // Wait for shutdown signal
@@ -1146,6 +1202,7 @@ impl Monitor {
         // Wait for tasks to complete
         let _ = recv_handle.await;
         let _ = hist_handle.await;
+        let _ = evict_handle.await;
         let _ = cmd_handle.await;
         let _ = http_handle.await;
 
@@ -1308,11 +1365,19 @@ impl Monitor {
                         Some(HistogramMessage::GetPsdHistogram(key, tx)) => {
                             let _ = tx.send(state.psd_histograms.get(&key).cloned());
                         }
-                        Some(HistogramMessage::GetPsd2dHistogram(key, tx)) => {
-                            let _ = tx.send(state.psd2d_histograms.get(&key).cloned());
+                        Some(HistogramMessage::Get2dHistogram(key, x, y, tx)) => {
+                            // ensure_plot creates the entry on demand and bumps
+                            // last_accessed; the response is always a (possibly
+                            // empty) histogram so the frontend has something to
+                            // render.
+                            let hist = state.ensure_plot(key, x, y).clone();
+                            let _ = tx.send(hist);
                         }
-                        Some(HistogramMessage::GetAmax2dHistogram(key, tx)) => {
-                            let _ = tx.send(state.amax2d_histograms.get(&key).cloned());
+                        Some(HistogramMessage::EvictStalePlots(ttl)) => {
+                            let evicted = state.evict_stale_plots(ttl);
+                            if evicted > 0 {
+                                debug!(evicted, "evicted stale 2D plot(s)");
+                            }
                         }
                         Some(HistogramMessage::GetWaveform(key, tx)) => {
                             let _ = tx.send(state.latest_waveforms.get(&key).cloned());
@@ -1496,6 +1561,12 @@ mod tests {
     fn test_psd_histogram_fill() {
         let config = MonitorConfig::default();
         let mut state = MonitorState::new(&config);
+        let key = ChannelKey::new(0, 0);
+
+        // Pre-register the 2D plot so the frontend's "polling" is simulated —
+        // 2D histograms are now on-demand and only the actively-requested
+        // (X, Y) pairs get filled.
+        state.ensure_plot(key, AxisSource::Energy, AxisSource::Psd);
 
         // Event with energy=1000, energy_short=300 → PSD = (1000-300)/1000 = 0.7
         let event = EventData {
@@ -1510,23 +1581,29 @@ mod tests {
         };
         state.process_event(event);
 
-        let key = ChannelKey::new(0, 0);
-
         // 1D PSD histogram should have 1 entry
         let psd_hist = state.psd_histograms.get(&key).unwrap();
         assert_eq!(psd_hist.total_counts, 1);
 
-        // 2D histogram should have 1 entry
-        let psd2d = state.psd2d_histograms.get(&key).unwrap();
-        assert_eq!(psd2d.total_counts, 1);
+        // 2D histogram for (Energy, Psd) should have 1 entry
+        let entry = state
+            .histograms2d
+            .get(&(key, AxisSource::Energy, AxisSource::Psd))
+            .expect("2D plot was pre-registered");
+        assert_eq!(entry.hist.total_counts, 1);
     }
 
     #[test]
     fn test_psd_skipped_for_zero_energy() {
         let config = MonitorConfig::default();
         let mut state = MonitorState::new(&config);
+        let key = ChannelKey::new(0, 0);
 
-        // Event with energy=0 → PSD calculation skipped
+        // Pre-register the (Energy, Psd) plot — the test asserts that a
+        // zero-energy event leaves both the 1D PSD and the 2D plot empty
+        // (Psd extraction returns None when energy == 0).
+        state.ensure_plot(key, AxisSource::Energy, AxisSource::Psd);
+
         let event = EventData {
             module: 0,
             channel: 0,
@@ -1539,14 +1616,80 @@ mod tests {
         };
         state.process_event(event);
 
-        let key = ChannelKey::new(0, 0);
-
         // Energy histogram should still have the event
         assert_eq!(state.histograms.get(&key).unwrap().total_counts, 1);
 
-        // PSD histograms should NOT have any entries (lazy created, so not present)
+        // 1D PSD histogram is lazy-created on first non-zero energy event, so
+        // it shouldn't exist.
         assert!(!state.psd_histograms.contains_key(&key));
-        assert!(!state.psd2d_histograms.contains_key(&key));
+
+        // The (Energy, Psd) 2D plot exists (we pre-registered it) but its
+        // total_counts is 0 because Psd.extract returns None for energy == 0.
+        let entry = state
+            .histograms2d
+            .get(&(key, AxisSource::Energy, AxisSource::Psd))
+            .expect("2D plot was pre-registered");
+        assert_eq!(entry.hist.total_counts, 0);
+    }
+
+    #[test]
+    fn test_ensure_plot_lazy_creation_and_axis_orthogonality() {
+        // Two different (X, Y) pairs for the same channel each get their own
+        // independent plot — the axis pair is part of the storage key.
+        let config = MonitorConfig::default();
+        let mut state = MonitorState::new(&config);
+        let key = ChannelKey::new(0, 0);
+
+        state.ensure_plot(key, AxisSource::Energy, AxisSource::Psd);
+        state.ensure_plot(key, AxisSource::Energy, AxisSource::UserInfo0);
+        assert_eq!(state.histograms2d.len(), 2);
+
+        // Event with energy=1000, energy_short=400 → psd=0.6, user_info[0]=42
+        let event = EventData {
+            module: 0,
+            channel: 0,
+            energy: 1000,
+            energy_short: 400,
+            timestamp_ns: 0.0,
+            flags: 0,
+            user_info: [42, 0, 0, 0],
+            waveform: None,
+        };
+        state.process_event(event);
+
+        // Both plots filled — extract on different axes.
+        for axes in [
+            (AxisSource::Energy, AxisSource::Psd),
+            (AxisSource::Energy, AxisSource::UserInfo0),
+        ] {
+            let entry = state.histograms2d.get(&(key, axes.0, axes.1)).unwrap();
+            assert_eq!(entry.hist.total_counts, 1, "{:?}", axes);
+        }
+    }
+
+    #[test]
+    fn test_evict_stale_plots() {
+        use std::time::Duration;
+
+        let config = MonitorConfig::default();
+        let mut state = MonitorState::new(&config);
+        let key = ChannelKey::new(0, 0);
+
+        state.ensure_plot(key, AxisSource::Energy, AxisSource::Psd);
+        assert_eq!(state.histograms2d.len(), 1);
+
+        // TTL of 1h: nothing evicted (entry is fresh).
+        assert_eq!(state.evict_stale_plots(Duration::from_secs(3600)), 0);
+        assert_eq!(state.histograms2d.len(), 1);
+
+        // Force the entry's last_accessed into the past so the TTL kicks in.
+        let plot_key = (key, AxisSource::Energy, AxisSource::Psd);
+        state.histograms2d.get_mut(&plot_key).unwrap().last_accessed =
+            Instant::now() - Duration::from_secs(120);
+
+        // TTL of 60s: stale entry gets evicted.
+        assert_eq!(state.evict_stale_plots(Duration::from_secs(60)), 1);
+        assert!(state.histograms2d.is_empty());
     }
 
     #[test]
