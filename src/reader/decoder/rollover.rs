@@ -282,7 +282,10 @@ mod tests {
         let mut t = RolloverTracker::new(BITS);
         assert_eq!(t.extend(5).unwrap(), 5);
         // Before any rollover, the "late arrival" branch turns this into Underflow:
-        assert!(matches!(t.extend(max - 5), Err(RolloverError::Underflow { .. })));
+        assert!(matches!(
+            t.extend(max - 5),
+            Err(RolloverError::Underflow { .. })
+        ));
     }
 
     /// T6 — upper bits above `bits` must be silently masked off.

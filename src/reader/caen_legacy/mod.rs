@@ -14,6 +14,6 @@ mod handle;
 pub use error::{DigitizerError, ErrorCode};
 pub use handle::{
     AcqMode, BoardInfo, ConnectionType, EventBuffer, IOLevel, ReadoutBuffer, SamCorrectionLevel,
-    SamFrequency, SamPulseSource, TriggerMode, TriggerPolarity, X743Handle,
-    MAX_CHANNELS, MAX_GROUPS, CHANNELS_PER_GROUP,
+    SamFrequency, SamPulseSource, TriggerMode, TriggerPolarity, X743Handle, CHANNELS_PER_GROUP,
+    MAX_CHANNELS, MAX_GROUPS,
 };

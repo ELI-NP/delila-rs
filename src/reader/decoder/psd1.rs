@@ -1160,7 +1160,11 @@ mod tests {
         let word = make_extras_word(ext_time, flags, fine_time);
 
         match decode_extras_word(word, 2) {
-            ExtrasDecoded::HwFineTs { extended_time: ext, fine_time: ft, flags: fl } => {
+            ExtrasDecoded::HwFineTs {
+                extended_time: ext,
+                fine_time: ft,
+                flags: fl,
+            } => {
                 assert_eq!(ext, ext_time);
                 assert_eq!(ft, fine_time);
                 assert_eq!(fl, flags as u32);
@@ -1174,7 +1178,11 @@ mod tests {
         // Option 0b000: extended_time + baseline
         let word: u32 = (0xABCD_u32 << 16) | 0x1234;
         match decode_extras_word(word, 0) {
-            ExtrasDecoded::HwFineTs { extended_time, fine_time, flags } => {
+            ExtrasDecoded::HwFineTs {
+                extended_time,
+                fine_time,
+                flags,
+            } => {
                 assert_eq!(extended_time, 0xABCD);
                 assert_eq!(fine_time, 0);
                 assert_eq!(flags, 0);
@@ -1188,7 +1196,11 @@ mod tests {
         // Option 0b001: extended_time + flags (16-bit)
         let word: u32 = (0x5678_u32 << 16) | 0x00FF;
         match decode_extras_word(word, 1) {
-            ExtrasDecoded::HwFineTs { extended_time, fine_time, flags } => {
+            ExtrasDecoded::HwFineTs {
+                extended_time,
+                fine_time,
+                flags,
+            } => {
                 assert_eq!(extended_time, 0x5678);
                 assert_eq!(fine_time, 0);
                 assert_eq!(flags, 0x00FF);
@@ -1201,10 +1213,13 @@ mod tests {
     fn test_decode_extras_word_option5_sw_fine_ts() {
         // Option 0b101: SAZC/SBZC zero-crossing samples
         let before_zc: u16 = 8300; // Before ZC (above baseline)
-        let after_zc: u16 = 8100;  // After ZC (below baseline)
+        let after_zc: u16 = 8100; // After ZC (below baseline)
         let word: u32 = ((before_zc as u32) << 16) | (after_zc as u32);
         match decode_extras_word(word, 5) {
-            ExtrasDecoded::SwFineTs { before_zc: b, after_zc: a } => {
+            ExtrasDecoded::SwFineTs {
+                before_zc: b,
+                after_zc: a,
+            } => {
                 assert_eq!(b, before_zc);
                 assert_eq!(a, after_zc);
                 // Verify fraction calculation

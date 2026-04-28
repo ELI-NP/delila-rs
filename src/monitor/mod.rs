@@ -524,7 +524,8 @@ impl AtomicStats {
     #[inline]
     fn record_processed(&self, event_count: u64) {
         self.processed_batches.fetch_add(1, Ordering::Relaxed);
-        self.processed_events.fetch_add(event_count, Ordering::Relaxed);
+        self.processed_events
+            .fetch_add(event_count, Ordering::Relaxed);
     }
 
     #[inline]

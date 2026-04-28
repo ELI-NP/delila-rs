@@ -240,7 +240,6 @@ pub struct X743Config {
     pub pulse_source: String,
 
     // ---- Event decode parameters (Standard mode) ----
-
     /// **DEPRECATED** — the CAEN lib does not populate `PosEdgeTimeStamp`
     /// or `NegEdgeTimeStamp` in V1743 Standard mode (only TDC + waveform),
     /// so fine timing is always computed by the Rust-side software CFD.
@@ -282,10 +281,126 @@ pub struct X743Config {
     #[serde(default = "X743Config::default_cfd_fraction")]
     pub cfd_fraction: f32,
 
+    /// TTF (Trigger and Timing Filter) smoothing — N-tap moving average applied
+    /// to the raw waveform *before* baseline / software CFD computation. Mirrors
+    /// WaveDemo's `TTF_SMOOTHING` option. Default `Off` keeps existing behavior.
+    #[serde(default)]
+    pub ttf_smoothing: TtfSmoothing,
+
+    /// Arbitrary register writes applied at the end of `apply_config_standard`
+    /// (after `wait_for_board_ready`). Mirrors WaveDemo's `WRITE_REGISTER` —
+    /// escape hatch for parameters not covered by the high-level API.
+    /// Order is preserved; later entries override earlier writes to the same address.
+    #[serde(default)]
+    pub extra_registers: Vec<RegisterWrite>,
     // DPP-CI (Charge Mode) fields were removed 2026-04-20.
     // See TODO/47_v1743_standard_mode_redesign.md — Charge Mode wire format has no TDC,
     // so V1743 is now Standard-mode only. Any legacy dpp_ci_*/pair_*/board_* keys in TOML
     // are ignored via serde's default-on-unknown behavior.
+}
+
+/// TTF (Trigger and Timing Filter) smoothing N-tap selection.
+/// `Off`/`N1` are equivalent (pass-through). 2/4/8/16 mirror WaveDemo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TtfSmoothing {
+    #[default]
+    Off,
+    N2,
+    N4,
+    N8,
+    N16,
+}
+
+impl TtfSmoothing {
+    /// Number of taps as used by the moving-average filter. 0/1 = pass-through.
+    pub fn taps(self) -> usize {
+        match self {
+            TtfSmoothing::Off => 0,
+            TtfSmoothing::N2 => 2,
+            TtfSmoothing::N4 => 4,
+            TtfSmoothing::N8 => 8,
+            TtfSmoothing::N16 => 16,
+        }
+    }
+}
+
+/// Convert an **input-referred** trigger threshold in volts to the V1743
+/// channel-threshold DAC code, accounting for the channel's DC offset.
+///
+/// The V1743 comparator operates on the post-DC-offset signal, so the
+/// register threshold corresponds to a voltage at the ADC, not at the
+/// input. To trigger when the **input** crosses `v_input_volts`, the
+/// register threshold must be `v_input_volts + dc_offset_v` (DC offset
+/// adds to the signal before digitization, per UM1935).
+///
+/// Inputs:
+/// - `v_input_volts`: desired threshold at the input, range nominally -1.25..=+1.25 V
+/// - `dc_offset_pct`: same percentage stored in `ChannelConfig::dc_offset`
+///   (50% = 0 V, 0% = -1.25 V, 100% = +1.25 V).
+///
+/// The post-offset target is clamped to ±1.25 V before mapping to DAC,
+/// so out-of-range inputs saturate at the rails (0 or 65535).
+pub fn x743_threshold_v_to_dac(v_input_volts: f32, dc_offset_pct: f32) -> u32 {
+    let dc_offset_v = (dc_offset_pct - 50.0) / 50.0 * 1.25;
+    let v_at_adc = (v_input_volts + dc_offset_v).clamp(-1.25, 1.25);
+    // WaveDemo formula: lower V → higher DAC (inverted range, -1.25 V = 65535).
+    let dac = (1.25 - v_at_adc) / 2.5 * 65535.0;
+    dac.round().clamp(0.0, 65535.0) as u32
+}
+
+/// Single arbitrary register write entry. Order in `Vec<RegisterWrite>` is preserved
+/// and applied verbatim at the end of `apply_config_standard`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegisterWrite {
+    /// 32-bit register address. Accepts `0x` hex string, decimal string, or integer.
+    #[serde(deserialize_with = "deserialize_u32_hex_or_dec")]
+    pub addr: u32,
+    /// 32-bit data word. Accepts `0x` hex string, decimal string, or integer.
+    #[serde(deserialize_with = "deserialize_u32_hex_or_dec")]
+    pub data: u32,
+    /// Optional human-readable note (logged when applied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// Accept `"0x8108"`, `"0X8108"`, `"33032"` (string forms) or a raw integer literal.
+/// TOML integer literals come through as `i64`/`u64`; JSON forms typically as strings
+/// (when the user wants hex). Both are normalized to `u32`.
+fn deserialize_u32_hex_or_dec<'de, D>(de: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Int(i64),
+        UInt(u64),
+        Str(String),
+    }
+
+    match Repr::deserialize(de)? {
+        Repr::Int(i) => {
+            u32::try_from(i).map_err(|_| Error::custom(format!("value {i} out of u32 range")))
+        }
+        Repr::UInt(u) => {
+            u32::try_from(u).map_err(|_| Error::custom(format!("value {u} out of u32 range")))
+        }
+        Repr::Str(s) => {
+            let trimmed = s.trim();
+            let parsed = if let Some(hex) = trimmed
+                .strip_prefix("0x")
+                .or_else(|| trimmed.strip_prefix("0X"))
+            {
+                u32::from_str_radix(hex, 16)
+            } else {
+                trimmed.parse::<u32>()
+            };
+            parsed.map_err(|e| Error::custom(format!("invalid u32 literal '{s}': {e}")))
+        }
+    }
 }
 
 impl X743Config {
@@ -546,9 +661,21 @@ pub struct ChannelConfig {
     /// Channel enable (e.g., "True", "False", "TRUE", "FALSE")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<String>,
-    /// Pulse polarity (e.g., "Positive", "Negative", "POLARITY_POSITIVE")
+    /// Pulse polarity — direction of the input pulse, NOT trigger edge.
+    /// Used by all FW for input-stage settings (DevTree `PulsePolarity`/`ch_polarity`).
+    /// X743Std: drives the software-side waveform inversion in the decoder.
+    /// For X743Std, when `trigger_edge` is unset this is also used as a fallback
+    /// to derive `SetTriggerPolarity` (Positive→Rising, Negative→Falling) so that
+    /// existing configs that only set `polarity` keep working.
+    /// Values: "Positive", "Negative", "POLARITY_POSITIVE", "POLARITY_NEGATIVE".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub polarity: Option<String>,
+    /// Trigger edge — discriminator edge, independent of pulse polarity.
+    /// X743Std only (consumed by `SetTriggerPolarity`); other FW currently ignore it.
+    /// When unset on X743Std, falls back to `polarity` (see above).
+    /// Values: "Rising", "Falling".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_edge: Option<String>,
     /// DC offset as percentage (0-100%)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dc_offset: Option<f32>,
@@ -581,9 +708,20 @@ pub struct ChannelConfig {
     /// Discriminator mode (PSD2: "LeadingEdge"/"CFD", PSD1: "DISCR_MODE_LED"/"DISCR_MODE_CFD")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discriminator_mode: Option<String>,
-    /// Trigger threshold in ADC counts
+    /// Trigger threshold in ADC counts (raw DAC for X743Std: 0-65535).
+    /// X743Std: prefer `trigger_threshold_v` instead — this DAC field stays
+    /// for legacy / advanced use and is overridden when `trigger_threshold_v` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_threshold: Option<u32>,
+    /// Trigger threshold in **input-referred volts** (X743Std only).
+    /// Range: -1.25 V to +1.25 V (clamped to V1743 input dynamic range).
+    /// The hardware comparator runs on the post-DC-offset signal, so the V→DAC
+    /// conversion accounts for the channel's `dc_offset` automatically:
+    ///   `DAC = clamp((1.25 - (V_input + dc_offset_v)) / 2.5 * 65535, 0, 65535)`
+    /// — i.e. the user enters the threshold as it appears at the **input**, not at the ADC.
+    /// When set, takes priority over `trigger_threshold` (DAC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_threshold_v: Option<f32>,
     /// CFD delay in ns (PSD2/PSD1). PSD1: converted to samples at apply time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cfd_delay_ns: Option<u32>,
@@ -2342,5 +2480,129 @@ mod tests {
         config.board.start_source = Some("P0".to_string());
         config.force_software_trigger();
         assert_eq!(config.board.start_source, Some("SWcmd".to_string()));
+    }
+
+    /// `deserialize_u32_hex_or_dec` accepts hex strings, decimal strings, and
+    /// integer literals. All four forms below must produce 0x8108 = 33032.
+    #[test]
+    fn test_register_write_hex_or_dec_parsing() {
+        let hex_lower =
+            serde_json::from_str::<RegisterWrite>(r#"{"addr":"0x8108","data":"0x10"}"#).unwrap();
+        assert_eq!(hex_lower.addr, 0x8108);
+        assert_eq!(hex_lower.data, 0x10);
+
+        let hex_upper =
+            serde_json::from_str::<RegisterWrite>(r#"{"addr":"0X8108","data":"0X10"}"#).unwrap();
+        assert_eq!(hex_upper.addr, 0x8108);
+
+        let dec_str =
+            serde_json::from_str::<RegisterWrite>(r#"{"addr":"33032","data":"16"}"#).unwrap();
+        assert_eq!(dec_str.addr, 0x8108);
+        assert_eq!(dec_str.data, 16);
+
+        let dec_int = serde_json::from_str::<RegisterWrite>(r#"{"addr":33032,"data":16}"#).unwrap();
+        assert_eq!(dec_int.addr, 0x8108);
+        assert_eq!(dec_int.data, 16);
+
+        // Junk should fail.
+        let bad = serde_json::from_str::<RegisterWrite>(r#"{"addr":"xyz","data":0}"#);
+        assert!(bad.is_err());
+    }
+
+    /// `trigger_edge` must round-trip through serde alongside `polarity`,
+    /// without one clobbering the other.
+    #[test]
+    fn test_channel_config_trigger_edge_roundtrip() {
+        let json = r#"{"polarity":"Negative","trigger_edge":"Rising"}"#;
+        let cfg: ChannelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.polarity.as_deref(), Some("Negative"));
+        assert_eq!(cfg.trigger_edge.as_deref(), Some("Rising"));
+
+        // polarity-only (no trigger_edge) must still parse — backward compat.
+        let json_legacy = r#"{"polarity":"Negative"}"#;
+        let cfg_legacy: ChannelConfig = serde_json::from_str(json_legacy).unwrap();
+        assert_eq!(cfg_legacy.polarity.as_deref(), Some("Negative"));
+        assert_eq!(cfg_legacy.trigger_edge, None);
+    }
+
+    /// `TtfSmoothing` enum maps to the WaveDemo tap counts.
+    #[test]
+    fn test_ttf_smoothing_taps() {
+        assert_eq!(TtfSmoothing::Off.taps(), 0);
+        assert_eq!(TtfSmoothing::N2.taps(), 2);
+        assert_eq!(TtfSmoothing::N4.taps(), 4);
+        assert_eq!(TtfSmoothing::N8.taps(), 8);
+        assert_eq!(TtfSmoothing::N16.taps(), 16);
+        assert_eq!(TtfSmoothing::default().taps(), 0);
+    }
+
+    /// V1743 input-referred threshold → DAC, with DC offset = 50% (0 V):
+    /// the WaveDemo formula passes through unchanged.
+    #[test]
+    fn test_x743_threshold_v_to_dac_no_offset() {
+        // 50% DC offset = 0 V, so threshold V_at_adc = V_input.
+        // 0 V → mid-scale (32768 ± rounding)
+        assert_eq!(x743_threshold_v_to_dac(0.0, 50.0), 32768);
+        // -1.25 V → 65535 (rail, fully negative)
+        assert_eq!(x743_threshold_v_to_dac(-1.25, 50.0), 65535);
+        // +1.25 V → 0 (rail, fully positive)
+        assert_eq!(x743_threshold_v_to_dac(1.25, 50.0), 0);
+        // -0.2 V → (1.25 - (-0.2)) / 2.5 * 65535 = 1.45 / 2.5 * 65535 ≈ 38010
+        let dac = x743_threshold_v_to_dac(-0.2, 50.0);
+        assert!((dac as i32 - 38010).abs() <= 1, "got {dac}");
+    }
+
+    /// With DC offset = 70% (= +0.5 V), input-referred V=-0.2 V means the
+    /// signal hits the comparator at +0.3 V, i.e. DAC ≈ 24903.
+    /// This is what the user actually wants when adjusting baseline.
+    #[test]
+    fn test_x743_threshold_v_to_dac_with_positive_offset() {
+        // dc_offset_v = (70 - 50) / 50 * 1.25 = +0.5 V
+        // V_at_adc = -0.2 + 0.5 = +0.3 V
+        // DAC = (1.25 - 0.3) / 2.5 * 65535 ≈ 24903
+        let dac = x743_threshold_v_to_dac(-0.2, 70.0);
+        assert!((dac as i32 - 24903).abs() <= 1, "got {dac}");
+
+        // Same input-referred 0 V at offset 90% (+1.0 V) → V_at_adc = +1.0
+        // DAC = (1.25 - 1.0) / 2.5 * 65535 ≈ 6553
+        let dac = x743_threshold_v_to_dac(0.0, 90.0);
+        assert!((dac as i32 - 6553).abs() <= 1, "got {dac}");
+    }
+
+    /// Negative DC offset shifts the signal down; same input-referred V means
+    /// the threshold register has to go further negative to compensate.
+    #[test]
+    fn test_x743_threshold_v_to_dac_with_negative_offset() {
+        // dc_offset_v = (30 - 50) / 50 * 1.25 = -0.5 V
+        // V_at_adc = -0.2 + (-0.5) = -0.7 V
+        // DAC = (1.25 - (-0.7)) / 2.5 * 65535 = 1.95 / 2.5 * 65535 ≈ 51117
+        let dac = x743_threshold_v_to_dac(-0.2, 30.0);
+        assert!((dac as i32 - 51117).abs() <= 1, "got {dac}");
+    }
+
+    /// Out-of-range inputs saturate at the rails — never panic.
+    #[test]
+    fn test_x743_threshold_v_to_dac_clamping() {
+        // V_input way below -1.25, any DC offset → DAC saturates at 65535
+        assert_eq!(x743_threshold_v_to_dac(-5.0, 50.0), 65535);
+        // V_input way above +1.25 → DAC saturates at 0
+        assert_eq!(x743_threshold_v_to_dac(5.0, 50.0), 0);
+        // Combined edge: V=-1.0 with DC offset = 0% (= -1.25 V) → V_at_adc = -2.25 → clamp -1.25
+        assert_eq!(x743_threshold_v_to_dac(-1.0, 0.0), 65535);
+    }
+
+    /// `trigger_threshold_v` round-trips through serde alongside `trigger_threshold`.
+    #[test]
+    fn test_channel_config_trigger_threshold_v_roundtrip() {
+        let json = r#"{"trigger_threshold":1234,"trigger_threshold_v":-0.2}"#;
+        let cfg: ChannelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.trigger_threshold, Some(1234));
+        assert_eq!(cfg.trigger_threshold_v, Some(-0.2));
+
+        // V-only (preferred path) — backward compat with no DAC
+        let json_v = r#"{"trigger_threshold_v":0.5}"#;
+        let cfg_v: ChannelConfig = serde_json::from_str(json_v).unwrap();
+        assert_eq!(cfg_v.trigger_threshold, None);
+        assert_eq!(cfg_v.trigger_threshold_v, Some(0.5));
     }
 }

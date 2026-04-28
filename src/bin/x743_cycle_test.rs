@@ -189,7 +189,9 @@ impl Log {
 
     fn record(&mut self, cycle: u32, phase: &str, status: Option<u32>, note: &str) {
         let t = self.start.elapsed().as_secs_f64();
-        let status_s = status.map(|s| format!("0x{:08X}", s)).unwrap_or_else(|| "-".to_string());
+        let status_s = status
+            .map(|s| format!("0x{:08X}", s))
+            .unwrap_or_else(|| "-".to_string());
         info!(cycle, phase, status = %status_s, note = %note, "mark");
         if let Some(ref mut f) = self.csv {
             use std::io::Write;
@@ -322,7 +324,10 @@ fn drain_data(
         }
     }
     if total_events > 0 {
-        info!("{}: drained {} events ({} bytes)", label, total_events, total_bytes);
+        info!(
+            "{}: drained {} events ({} bytes)",
+            label, total_events, total_bytes
+        );
     }
     Ok(total_bytes)
 }
@@ -454,7 +459,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            info!("Pre-apply: ReadoutBuffer allocated_size={} bytes (BEFORE apply_config)", b.allocated_size());
+            info!(
+                "Pre-apply: ReadoutBuffer allocated_size={} bytes (BEFORE apply_config)",
+                b.allocated_size()
+            );
             Some((b, eb))
         } else {
             None
@@ -479,7 +487,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     None
                 };
-                info!("Post-apply: ReadoutBuffer allocated_size={} bytes (AFTER apply_config)", b.allocated_size());
+                info!(
+                    "Post-apply: ReadoutBuffer allocated_size={} bytes (AFTER apply_config)",
+                    b.allocated_size()
+                );
                 (b, eb)
             }
         };
@@ -506,139 +517,145 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..session_cycles {
             global_cycle += 1;
             let cycle = global_cycle;
-        // ---- (optional) DOUBLE RESET ----
-        // T3: production's state machine calls h.reset() in the "Reset to Idle"
-        // block (mod.rs:2287) when the operator's Phase 0 sends Reset, and then
-        // apply_config_standard does its own h.reset() (handle.rs:590) at the
-        // start of the Configure phase. The two Resets fire ~7 ms to ~1.7 s
-        // apart. Standalone normally has only one (apply's). This flag adds
-        // the outer Reset to mirror production exactly.
-        if args.double_reset {
-            h.reset()?;
-            log.record(cycle, "after_outer_reset", Some(read_status(&h)), "");
-        }
-
-        // ---- (optional) RE-APPLY CONFIG ----
-        // Simulates the Reader's behaviour where every Configure command or
-        // every Tune Up Apply triggers apply_config_standard afresh.
-        if args.reapply {
-            if let Some(ref cfg) = prod_cfg {
-                h.apply_config_standard(cfg)?;
-            } else {
-                apply_minimal_config(&h)?;
+            // ---- (optional) DOUBLE RESET ----
+            // T3: production's state machine calls h.reset() in the "Reset to Idle"
+            // block (mod.rs:2287) when the operator's Phase 0 sends Reset, and then
+            // apply_config_standard does its own h.reset() (handle.rs:590) at the
+            // start of the Configure phase. The two Resets fire ~7 ms to ~1.7 s
+            // apart. Standalone normally has only one (apply's). This flag adds
+            // the outer Reset to mirror production exactly.
+            if args.double_reset {
+                h.reset()?;
+                log.record(cycle, "after_outer_reset", Some(read_status(&h)), "");
             }
-            log.record(cycle, "after_reapply", Some(read_status(&h)), "");
 
-            // T2: realloc readout buffer + event buffer to clear any stale
-            // lib-internal pointers that Reset may have invalidated.
-            if args.realloc_buf {
-                drop(buf);
-                buf = h.malloc_readout_buffer()?;
-                if event_buf.is_some() {
-                    event_buf = None; // drop old EventBuffer first
-                    event_buf = Some(h.allocate_event()?);
+            // ---- (optional) RE-APPLY CONFIG ----
+            // Simulates the Reader's behaviour where every Configure command or
+            // every Tune Up Apply triggers apply_config_standard afresh.
+            if args.reapply {
+                if let Some(ref cfg) = prod_cfg {
+                    h.apply_config_standard(cfg)?;
+                } else {
+                    apply_minimal_config(&h)?;
                 }
-                log.record(cycle, "after_realloc_buf", Some(read_status(&h)), "");
+                log.record(cycle, "after_reapply", Some(read_status(&h)), "");
+
+                // T2: realloc readout buffer + event buffer to clear any stale
+                // lib-internal pointers that Reset may have invalidated.
+                if args.realloc_buf {
+                    drop(buf);
+                    buf = h.malloc_readout_buffer()?;
+                    if event_buf.is_some() {
+                        event_buf = None; // drop old EventBuffer first
+                        event_buf = Some(h.allocate_event()?);
+                    }
+                    log.record(cycle, "after_realloc_buf", Some(read_status(&h)), "");
+                }
             }
-        }
 
-        // ---- START ----
-        match mode {
-            Mode::A | Mode::D => {}
-            Mode::B | Mode::C => h.clear_data()?,
-        }
-        let s_before_start = read_status(&h);
-        h.sw_start_acquisition()?;
-        let s_after_start = read_status(&h);
-        log.record(
-            cycle,
-            "after_start",
-            Some(s_after_start),
-            &format!("before_start=0x{:08X}", s_before_start),
-        );
+            // ---- START ----
+            match mode {
+                Mode::A | Mode::D => {}
+                Mode::B | Mode::C => h.clear_data()?,
+            }
+            let s_before_start = read_status(&h);
+            h.sw_start_acquisition()?;
+            let s_after_start = read_status(&h);
+            log.record(
+                cycle,
+                "after_start",
+                Some(s_after_start),
+                &format!("before_start=0x{:08X}", s_before_start),
+            );
 
-        // ---- RUN ----
-        let run_start = Instant::now();
-        let mut total_bytes = 0u64;
-        let mut total_events = 0u64;
-        let mut read_err: Option<String> = None;
-        if args.fill_fifo {
-            // Don't touch the buffer — let board FIFO fill / overflow.
-            std::thread::sleep(run_dur);
-        } else {
-            while run_start.elapsed() < run_dur {
-                match h.read_data(&mut buf) {
-                    Ok(0) => std::thread::sleep(Duration::from_millis(5)),
-                    Ok(n) => {
-                        total_bytes += n as u64;
-                        // Mirror production: per-event get_event_info + decode_event
-                        if let Some(ref mut eb) = event_buf {
-                            match h.get_num_events(&buf, n) {
-                                Ok(num) => {
-                                    for i in 0..num {
-                                        match h.get_event_info(&buf, n, i) {
-                                            Ok((_info, ptr)) => {
-                                                if let Err(e) = h.decode_event(ptr, eb) {
-                                                    warn!("DecodeEvent cycle {} idx {}: {}", cycle, i, e);
-                                                } else {
-                                                    total_events += 1;
+            // ---- RUN ----
+            let run_start = Instant::now();
+            let mut total_bytes = 0u64;
+            let mut total_events = 0u64;
+            let mut read_err: Option<String> = None;
+            if args.fill_fifo {
+                // Don't touch the buffer — let board FIFO fill / overflow.
+                std::thread::sleep(run_dur);
+            } else {
+                while run_start.elapsed() < run_dur {
+                    match h.read_data(&mut buf) {
+                        Ok(0) => std::thread::sleep(Duration::from_millis(5)),
+                        Ok(n) => {
+                            total_bytes += n as u64;
+                            // Mirror production: per-event get_event_info + decode_event
+                            if let Some(ref mut eb) = event_buf {
+                                match h.get_num_events(&buf, n) {
+                                    Ok(num) => {
+                                        for i in 0..num {
+                                            match h.get_event_info(&buf, n, i) {
+                                                Ok((_info, ptr)) => {
+                                                    if let Err(e) = h.decode_event(ptr, eb) {
+                                                        warn!(
+                                                            "DecodeEvent cycle {} idx {}: {}",
+                                                            cycle, i, e
+                                                        );
+                                                    } else {
+                                                        total_events += 1;
+                                                    }
                                                 }
-                                            }
-                                            Err(e) => {
-                                                warn!("GetEventInfo cycle {} idx {}: {}", cycle, i, e);
+                                                Err(e) => {
+                                                    warn!(
+                                                        "GetEventInfo cycle {} idx {}: {}",
+                                                        cycle, i, e
+                                                    );
+                                                }
                                             }
                                         }
                                     }
+                                    Err(e) => warn!("GetNumEvents cycle {}: {}", cycle, e),
                                 }
-                                Err(e) => warn!("GetNumEvents cycle {}: {}", cycle, e),
                             }
                         }
-                    }
-                    Err(e) => {
-                        // Non-fatal: board FIFO overflow (OutOfMemory) or transient.
-                        // Log and break this cycle's read loop — we still want to
-                        // proceed to Stop so the hardware exits cleanly.
-                        read_err = Some(e.to_string());
-                        warn!("ReadData during cycle {} run: {}", cycle, e);
-                        break;
+                        Err(e) => {
+                            // Non-fatal: board FIFO overflow (OutOfMemory) or transient.
+                            // Log and break this cycle's read loop — we still want to
+                            // proceed to Stop so the hardware exits cleanly.
+                            read_err = Some(e.to_string());
+                            warn!("ReadData during cycle {} run: {}", cycle, e);
+                            break;
+                        }
                     }
                 }
             }
-        }
-        log.record(
-            cycle,
-            "run_done",
-            Some(read_status(&h)),
-            &format!(
-                "bytes_read={} events={}{}",
-                total_bytes,
-                total_events,
-                read_err
-                    .as_deref()
-                    .map(|s| format!(" err={}", s))
-                    .unwrap_or_default()
-            ),
-        );
+            log.record(
+                cycle,
+                "run_done",
+                Some(read_status(&h)),
+                &format!(
+                    "bytes_read={} events={}{}",
+                    total_bytes,
+                    total_events,
+                    read_err
+                        .as_deref()
+                        .map(|s| format!(" err={}", s))
+                        .unwrap_or_default()
+                ),
+            );
 
-        // ---- STOP ----
-        h.sw_stop_acquisition()?;
-        let s_after_stop = read_status(&h);
-        log.record(cycle, "after_stop", Some(s_after_stop), "");
+            // ---- STOP ----
+            h.sw_stop_acquisition()?;
+            let s_after_stop = read_status(&h);
+            log.record(cycle, "after_stop", Some(s_after_stop), "");
 
-        match mode {
-            Mode::A => {
-                h.clear_data()?;
+            match mode {
+                Mode::A => {
+                    h.clear_data()?;
+                }
+                Mode::B => {
+                    drain_data(&h, &mut buf, event_buf.as_mut(), "post_stop_drain")?;
+                }
+                Mode::C => {
+                    drain_data(&h, &mut buf, event_buf.as_mut(), "post_stop_drain")?;
+                    h.clear_data()?;
+                }
+                Mode::D => {}
             }
-            Mode::B => {
-                drain_data(&h, &mut buf, event_buf.as_mut(), "post_stop_drain")?;
-            }
-            Mode::C => {
-                drain_data(&h, &mut buf, event_buf.as_mut(), "post_stop_drain")?;
-                h.clear_data()?;
-            }
-            Mode::D => {}
-        }
-        log.record(cycle, "post_procedure", Some(read_status(&h)), "");
+            log.record(cycle, "post_procedure", Some(read_status(&h)), "");
         }
         // _guard drops here (Stop + ClearData), then h drops (CloseDigitizer).
     }

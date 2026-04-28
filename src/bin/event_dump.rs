@@ -334,7 +334,9 @@ fn process_waveform_stats(
                 .min_by_key(|&(_, v)| *v)
                 .unwrap_or((0, &0));
             let max_val = *s.iter().max().unwrap_or(&0);
-            let amp = (pk_val as f64 - baseline).abs().max((max_val as f64 - baseline).abs());
+            let amp = (pk_val as f64 - baseline)
+                .abs()
+                .max((max_val as f64 - baseline).abs());
 
             amplitudes.push(amp);
             baselines.push(baseline);
@@ -375,8 +377,7 @@ fn process_waveform_stats(
     let mut pk: Vec<f64> = peak_idx.iter().map(|&v| v as f64).collect();
     pk.sort_by(|x, y| x.partial_cmp(y).unwrap());
     let pkmean = pk.iter().sum::<f64>() / pk.len() as f64;
-    let pkstd =
-        (pk.iter().map(|v| (v - pkmean).powi(2)).sum::<f64>() / pk.len() as f64).sqrt();
+    let pkstd = (pk.iter().map(|v| (v - pkmean).powi(2)).sum::<f64>() / pk.len() as f64).sqrt();
 
     let mut sp = spans.iter().map(|&v| v as f64).collect::<Vec<_>>();
     sp.sort_by(|x, y| x.partial_cmp(y).unwrap());
@@ -617,8 +618,7 @@ fn parse_opts(args: &[String]) -> Result<(PathBuf, Opts), String> {
             }
             "-o" | "--output" => {
                 i += 1;
-                opts.waveform_out =
-                    Some(PathBuf::from(args.get(i).ok_or("-o requires a path")?));
+                opts.waveform_out = Some(PathBuf::from(args.get(i).ok_or("-o requires a path")?));
             }
             "--delta-t-hist" => opts.delta_t_hist = true,
             "--wf-stats" => {

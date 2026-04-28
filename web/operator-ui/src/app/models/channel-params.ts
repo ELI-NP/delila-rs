@@ -80,9 +80,14 @@ const PSD1_TRIGGER_PARAMS: ChannelParamDef[] = [
 ];
 
 const X743STD_TRIGGER_PARAMS: ChannelParamDef[] = [
-  // V1743 threshold is a 16-bit DAC (inverted range). WaveDemo: reg = (1.25 - V_thr) / 2.5 * 65535
-  // 0 → +1.25 V, 65535 → -1.25 V, 32768 → ~0 V. Lower V_thr = higher DAC code.
-  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'DAC', min: 0, max: 65535, step: 1 },
+  // V1743 threshold expressed as **input-referred volts** (DC-offset-aware).
+  // The backend converts V→DAC accounting for the channel's DC offset, so users
+  // type the threshold as it appears at the input. Range matches the V1743
+  // input dynamic range (±1.25 V); 1 mV resolution covers the 38 µV LSB easily.
+  { key: 'trigger_threshold_v', label: 'Threshold', type: 'number', unit: 'V', min: -1.25, max: 1.25, step: 0.001 },
+  // Trigger edge is independent of pulse polarity (WaveDemo: TRIGGER_EDGE vs PULSE_POLARITY).
+  // When unset, falls back to the Polarity field (Positive→Rising, Negative→Falling) for backward compat.
+  { key: 'trigger_edge', label: 'Trigger Edge', type: 'enum', options: ['Rising', 'Falling'] },
   { key: 'self_trigger', label: 'Self Trigger', type: 'boolean' },
 ];
 

@@ -745,18 +745,22 @@ impl CaenHandle {
                 .unwrap_or(crate::config::digitizer::FineTsMode::Hardware);
 
             let extras_value = match (config.firmware, fine_ts_mode) {
-                (crate::config::digitizer::FirmwareType::PSD1, crate::config::digitizer::FineTsMode::Hardware) => {
-                    "EXTRAS_OPT_TT48_FLAGS_FINETT"
-                }
-                (crate::config::digitizer::FirmwareType::PSD1, crate::config::digitizer::FineTsMode::Software) => {
-                    "EXTRAS_OPT_SBZC_SAZC"
-                }
-                (crate::config::digitizer::FirmwareType::PHA1, crate::config::digitizer::FineTsMode::Hardware) => {
-                    "EXTRAS_OPT_TT48_FINETT"
-                }
-                (crate::config::digitizer::FirmwareType::PHA1, crate::config::digitizer::FineTsMode::Software) => {
-                    "EXTRAS_OPT_EBZC_EAZC"
-                }
+                (
+                    crate::config::digitizer::FirmwareType::PSD1,
+                    crate::config::digitizer::FineTsMode::Hardware,
+                ) => "EXTRAS_OPT_TT48_FLAGS_FINETT",
+                (
+                    crate::config::digitizer::FirmwareType::PSD1,
+                    crate::config::digitizer::FineTsMode::Software,
+                ) => "EXTRAS_OPT_SBZC_SAZC",
+                (
+                    crate::config::digitizer::FirmwareType::PHA1,
+                    crate::config::digitizer::FineTsMode::Hardware,
+                ) => "EXTRAS_OPT_TT48_FINETT",
+                (
+                    crate::config::digitizer::FirmwareType::PHA1,
+                    crate::config::digitizer::FineTsMode::Software,
+                ) => "EXTRAS_OPT_EBZC_EAZC",
                 _ => unreachable!(),
             };
             for ch in 0..config.num_channels {
@@ -789,7 +793,11 @@ impl CaenHandle {
                             if let Err(e) = self.set_user_register(addr, new_val) {
                                 warn!(ch = ch, error = %e, "Failed to set CFD interpolation point");
                             } else {
-                                debug!(ch = ch, interp_pt = interp_pt, "Set CFD interpolation point");
+                                debug!(
+                                    ch = ch,
+                                    interp_pt = interp_pt,
+                                    "Set CFD interpolation point"
+                                );
                             }
                         }
                         Err(e) => {

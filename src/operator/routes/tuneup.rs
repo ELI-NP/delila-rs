@@ -165,56 +165,56 @@ pub(super) async fn tuneup_start(
                         "X743Std: skipping redundant Tune Up Apply (configure_all_sync already applied identical config)"
                     );
                 } else {
-                tracing::info!(
-                    digitizer_id,
-                    name = %comp.name,
-                    "Pushing digitizer config to Reader (Tune Up)"
-                );
-                // Force software trigger for Tune Up (original config in state is unchanged)
-                let mut tuneup_config = config.clone();
-                tuneup_config.force_software_trigger();
-                tracing::info!(digitizer_id, "Forcing software trigger for Tune Up mode");
+                    tracing::info!(
+                        digitizer_id,
+                        name = %comp.name,
+                        "Pushing digitizer config to Reader (Tune Up)"
+                    );
+                    // Force software trigger for Tune Up (original config in state is unchanged)
+                    let mut tuneup_config = config.clone();
+                    tuneup_config.force_software_trigger();
+                    tracing::info!(digitizer_id, "Forcing software trigger for Tune Up mode");
 
-                match state
-                    .client
-                    .send_command(
-                        &comp.address,
-                        &Command::ApplyDigitizerConfig(Box::new(tuneup_config)),
-                    )
-                    .await
-                {
-                    Ok(resp) if resp.success => {
-                        tracing::info!(
-                            digitizer_id,
-                            params = resp.message,
-                            "Digitizer config applied (Tune Up)"
-                        );
+                    match state
+                        .client
+                        .send_command(
+                            &comp.address,
+                            &Command::ApplyDigitizerConfig(Box::new(tuneup_config)),
+                        )
+                        .await
+                    {
+                        Ok(resp) if resp.success => {
+                            tracing::info!(
+                                digitizer_id,
+                                params = resp.message,
+                                "Digitizer config applied (Tune Up)"
+                            );
+                        }
+                        Ok(resp) => {
+                            let _ = state.client.reset_all(&filtered).await;
+                            *state.tuneup_mode.write().await = false;
+                            *state.tuneup_digitizer_id.write().await = None;
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ApiResponse::error(format!(
+                                    "Tune Up config apply failed: {}",
+                                    resp.message
+                                ))),
+                            );
+                        }
+                        Err(e) => {
+                            let _ = state.client.reset_all(&filtered).await;
+                            *state.tuneup_mode.write().await = false;
+                            *state.tuneup_digitizer_id.write().await = None;
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ApiResponse::error(format!(
+                                    "Failed to send config to Reader: {}",
+                                    e
+                                ))),
+                            );
+                        }
                     }
-                    Ok(resp) => {
-                        let _ = state.client.reset_all(&filtered).await;
-                        *state.tuneup_mode.write().await = false;
-                        *state.tuneup_digitizer_id.write().await = None;
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ApiResponse::error(format!(
-                                "Tune Up config apply failed: {}",
-                                resp.message
-                            ))),
-                        );
-                    }
-                    Err(e) => {
-                        let _ = state.client.reset_all(&filtered).await;
-                        *state.tuneup_mode.write().await = false;
-                        *state.tuneup_digitizer_id.write().await = None;
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ApiResponse::error(format!(
-                                "Failed to send config to Reader: {}",
-                                e
-                            ))),
-                        );
-                    }
-                }
                 }
             }
         } else {

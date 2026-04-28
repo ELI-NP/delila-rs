@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-04-23 夜（退勤時）
+**Updated:** 2026-04-27 夜（V1743 WaveDemo パラメーター作業完了）
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -16,6 +16,7 @@ Claudeセッション開始時に必ず読み込まれます。
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
 | **0 (done)** | [48_v1743_tuneup_double_apply_crash.md](48_v1743_tuneup_double_apply_crash.md) | **✅ FINAL RESOLUTION (2026-04-27)** | **真因**: `CAEN_DGTZ_MallocReadoutBuffer` を `apply_config_standard` の前に呼んでいた → 35 KB / 35 MB の 1000× サイズ食い違い → CAEN DMA が user buffer を踏み越え → libCAENDigitizer.so 内部破壊 → SIGSEGV。4/24 fix (SIGTERM + Apply skip) は症状緩和のみ。修正: `45bb325` (真因 fix) + `8f6ce55` `838dfbb` `d976daf` (関連 fix)。**1 セッション内 30/30 Run + 5/5 Tune Up cycles PASS** |
+| **0 (done)** | — (V1743 WaveDemo params, 2026-04-27) | **✅ デプロイ稼働確認** | trigger_edge / pulse_polarity 分離 + ttf_smoothing + extra_registers + DC-offset-aware V threshold (`trigger_threshold_v`)。ChannelConfig + ChannelParamDef + apply_channel_config + 4 unit test pass。172.18.4.147 SN:25 で稼働確認済。`start_daq.sh` の `cargo build --release --features x743` 修正済 (ビルド時 features 落ち再発防止) |
 | **1** | [47_v1743_standard_mode_redesign.md](47_v1743_standard_mode_redesign.md) | **🎯 Step 1-3 完了 (2026-04-23) / Step 4-7 (多台同期 + S1 較正 + 5 ps RMS) はハードウェア拡張待ち** | V1743 Standard mode 再設計 — RolloverTracker 統一 + V1743 組込 + PSD1/PHA1 移行 + 旧 TimestampTracker 削除 + **95 min 長時間ランで 40-bit TDC rollover 通過確認** (120M events) |
 | 1-old | [45_v1743_support.md](45_v1743_support.md) | **⚠️ Phase 2 は 47 に移管** | V1743 Phase 1 (FFI+接続) ✅。Phase 2 以降は 47 へ |
 | **2** | [30_mvp_march_roadmap.md](30_mvp_march_roadmap.md) | **✅ MVP達成** | 3月MVP: 全Goal達成 — 全FW DAQ稼働 + Grafana + ELOG |

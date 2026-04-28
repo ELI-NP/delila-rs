@@ -31,6 +31,9 @@ struct X743DecodeParams {
     cfd_delay_samples: usize,
     /// CFD fraction (typ. 0.2–0.5 for PMT-like pulses).
     cfd_fraction: f32,
+    /// TTF moving-average tap count applied to the raw waveform before
+    /// baseline / CFD computation. 0 or 1 = pass-through. Mirrors WaveDemo.
+    ttf_smoothing_taps: usize,
     /// Per-channel polarity: `true` = negative pulse (pulse dips below baseline).
     channel_negative: [bool; caen_legacy::MAX_CHANNELS],
 }
@@ -202,6 +205,7 @@ impl X743DecodeParams {
             baseline_samples: 32,
             cfd_delay_samples: 4,
             cfd_fraction: 0.3,
+            ttf_smoothing_taps: 0,
             channel_negative: [true; caen_legacy::MAX_CHANNELS],
         };
         let Some(dc) = dig_config else {
@@ -246,6 +250,7 @@ impl X743DecodeParams {
         p.baseline_samples = x743.baseline_samples.max(4) as usize;
         p.cfd_delay_samples = x743.cfd_delay_samples.max(1) as usize;
         p.cfd_fraction = x743.cfd_fraction.clamp(0.01, 0.99);
+        p.ttf_smoothing_taps = x743.ttf_smoothing.taps();
         p
     }
 
@@ -266,6 +271,51 @@ impl X743DecodeParams {
             "400mhz" | "0.4ghz" => 1.0 / 0.4,
             _ => 1.0 / 3.2,
         }
+    }
+}
+
+/// Per-event scratch buffers reused across the V1743 decode hot path.
+/// `raw` holds samples copied out of CAEN-lib-owned memory; `smoothed` holds
+/// the moving-average output. Both are sized to `record_length` (≤ 1024).
+/// Reusing them avoids one `Vec<f32>::with_capacity` per channel per event.
+#[cfg(feature = "x743")]
+#[derive(Default)]
+struct X743Scratch {
+    raw: Vec<f32>,
+    smoothed: Vec<f32>,
+}
+
+#[cfg(feature = "x743")]
+impl X743Scratch {
+    fn new() -> Self {
+        Self {
+            raw: Vec::with_capacity(1024),
+            smoothed: Vec::with_capacity(1024),
+        }
+    }
+
+    /// Apply N-tap moving average to `self.raw` writing to `self.smoothed`.
+    /// Returns a slice into the buffer that was actually used.
+    /// `taps == 0 || taps == 1` → returns `&self.raw` directly (no copy).
+    /// Edge handling: leading samples (i < taps-1) average over the available
+    /// `i+1` samples (no zero padding); steady-state from i = taps-1 onwards.
+    fn smoothed_view(&mut self, taps: usize) -> &[f32] {
+        if taps <= 1 || self.raw.is_empty() {
+            return &self.raw;
+        }
+        let n = self.raw.len();
+        self.smoothed.clear();
+        self.smoothed.reserve(n);
+        let mut sum: f32 = 0.0;
+        for i in 0..n {
+            sum += self.raw[i];
+            if i >= taps {
+                sum -= self.raw[i - taps];
+            }
+            let denom = (i + 1).min(taps) as f32;
+            self.smoothed.push(sum / denom);
+        }
+        &self.smoothed
     }
 }
 
@@ -2069,20 +2119,14 @@ impl Reader {
     ) -> Result<(), ReaderError> {
         use crate::reader::caen_legacy::*;
 
-        info!(
-            source_id = config.source_id,
-            "ReadLoop (x743) starting"
-        );
+        info!(source_id = config.source_id, "ReadLoop (x743) starting");
 
         // Load digitizer config to get X743Config (connection params)
-        let dig_config = config
-            .config_file
-            .as_ref()
-            .and_then(|path| {
-                crate::config::digitizer::DigitizerConfig::load(path)
-                    .map_err(|e| warn!("Failed to load digitizer config: {}", e))
-                    .ok()
-            });
+        let dig_config = config.config_file.as_ref().and_then(|path| {
+            crate::config::digitizer::DigitizerConfig::load(path)
+                .map_err(|e| warn!("Failed to load digitizer config: {}", e))
+                .ok()
+        });
         let mut decode_params = X743DecodeParams::from_config(dig_config.as_ref());
         info!(
             "V1743 decode params: save_waveform={} amp_scale={} amp_offset={} baseline_samples={} cfd_delay={} cfd_frac={} ns_per_sample={}",
@@ -2099,10 +2143,13 @@ impl Reader {
         // ~91 min). Each SAMLONG group has its own FIFO and may re-order
         // slightly around the wrap boundary, so we track each of the 8 possible
         // groups independently — cheap and removes a failure mode.
-        let mut tdc_trackers: Vec<decoder::RolloverTracker> =
-            (0..caen_legacy::MAX_GROUPS)
-                .map(|_| decoder::RolloverTracker::new(40))
-                .collect();
+        let mut tdc_trackers: Vec<decoder::RolloverTracker> = (0..caen_legacy::MAX_GROUPS)
+            .map(|_| decoder::RolloverTracker::new(40))
+            .collect();
+
+        // Reusable per-event scratch buffers (raw + smoothed waveform).
+        // Eliminates one Vec<f32> alloc per channel per event.
+        let mut x743_scratch = X743Scratch::new();
 
         // Connection state
         let mut handle: Option<X743Handle> = None;
@@ -2115,20 +2162,26 @@ impl Reader {
         let mut last_connect_attempt: Option<Instant> = None;
 
         // Try to connect
-        let try_connect = |dig_config: &Option<crate::config::digitizer::DigitizerConfig>| -> Option<X743Handle> {
-            let x743_cfg = dig_config.as_ref()?.x743.as_ref()?;
-            let link_type = match x743_cfg.link_type.as_str() {
-                "usb" => ConnectionType::USB,
-                _ => ConnectionType::OpticalLink,
-            };
-            match X743Handle::open(link_type, x743_cfg.link_num, x743_cfg.conet_node, x743_cfg.vme_base_address) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    warn!("Failed to open V1743: {}", e);
-                    None
+        let try_connect =
+            |dig_config: &Option<crate::config::digitizer::DigitizerConfig>| -> Option<X743Handle> {
+                let x743_cfg = dig_config.as_ref()?.x743.as_ref()?;
+                let link_type = match x743_cfg.link_type.as_str() {
+                    "usb" => ConnectionType::USB,
+                    _ => ConnectionType::OpticalLink,
+                };
+                match X743Handle::open(
+                    link_type,
+                    x743_cfg.link_num,
+                    x743_cfg.conet_node,
+                    x743_cfg.vme_base_address,
+                ) {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        warn!("Failed to open V1743: {}", e);
+                        None
+                    }
                 }
-            }
-        };
+            };
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
@@ -2177,8 +2230,8 @@ impl Reader {
             if target_rank >= state_rank(ComponentState::Configured) && !hw_configured {
                 if let Some(ref dc) = dig_config {
                     match h.apply_config_standard(dc) {
-                        Ok(()) => {
-                            info!("V1743 configured successfully");
+                        Ok(n) => {
+                            info!("V1743 configured successfully ({} parameters)", n);
                             // Re-allocate readout buffer + event buffer NOW that the
                             // digitizer is configured. The buffer size CAEN returns is
                             // sized to the active record_length / max_num_events_blt,
@@ -2190,7 +2243,10 @@ impl Reader {
                             event_buf = None;
                             match (h.malloc_readout_buffer(), h.allocate_event()) {
                                 (Ok(rb), Ok(eb)) => {
-                                    info!("V1743 buffers allocated post-configure (size={} bytes)", rb.allocated_size());
+                                    info!(
+                                        "V1743 buffers allocated post-configure (size={} bytes)",
+                                        rb.allocated_size()
+                                    );
                                     readout_buf = Some(rb);
                                     event_buf = Some(eb);
                                 }
@@ -2274,7 +2330,8 @@ impl Reader {
                             Ok(data_size) => {
                                 if let Ok(n) = h.get_num_events(rb, data_size) {
                                     for i in 0..n {
-                                        if let Ok((info, ptr)) = h.get_event_info(rb, data_size, i) {
+                                        if let Ok((info, ptr)) = h.get_event_info(rb, data_size, i)
+                                        {
                                             if h.decode_event(ptr, eb).is_ok() {
                                                 let events = Self::x743_std_event_to_event_data(
                                                     eb.event(),
@@ -2282,6 +2339,7 @@ impl Reader {
                                                     config.module_id,
                                                     &decode_params,
                                                     &mut tdc_trackers,
+                                                    &mut x743_scratch,
                                                 );
                                                 for event in events {
                                                     let _ = tx.blocking_send(
@@ -2329,8 +2387,13 @@ impl Reader {
                         let result = h.get_device_info_json().map_err(|e| e.to_string());
                         let _ = response_tx.send(result);
                     }
-                    ReadLoopRequest::ApplyConfig { config: new_config, response_tx } => {
-                        let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                    ReadLoopRequest::ApplyConfig {
+                        config: new_config,
+                        response_tx,
+                    } => {
+                        let result = h
+                            .apply_config_standard(&new_config)
+                            .map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
                             hw_configured = true;
@@ -2351,10 +2414,23 @@ impl Reader {
                         }
                         let _ = response_tx.send(result);
                     }
-                    ReadLoopRequest::ApplyConfigRunning { config: new_config, response_tx } => {
+                    ReadLoopRequest::ApplyConfigRunning {
+                        config: new_config,
+                        response_tx,
+                    } => {
                         // V1743 doesn't support parameter changes while running
                         // but we can try re-applying if needed
-                        let result = h.apply_config_standard(&new_config).map(|_| 0usize).map_err(|e| e.to_string());
+                        if let Some(x743) = new_config.x743.as_ref() {
+                            if !x743.extra_registers.is_empty() {
+                                warn!(
+                                    "ApplyConfigRunning: extra_registers ({} entries) will be applied while acquisition is running — board state may be disrupted",
+                                    x743.extra_registers.len()
+                                );
+                            }
+                        }
+                        let result = h
+                            .apply_config_standard(&new_config)
+                            .map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
                             // Re-allocate buffers (best-effort; running mode is rare)
@@ -2366,7 +2442,10 @@ impl Reader {
                                     event_buf = Some(eb);
                                 }
                                 (Err(e), _) | (_, Err(e)) => {
-                                    error!("V1743 post-ApplyConfigRunning buffer realloc failed: {}", e);
+                                    error!(
+                                        "V1743 post-ApplyConfigRunning buffer realloc failed: {}",
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -2457,6 +2536,7 @@ impl Reader {
                                 config.module_id,
                                 &decode_params,
                                 &mut tdc_trackers,
+                                &mut x743_scratch,
                             );
 
                             for event in events {
@@ -2513,6 +2593,7 @@ impl Reader {
         module_id: u8,
         params: &X743DecodeParams,
         tdc_trackers: &mut [decoder::RolloverTracker],
+        scratch: &mut X743Scratch,
     ) -> Vec<decoder::EventData> {
         const TDC_NS: f64 = 5.0;
         const FLAG_CFD_VALID: u32 = 1 << 24;
@@ -2554,10 +2635,14 @@ impl Reader {
                     .copied()
                     .unwrap_or(true);
 
-                let samples_f32 = Self::x743_waveform_samples_f32(group, ch_in_group);
+                Self::x743_waveform_samples_into(group, ch_in_group, &mut scratch.raw);
+                // TTF smoothing (WaveDemo-compatible) is applied BEFORE baseline /
+                // CFD computation so noisy pulses get a stable timing fix. taps≤1
+                // returns the raw slice — zero-copy fast path.
+                let analyze_input = scratch.smoothed_view(params.ttf_smoothing_taps);
 
                 let stats = X743WaveformStats::analyze(
-                    &samples_f32,
+                    analyze_input,
                     params.ns_per_sample,
                     negative,
                     params.baseline_samples,
@@ -2567,7 +2652,13 @@ impl Reader {
 
                 let (timestamp_ns, amplitude, peak_index, cfd_valid, decode_ok) =
                     if let Some(s) = stats {
-                        (tdc_ns + s.cfd_time_ns, s.amplitude, s.peak_index, s.cfd_valid, true)
+                        (
+                            tdc_ns + s.cfd_time_ns,
+                            s.amplitude,
+                            s.peak_index,
+                            s.cfd_valid,
+                            true,
+                        )
                     } else {
                         (tdc_ns, 0.0, 0, false, false)
                     };
@@ -2603,14 +2694,18 @@ impl Reader {
                         std::sync::atomic::AtomicBool::new(false);
                     if !WF_DEBUGGED.swap(true, Ordering::Relaxed) {
                         tracing::info!(
-                            "V1743 waveform emission: save_waveform={}, samples_f32.len()={}",
+                            "V1743 waveform emission: save_waveform={}, raw.len()={}",
                             params.save_waveform,
-                            samples_f32.len(),
+                            scratch.raw.len(),
                         );
                     }
                 }
-                let waveform = if params.save_waveform && !samples_f32.is_empty() {
-                    let samples_i16: Vec<i16> = samples_f32
+                // Save the *raw* waveform (pre-smoothing) so downstream analysis
+                // sees what the digitizer actually produced; smoothing is purely
+                // a software-side timing aid for our CFD.
+                let waveform = if params.save_waveform && !scratch.raw.is_empty() {
+                    let samples_i16: Vec<i16> = scratch
+                        .raw
                         .iter()
                         .map(|&s| {
                             if s.is_finite() {
@@ -2651,26 +2746,30 @@ impl Reader {
         events
     }
 
-    /// Copy the raw float waveform out of the CAEN-lib-owned buffer so our
-    /// analyser can use it without lifetime entanglement. Returns empty if
-    /// `ChSize == 0` or the `DataChannel[ch]` pointer is null.
+    /// Copy the raw float waveform out of the CAEN-lib-owned buffer into the
+    /// caller-provided scratch buffer. Avoids a per-event `Vec<f32>` alloc.
+    /// `dst` is cleared first, then filled. Empty result if `ChSize == 0` or
+    /// the `DataChannel[ch]` pointer is null.
     #[cfg(feature = "x743")]
-    fn x743_waveform_samples_f32(
+    fn x743_waveform_samples_into(
         group: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_GROUP_t,
         ch_in_group: usize,
-    ) -> Vec<f32> {
+        dst: &mut Vec<f32>,
+    ) {
+        dst.clear();
         let ch_size = group.ChSize as usize;
         if ch_size == 0 {
-            return Vec::new();
+            return;
         }
         let ptr = group.DataChannel[ch_in_group];
         if ptr.is_null() {
-            return Vec::new();
+            return;
         }
         // Safety: CAEN lib guarantees `DataChannel[ch_in_group]` points to `ChSize` floats
         // for the duration of this event decode; we copy them out immediately.
         let raw = unsafe { std::slice::from_raw_parts(ptr, ch_size) };
-        raw.to_vec()
+        dst.reserve(raw.len());
+        dst.extend_from_slice(raw);
     }
 
     // V1743 DPP-CI (Charge Mode) support was removed on 2026-04-20.
@@ -3356,6 +3455,7 @@ mod tests {
             baseline_samples: 16,
             cfd_delay_samples: 2,
             cfd_fraction: 0.5,
+            ttf_smoothing_taps: 0,
             channel_negative: [negative; caen_legacy::MAX_CHANNELS],
         }
     }
@@ -3396,7 +3496,10 @@ mod tests {
         let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
         let stats = X743WaveformStats::analyze(&wf, ns_per_sample, true, 32, 4, 0.3)
             .expect("analyzer returned None");
-        assert!(stats.cfd_valid, "CFD crossing should be found on a clean ramp");
+        assert!(
+            stats.cfd_valid,
+            "CFD crossing should be found on a clean ramp"
+        );
         assert!(stats.baseline.abs() < 1e-3, "baseline ≈ 0 for our synth");
         assert!((stats.amplitude - 1000.0).abs() < 1e-3);
         // For a linear ramp from 0 to −A over `rise_len` samples starting at sample 64,
@@ -3423,8 +3526,8 @@ mod tests {
     #[test]
     fn test_x743_cfd_positive_pulse_finds_edge() {
         let wf = x743_synth_pulse(48, 24, 16, 128, 800.0, false);
-        let stats = X743WaveformStats::analyze(&wf, 1.0 / 3.2, false, 32, 4, 0.3)
-            .expect("analyzer None");
+        let stats =
+            X743WaveformStats::analyze(&wf, 1.0 / 3.2, false, 32, 4, 0.3).expect("analyzer None");
         assert!(stats.cfd_valid);
         assert!((stats.amplitude - 800.0).abs() < 1e-3);
         assert!(stats.peak_index >= 48 + 24 && (stats.peak_index as usize) < 128);
@@ -3509,6 +3612,8 @@ mod tests {
                 baseline_samples: 32,
                 cfd_delay_samples: 4,
                 cfd_fraction: 0.3,
+                ttf_smoothing: Default::default(),
+                extra_registers: Vec::new(),
             }),
         };
         let p = X743DecodeParams::from_config(Some(&dc));
@@ -3531,7 +3636,15 @@ mod tests {
         let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
         let params = x743_test_params(true);
         let mut trackers = fresh_x743_trackers();
-        let events = Reader::x743_std_event_to_event_data(&event, &info, 7, &params, &mut trackers);
+        let mut scratch = X743Scratch::new();
+        let events = Reader::x743_std_event_to_event_data(
+            &event,
+            &info,
+            7,
+            &params,
+            &mut trackers,
+            &mut scratch,
+        );
         assert!(events.is_empty());
     }
 
@@ -3546,14 +3659,26 @@ mod tests {
         let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
         let params = x743_test_params(true);
         let mut trackers = fresh_x743_trackers();
-        let events = Reader::x743_std_event_to_event_data(&event, &info, 0, &params, &mut trackers);
+        let mut scratch = X743Scratch::new();
+        let events = Reader::x743_std_event_to_event_data(
+            &event,
+            &info,
+            0,
+            &params,
+            &mut trackers,
+            &mut scratch,
+        );
         assert_eq!(events.len(), 2);
         for e in &events {
             assert!((e.timestamp_ns - 500.0).abs() < 1e-9);
             assert_eq!(e.energy, 0);
             assert_eq!(e.flags & (1 << 24), 0, "CFD_VALID must be clear");
             assert_ne!(e.flags & (1 << 25), 0, "WF_DECODE_FAIL must be set");
-            assert_eq!(e.flags & (1 << 26), 0, "TDC_UNDERFLOW must be clear (first event)");
+            assert_eq!(
+                e.flags & (1 << 26),
+                0,
+                "TDC_UNDERFLOW must be clear (first event)"
+            );
         }
     }
 
@@ -3568,30 +3693,103 @@ mod tests {
         let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
         let params = x743_test_params(true);
         let mut trackers = fresh_x743_trackers();
+        let mut scratch = X743Scratch::new();
 
         // Event 1: TDC near top of 40-bit range on group 0.
         event.GrPresent[0] = 1;
         event.DataGroup[0].TDC = TDC_MAX - 10;
-        let ev1 = Reader::x743_std_event_to_event_data(&event, &info, 0, &params, &mut trackers);
+        let ev1 = Reader::x743_std_event_to_event_data(
+            &event,
+            &info,
+            0,
+            &params,
+            &mut trackers,
+            &mut scratch,
+        );
         assert_eq!(ev1.len(), 2);
         let ts1 = ev1[0].timestamp_ns;
 
         // Event 2: small TDC after the wrap on the same group.
         event.DataGroup[0].TDC = 5;
-        let ev2 = Reader::x743_std_event_to_event_data(&event, &info, 0, &params, &mut trackers);
+        let ev2 = Reader::x743_std_event_to_event_data(
+            &event,
+            &info,
+            0,
+            &params,
+            &mut trackers,
+            &mut scratch,
+        );
         assert_eq!(ev2.len(), 2);
         let ts2 = ev2[0].timestamp_ns;
 
-        assert!(ts2 > ts1,
-            "post-wrap timestamp must be greater than pre-wrap (ts1={ts1}, ts2={ts2})");
+        assert!(
+            ts2 > ts1,
+            "post-wrap timestamp must be greater than pre-wrap (ts1={ts1}, ts2={ts2})"
+        );
         // The gap must be ~(TDC_MAX - 10 to wrap to 5) * 5 ns, i.e. ~16 ticks * 5 ns = 80 ns,
         // plus the full 2^40 * 5 ns period (~5497.5 s) for the rollover epoch.
         let expected_gap_ns = ((1u64 << 40) + 5 - (TDC_MAX - 10)) as f64 * 5.0;
         let gap = ts2 - ts1;
-        assert!((gap - expected_gap_ns).abs() < 1e-6,
-            "expected gap {expected_gap_ns} ns, got {gap} ns");
+        assert!(
+            (gap - expected_gap_ns).abs() < 1e-6,
+            "expected gap {expected_gap_ns} ns, got {gap} ns"
+        );
         // No underflow flag on clean rollover.
         assert_eq!(ev2[0].flags & (1 << 26), 0);
     }
-}
 
+    /// `taps == 0` and `taps == 1` are pass-through (no copy, no smoothing).
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_scratch_smoothing_passthrough() {
+        let mut sc = X743Scratch::new();
+        sc.raw.extend_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let v0 = sc.smoothed_view(0);
+        assert_eq!(v0, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let v1 = sc.smoothed_view(1);
+        assert_eq!(v1, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    /// 2-tap moving average on a step input. Edge handling: the very first
+    /// sample averages over only itself (no zero-padding).
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_scratch_smoothing_2tap_step() {
+        let mut sc = X743Scratch::new();
+        // Input: 0, 0, 10, 10, 10
+        sc.raw.extend_from_slice(&[0.0, 0.0, 10.0, 10.0, 10.0]);
+        let v = sc.smoothed_view(2).to_vec();
+        // i=0: sum/1 = 0/1 = 0.0
+        // i=1: (0+0)/2 = 0.0
+        // i=2: (0+10)/2 = 5.0
+        // i=3: (10+10)/2 = 10.0
+        // i=4: (10+10)/2 = 10.0
+        assert_eq!(v, vec![0.0, 0.0, 5.0, 10.0, 10.0]);
+    }
+
+    /// 4-tap on a unit impulse: response = [1/1, 1/2, 1/3, 1/4, 0, 0, ...].
+    /// Reuses the buffer across calls — verifies `clear()` resets correctly.
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_scratch_smoothing_4tap_impulse() {
+        let mut sc = X743Scratch::new();
+        sc.raw.extend_from_slice(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let v = sc.smoothed_view(4).to_vec();
+        // i=0: 1/1=1, i=1: 1/2=0.5, i=2: 1/3≈0.333, i=3: 1/4=0.25
+        // i=4: drops the impulse → 0
+        assert!((v[0] - 1.0).abs() < 1e-6);
+        assert!((v[1] - 0.5).abs() < 1e-6);
+        assert!((v[2] - 1.0 / 3.0).abs() < 1e-6);
+        assert!((v[3] - 0.25).abs() < 1e-6);
+        assert!((v[4]).abs() < 1e-6);
+        assert!((v[5]).abs() < 1e-6);
+
+        // Reuse: replace raw with a different signal; smoothed buffer must clear.
+        sc.raw.clear();
+        sc.raw.extend_from_slice(&[2.0; 8]);
+        let v2 = sc.smoothed_view(4).to_vec();
+        // After 4 samples it's at steady-state = 2.0.
+        assert!((v2[3] - 2.0).abs() < 1e-6);
+        assert!((v2[7] - 2.0).abs() < 1e-6);
+    }
+}

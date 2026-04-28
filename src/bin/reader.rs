@@ -216,8 +216,8 @@ async fn main() -> anyhow::Result<()> {
     let shutdown_tx_clone = shutdown_tx.clone();
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 println!("\nReceived SIGINT, shutting down...");

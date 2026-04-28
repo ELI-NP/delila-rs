@@ -257,13 +257,9 @@ impl X743Handle {
     }
 
     /// Set SAM sampling frequency
-    pub fn set_sam_sampling_frequency(
-        &self,
-        freq: SamFrequency,
-    ) -> Result<(), DigitizerError> {
+    pub fn set_sam_sampling_frequency(&self, freq: SamFrequency) -> Result<(), DigitizerError> {
         debug!("SetSAMSamplingFrequency: {:?}", freq);
-        let ret =
-            unsafe { ffi::CAEN_DGTZ_SetSAMSamplingFrequency(self.handle, freq.to_ffi()) };
+        let ret = unsafe { ffi::CAEN_DGTZ_SetSAMSamplingFrequency(self.handle, freq.to_ffi()) };
         DigitizerError::check(ret, "SetSAMSamplingFrequency")
     }
 
@@ -273,8 +269,7 @@ impl X743Handle {
         level: SamCorrectionLevel,
     ) -> Result<(), DigitizerError> {
         debug!("SetSAMCorrectionLevel: {:?}", level);
-        let ret =
-            unsafe { ffi::CAEN_DGTZ_SetSAMCorrectionLevel(self.handle, level.to_ffi()) };
+        let ret = unsafe { ffi::CAEN_DGTZ_SetSAMCorrectionLevel(self.handle, level.to_ffi()) };
         DigitizerError::check(ret, "SetSAMCorrectionLevel")
     }
 
@@ -304,15 +299,10 @@ impl X743Handle {
     }
 
     /// Set post-trigger size for a SAM group
-    pub fn set_sam_post_trigger_size(
-        &self,
-        group: u32,
-        value: u32,
-    ) -> Result<(), DigitizerError> {
+    pub fn set_sam_post_trigger_size(&self, group: u32, value: u32) -> Result<(), DigitizerError> {
         debug!("SetSAMPostTriggerSize: group={}, value={}", group, value);
-        let ret = unsafe {
-            ffi::CAEN_DGTZ_SetSAMPostTriggerSize(self.handle, group as i32, value as u8)
-        };
+        let ret =
+            unsafe { ffi::CAEN_DGTZ_SetSAMPostTriggerSize(self.handle, group as i32, value as u8) };
         DigitizerError::check(ret, &format!("SetSAMPostTriggerSize(group={})", group))
     }
 
@@ -324,11 +314,7 @@ impl X743Handle {
     }
 
     /// Set channel DC offset (0-65535)
-    pub fn set_channel_dc_offset(
-        &self,
-        channel: u32,
-        offset: u32,
-    ) -> Result<(), DigitizerError> {
+    pub fn set_channel_dc_offset(&self, channel: u32, offset: u32) -> Result<(), DigitizerError> {
         debug!("SetChannelDCOffset: ch={}, offset={}", channel, offset);
         let ret = unsafe { ffi::CAEN_DGTZ_SetChannelDCOffset(self.handle, channel, offset) };
         DigitizerError::check(ret, &format!("SetChannelDCOffset(ch={})", channel))
@@ -344,9 +330,8 @@ impl X743Handle {
             "SetChannelTriggerThreshold: ch={}, threshold={}",
             channel, threshold
         );
-        let ret = unsafe {
-            ffi::CAEN_DGTZ_SetChannelTriggerThreshold(self.handle, channel, threshold)
-        };
+        let ret =
+            unsafe { ffi::CAEN_DGTZ_SetChannelTriggerThreshold(self.handle, channel, threshold) };
         DigitizerError::check(ret, &format!("SetChannelTriggerThreshold(ch={})", channel))
     }
 
@@ -357,9 +342,8 @@ impl X743Handle {
         polarity: TriggerPolarity,
     ) -> Result<(), DigitizerError> {
         debug!("SetTriggerPolarity: ch={}, {:?}", channel, polarity);
-        let ret = unsafe {
-            ffi::CAEN_DGTZ_SetTriggerPolarity(self.handle, channel, polarity.to_ffi())
-        };
+        let ret =
+            unsafe { ffi::CAEN_DGTZ_SetTriggerPolarity(self.handle, channel, polarity.to_ffi()) };
         DigitizerError::check(ret, &format!("SetTriggerPolarity(ch={})", channel))
     }
 
@@ -387,13 +371,9 @@ impl X743Handle {
     }
 
     /// Set external trigger input mode
-    pub fn set_ext_trigger_input_mode(
-        &self,
-        mode: TriggerMode,
-    ) -> Result<(), DigitizerError> {
+    pub fn set_ext_trigger_input_mode(&self, mode: TriggerMode) -> Result<(), DigitizerError> {
         debug!("SetExtTriggerInputMode: {:?}", mode);
-        let ret =
-            unsafe { ffi::CAEN_DGTZ_SetExtTriggerInputMode(self.handle, mode.to_ffi()) };
+        let ret = unsafe { ffi::CAEN_DGTZ_SetExtTriggerInputMode(self.handle, mode.to_ffi()) };
         DigitizerError::check(ret, "SetExtTriggerInputMode")
     }
 
@@ -443,8 +423,7 @@ impl X743Handle {
     /// Disable SAM pulse generator on a channel
     pub fn disable_sam_pulse_gen(&self, channel: u32) -> Result<(), DigitizerError> {
         debug!("DisableSAMPulseGen: ch={}", channel);
-        let ret =
-            unsafe { ffi::CAEN_DGTZ_DisableSAMPulseGen(self.handle, channel as i32) };
+        let ret = unsafe { ffi::CAEN_DGTZ_DisableSAMPulseGen(self.handle, channel as i32) };
         DigitizerError::check(ret, &format!("DisableSAMPulseGen(ch={})", channel))
     }
 
@@ -522,12 +501,7 @@ impl X743Handle {
         let mut num_events: u32 = 0;
 
         let ret = unsafe {
-            ffi::CAEN_DGTZ_GetNumEvents(
-                self.handle,
-                buf.buffer,
-                data_size,
-                &mut num_events,
-            )
+            ffi::CAEN_DGTZ_GetNumEvents(self.handle, buf.buffer, data_size, &mut num_events)
         };
         DigitizerError::check(ret, "GetNumEvents")?;
 
@@ -589,8 +563,7 @@ impl X743Handle {
         let ret = unsafe {
             ffi::CAEN_DGTZ_AllocateEvent(
                 self.handle,
-                &mut event as *mut *mut ffi::CAEN_DGTZ_X743_EVENT_t
-                    as *mut *mut std::ffi::c_void,
+                &mut event as *mut *mut ffi::CAEN_DGTZ_X743_EVENT_t as *mut *mut std::ffi::c_void,
             )
         };
         DigitizerError::check(ret, "AllocateEvent")?;
@@ -602,14 +575,21 @@ impl X743Handle {
     }
 
     /// Apply Standard mode configuration from DigitizerConfig + X743Config.
-    /// Follows WaveDemo ProgramBoard() sequence.
-    pub fn apply_config_standard(&self, config: &DigitizerConfig) -> Result<(), DigitizerError> {
+    /// Follows WaveDemo ProgramBoard() sequence. Returns the number of parameters
+    /// actually written to hardware (board-level + per-channel + extra_registers),
+    /// which the Operator surfaces in the "Applied N parameters" toast.
+    pub fn apply_config_standard(
+        &self,
+        config: &DigitizerConfig,
+    ) -> Result<usize, DigitizerError> {
         let x743 = config
             .x743
             .as_ref()
             .ok_or_else(|| DigitizerError::new(-1, "Missing x743 config section"))?;
 
         info!("Applying V1743 configuration...");
+
+        let mut params_applied: usize = 0;
 
         // 1. Reset
         self.reset()?;
@@ -647,12 +627,14 @@ impl X743Handle {
 
         // 2. Group enable mask
         self.set_group_enable_mask(x743.group_enable_mask)?;
+        params_applied += 1;
 
         // 3. SAM post-trigger size (per group)
         let num_groups = x743.group_enable_mask.count_ones();
         for g in 0..MAX_GROUPS as u32 {
             if x743.group_enable_mask & (1 << g) != 0 {
                 self.set_sam_post_trigger_size(g, x743.post_trigger_size)?;
+                params_applied += 1;
             }
         }
         debug!("Post-trigger size set for {} groups", num_groups);
@@ -660,21 +642,24 @@ impl X743Handle {
         // 4. SAM sampling frequency
         let freq = parse_sam_frequency(&x743.sampling_frequency)?;
         self.set_sam_sampling_frequency(freq)?;
+        params_applied += 1;
 
         // 5. Pulse generator
         if x743.pulse_gen_enabled {
             let source = parse_pulse_source(&x743.pulse_source)?;
             for ch in 0..MAX_CHANNELS as u32 {
                 self.enable_sam_pulse_gen(ch, x743.pulse_pattern, source)?;
+                params_applied += 1;
             }
         } else {
             for ch in 0..MAX_CHANNELS as u32 {
                 self.disable_sam_pulse_gen(ch)?;
+                params_applied += 1;
             }
         }
 
         // 6. Per-channel settings (threshold, dc_offset, polarity, self-trigger)
-        self.apply_channel_config(config, x743)?;
+        params_applied += self.apply_channel_config(config, x743)?;
 
         // 7. Trigger source. Mirrors WaveDemo x743 v1.2.1 ProgramBoard
         // (lines 1199-1225): SW trigger stays ACQ_ONLY in all modes so
@@ -708,39 +693,70 @@ impl X743Handle {
                 self.set_ext_trigger_input_mode(TriggerMode::AcqOnly)?;
             }
         }
+        params_applied += 2; // sw + ext trigger modes
 
         // 8. SAM correction level
         let correction = parse_correction_level(&x743.correction_level)?;
         self.set_sam_correction_level(correction)?;
+        params_applied += 1;
 
         // 9. Max events per BLT
         self.set_max_num_events_blt(x743.max_num_events_blt)?;
+        params_applied += 1;
 
         // 10. Record length
         self.set_record_length(x743.record_length)?;
+        params_applied += 1;
 
         // 11. I/O level
         let io = parse_io_level(&x743.io_level)?;
         self.set_io_level(io)?;
+        params_applied += 1;
 
         // 12. Acquisition mode (always SW controlled for delila-rs)
         self.set_acquisition_mode(AcqMode::SWControlled)?;
+        params_applied += 1;
 
         // Final sanity: re-verify readiness after the full configure sequence.
         // PLL can drop again after certain register writes; wait for it to re-lock
         // so the next SWStartAcquisition is safe.
         self.wait_for_board_ready("after apply_config_standard")?;
 
-        info!("V1743 configuration applied successfully");
-        Ok(())
+        // Apply user-supplied raw register writes LAST. Mirrors WaveDemo's
+        // WRITE_REGISTER feature but inverted: high-level API has finished
+        // configuring the board, and these writes intentionally override or
+        // tweak whatever the API just set. Order is preserved.
+        if !x743.extra_registers.is_empty() {
+            info!(
+                "Applying {} extra register write(s) (post-API)",
+                x743.extra_registers.len()
+            );
+            for w in &x743.extra_registers {
+                info!(
+                    "[X743] WriteRegister(addr=0x{:08X}, data=0x{:08X}) — {}",
+                    w.addr,
+                    w.data,
+                    w.comment.as_deref().unwrap_or("")
+                );
+                self.write_register(w.addr, w.data)?;
+                params_applied += 1;
+            }
+        }
+
+        info!(
+            "V1743 configuration applied successfully ({} parameters)",
+            params_applied
+        );
+        Ok(params_applied)
     }
 
     /// Apply per-channel settings from DigitizerConfig defaults + overrides.
+    /// Returns the number of register operations actually issued.
     fn apply_channel_config(
         &self,
         config: &DigitizerConfig,
         x743: &X743Config,
-    ) -> Result<(), DigitizerError> {
+    ) -> Result<usize, DigitizerError> {
         // Defensive: reset all channel self-triggers to DISABLED before applying
         // the new mask. Mirrors WaveDemo x743 v1.2.1 ProgramBoard line 1199.
         // apply_config_standard always Resets first which should suffice, but if
@@ -749,6 +765,7 @@ impl X743Handle {
         // for the chosen mode; bits not in the mask are unchanged).
         let all_channels_mask: u32 = (1u32 << config.num_channels) - 1;
         self.set_channel_self_trigger(TriggerMode::Disabled, all_channels_mask)?;
+        let mut count: usize = 1;
 
         let defaults = &config.channel_defaults;
         let mut self_trigger_mask: u32 = 0;
@@ -769,25 +786,55 @@ impl X743Handle {
                 .unwrap_or(50.0);
             let dc_offset_dac = ((dc_offset_pct / 100.0) * 65535.0) as u32;
             self.set_channel_dc_offset(ch, dc_offset_dac)?;
+            count += 1;
 
-            // Trigger threshold (raw DAC value, 0-65535)
-            if let Some(threshold) = ch_config
+            // Trigger threshold. Priority:
+            //   1. `trigger_threshold_v` (input-referred volts, DC-offset-aware) — preferred
+            //   2. `trigger_threshold`   (raw DAC, 0-65535) — legacy / advanced fallback
+            // V→DAC accounts for DC offset because the V1743 comparator runs on the
+            // post-DC-offset signal (UM1935): trigger fires when (input + dc_offset) crosses
+            // the threshold register, so we pre-add dc_offset_v to land the cross at v_input.
+            let threshold_v = ch_config
+                .and_then(|c| c.trigger_threshold_v)
+                .or(defaults.trigger_threshold_v);
+            if let Some(v_input) = threshold_v {
+                let dac =
+                    crate::config::digitizer::x743_threshold_v_to_dac(v_input, dc_offset_pct);
+                self.set_channel_trigger_threshold(ch, dac)?;
+                count += 1;
+            } else if let Some(threshold) = ch_config
                 .and_then(|c| c.trigger_threshold)
                 .or(defaults.trigger_threshold)
             {
                 self.set_channel_trigger_threshold(ch, threshold)?;
+                count += 1;
             }
 
-            // Trigger polarity
+            // Trigger polarity (= trigger edge in CAEN API terms).
+            // Priority: explicit `trigger_edge` (channel → defaults)
+            //   → fallback to `polarity` (Positive→Rising, Negative→Falling).
+            // The fallback preserves backward-compat for configs predating the
+            // trigger_edge / pulse_polarity split.
+            let trigger_edge_str = ch_config
+                .and_then(|c| c.trigger_edge.as_deref())
+                .or(defaults.trigger_edge.as_deref());
             let polarity_str = ch_config
                 .and_then(|c| c.polarity.as_deref())
                 .or(defaults.polarity.as_deref());
-            if let Some(pol) = polarity_str {
-                let polarity = match pol.to_lowercase().as_str() {
-                    "positive" | "rising" | "risingedge" => TriggerPolarity::RisingEdge,
+            let edge = trigger_edge_str
+                .map(|s| match s.to_lowercase().as_str() {
+                    "rising" | "risingedge" | "rising_edge" => TriggerPolarity::RisingEdge,
                     _ => TriggerPolarity::FallingEdge,
-                };
+                })
+                .or_else(|| {
+                    polarity_str.map(|p| match p.to_lowercase().as_str() {
+                        "positive" | "polarity_positive" => TriggerPolarity::RisingEdge,
+                        _ => TriggerPolarity::FallingEdge,
+                    })
+                });
+            if let Some(polarity) = edge {
                 self.set_trigger_polarity(ch, polarity)?;
+                count += 1;
             }
 
             // Self-trigger mask
@@ -809,16 +856,18 @@ impl X743Handle {
         // Apply self-trigger mask
         if self_trigger_mask != 0 {
             self.set_channel_self_trigger(TriggerMode::AcqOnly, self_trigger_mask)?;
+            count += 1;
         }
 
-        Ok(())
+        Ok(count)
     }
 
     /// Get device info as JSON (for Detect response)
     pub fn get_device_info_json(&self) -> Result<serde_json::Value, DigitizerError> {
-        let info = self.board_info.as_ref().ok_or_else(|| {
-            DigitizerError::new(-1, "Board info not available")
-        })?;
+        let info = self
+            .board_info
+            .as_ref()
+            .ok_or_else(|| DigitizerError::new(-1, "Board info not available"))?;
         Ok(serde_json::json!({
             "model": info.model_name,
             "serial_number": info.serial_number.to_string(),
@@ -831,7 +880,6 @@ impl X743Handle {
             "sam_correction_loaded": info.sam_correction_loaded,
         }))
     }
-
 }
 
 /// Parse sampling frequency string to enum
@@ -867,10 +915,7 @@ fn parse_io_level(s: &str) -> Result<IOLevel, DigitizerError> {
     match s.to_lowercase().as_str() {
         "nim" => Ok(IOLevel::NIM),
         "ttl" => Ok(IOLevel::TTL),
-        _ => Err(DigitizerError::new(
-            -1,
-            &format!("Unknown IO level: {}", s),
-        )),
+        _ => Err(DigitizerError::new(-1, &format!("Unknown IO level: {}", s))),
     }
 }
 
@@ -1036,12 +1081,8 @@ impl SamCorrectionLevel {
             Self::PedestalOnly => {
                 ffi::CAEN_DGTZ_SAM_CORRECTION_LEVEL_t::CAEN_DGTZ_SAM_CORRECTION_PEDESTAL_ONLY
             }
-            Self::INL => {
-                ffi::CAEN_DGTZ_SAM_CORRECTION_LEVEL_t::CAEN_DGTZ_SAM_CORRECTION_INL
-            }
-            Self::All => {
-                ffi::CAEN_DGTZ_SAM_CORRECTION_LEVEL_t::CAEN_DGTZ_SAM_CORRECTION_ALL
-            }
+            Self::INL => ffi::CAEN_DGTZ_SAM_CORRECTION_LEVEL_t::CAEN_DGTZ_SAM_CORRECTION_INL,
+            Self::All => ffi::CAEN_DGTZ_SAM_CORRECTION_LEVEL_t::CAEN_DGTZ_SAM_CORRECTION_ALL,
         }
     }
 }
@@ -1060,9 +1101,7 @@ impl TriggerMode {
         match self {
             Self::Disabled => ffi::CAEN_DGTZ_TriggerMode_t::CAEN_DGTZ_TRGMODE_DISABLED,
             Self::AcqOnly => ffi::CAEN_DGTZ_TriggerMode_t::CAEN_DGTZ_TRGMODE_ACQ_ONLY,
-            Self::AcqAndExtOut => {
-                ffi::CAEN_DGTZ_TriggerMode_t::CAEN_DGTZ_TRGMODE_ACQ_AND_EXTOUT
-            }
+            Self::AcqAndExtOut => ffi::CAEN_DGTZ_TriggerMode_t::CAEN_DGTZ_TRGMODE_ACQ_AND_EXTOUT,
             Self::ExtOutOnly => ffi::CAEN_DGTZ_TriggerMode_t::CAEN_DGTZ_TRGMODE_EXTOUT_ONLY,
         }
     }
@@ -1078,12 +1117,8 @@ pub enum TriggerPolarity {
 impl TriggerPolarity {
     fn to_ffi(self) -> ffi::CAEN_DGTZ_TriggerPolarity_t {
         match self {
-            Self::RisingEdge => {
-                ffi::CAEN_DGTZ_TriggerPolarity_t::CAEN_DGTZ_TriggerOnRisingEdge
-            }
-            Self::FallingEdge => {
-                ffi::CAEN_DGTZ_TriggerPolarity_t::CAEN_DGTZ_TriggerOnFallingEdge
-            }
+            Self::RisingEdge => ffi::CAEN_DGTZ_TriggerPolarity_t::CAEN_DGTZ_TriggerOnRisingEdge,
+            Self::FallingEdge => ffi::CAEN_DGTZ_TriggerPolarity_t::CAEN_DGTZ_TriggerOnFallingEdge,
         }
     }
 }
@@ -1117,9 +1152,7 @@ impl AcqMode {
         match self {
             Self::SWControlled => ffi::CAEN_DGTZ_AcqMode_t::CAEN_DGTZ_SW_CONTROLLED,
             Self::SINControlled => ffi::CAEN_DGTZ_AcqMode_t::CAEN_DGTZ_S_IN_CONTROLLED,
-            Self::FirstTrigControlled => {
-                ffi::CAEN_DGTZ_AcqMode_t::CAEN_DGTZ_FIRST_TRG_CONTROLLED
-            }
+            Self::FirstTrigControlled => ffi::CAEN_DGTZ_AcqMode_t::CAEN_DGTZ_FIRST_TRG_CONTROLLED,
         }
     }
 }
@@ -1134,11 +1167,8 @@ pub enum SamPulseSource {
 impl SamPulseSource {
     fn to_ffi(self) -> ffi::CAEN_DGTZ_SAMPulseSourceType_t {
         match self {
-            Self::Software => {
-                ffi::CAEN_DGTZ_SAMPulseSourceType_t::CAEN_DGTZ_SAMPulseSoftware
-            }
+            Self::Software => ffi::CAEN_DGTZ_SAMPulseSourceType_t::CAEN_DGTZ_SAMPulseSoftware,
             Self::Continuous => ffi::CAEN_DGTZ_SAMPulseSourceType_t::CAEN_DGTZ_SAMPulseCont,
         }
     }
 }
-

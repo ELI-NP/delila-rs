@@ -156,7 +156,14 @@ export interface BoardConfig {
 export interface ChannelConfig {
   // --- Input ---
   enabled?: string;
+  /**
+   * Pulse polarity ("Positive" / "Negative" / "POLARITY_*"). NOT trigger edge.
+   * X743Std: drives software-side waveform inversion in the decoder, and (when
+   * trigger_edge is unset) is also used as a fallback to derive the trigger edge.
+   */
   polarity?: string;
+  /** Trigger edge ("Rising" / "Falling"). X743Std only — independent of polarity. */
+  trigger_edge?: string;
   dc_offset?: number;
   vga_gain?: number;
   baseline_avg?: string;
@@ -169,6 +176,13 @@ export interface ChannelConfig {
   // --- Trigger ---
   discriminator_mode?: string;
   trigger_threshold?: number;
+  /**
+   * X743Std only: trigger threshold in **input-referred volts** (-1.25..+1.25).
+   * Backend accounts for DC offset when converting to the threshold DAC, so
+   * users specify the threshold as it appears at the input — not the ADC.
+   * Takes priority over `trigger_threshold` (DAC) when set.
+   */
+  trigger_threshold_v?: number;
   cfd_delay_ns?: number;
   cfd_fraction?: string;
   cfd_interpolation_point?: number; // DIG1 only: 0-3
@@ -264,6 +278,28 @@ export interface X743Config {
   baseline_samples?: number;
   cfd_delay_samples?: number;
   cfd_fraction?: number;
+  /**
+   * TTF (Trigger and Timing Filter) smoothing — N-tap moving average applied
+   * before baseline / software CFD. Mirrors WaveDemo's TTF_SMOOTHING.
+   * Backend serializes this as lowercase.
+   */
+  ttf_smoothing?: 'off' | 'n2' | 'n4' | 'n8' | 'n16';
+  /**
+   * Arbitrary register writes applied at the end of `apply_config_standard`.
+   * Order is preserved; later entries override earlier writes to the same address.
+   * Mirrors WaveDemo's WRITE_REGISTER escape hatch.
+   */
+  extra_registers?: RegisterWrite[];
+}
+
+/** Single arbitrary register write entry for X743Config.extra_registers. */
+export interface RegisterWrite {
+  /** 32-bit register address. UI displays/edits as hex; serialized as number or "0x..." string. */
+  addr: number;
+  /** 32-bit data word. Same encoding as `addr`. */
+  data: number;
+  /** Optional human-readable note (logged when applied). */
+  comment?: string;
 }
 
 // Digitizer configuration

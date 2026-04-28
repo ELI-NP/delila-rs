@@ -17,7 +17,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { firstValueFrom } from 'rxjs';
 import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
-import { FirmwareType, X743Config } from '../../models/types';
+import { FirmwareType, RegisterWrite, X743Config } from '../../models/types';
 import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
 import {
   ChannelTableComponent,
@@ -207,6 +207,49 @@ import {
                         </mat-select>
                       </mat-form-field>
                     </div>
+
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">Advanced Registers</h3>
+                    <p class="hint-text">
+                      Raw register writes applied at the end of configure (after the high-level API).
+                      Order matters — later entries override earlier writes to the same address.
+                      Mirrors WaveDemo's WRITE_REGISTER. Hex (0x...) or decimal accepted.
+                    </p>
+                    @for (entry of config.x743.extra_registers ?? []; track $index) {
+                      <div class="reg-row">
+                        <mat-form-field appearance="outline" class="reg-addr">
+                          <mat-label>Address</mat-label>
+                          <input matInput type="text"
+                                 [value]="formatHex32(entry.addr)"
+                                 (change)="updateRegAddr(config.x743!, $index, $event)"
+                                 placeholder="0x8108" />
+                        </mat-form-field>
+                        <mat-form-field appearance="outline" class="reg-data">
+                          <mat-label>Data</mat-label>
+                          <input matInput type="text"
+                                 [value]="formatHex32(entry.data)"
+                                 (change)="updateRegData(config.x743!, $index, $event)"
+                                 placeholder="0x00000010" />
+                        </mat-form-field>
+                        <mat-form-field appearance="outline" class="reg-comment">
+                          <mat-label>Comment</mat-label>
+                          <input matInput type="text" [(ngModel)]="entry.comment"
+                                 placeholder="e.g., Force enable channel 4 — required by FW v1.2" />
+                        </mat-form-field>
+                        <button mat-icon-button (click)="moveRegUp(config.x743!, $index)" [disabled]="$index === 0" matTooltip="Move up">
+                          <mat-icon>arrow_upward</mat-icon>
+                        </button>
+                        <button mat-icon-button (click)="moveRegDown(config.x743!, $index)" [disabled]="$index === (config.x743!.extra_registers?.length ?? 0) - 1" matTooltip="Move down">
+                          <mat-icon>arrow_downward</mat-icon>
+                        </button>
+                        <button mat-icon-button color="warn" (click)="removeReg(config.x743!, $index)" matTooltip="Delete">
+                          <mat-icon>delete</mat-icon>
+                        </button>
+                      </div>
+                    }
+                    <button mat-stroked-button (click)="addReg(config.x743!)">
+                      <mat-icon>add</mat-icon> Add register
+                    </button>
                   </mat-card-content>
                 </mat-card>
               } @else {
@@ -563,6 +606,17 @@ import {
                     <p class="hint-text">V1743 Standard mode has no hardware CFD; fine time is computed in Rust from the waveform.</p>
                     <div class="form-grid">
                       <mat-form-field appearance="outline">
+                        <mat-label>TTF Smoothing</mat-label>
+                        <mat-select panelClass="fit-content-panel" [(value)]="config.x743.ttf_smoothing">
+                          <mat-option value="off">Off</mat-option>
+                          <mat-option value="n2">N=2</mat-option>
+                          <mat-option value="n4">N=4</mat-option>
+                          <mat-option value="n8">N=8</mat-option>
+                          <mat-option value="n16">N=16</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+
+                      <mat-form-field appearance="outline">
                         <mat-label>CFD Delay (samples)</mat-label>
                         <input matInput type="number" [(ngModel)]="config.x743.cfd_delay_samples" min="1" step="1" />
                       </mat-form-field>
@@ -740,6 +794,21 @@ import {
     }
 
     .config-card {
+    }
+
+    .reg-row {
+      display: grid;
+      grid-template-columns: 180px 200px 1fr auto auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 4px 0;
+    }
+    .reg-row mat-form-field {
+      margin-bottom: 0;
+    }
+    .reg-addr input,
+    .reg-data input {
+      font-family: monospace;
     }
 
     .form-grid {
@@ -1058,5 +1127,79 @@ export class DigitizerSettingsComponent {
       el.value = String(clamped);
       el.dispatchEvent(new Event('input'));
     }
+  }
+
+  // ---- X743 Advanced Registers helpers ----
+
+  /** Render a u32 as `0x` 8-digit uppercase hex, e.g. 0x00008108. */
+  formatHex32(n: number | undefined): string {
+    const v = (n ?? 0) >>> 0;
+    return '0x' + v.toString(16).toUpperCase().padStart(8, '0');
+  }
+
+  /** Parse hex (0x... / 0X...) or decimal. Returns undefined on failure. */
+  private parseU32(s: string): number | undefined {
+    const t = s.trim();
+    if (!t) return undefined;
+    let v: number;
+    if (/^0[xX][0-9a-fA-F]+$/.test(t)) {
+      v = parseInt(t, 16);
+    } else if (/^[0-9]+$/.test(t)) {
+      v = parseInt(t, 10);
+    } else {
+      return undefined;
+    }
+    if (!Number.isFinite(v) || v < 0 || v > 0xFFFFFFFF) return undefined;
+    return v >>> 0;
+  }
+
+  updateRegAddr(x743: X743Config, index: number, event: Event): void {
+    const el = event.target as HTMLInputElement;
+    const list = x743.extra_registers;
+    if (!list || index < 0 || index >= list.length) return;
+    const parsed = this.parseU32(el.value);
+    if (parsed === undefined) {
+      // Restore previous value to make the failure obvious to the user.
+      el.value = this.formatHex32(list[index].addr);
+      return;
+    }
+    list[index].addr = parsed;
+    el.value = this.formatHex32(parsed);
+  }
+
+  updateRegData(x743: X743Config, index: number, event: Event): void {
+    const el = event.target as HTMLInputElement;
+    const list = x743.extra_registers;
+    if (!list || index < 0 || index >= list.length) return;
+    const parsed = this.parseU32(el.value);
+    if (parsed === undefined) {
+      el.value = this.formatHex32(list[index].data);
+      return;
+    }
+    list[index].data = parsed;
+    el.value = this.formatHex32(parsed);
+  }
+
+  addReg(x743: X743Config): void {
+    if (!x743.extra_registers) x743.extra_registers = [];
+    x743.extra_registers.push({ addr: 0, data: 0, comment: '' });
+  }
+
+  removeReg(x743: X743Config, index: number): void {
+    const list = x743.extra_registers;
+    if (!list || index < 0 || index >= list.length) return;
+    list.splice(index, 1);
+  }
+
+  moveRegUp(x743: X743Config, index: number): void {
+    const list = x743.extra_registers;
+    if (!list || index <= 0 || index >= list.length) return;
+    [list[index - 1], list[index]] = [list[index], list[index - 1]];
+  }
+
+  moveRegDown(x743: X743Config, index: number): void {
+    const list = x743.extra_registers;
+    if (!list || index < 0 || index >= list.length - 1) return;
+    [list[index], list[index + 1]] = [list[index + 1], list[index]];
   }
 }

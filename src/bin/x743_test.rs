@@ -183,7 +183,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if total_events - num_events + evt_idx < 3 {
                     println!(
                         "  Event {}: counter={}, trigger_time_tag={}, group_mask=0x{:02X}",
-                        evt_idx, event_info.EventCounter, event_info.TriggerTimeTag,
+                        evt_idx,
+                        event_info.EventCounter,
+                        event_info.TriggerTimeTag,
                         event_info.ChannelMask,
                     );
 

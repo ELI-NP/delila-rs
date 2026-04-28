@@ -38,25 +38,37 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
     let url = args.get(1).map(|s| s.as_str()).unwrap_or(DEFAULT_URL);
-    let ch: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_CH);
+    let ch: usize = args
+        .get(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_CH);
     println!("  URL: {}", url);
     println!("  Channel: {}", ch);
 
     let handle = CaenHandle::open(url).expect("Failed to connect");
     println!("[OK] Connected");
 
-    if let Ok(m) = handle.get_value("/par/ModelName") { print!("  Model: {}", m); }
-    if let Ok(s) = handle.get_value("/par/SerialNum") { print!("  SN: {}", s); }
+    if let Ok(m) = handle.get_value("/par/ModelName") {
+        print!("  Model: {}", m);
+    }
+    if let Ok(s) = handle.get_value("/par/SerialNum") {
+        print!("  SN: {}", s);
+    }
     println!();
 
-    let fw_type = handle.get_value("/par/FwType").unwrap_or_else(|_| "unknown".to_string());
+    let fw_type = handle
+        .get_value("/par/FwType")
+        .unwrap_or_else(|_| "unknown".to_string());
     println!("  Firmware: {}", fw_type);
     let fw_upper = fw_type.to_uppercase().replace('-', "_");
     let is_pha = fw_upper.contains("PHA");
 
     if let Ok(tb) = handle.get_value("/par/timebombdowncounter") {
         let secs: u32 = tb.parse().unwrap_or(0);
-        if secs == 0 { println!("[!!!] TIMEBOMB EXPIRED!"); return; }
+        if secs == 0 {
+            println!("[!!!] TIMEBOMB EXPIRED!");
+            return;
+        }
         println!("  Timebomb: {}:{:02}", secs / 60, secs % 60);
     }
 
@@ -68,7 +80,11 @@ fn main() {
     println!("=== Phase 1: HW Fine TS ===");
     println!("{}", "=".repeat(60));
 
-    let hw_extras_opt = if is_pha { "EXTRAS_OPT_TT48_FINETT" } else { "EXTRAS_OPT_TT48_FLAGS_FINETT" };
+    let hw_extras_opt = if is_pha {
+        "EXTRAS_OPT_TT48_FINETT"
+    } else {
+        "EXTRAS_OPT_TT48_FLAGS_FINETT"
+    };
     let hw_events = run_phase(url, ch, hw_extras_opt, true);
 
     if hw_events.is_empty() {
@@ -82,7 +98,11 @@ fn main() {
     println!("=== Phase 2: SAZC/SBZC ===");
     println!("{}", "=".repeat(60));
 
-    let sw_extras_opt = if is_pha { "EXTRAS_OPT_EBZC_EAZC" } else { "EXTRAS_OPT_SBZC_SAZC" };
+    let sw_extras_opt = if is_pha {
+        "EXTRAS_OPT_EBZC_EAZC"
+    } else {
+        "EXTRAS_OPT_SBZC_SAZC"
+    };
     let sw_events = run_phase(url, ch, sw_extras_opt, false);
 
     if sw_events.is_empty() {
@@ -104,7 +124,10 @@ fn main() {
 fn run_phase(url: &str, ch: usize, extras_opt: &str, is_hw: bool) -> Vec<PhaseResult> {
     let handle = match CaenHandle::open(url) {
         Ok(h) => h,
-        Err(e) => { println!("[ERR] open: {}", e); return vec![]; }
+        Err(e) => {
+            println!("[ERR] open: {}", e);
+            return vec![];
+        }
     };
     let _ = handle.send_command("/cmd/reset");
     thread::sleep(Duration::from_millis(200));
@@ -116,16 +139,44 @@ fn run_phase(url: &str, ch: usize, extras_opt: &str, is_hw: bool) -> Vec<PhaseRe
 
     // Use production-like settings; override polarity/threshold per signal
     set(&handle, &format!("/ch/{}/par/ch_enabled", ch), "True");
-    set(&handle, &format!("/ch/{}/par/ch_polarity", ch), "POLARITY_POSITIVE");
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_polarity", ch),
+        "POLARITY_POSITIVE",
+    );
     set(&handle, &format!("/ch/{}/par/ch_dcoffset", ch), "5");
     set(&handle, &format!("/ch/{}/par/ch_threshold", ch), "200");
-    set(&handle, &format!("/ch/{}/par/ch_discr_mode", ch), "DISCR_MODE_CFD");
-    set(&handle, &format!("/ch/{}/par/ch_self_trg_enable", ch), "TRUE");
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_discr_mode", ch),
+        "DISCR_MODE_CFD",
+    );
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_self_trg_enable", ch),
+        "TRUE",
+    );
     set(&handle, &format!("/ch/{}/par/ch_cfd_delay", ch), "8");
-    set(&handle, &format!("/ch/{}/par/ch_cfd_fraction", ch), "CFD_FRACTLIST_50");
-    set(&handle, &format!("/ch/{}/par/ch_cfd_smoothexp", ch), "CFD_SMOOTH_EXP_1");
-    set(&handle, &format!("/ch/{}/par/ch_indyn", ch), "INDYN_2_0_VPP");
-    set(&handle, &format!("/ch/{}/par/ch_chargesens", ch), "CHARGESENS_640_FC_LSB_VPP");
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_cfd_fraction", ch),
+        "CFD_FRACTLIST_50",
+    );
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_cfd_smoothexp", ch),
+        "CFD_SMOOTH_EXP_1",
+    );
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_indyn", ch),
+        "INDYN_2_0_VPP",
+    );
+    set(
+        &handle,
+        &format!("/ch/{}/par/ch_chargesens", ch),
+        "CHARGESENS_640_FC_LSB_VPP",
+    );
     set(&handle, &format!("/ch/{}/par/ch_gatepre", ch), "70");
     set(&handle, &format!("/ch/{}/par/ch_gate", ch), "256");
     set(&handle, &format!("/ch/{}/par/ch_gateshort", ch), "45");
@@ -172,8 +223,14 @@ fn run_phase(url: &str, ch: usize, extras_opt: &str, is_hw: bool) -> Vec<PhaseRe
             println!("  Read {} bytes", raw.size);
             parse_aggregate(&raw.data, raw.size, is_hw)
         }
-        Ok(None) => { println!("  Timeout"); vec![] }
-        Err(e) => { println!("  Read error: {}", e); vec![] }
+        Ok(None) => {
+            println!("  Timeout");
+            vec![]
+        }
+        Err(e) => {
+            println!("  Read error: {}", e);
+            vec![]
+        }
     };
 
     let _ = handle.send_command("/cmd/disarmacquisition");
@@ -187,8 +244,12 @@ fn print_cfd_register(handle: &CaenHandle, ch: usize) {
         let fraction = (val >> 8) & 0x3;
         let interp_pt = (val >> 10) & 0x3;
         println!("\n  CFD Register (0x{:04X}): 0x{:08X}", addr, val);
-        println!("    Delay={} samples, Fraction={}%, InterpPt={}",
-            delay, [25, 50, 75, 100][fraction as usize], interp_pt);
+        println!(
+            "    Delay={} samples, Fraction={}%, InterpPt={}",
+            delay,
+            [25, 50, 75, 100][fraction as usize],
+            interp_pt
+        );
     }
 }
 
@@ -201,21 +262,31 @@ fn parse_aggregate(data: &[u8], size: usize, is_hw: bool) -> Vec<PhaseResult> {
 
     while offset + 16 <= size {
         let w0 = read_u32(data, offset);
-        if (w0 >> 28) & 0xF != 0xA { break; }
+        if (w0 >> 28) & 0xF != 0xA {
+            break;
+        }
         let board_size = (w0 & 0x0FFF_FFFF) as usize;
         let board_end = offset + board_size * 4;
-        if board_end > size { break; }
+        if board_end > size {
+            break;
+        }
         let ch_mask = read_u32(data, offset + 4) & 0xFF;
         offset += 16;
 
         for pair in 0..8u8 {
-            if ch_mask & (1 << pair) == 0 { continue; }
-            if offset + 8 > board_end { break; }
+            if ch_mask & (1 << pair) == 0 {
+                continue;
+            }
+            if offset + 8 > board_end {
+                break;
+            }
 
             let cw0 = read_u32(data, offset);
             let cw1 = read_u32(data, offset + 4);
             let ch_block_end = offset + (cw0 & 0x003F_FFFF) as usize * 4;
-            if ch_block_end > board_end { break; }
+            if ch_block_end > board_end {
+                break;
+            }
 
             let nsw = (cw1 & 0xFFFF) as usize;
             let extra_opt = (cw1 >> 24) & 0x7;
@@ -225,8 +296,10 @@ fn parse_aggregate(data: &[u8], size: usize, is_hw: bool) -> Vec<PhaseResult> {
             let eq = (cw1 >> 30) & 1;
 
             if !header_printed {
-                println!("  Channel header: extra_option={} (0b{:03b}), ET={} EE={} EQ={} ES={}",
-                    extra_opt, extra_opt, et, ee, eq, es);
+                println!(
+                    "  Channel header: extra_option={} (0b{:03b}), ET={} EE={} EQ={} ES={}",
+                    extra_opt, extra_opt, et, ee, eq, es
+                );
                 header_printed = true;
             }
 
@@ -234,13 +307,19 @@ fn parse_aggregate(data: &[u8], size: usize, is_hw: bool) -> Vec<PhaseResult> {
             offset += 8;
 
             while offset < ch_block_end {
-                if et == 0 || offset + 4 > size { break; }
+                if et == 0 || offset + 4 > size {
+                    break;
+                }
                 offset += 4; // time tag
 
-                if es == 1 { offset += wf_words * 4; }
+                if es == 1 {
+                    offset += wf_words * 4;
+                }
 
                 if ee == 1 {
-                    if offset + 4 > size { break; }
+                    if offset + 4 > size {
+                        break;
+                    }
                     let extras = read_u32(data, offset);
                     offset += 4;
                     if is_hw {
@@ -257,7 +336,9 @@ fn parse_aggregate(data: &[u8], size: usize, is_hw: bool) -> Vec<PhaseResult> {
                     }
                 }
 
-                if eq == 1 { offset += 4; }
+                if eq == 1 {
+                    offset += 4;
+                }
             }
             offset = ch_block_end;
         }
@@ -269,11 +350,17 @@ fn parse_aggregate(data: &[u8], size: usize, is_hw: bool) -> Vec<PhaseResult> {
 // --- Output ---
 
 fn print_hw_stats(events: &[PhaseResult]) {
-    let hw: Vec<u16> = events.iter().filter_map(|e| match e {
-        PhaseResult::Hw(h) => Some(h.fine_time), _ => None
-    }).collect();
+    let hw: Vec<u16> = events
+        .iter()
+        .filter_map(|e| match e {
+            PhaseResult::Hw(h) => Some(h.fine_time),
+            _ => None,
+        })
+        .collect();
     println!("  Collected {} events", hw.len());
-    if hw.is_empty() { return; }
+    if hw.is_empty() {
+        return;
+    }
     let min = *hw.iter().min().unwrap();
     let max = *hw.iter().max().unwrap();
     let mean: f64 = hw.iter().map(|&x| x as f64).sum::<f64>() / hw.len() as f64;
@@ -288,17 +375,25 @@ fn print_hw_stats(events: &[PhaseResult]) {
 }
 
 fn print_sw_details(events: &[PhaseResult]) {
-    let sw: Vec<&SwEvent> = events.iter().filter_map(|e| match e {
-        PhaseResult::Sw(s) => Some(s), _ => None
-    }).collect();
+    let sw: Vec<&SwEvent> = events
+        .iter()
+        .filter_map(|e| match e {
+            PhaseResult::Sw(s) => Some(s),
+            _ => None,
+        })
+        .collect();
     println!("  Collected {} events\n", sw.len());
-    if sw.is_empty() { return; }
+    if sw.is_empty() {
+        return;
+    }
 
     println!("  First {} events:", sw.len().min(10));
     for (i, ev) in sw.iter().take(10).enumerate() {
         let (fa, fb) = fractions(ev);
-        println!("    #{:3}: raw=0x{:08X}  upper={:6}  lower={:6}  fracA={:7.3}  fracB={:7.3}",
-            i, ev.extras_raw, ev.upper_i16, ev.lower_i16, fa, fb);
+        println!(
+            "    #{:3}: raw=0x{:08X}  upper={:6}  lower={:6}  fracA={:7.3}  fracB={:7.3}",
+            i, ev.extras_raw, ev.upper_i16, ev.lower_i16, fa, fb
+        );
     }
 
     let n = sw.len();
@@ -318,31 +413,58 @@ fn print_sw_details(events: &[PhaseResult]) {
     let (mut av, mut bv) = (0, 0);
     for ev in &sw {
         let (fa, fb) = fractions(ev);
-        if (0.0..1.0).contains(&fa) { av += 1; }
-        if (0.0..1.0).contains(&fb) { bv += 1; }
+        if (0.0..1.0).contains(&fa) {
+            av += 1;
+        }
+        if (0.0..1.0).contains(&fb) {
+            bv += 1;
+        }
     }
     println!("\n  Fraction in [0,1):");
-    println!("    A (upper=After,  lower=Before): {}/{} ({:.1}%)", av, n, pct(av, n));
-    println!("    B (upper=Before, lower=After):  {}/{} ({:.1}%)", bv, n, pct(bv, n));
+    println!(
+        "    A (upper=After,  lower=Before): {}/{} ({:.1}%)",
+        av,
+        n,
+        pct(av, n)
+    );
+    println!(
+        "    B (upper=Before, lower=After):  {}/{} ({:.1}%)",
+        bv,
+        n,
+        pct(bv, n)
+    );
 }
 
 fn print_verdict(hw_events: &[PhaseResult], sw_events: &[PhaseResult], fw: &str) {
-    let hw_fracs: Vec<f64> = hw_events.iter().filter_map(|e| match e {
-        PhaseResult::Hw(h) => Some(h.fine_time as f64 / 1024.0), _ => None
-    }).collect();
-    let sw: Vec<&SwEvent> = sw_events.iter().filter_map(|e| match e {
-        PhaseResult::Sw(s) => Some(s), _ => None
-    }).collect();
+    let hw_fracs: Vec<f64> = hw_events
+        .iter()
+        .filter_map(|e| match e {
+            PhaseResult::Hw(h) => Some(h.fine_time as f64 / 1024.0),
+            _ => None,
+        })
+        .collect();
+    let sw: Vec<&SwEvent> = sw_events
+        .iter()
+        .filter_map(|e| match e {
+            PhaseResult::Sw(s) => Some(s),
+            _ => None,
+        })
+        .collect();
     if hw_fracs.is_empty() || sw.is_empty() {
-        println!("  Not enough data."); return;
+        println!("  Not enough data.");
+        return;
     }
 
     let n = sw.len();
     let (mut av, mut bv) = (0, 0);
     for ev in &sw {
         let (fa, fb) = fractions(ev);
-        if (0.0..1.0).contains(&fa) { av += 1; }
-        if (0.0..1.0).contains(&fb) { bv += 1; }
+        if (0.0..1.0).contains(&fa) {
+            av += 1;
+        }
+        if (0.0..1.0).contains(&fb) {
+            bv += 1;
+        }
     }
     let (ap, bp) = (pct(av, n), pct(bv, n));
 
@@ -351,10 +473,13 @@ fn print_verdict(hw_events: &[PhaseResult], sw_events: &[PhaseResult], fw: &str)
     println!("  Interp B valid: {}/{} ({:.1}%)", bv, n, bp);
 
     let use_a = ap > bp;
-    let sw_fracs: Vec<f64> = sw.iter().map(|ev| {
-        let (fa, fb) = fractions(ev);
-        (if use_a { fa } else { fb }).clamp(0.0, 1.0)
-    }).collect();
+    let sw_fracs: Vec<f64> = sw
+        .iter()
+        .map(|ev| {
+            let (fa, fb) = fractions(ev);
+            (if use_a { fa } else { fb }).clamp(0.0, 1.0)
+        })
+        .collect();
 
     println!("\n  Distribution (10 bins):");
     println!("  {:>12} {:>8} {:>8}", "Range", "HW", "SW");
@@ -395,17 +520,29 @@ fn fractions(ev: &SwEvent) -> (f64, f64) {
 
     // Interp A: upper=After, lower=Before → fraction = (BL - Before) / (After - Before)
     let da = u - l;
-    let fa = if da.abs() > f64::EPSILON { (BASELINE - l) / da } else { f64::NAN };
+    let fa = if da.abs() > f64::EPSILON {
+        (BASELINE - l) / da
+    } else {
+        f64::NAN
+    };
 
     // Interp B: upper=Before, lower=After → fraction = (BL - Before) / (After - Before)
     let db = l - u;
-    let fb = if db.abs() > f64::EPSILON { (BASELINE - u) / db } else { f64::NAN };
+    let fb = if db.abs() > f64::EPSILON {
+        (BASELINE - u) / db
+    } else {
+        f64::NAN
+    };
 
     (fa, fb)
 }
 
 fn pct(c: usize, t: usize) -> f64 {
-    if t == 0 { 0.0 } else { c as f64 / t as f64 * 100.0 }
+    if t == 0 {
+        0.0
+    } else {
+        c as f64 / t as f64 * 100.0
+    }
 }
 
 fn set(handle: &CaenHandle, path: &str, value: &str) {
@@ -415,6 +552,13 @@ fn set(handle: &CaenHandle, path: &str, value: &str) {
 }
 
 fn read_u32(data: &[u8], offset: usize) -> u32 {
-    if offset + 4 > data.len() { return 0; }
-    u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
+    if offset + 4 > data.len() {
+        return 0;
+    }
+    u32::from_le_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ])
 }

@@ -25,6 +25,8 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   // --- Trigger ---
   'discriminator_mode',
   'trigger_threshold',
+  'trigger_threshold_v',
+  'trigger_edge',
   'cfd_delay_ns',
   'cfd_fraction',
   'cfd_interpolation_point',
