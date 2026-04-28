@@ -9,6 +9,9 @@
 //! This module provides real-time monitoring of DAQ data with browser-based
 //! histogram display.
 
+mod axis;
+pub use axis::AxisSource;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
