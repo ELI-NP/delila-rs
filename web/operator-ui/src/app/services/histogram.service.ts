@@ -146,6 +146,25 @@ export class HistogramService {
   }
 
   /**
+   * Fetch a 1D histogram for one of the AMax-style `UserInfo[i]` slots
+   * (i = 0..3). Backend pre-creates the slot for every registered channel,
+   * so this returns an empty histogram (not 404) on a fresh run.
+   */
+  fetchUserInfoHistogram(
+    moduleId: number,
+    channelId: number,
+    slot: 0 | 1 | 2 | 3,
+  ): Observable<Histogram1D | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http
+      .get<Histogram1D>(`${url}/histograms/${moduleId}/${channelId}`, {
+        params: { type: `user_info${slot}` },
+      })
+      .pipe(catchError(() => of(null)));
+  }
+
+  /**
    * Fetch a 2D histogram for `(moduleId, channelId)` with axes `(x, y)`.
    * The plot is created lazily on the backend on first request and lives
    * for ~60s after the last poll (TTL eviction); active subscribers keep

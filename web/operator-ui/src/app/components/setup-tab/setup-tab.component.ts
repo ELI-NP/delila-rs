@@ -111,6 +111,10 @@ import {
           >
             <mat-option value="energy">Energy</mat-option>
             <mat-option value="psd">PSD</mat-option>
+            <mat-option value="user_info0">UserInfo[0]</mat-option>
+            <mat-option value="user_info1">UserInfo[1]</mat-option>
+            <mat-option value="user_info2">UserInfo[2]</mat-option>
+            <mat-option value="user_info3">UserInfo[3]</mat-option>
             <mat-option value="2d">2D Heatmap</mat-option>
           </mat-select>
         </mat-form-field>

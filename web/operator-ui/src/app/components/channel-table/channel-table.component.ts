@@ -29,6 +29,8 @@ export interface ChannelParamDef {
   step?: number;
   /** If true, parameter can be changed while DAQ is Running */
   setInRun?: boolean;
+  /** Optional hover tooltip (e.g. FW register address for AMax). */
+  tooltip?: string;
 }
 
 /**
@@ -86,10 +88,13 @@ export interface ChannelValueChange {
         <tbody>
           @for (param of params(); track param.key) {
             <tr [class.disabled-row]="isDisabled(param.key)">
-              <td class="sticky-col param-cell">
+              <td class="sticky-col param-cell" [attr.title]="param.tooltip || null">
                 {{ param.label }}
                 @if (param.unit) {
                   <span class="unit">({{ param.unit }})</span>
+                }
+                @if (param.tooltip) {
+                  <span class="info-icon" aria-hidden="true">ⓘ</span>
                 }
               </td>
               <td class="sticky-col all-cell">
@@ -270,6 +275,17 @@ export interface ChannelValueChange {
       font-size: 11px;
       color: #999;
       margin-left: 2px;
+    }
+
+    .info-icon {
+      font-size: 11px;
+      color: #1976d2;
+      margin-left: 4px;
+      cursor: help;
+    }
+
+    .param-cell[title] {
+      cursor: help;
     }
 
     /* Compact inputs */

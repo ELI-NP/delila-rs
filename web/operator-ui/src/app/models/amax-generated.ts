@@ -57,39 +57,67 @@ export interface AMaxChannelConfig {
   pretrigger_amax?: number;
 }
 
+/** Per-key default values from `fw_params.json` (FW developer defaults). */
+export const AMAX_DEFAULTS: Record<string, number> = {
+  'amax.selector_wave': 0,
+  'amax.pretrigger_input': 600,
+  'amax.polarity': 1,
+  'amax.offset': 0,
+  'amax.thrs': 20,
+  'amax.trig_k': 10,
+  'amax.trig_m': 12,
+  'amax.trap_k': 500,
+  'amax.trap_m': 550,
+  'amax.deconv_m': 3499000,
+  'amax.trap_gain': 2500,
+  'amax.bl_len': 6,
+  'amax.bl_inib': 1200,
+  'amax.sample_pos': 1800,
+  'amax.run_cfg': 1,
+  'amax.amax_window': 1000,
+  'amax.amax_delay': 32,
+  'amax.window_maxim': 500,
+  'amax.amax_len': 5,
+  'amax.baseline_delay': 200,
+  'amax.baseline_len': 6,
+  'amax.baseline_offset': 1000,
+  'amax.pretrigger_trap': 600,
+  'amax.pretrigger_amax': 600,
+};
+
 export const AMAX_INPUT_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"] },
-  { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1 },
-  { key: 'amax.run_cfg', label: "Run Enable", type: 'enum', options: ["0", "1"] },
+  { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], tooltip: "FW reg POLARITY • word 0x02 (ch0 @ 0x800002)" },
+  { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x03 (ch0 @ 0x800003)" },
+  { key: 'amax.run_cfg', label: "Run Enable", type: 'enum', options: ["0", "1"], tooltip: "FW reg RUN_CFG • word 0x0F (ch0 @ 0x80000F)" },
 ];
 
 export const AMAX_TRIGGER_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.thrs', label: "Threshold", type: 'number', min: 0, max: 1000000, step: 1 },
-  { key: 'amax.trig_k', label: "Fast Trig Rise", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
-  { key: 'amax.trig_m', label: "Fast Trig Decay", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
+  { key: 'amax.thrs', label: "Threshold", type: 'number', min: 0, max: 1000000, step: 1, tooltip: "FW reg THRS • word 0x04 (ch0 @ 0x800004)" },
+  { key: 'amax.trig_k', label: "Fast Trig Rise", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg TRIG_K • word 0x05 (ch0 @ 0x800005)" },
+  { key: 'amax.trig_m', label: "Fast Trig Decay", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg TRIG_M • word 0x06 (ch0 @ 0x800006)" },
 ];
 
 export const AMAX_ENERGY_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.trap_k', label: "Trap Rise", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
-  { key: 'amax.trap_m', label: "Trap Decay", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
-  { key: 'amax.deconv_m', label: "Deconvolution", type: 'number', min: 0, max: 16777215, step: 1 },
-  { key: 'amax.trap_gain', label: "Trap Gain", type: 'number', min: 0, max: 16777215, step: 1 },
-  { key: 'amax.bl_len', label: "BL Length (MCA)", type: 'number', min: 0, max: 15, step: 1 },
-  { key: 'amax.bl_inib', label: "BL Inhibit", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
-  { key: 'amax.sample_pos', label: "Sample Pos", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
-  { key: 'amax.amax_window', label: "AMax Window", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
-  { key: 'amax.amax_delay', label: "AMax Delay", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
-  { key: 'amax.window_maxim', label: "Max Window", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
-  { key: 'amax.amax_len', label: "AMax Length", type: 'number', unit: "samp", min: 0, max: 65535, step: 1 },
-  { key: 'amax.baseline_delay', label: "BL Delay (AMax)", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
-  { key: 'amax.baseline_len', label: "BL Length (AMax)", type: 'number', min: 0, max: 65535, step: 1 },
-  { key: 'amax.baseline_offset', label: "BL Offset (AMax)", type: 'number', min: 0, max: 65535, step: 1 },
+  { key: 'amax.trap_k', label: "Trap Rise", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg TRAP_K • word 0x07 (ch0 @ 0x800007)" },
+  { key: 'amax.trap_m', label: "Trap Decay", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg TRAP_M • word 0x08 (ch0 @ 0x800008)" },
+  { key: 'amax.deconv_m', label: "Deconvolution", type: 'number', min: 0, max: 16777215, step: 1, tooltip: "FW reg DECONV_M • word 0x09 (ch0 @ 0x800009)" },
+  { key: 'amax.trap_gain', label: "Trap Gain", type: 'number', min: 0, max: 16777215, step: 1, tooltip: "FW reg TRAP_GAIN • word 0x0A (ch0 @ 0x80000A)" },
+  { key: 'amax.bl_len', label: "BL Length (MCA)", type: 'number', min: 0, max: 15, step: 1, tooltip: "FW reg BL_LEN • word 0x0B (ch0 @ 0x80000B)" },
+  { key: 'amax.bl_inib', label: "BL Inhibit", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg BL_INIB • word 0x0C (ch0 @ 0x80000C)" },
+  { key: 'amax.sample_pos', label: "Sample Pos", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg SAMPLE_POS • word 0x0D (ch0 @ 0x80000D)" },
+  { key: 'amax.amax_window', label: "AMax Window", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg AMAX_window • word 0x12 (ch0 @ 0x800012)" },
+  { key: 'amax.amax_delay', label: "AMax Delay", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg AMAX_delay • word 0x14 (ch0 @ 0x800014)" },
+  { key: 'amax.window_maxim', label: "Max Window", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg WINDOW_MAXIM • word 0x15 (ch0 @ 0x800015)" },
+  { key: 'amax.amax_len', label: "AMax Length", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg AMAX_len • word 0x16 (ch0 @ 0x800016)" },
+  { key: 'amax.baseline_delay', label: "BL Delay (AMax)", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg baseline_delay • word 0x18 (ch0 @ 0x800018)" },
+  { key: 'amax.baseline_len', label: "BL Length (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_len • word 0x19 (ch0 @ 0x800019)" },
+  { key: 'amax.baseline_offset', label: "BL Offset (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_offset • word 0x1A (ch0 @ 0x80001A)" },
 ];
 
 export const AMAX_WAVEFORM_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.selector_wave', label: "Wave Selector", type: 'enum', options: ["0", "1"] },
-  { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
-  { key: 'amax.pretrigger_trap', label: "Pretrig Trap", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
-  { key: 'amax.pretrigger_amax', label: "Pretrig AMax", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1 },
+  { key: 'amax.selector_wave', label: "Wave Selector", type: 'enum', options: ["0", "1"], tooltip: "FW reg selector_wave • word 0x00 (ch0 @ 0x800000)" },
+  { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_INPUT • word 0x01 (ch0 @ 0x800001)" },
+  { key: 'amax.pretrigger_trap', label: "Pretrig Trap", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_TRAP • word 0x1F (ch0 @ 0x80001F)" },
+  { key: 'amax.pretrigger_amax', label: "Pretrig AMax", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_AMAX • word 0x20 (ch0 @ 0x800020)" },
 ];
 

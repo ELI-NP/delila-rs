@@ -302,15 +302,30 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   }
 
   private fetchAll1d() {
-    const isPsd = this.histType() === 'psd';
+    const t = this.histType();
     const requests = this.tab.cells.map((cell) => {
       if (cell.isEmpty) return of(null);
-      if (isPsd) {
+      if (t === 'psd') {
         return this.histogramService.fetchPsdHistogram(cell.sourceId, cell.channelId);
+      }
+      const slot = this.userInfoSlot(t);
+      if (slot !== null) {
+        return this.histogramService.fetchUserInfoHistogram(cell.sourceId, cell.channelId, slot);
       }
       return this.histogramService.fetchAndCacheHistogram(cell.sourceId, cell.channelId);
     });
     return forkJoin(requests);
+  }
+
+  /** Map a `'user_infoN'` HistogramType to its 0..3 slot, otherwise null. */
+  private userInfoSlot(t: string): 0 | 1 | 2 | 3 | null {
+    switch (t) {
+      case 'user_info0': return 0;
+      case 'user_info1': return 1;
+      case 'user_info2': return 2;
+      case 'user_info3': return 3;
+      default: return null;
+    }
   }
 
   private fetchAll2d() {

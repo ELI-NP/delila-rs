@@ -286,6 +286,13 @@ pub struct PlotEntry {
 pub struct MonitorState {
     pub histograms: HashMap<ChannelKey, Histogram1D>,
     pub psd_histograms: HashMap<ChannelKey, Histogram1D>,
+    /// 1D histograms for `UserInfo[0..=3]` (and any other `AxisSource` we care
+    /// to expose later). Pre-created on register for the registered channels
+    /// and refilled on every event whose `extract()` returns Some — same
+    /// pattern as `psd_histograms`, just keyed by `AxisSource` so the four
+    /// AMax slots share storage. Always-on (no TTL): a couple of channels ×
+    /// four slots stays well under a megabyte.
+    pub userinfo_histograms: HashMap<(ChannelKey, AxisSource), Histogram1D>,
     /// On-demand 2D histograms keyed by `(channel, x_axis, y_axis)`. Created
     /// lazily on first REST `GET /api/histograms2d/...?x=&y=` and evicted by
     /// `evict_stale_plots` after the TTL expires.
@@ -308,6 +315,7 @@ impl MonitorState {
         Self {
             histograms: HashMap::new(),
             psd_histograms: HashMap::new(),
+            userinfo_histograms: HashMap::new(),
             histograms2d: HashMap::new(),
             latest_waveforms: HashMap::new(),
             total_events: 0,
@@ -404,7 +412,22 @@ impl MonitorState {
             psd_hist.fill(psd);
         }
 
-        // 3. 2D fills: walk the on-demand plot map and fill any plot for this
+        // 3. UserInfo 1D fills (AMax-style): same pre-created pattern as PSD.
+        // Walk the per-channel slots; AxisSource::extract handles the cast.
+        for axis in [
+            AxisSource::UserInfo0,
+            AxisSource::UserInfo1,
+            AxisSource::UserInfo2,
+            AxisSource::UserInfo3,
+        ] {
+            if let Some(hist) = self.userinfo_histograms.get_mut(&(key, axis)) {
+                if let Some(v) = axis.extract(&event) {
+                    hist.fill(v as f32);
+                }
+            }
+        }
+
+        // 4. 2D fills: walk the on-demand plot map and fill any plot for this
         // channel whose axes both extract a defined value. With at most a
         // handful of live plots per channel this stays O(N) where N is small.
         for ((plot_key, x_src, y_src), entry) in self.histograms2d.iter_mut() {
@@ -443,6 +466,7 @@ impl MonitorState {
     pub fn clear(&mut self) {
         self.histograms.clear();
         self.psd_histograms.clear();
+        self.userinfo_histograms.clear();
         self.histograms2d.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
@@ -454,6 +478,7 @@ impl MonitorState {
     pub fn reset(&mut self) {
         self.histograms.clear();
         self.psd_histograms.clear();
+        self.userinfo_histograms.clear();
         self.histograms2d.clear();
         self.latest_waveforms.clear();
         self.total_events = 0;
@@ -474,8 +499,9 @@ impl MonitorState {
         self.ensure_registered_histograms();
     }
 
-    /// Ensure all registered channels have 1D histogram entries (Energy + PSD).
-    /// 2D histograms are created lazily on first request — see `ensure_plot`.
+    /// Ensure all registered channels have 1D histogram entries
+    /// (Energy + PSD + UserInfo[0..=3]). 2D histograms are created lazily on
+    /// first request — see `ensure_plot`.
     fn ensure_registered_histograms(&mut self) {
         for ch in &self.registered_channels {
             let key = ChannelKey::new(ch.module_id, ch.channel_id);
@@ -485,6 +511,17 @@ impl MonitorState {
             self.psd_histograms.entry(key).or_insert_with(|| {
                 Histogram1D::new(ch.module_id, ch.channel_id, self.psd_histogram_config)
             });
+            for axis in [
+                AxisSource::UserInfo0,
+                AxisSource::UserInfo1,
+                AxisSource::UserInfo2,
+                AxisSource::UserInfo3,
+            ] {
+                let cfg = self.axis_config(axis);
+                self.userinfo_histograms
+                    .entry((key, axis))
+                    .or_insert_with(|| Histogram1D::new(ch.module_id, ch.channel_id, cfg));
+            }
         }
     }
 
@@ -641,6 +678,9 @@ enum HistogramMessage {
     GetHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
     /// Get PSD 1D histogram for a channel
     GetPsdHistogram(ChannelKey, oneshot::Sender<Option<Histogram1D>>),
+    /// Get a 1D `UserInfo[i]` histogram for a channel (i = 0..=3, encoded
+    /// as the matching `AxisSource::UserInfo*` variant).
+    GetUserInfoHistogram(ChannelKey, AxisSource, oneshot::Sender<Option<Histogram1D>>),
     /// Get a 2D histogram for `(channel, x_axis, y_axis)`. Creates the plot
     /// on-demand if it doesn't exist yet (returns the empty histogram so the
     /// frontend has something to render until events start arriving).
@@ -742,7 +782,8 @@ async fn list_histograms(State(state): State<AppState>) -> Json<HistogramListRes
 /// Query parameters for histogram endpoint
 #[derive(Debug, Deserialize)]
 struct HistogramQuery {
-    /// Histogram type: "energy" (default) or "psd"
+    /// Histogram type: "energy" (default), "psd", or "user_info0".."user_info3"
+    /// (the AMax-style 63-bit user-info slots).
     #[serde(default = "default_histogram_type")]
     r#type: String,
 }
@@ -762,6 +803,10 @@ async fn get_histogram(
 
     let msg = match query.r#type.as_str() {
         "psd" => HistogramMessage::GetPsdHistogram(key, tx),
+        "user_info0" => HistogramMessage::GetUserInfoHistogram(key, AxisSource::UserInfo0, tx),
+        "user_info1" => HistogramMessage::GetUserInfoHistogram(key, AxisSource::UserInfo1, tx),
+        "user_info2" => HistogramMessage::GetUserInfoHistogram(key, AxisSource::UserInfo2, tx),
+        "user_info3" => HistogramMessage::GetUserInfoHistogram(key, AxisSource::UserInfo3, tx),
         _ => HistogramMessage::GetHistogram(key, tx),
     };
     let _ = state.histogram_tx.send(msg);
@@ -1365,6 +1410,9 @@ impl Monitor {
                         Some(HistogramMessage::GetPsdHistogram(key, tx)) => {
                             let _ = tx.send(state.psd_histograms.get(&key).cloned());
                         }
+                        Some(HistogramMessage::GetUserInfoHistogram(key, axis, tx)) => {
+                            let _ = tx.send(state.userinfo_histograms.get(&(key, axis)).cloned());
+                        }
                         Some(HistogramMessage::Get2dHistogram(key, x, y, tx)) => {
                             // ensure_plot creates the entry on demand and bumps
                             // last_accessed; the response is always a (possibly
@@ -1665,6 +1713,49 @@ mod tests {
             let entry = state.histograms2d.get(&(key, axes.0, axes.1)).unwrap();
             assert_eq!(entry.hist.total_counts, 1, "{:?}", axes);
         }
+    }
+
+    #[test]
+    fn test_userinfo_histograms_filled_on_event() {
+        let config = MonitorConfig::default();
+        let mut state = MonitorState::new(&config);
+        let key = ChannelKey::new(0, 0);
+
+        // Pre-register so the four UserInfo slots get pre-created.
+        state.register_channels(vec![ChannelRegistration {
+            module_id: 0,
+            channel_id: 0,
+            name: "ch0".into(),
+        }]);
+        for axis in [
+            AxisSource::UserInfo0,
+            AxisSource::UserInfo1,
+            AxisSource::UserInfo2,
+            AxisSource::UserInfo3,
+        ] {
+            assert!(state.userinfo_histograms.contains_key(&(key, axis)));
+        }
+
+        let event = EventData {
+            module: 0,
+            channel: 0,
+            energy: 100,
+            energy_short: 80,
+            timestamp_ns: 0.0,
+            flags: 0,
+            user_info: [42, 17, 9, 3],
+            waveform: None,
+        };
+        state.process_event(event);
+
+        let h0 = state.userinfo_histograms.get(&(key, AxisSource::UserInfo0)).unwrap();
+        let h1 = state.userinfo_histograms.get(&(key, AxisSource::UserInfo1)).unwrap();
+        assert_eq!(h0.total_counts, 1);
+        assert_eq!(h1.total_counts, 1);
+        // Bins are wide (default 0..16384, 512 bins); slot 0 (=42) ends up in bin 1.
+        let cfg = AxisSource::UserInfo0.default_axis();
+        let bin = ((42.0 - cfg.0) / (cfg.1 - cfg.0) * cfg.2 as f32) as usize;
+        assert_eq!(h0.bins[bin], 1);
     }
 
     #[test]

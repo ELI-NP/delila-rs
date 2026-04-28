@@ -258,10 +258,13 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
           if (hist) this.histogram2d.set(hist);
         });
     } else {
-      // Poll 1D histogram (energy or psd)
+      // Poll 1D histogram (energy / psd / user_info[0..3])
+      const slot = this.userInfoSlot(type);
       const fetch$ = type === 'psd'
         ? () => this.histogramService.fetchPsdHistogram(sourceId, channelId)
-        : () => this.histogramService.fetchAndCacheHistogram(sourceId, channelId);
+        : slot !== null
+          ? () => this.histogramService.fetchUserInfoHistogram(sourceId, channelId, slot)
+          : () => this.histogramService.fetchAndCacheHistogram(sourceId, channelId);
 
       interval(this.refreshInterval)
         .pipe(
@@ -299,6 +302,17 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
   /** Pretty label for an `AxisSource` used in chart titles + tooltips. */
   axisLabel(src: AxisSource): string {
     return AXIS_SOURCE_LABEL[src];
+  }
+
+  /** Map a `'user_infoN'` HistogramType to its 0..3 slot, otherwise null. */
+  private userInfoSlot(t: HistogramType): 0 | 1 | 2 | 3 | null {
+    switch (t) {
+      case 'user_info0': return 0;
+      case 'user_info1': return 1;
+      case 'user_info2': return 2;
+      case 'user_info3': return 3;
+      default: return null;
+    }
   }
 
   canFit(): boolean {

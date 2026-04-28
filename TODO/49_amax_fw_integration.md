@@ -1,7 +1,7 @@
 # AMax FW Integration into delila-rs
 
 **作成日:** 2026-04-27
-**ステータス:** ✅ Phase 1 完了 (2026-04-28)、🚧 Phase 2 着手中（軸選択 — `AxisSource` enum）
+**ステータス:** ✅ Phase 1 完了 (2026-04-28)、✅ Phase 2 完了 (2026-04-28)
 **プランファイル:** [/Users/aogaki/.claude/plans/valiant-napping-rabin.md](../../.claude/plans/valiant-napping-rabin.md)
 **前提:** [V1743 WaveDemo パラメーター追加](../TODO/archive/) は 2026-04-27 完了（trigger_edge / ttf_smoothing / extra_registers / V threshold 全部リモート稼働確認済）
 
@@ -70,50 +70,53 @@
 
 ---
 
-## Phase 2 — Exploration & Polish (in progress)
+## Phase 2 — Exploration & Polish
 
-### 着手中: AxisSource enum + 2D 軸選択
-ユーザー判断 (2026-04-28):
-- `AxisSource = Energy | EnergyShort | FineTime | UserInfo0..=3 | Psd` (派生量 Psd 含む、PSD2 互換のため)
-- ストレージ: `HashMap<(ChannelKey, AxisSource, AxisSource), Histogram2D>` + `last_accessed: Instant`、30s 周期で 60s 以上未アクセス分を evict
-- API: 新形式 `?x=energy&y=user_info0` に統一、古い `?type=psd2d|amax2d` は内部で migration
-- 1D は今回手付かず（Energy/PSD 固定、UserInfo 1D は別タスク）
-- SetInRun whitelist もスキップ（オフライン解析でやる方針）
+### ✅ AxisSource enum + 2D 軸選択 (2026-04-28 完了)
+ユーザー判断:
+- `AxisSource = Energy | EnergyShort | UserInfo0..=3 | Psd` (FineTime は pipeline EventData に無く dropped)
+- ストレージ: `HashMap<(ChannelKey, AxisSource, AxisSource), PlotEntry>` + `last_accessed: Instant`、30s 周期で 60s 以上未アクセス分を evict
+- API: 新形式 `?x=energy&y=user_info0`、古い `?type=psd2d|amax2d` は内部 migration で後方互換
+- 1D / SetInRun whitelist は今回スキップ（後者はオフライン解析運用のため永続スキップ）
 
-### タスク
+実機検証 (172.18.4.56、TestPulse 2ch ~10kHz)：
+- `?type=psd2d` (legacy) → 0 counts (TestPulse で energy=0 なので Psd 未定義、想定動作)
+- `?type=amax2d` (legacy) → 156k counts ✅
+- `?x=energy&y=user_info0` → 同 156k ✅
+- `?x=user_info0&y=user_info1` → **156k counts ✅ (Phase 2 の新機能)**
 
-#### Backend
-- [ ] **P2-B1.** `AxisSource` enum + `extract(&EventData) -> Option<f64>` — 新規 `src/monitor/axis.rs`
-- [ ] **P2-B2.** `MonitorState` の `psd2d_histograms` + `amax2d_histograms` を `histograms2d: HashMap<PlotKey, PlotEntry>` に統合
-- [ ] **P2-B3.** Event 受信時、その channel の既存 PlotEntry 全部を `extract` で fill。secondary index `plots_by_channel`
-- [ ] **P2-B4.** TTL evictor — 30s 周期、`last_accessed > 60s` を削除
-- [ ] **P2-B5.** `MonitorConfig.histogram2d_default` で軸別 (min, max, bins) を持つ
+#### Backend ✅
+- [x] **P2-B1.** `AxisSource` enum + `extract(&EventData) -> Option<f64>` — `src/monitor/axis.rs`
+- [x] **P2-B2.** `MonitorState.histograms2d: HashMap<(ChannelKey, AxisSource, AxisSource), PlotEntry>` 統合
+- [x] **P2-B3.** Event 受信時、その channel の既存 PlotEntry 全部を fill
+- [x] **P2-B4.** TTL evictor — 30s 周期、60s 以上未アクセスを削除
+- [x] **P2-B5.** `MonitorConfig.histogram2d_overrides: HashMap<AxisSource, HistogramConfig>`、`AxisSource::default_axis()` フォールバック
 
-#### REST API
-- [ ] **P2-R1.** `GET /api/histograms2d/:m/:c?x=<axis>&y=<axis>` — `last_accessed` 更新、無ければ作成して空ヒスト返す
-- [ ] **P2-R2.** 古い `?type=psd2d` → `?x=energy&y=psd`、`?type=amax2d` → `?x=energy&y=user_info0`（内部 migration）
-- [ ] **P2-R3.** OpenAPI schema 更新
+#### REST API ✅
+- [x] **P2-R1.** `GET /api/histograms2d/:m/:c?x=<axis>&y=<axis>` — 無ければ on-demand 作成
+- [x] **P2-R2.** 古い `?type=psd2d` → `(energy, psd)`、`?type=amax2d` → `(energy, user_info0)`
+- [x] **P2-R3.** OpenAPI schema 更新
 
-#### Frontend
-- [ ] **P2-F1.** `histogram.types.ts` — `AxisSource` string literal、`PlotConfig` 形式
-- [ ] **P2-F2.** `histogram.service.ts` — `fetchHistogram2d(m, c, x, y)` シグネチャ変更
-- [ ] **P2-F3.** `setup-tab` — 2D 選択時に X/Y 軸 dropdown 表示
-- [ ] **P2-F4.** `view-tab` — `tab.plotConfig.{x,y}` を fetchHistogram2d に渡す
-- [ ] **P2-F5.** `histogram-expand-dialog` — 同上
-- [ ] **P2-F6.** `heatmap-chart` — `xAxisLabel` Input も追加
-- [ ] **P2-F7.** Migration — localStorage / monitor_layout.json の古い形式を新形式に変換
+#### Frontend ✅
+- [x] **P2-F1.** `histogram.types.ts` — `AxisSource` 統一、`HistogramType = 'energy' | 'psd' | '2d'`
+- [x] **P2-F2.** `histogram.service.ts` — `fetchHistogram2d(m, c, x, y)`
+- [x] **P2-F3.** `setup-tab` — 2D 選択時に X/Y 軸 dropdown 表示
+- [x] **P2-F4.** `view-tab` — `tab.{xAxis,yAxis}` 経由で fetch
+- [x] **P2-F5.** `histogram-expand-dialog` — 同上、開く際に X/Y を継承
+- [x] **P2-F6.** `heatmap-chart` — `xAxisLabel` Input 追加
+- [x] **P2-F7.** Migration — `migrateLegacyHistType()` で localStorage / monitor_layout.json を変換
 
-#### Tests
-- [ ] AxisSource roundtrip (serde、URL query、TS string literal)
-- [ ] `extract()` で各 axis が EventData から正しい値を取り出す
-- [ ] TTL evictor: 60s 経過後に entry が消える
-- [ ] 旧 `?type=psd2d` → `(energy, psd)` への migration
-- [ ] Histogram2D fill: 同一イベントで複数 PlotEntry に並列 fill
+Commits: `cc98d7d` (B1) + `ef5ba7c` (B2..B5 + R1..R3) + `3da6a3f` (F1..F7)
 
-### 後続（AxisSource 完了後）
-- [ ] 1D histograms for `UserInfo[0..=3]`（既存 `psd_histograms` と同パターン）
-- [ ] Reset-to-defaults button（per-channel + board-level、`fw_params.json` の default 値復元 — codegen で取得済）
-- [ ] Tooltip with hex address (Settings tab、senior physicist の信頼感のため)
+### ✅ 残タスク完了 (2026-04-28)
+- [x] **Hex address tooltip** — `ChannelParamDef.tooltip` field を追加、codegen で `"FW reg POLARITY • word 0x02 (ch0 @ 0x800002)"` 形式の文字列を埋める。Settings tab の param-cell に hover で表示。
+- [x] **Reset-to-defaults button** — codegen で `AMAX_DEFAULTS: Record<string, number>` を出力、`resetAmaxDefaults()` が defaults + 全 channel に書き込む。FW=AMax の時だけ表示。
+- [x] **1D histograms for `UserInfo[0..=3]`** — `MonitorState.userinfo_histograms: HashMap<(ChannelKey, AxisSource), Histogram1D>` を追加（registered channel に pre-create、event ごとに 4 slot 全部 fill）。REST `/api/histograms/:m/:c?type=user_info0..3`、HistogramType に追加、setup-tab dropdown / view-tab fetch / expand-dialog 全部対応。
+
+実機検証 (172.18.4.56、TestPulse 2ch ~10kHz、run 201)：
+- Energy 1D: 205,042 counts ✅
+- UserInfo[0..=3] 1D: 各 ~205,000 counts ✅
+- UserInfo[0] non-zero bins: 508/512（広いスペクトラム、TestPulse 振幅検出らしい分布） ✅
 
 #### スキップ (ユーザー方針)
 - ~~Z 軸 Log/Linear トグル~~ — 既に `logScale` プロパティ実装済、ユーザー要望薄

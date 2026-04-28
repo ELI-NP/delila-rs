@@ -134,6 +134,8 @@ export const AXIS_SOURCE_OPTIONS: readonly AxisSource[] = [
  * Histogram type for tab-level selection.
  *
  * - `'energy'` / `'psd'`: 1D plot of the named axis.
+ * - `'user_info0'..'user_info3'`: 1D plot of the AMax-style 63-bit user-info
+ *   slot. Available on every channel; non-AMax FW just leaves the slot at 0.
  * - `'2d'`: 2D heatmap whose axes are taken from `SetupConfig.xAxis` /
  *   `SetupConfig.yAxis` (or the same fields on `ViewTab`).
  *
@@ -141,7 +143,14 @@ export const AXIS_SOURCE_OPTIONS: readonly AxisSource[] = [
  * `(xAxis, yAxis) = ('energy', 'psd')` and `('energy', 'user_info0')`
  * respectively — see `migrateHistogramType`.
  */
-export type HistogramType = 'energy' | 'psd' | '2d';
+export type HistogramType =
+  | 'energy'
+  | 'psd'
+  | 'user_info0'
+  | 'user_info1'
+  | 'user_info2'
+  | 'user_info3'
+  | '2d';
 
 /** Returns true if the type is a 2D heatmap (needs `xAxis` / `yAxis`). */
 export function is2dHistogramType(t: HistogramType | undefined): boolean {

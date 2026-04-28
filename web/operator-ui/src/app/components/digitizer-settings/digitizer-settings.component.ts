@@ -19,6 +19,7 @@ import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
 import { FirmwareType, RegisterWrite, X743Config } from '../../models/types';
 import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
+import { AMAX_DEFAULTS } from '../../models/amax-generated';
 import {
   ChannelTableComponent,
   DefaultValueChange,
@@ -89,6 +90,17 @@ import {
           <mat-icon>refresh</mat-icon>
           Reset
         </button>
+        @if (selectedConfig()?.firmware === 'AMax') {
+          <button
+            mat-button
+            (click)="resetAmaxDefaults()"
+            [disabled]="!selectedConfig()"
+            matTooltip="Restore all AMax channel parameters to FW developer defaults (fw_params.json)"
+          >
+            <mat-icon>settings_backup_restore</mat-icon>
+            Reset AMax
+          </button>
+        }
         <button
           mat-raised-button
           color="primary"
@@ -1103,6 +1115,30 @@ export class DigitizerSettingsComponent {
       this.digitizerService.loadDigitizers();
       this.snackBar.open('Configuration reset', 'OK', { duration: 2000 });
     }
+  }
+
+  /**
+   * Restore all AMax channel parameters (the 24 keys under `amax.*`) to the
+   * FW developer defaults declared in `fw_params.json` (codegen-driven).
+   * Updates the "All" column and propagates to every channel — equivalent to
+   * the user manually changing each row.
+   */
+  resetAmaxDefaults(): void {
+    const config = this.selectedConfig();
+    if (!config || config.firmware !== 'AMax') return;
+    const defaults = { ...this.defaultValues() };
+    const channels = this.channelValues().map((ch) => ({ ...ch }));
+    for (const [key, value] of Object.entries(AMAX_DEFAULTS)) {
+      defaults[key] = value;
+      for (const ch of channels) {
+        ch[key] = value;
+      }
+    }
+    this.defaultValues.set(defaults);
+    this.channelValues.set(channels);
+    this.snackBar.open('AMax parameters restored to FW defaults', 'OK', {
+      duration: 3000,
+    });
   }
 
   // ===========================================================================

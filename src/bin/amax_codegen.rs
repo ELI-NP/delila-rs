@@ -88,7 +88,6 @@ struct FwParam {
 
 // ---- Resolved per-register info used by all three emitters ----
 
-#[allow(dead_code)] // `default` is reserved for future "Reset to defaults" UI codegen.
 struct ResolvedReg {
     /// Original FW name (from RegisterFile.json, e.g. "POLARITY", "AMAX_window").
     fw_name: String,
@@ -379,6 +378,14 @@ fn emit_typescript(
     }
     out.push_str("}\n\n");
 
+    // FW defaults table for the "Reset AMax to FW defaults" UI button.
+    out.push_str("/** Per-key default values from `fw_params.json` (FW developer defaults). */\n");
+    out.push_str("export const AMAX_DEFAULTS: Record<string, number> = {\n");
+    for r in resolved {
+        out.push_str(&format!("  'amax.{}': {},\n", r.field, r.default));
+    }
+    out.push_str("};\n\n");
+
     // Emit one const array per category, in stable order.
     for cat in ["input", "trigger", "energy", "waveform"] {
         let const_name = format!("AMAX_{}_PARAMS", category_label(cat).to_uppercase());
@@ -387,6 +394,13 @@ fn emit_typescript(
             const_name
         ));
         for r in resolved.iter().filter(|r| r.category == cat) {
+            // Hex address tooltip: original FW name + page-relative word offset
+            // + canonical ch0 word address (0x800000-base, what amax_viewer uses).
+            let ch0_word = 0x800000 + r.word_offset;
+            let tooltip = format!(
+                "FW reg {} • word 0x{:02X} (ch0 @ 0x{:06X})",
+                r.fw_name, r.word_offset, ch0_word
+            );
             let mut line = format!(
                 "  {{ key: 'amax.{}', label: {:?}",
                 r.field, r.label
@@ -406,6 +420,7 @@ fn emit_typescript(
                 }
                 line.push_str(&format!(", min: 0, max: {}, step: 1", r.ui_max));
             }
+            line.push_str(&format!(", tooltip: {:?}", tooltip));
             line.push_str(" },\n");
             out.push_str(&line);
         }
