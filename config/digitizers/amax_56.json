@@ -2,7 +2,7 @@
   "digitizer_id": 0,
   "name": "AMax VX2730 @ 172.18.4.56",
   "firmware": "AMax",
-  "num_channels": 1,
+  "num_channels": 2,
   "is_master": true,
   "board": {
     "start_source": "SWcmd",
