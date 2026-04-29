@@ -690,6 +690,11 @@ impl Pha1Decoder {
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: self.config.time_step_ns,
+            // PHA1 sign-extends both probes (`sign_extend_14bit`) so values
+            // can land in `[-8192, 8191]` — the trapezoid / Delta probes go
+            // negative around baseline.
+            analog_probe1_is_signed: true,
+            analog_probe2_is_signed: true,
         }
     }
 }

@@ -359,6 +359,14 @@ export interface Waveform {
   time_resolution: number;
   trigger_threshold: number;
   ns_per_sample?: number;
+  /** True when `analog_probe1` is signed 14-bit data (PHA1 trapezoid /
+   *  Delta probe). The waveform UI applies the +8191 centering offset
+   *  only when this flag is true so unsigned ADC traces (PSD1/PSD2/AMax)
+   *  render at their natural scale. Optional for backward compatibility
+   *  with older event payloads. */
+  analog_probe1_is_signed?: boolean;
+  /** Same as `analog_probe1_is_signed` for the second analog probe. */
+  analog_probe2_is_signed?: boolean;
 }
 
 // Latest waveform response

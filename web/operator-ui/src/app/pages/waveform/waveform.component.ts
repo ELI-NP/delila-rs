@@ -1406,8 +1406,14 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       const series: unknown[] = [];
       const nsPerSample = wf.waveform.ns_per_sample || 0;
       const toX = nsPerSample > 0 ? (i: number) => i * nsPerSample : (i: number) => i;
-      // 14-bit sign-extended values offset to center signed probes (Delta, etc.)
-      const OFFSET_14BIT = 8191;
+      // Apply the 14-bit centering offset (+8191) only when the backend
+      // marks the probe as signed — PHA1's trapezoid / Delta probes go
+      // negative around baseline, and the offset shifts them into the
+      // 0..16383 visible band alongside unsigned probes. Unsigned probes
+      // (PSD1/PSD2/AMax) keep their natural scale.
+      const OFFSET_14BIT_SIGNED = 8191;
+      const offsetFor = (signed: boolean | undefined): number =>
+        signed ? OFFSET_14BIT_SIGNED : 0;
 
       // Render accumulated history traces first (older = more transparent, analog only)
       if (isAccumulating && history.length > 0) {
@@ -1421,10 +1427,12 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           const opacity = 0.1 + (0.3 * idx) / Math.max(channelHistory.length - 1, 1);
           const hNs = hw.waveform.ns_per_sample || 0;
           const hToX = hNs > 0 ? (i: number) => i * hNs : (i: number) => i;
+          const off1 = offsetFor(hw.waveform.analog_probe1_is_signed);
+          const off2 = offsetFor(hw.waveform.analog_probe2_is_signed);
           if (config.analog1 && hw.waveform.analog_probe1.length > 0) {
             series.push({
               type: 'line',
-              data: hw.waveform.analog_probe1.map((v, i) => [hToX(i), v + OFFSET_14BIT]),
+              data: hw.waveform.analog_probe1.map((v, i) => [hToX(i), v + off1]),
               symbol: 'none',
               lineStyle: { width: 1, color: this.probeColors.analog1, opacity },
               itemStyle: { color: this.probeColors.analog1 },
@@ -1434,7 +1442,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           if (config.analog2 && hw.waveform.analog_probe2.length > 0) {
             series.push({
               type: 'line',
-              data: hw.waveform.analog_probe2.map((v, i) => [hToX(i), v + OFFSET_14BIT]),
+              data: hw.waveform.analog_probe2.map((v, i) => [hToX(i), v + off2]),
               symbol: 'none',
               lineStyle: { width: 1, color: this.probeColors.analog2, opacity },
               itemStyle: { color: this.probeColors.analog2 },
@@ -1444,12 +1452,15 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         });
       }
 
+      const latestOff1 = offsetFor(wf.waveform.analog_probe1_is_signed);
+      const latestOff2 = offsetFor(wf.waveform.analog_probe2_is_signed);
+
       // Latest waveform (full opacity)
       if (config.analog1 && wf.waveform.analog_probe1.length > 0) {
         series.push({
           name: 'Analog 0',
           type: 'line',
-          data: wf.waveform.analog_probe1.map((v, i) => [toX(i), v + OFFSET_14BIT]),
+          data: wf.waveform.analog_probe1.map((v, i) => [toX(i), v + latestOff1]),
           symbol: 'none',
           lineStyle: { width: 1.5, color: this.probeColors.analog1 },
           itemStyle: { color: this.probeColors.analog1 },
@@ -1460,7 +1471,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         series.push({
           name: 'Analog 1',
           type: 'line',
-          data: wf.waveform.analog_probe2.map((v, i) => [toX(i), v + OFFSET_14BIT]),
+          data: wf.waveform.analog_probe2.map((v, i) => [toX(i), v + latestOff2]),
           symbol: 'none',
           lineStyle: { width: 1.5, color: this.probeColors.analog2 },
           itemStyle: { color: this.probeColors.analog2 },

@@ -19,7 +19,7 @@
       "selector_wave": 0,
       "pretrigger_input": 1125,
       "polarity": 1,
-      "offset": 0,
+      "offset": 50,
       "thrs": 40,
       "trig_k": 10,
       "trig_m": 12,
@@ -32,16 +32,13 @@
       "sample_pos": 510,
       "run_cfg": 1,
       "amax_window": 1000,
-      "amax_len": 5,
       "window_maxim": 500,
+      "amax_len": 5,
       "baseline_delay": 200,
       "baseline_len": 6,
       "baseline_offset": 1000,
       "pretrigger_trap": 600,
-      "pretrigger_amax": 600,
-      "delay_shaping": 32,
-      "shap_trigg": 0,
-      "shap_bl_hold": 0
+      "pretrigger_amax": 600
     }
   }
 }

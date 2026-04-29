@@ -58,9 +58,9 @@ pub enum DecodeResult {
 /// Waveform data from digitizer
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Waveform {
-    /// Analog probe 1 samples (signed 14-bit values)
+    /// Analog probe 1 samples
     pub analog_probe1: Vec<i16>,
-    /// Analog probe 2 samples (signed 14-bit values)
+    /// Analog probe 2 samples
     pub analog_probe2: Vec<i16>,
     /// Digital probe 1 samples (1-bit)
     pub digital_probe1: Vec<u8>,
@@ -78,6 +78,17 @@ pub struct Waveform {
     /// Nanoseconds per waveform sample (set by decoder)
     #[serde(default)]
     pub ns_per_sample: f64,
+
+    /// True when `analog_probe1` is sign-extended 14-bit data (PHA1
+    /// trapezoid / Delta probe etc., range `[-8192, 8191]`). False for
+    /// raw-ADC unsigned probes (PSD1 / PSD2 / AMax input, range
+    /// `[0, 16383]`). The frontend uses this to decide whether to apply
+    /// the +8191 visual centering offset.
+    #[serde(default)]
+    pub analog_probe1_is_signed: bool,
+    /// Same as `analog_probe1_is_signed` for the second analog probe.
+    #[serde(default)]
+    pub analog_probe2_is_signed: bool,
 }
 
 /// Sign-extend a 14-bit two's complement value to i16.

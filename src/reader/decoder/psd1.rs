@@ -684,6 +684,9 @@ impl Psd1Decoder {
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: self.config.time_step_ns,
+            // PSD1 masks with `0x3FFF` so values land in `[0, 16383]` — unsigned.
+            analog_probe1_is_signed: false,
+            analog_probe2_is_signed: false,
         }
     }
 }

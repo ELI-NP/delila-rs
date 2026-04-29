@@ -420,6 +420,9 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: TIME_STEP_NS,
+            // AMax raw ADC stream — unsigned 14-bit.
+            analog_probe1_is_signed: false,
+            analog_probe2_is_signed: false,
         }
     });
 
@@ -1264,6 +1267,8 @@ impl Reader {
                     time_resolution: wf.time_resolution,
                     trigger_threshold: wf.trigger_threshold,
                     ns_per_sample: wf.ns_per_sample,
+                    analog_probe1_is_signed: wf.analog_probe1_is_signed,
+                    analog_probe2_is_signed: wf.analog_probe2_is_signed,
                 },
             )
         } else {
@@ -3526,6 +3531,8 @@ mod tests {
             time_resolution: 2,
             trigger_threshold: 500,
             ns_per_sample: 2.0,
+            analog_probe1_is_signed: true,
+            analog_probe2_is_signed: true,
         };
 
         let event = EventData {

@@ -361,6 +361,9 @@ impl AMaxDecoder {
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: constants::TIME_STEP_NS,
+            // AMax FW emits the raw 14-bit ADC stream — unsigned.
+            analog_probe1_is_signed: false,
+            analog_probe2_is_signed: false,
         })
     }
 

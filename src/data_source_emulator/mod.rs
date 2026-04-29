@@ -460,6 +460,8 @@ impl Emulator {
             time_resolution: 0, // 1x resolution
             trigger_threshold: 100,
             ns_per_sample: 2.0,
+            analog_probe1_is_signed: false,
+            analog_probe2_is_signed: false,
         }
     }
 
