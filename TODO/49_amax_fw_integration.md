@@ -1,7 +1,7 @@
 # AMax FW Integration into delila-rs
 
 **作成日:** 2026-04-27
-**ステータス:** ✅ Phase 1 完了 (2026-04-28)、✅ Phase 2 完了 (2026-04-28)
+**ステータス:** ✅ Phase 1 完了 (2026-04-28)、✅ Phase 2 完了 (2026-04-28)、✅ Phase 2.5 完了 (2026-04-29: 新 FW + 波形 + dev 環境)
 **プランファイル:** [/Users/aogaki/.claude/plans/valiant-napping-rabin.md](../../.claude/plans/valiant-napping-rabin.md)
 **前提:** [V1743 WaveDemo パラメーター追加](../TODO/archive/) は 2026-04-27 完了（trigger_edge / ttf_smoothing / extra_registers / V threshold 全部リモート稼働確認済）
 
@@ -121,6 +121,43 @@ Commits: `cc98d7d` (B1) + `ef5ba7c` (B2..B5 + R1..R3) + `3da6a3f` (F1..F7)
 #### スキップ (ユーザー方針)
 - ~~Z 軸 Log/Linear トグル~~ — 既に `logScale` プロパティ実装済、ユーザー要望薄
 - ~~SetInRun whitelist~~ — オフライン解析中心の運用方針
+
+---
+
+## Phase 2.5 — 新 FW + 波形 + dev 環境 (2026-04-29 完了)
+
+Phase 2 締め後にやってきた追加作業。AMax FW の世代交代 + waveform 表示の精度向上 + gant 開発機セットアップを 1 日でまとめて消化。
+
+### 新 FW 移植（caenlist firmware32_4input、register `Name` schema）✅
+FW 開発者が `RegisterFile_21last.json` をリリース。スキーマが per-channel `Path: page_amax_energy_0/POLARITY` から単一 `Name: page_amax_energy_POLARITY` に変わり、page base が `0x800000` → `0x100000`、`AMAX_delay` → `DELAY_SHAPING` rename + `SHAP_TRIGG` / `SHAP_BL_HOLD` 追加。
+
+- [x] **Codegen 全面対応**: `Register` 構造体が `Path` / `Name` 両対応、`fw_key()` で `_<digit>/` 接頭辞を剥がして fw_params キー一致。`--page-base` default を `0x100000` / `--page-stride` default を `0` (ch0 only) に変更。レガシー FW は引数で旧値を渡せば動く
+- [x] **`channel_writes()` helper 自動生成**: `handle.rs` の hand-written 24-field 配列を削除、codegen が `if let Some(v) = config.<field> { writes.push(...); }` 列を吐く。FW が register を追加・削除しても `handle.rs` には触らずに済む
+- [x] **`fw_params.json` 更新**: `AMAX_delay` 削除 + `DELAY_SHAPING` / `SHAP_TRIGG` / `SHAP_BL_HOLD` 追加 + `Delayed_READ` を readonly_patterns に追加
+- [x] **`amax_56.json` 更新**: 26 fields の新 FW 値、`num_channels: 2` キープ (PAGE_STRIDE=0 だが apply ループは 2 回回す必要あり — 1 回だけだと FW が triggers を発火しない)
+
+実機検証 (run 300-303 @ 172.18.4.56): 26 AMax registers × 2ch = 52 writes Apply、ch0 1 kHz、ch1 0、波形・1D・2D 全部 amax_viewer と一致。
+
+### Waveform 表示の精度向上 ✅
+- [x] **`waveforms_enabled` を OpenDPP endpoint format JSON に plumb** — AMax FW は WAVEFORM フィールドを format に含めないと波形を吐かない。`BoardConfig.waveforms_enabled: bool` を `configure_opendpp_endpoint` 呼び出しに連動。Settings → Waveform tab に AMax 用 toggle 追加
+- [x] **`selector_wave=0` (FW デフォルト) で生 ADC 1 stream** — 1 にすると 4-値 interleaved デバッグデータが返る。FW dev は今 1 信号だけ使う
+- [x] **`opendpp_to_event_data` で waveform を `analog_probe1` に転送** — 1024 sample × `& 0x3FFF` mask
+- [x] **`Waveform.analog_probe1_is_signed` / `analog_probe2_is_signed` フラグ** — PHA1 のみ true (sign_extend_14bit)、PSD1/PSD2/AMax は false (`& 0x3FFF`)。frontend は flag を見て signed のときだけ +8191 centering 適用、unsigned は raw scale で描画
+- [x] **2D heatmap auto-zoom + visualMap 改善**: bin left-edge 軸ラベル化、populated `(xi>0 && yi>0)` のみ表示+ズーム計算、visualMap range を毎 poll で `[min, max]` にリセット (drag は transient)、`outOfRange.color` で範囲外を薄いグレー表示
+
+実機検証: ch0 入力信号で baseline ~8228、peak ~9712、p2p ~1500 ADC のステップパルスがクリアに見える。signed/unsigned 切替で PHA1 trapezoid 互換も維持。
+
+### Dev 環境: gant@172.18.6.114 ✅
+- [x] **`/media/raid1/delila-rs` を `origin/master` に同期** — local 修正は `git reset --hard` で破棄、build 1m46s、546 tests pass
+- [x] **MongoDB を TOML から読めるよう拡張**: `OperatorFileConfig.mongodb: Option<MongoConfig>` 追加、CLI > TOML > None の優先順位。`config_amax_56.toml` に `[operator.mongodb]` ブロック追加 (Docker MongoDB 上の `delila` database)
+- [x] **AMax_56 用 config (toml + json) を gant に scp** — `./target/release/operator --config config/config_amax_56.toml` だけで Mongo 接続まで完結
+
+### 関連 commits (Phase 2.5)
+- `009af4e` config(amax_56): match amax_viewer signal-verified register set
+- `0ba78f6` feat(amax): support new 32-channel FW (page 0x100000) + heatmap polish
+- `89a0cab` fix(amax): keep num_channels=2 — the new FW needs duplicate writes
+- `5737b1d` feat(waveform): per-probe is_signed flag, drop unconditional +8191 offset
+- `9d49f63` feat(operator): mongodb config from TOML (CLI flags still override)
 
 ---
 
