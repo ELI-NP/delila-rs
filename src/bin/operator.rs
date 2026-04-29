@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use delila_rs::common::OperatorArgs;
-use delila_rs::config::{Config, InfluxDbConfig};
+use delila_rs::config::{Config, InfluxDbConfig, MongoConfig};
 use delila_rs::operator::{
     ComponentConfig, DigitizerConfigRepository, EmulatorSettings, OperatorConfig, RouterBuilder,
     RunRepository,
@@ -58,6 +58,7 @@ fn load_config(
     EmulatorSettings,
     Vec<(u32, PathBuf)>,
     Option<InfluxDbConfig>,
+    Option<MongoConfig>,
 ) {
     // Try to load from config file
     if let Ok(config) = Config::load(config_file) {
@@ -113,12 +114,14 @@ fn load_config(
             .filter_map(|s| s.config_file.as_ref().map(|f| (s.id, PathBuf::from(f))))
             .collect();
         let influxdb_config = config.operator.influxdb;
+        let mongodb_config = config.operator.mongodb;
         return (
             components,
             operator_config,
             emulator_settings,
             config_files,
             influxdb_config,
+            mongodb_config,
         );
     }
 
@@ -186,6 +189,7 @@ fn load_config(
         OperatorConfig::default(),
         EmulatorSettings::default(),
         Vec::new(),
+        None,
         None,
     )
 }
@@ -304,8 +308,27 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // Load component, operator, and emulator configuration
-    let (components, operator_config, emulator_settings, config_files, influxdb_config) =
-        load_config(&args.operator.common.config_file);
+    let (
+        components,
+        operator_config,
+        emulator_settings,
+        config_files,
+        influxdb_config,
+        mongodb_toml,
+    ) = load_config(&args.operator.common.config_file);
+    // Resolve MongoDB settings: CLI flags win, fall back to TOML `[operator.mongodb]`.
+    let resolved_mongo_uri: Option<String> = args
+        .mongodb_uri
+        .clone()
+        .or_else(|| mongodb_toml.as_ref().map(|m| m.uri.clone()));
+    let resolved_mongo_db: String = if args.mongodb_uri.is_some() {
+        // CLI wins for the uri ⇒ also use the CLI database (defaulted to "delila").
+        args.mongodb_database.clone()
+    } else if let Some(ref m) = mongodb_toml {
+        m.database.clone()
+    } else {
+        args.mongodb_database.clone()
+    };
     info!("Loaded {} component(s)", components.len());
     for comp in &components {
         info!("  {} -> {}", comp.name, comp.address);
@@ -321,8 +344,8 @@ async fn main() -> anyhow::Result<()> {
         emulator_settings.events_per_batch, emulator_settings.batch_interval_ms
     );
 
-    // Connect to MongoDB if URI is provided
-    let (run_repo, digitizer_repo) = if let Some(ref uri) = args.mongodb_uri {
+    // Connect to MongoDB if URI is provided (CLI > TOML).
+    let (run_repo, digitizer_repo) = if let Some(ref uri) = resolved_mongo_uri {
         use mongodb::options::ClientOptions;
         use mongodb::Client;
 
@@ -340,11 +363,11 @@ async fn main() -> anyhow::Result<()> {
 
             info!(
                 "Connected to MongoDB at {} (database: {})",
-                uri, args.mongodb_database
+                uri, resolved_mongo_db
             );
 
-            let run_repo = RunRepository::new(&client, &args.mongodb_database);
-            let digitizer_repo = DigitizerConfigRepository::new(&client, &args.mongodb_database);
+            let run_repo = RunRepository::new(&client, &resolved_mongo_db);
+            let digitizer_repo = DigitizerConfigRepository::new(&client, &resolved_mongo_db);
             Some((run_repo, digitizer_repo))
         }
         .await;

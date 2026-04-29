@@ -83,6 +83,24 @@ pub struct OperatorFileConfig {
     /// ELOG electronic logbook configuration
     #[serde(default)]
     pub elog: Option<ElogConfig>,
+    /// MongoDB configuration for run history + digitizer config persistence.
+    /// CLI flags `--mongodb-uri` / `--mongodb-database` override this when set.
+    #[serde(default)]
+    pub mongodb: Option<MongoConfig>,
+}
+
+/// MongoDB configuration for run history persistence
+#[derive(Debug, Clone, Deserialize)]
+pub struct MongoConfig {
+    /// Connection URI (e.g., `mongodb://user:pass@host:27017`)
+    pub uri: String,
+    /// Database name (default: `delila`)
+    #[serde(default = "default_mongodb_database")]
+    pub database: String,
+}
+
+fn default_mongodb_database() -> String {
+    "delila".to_string()
 }
 
 /// InfluxDB v3 Core configuration for metrics export
@@ -138,6 +156,7 @@ impl Default for OperatorFileConfig {
             reset_timeout_ms: None,
             influxdb: None,
             elog: None,
+            mongodb: None,
         }
     }
 }

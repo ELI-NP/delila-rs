@@ -5,6 +5,12 @@
 experiment_name = "AMax_56"
 port = 9090
 
+# Run history is persisted to MongoDB on the gant dev box. The CLI flags
+# `--mongodb-uri` / `--mongodb-database` override these values when present.
+[operator.mongodb]
+uri = "mongodb://delila:delila_pass@localhost:27017"
+database = "delila"
+
 [network]
 
 [[network.sources]]
