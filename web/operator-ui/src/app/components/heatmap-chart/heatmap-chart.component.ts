@@ -139,30 +139,54 @@ export class HeatmapChartComponent implements OnChanges {
     const xStep = (xMax - xMin) / xBins;
     const yStep = (yMax - yMin) / yBins;
 
-    // Build X and Y category labels (downsampled for display)
+    // Build X and Y category labels — use the bin LEFT EDGE so the axis
+    // starts at the configured min (e.g. 0) rather than the first bin center
+    // (which would be half a bin-width higher and confusing for physics).
     const xLabels: string[] = [];
     for (let i = 0; i < xBins; i++) {
-      const v = xMin + (i + 0.5) * xStep;
+      const v = xMin + i * xStep;
       xLabels.push(Math.round(v).toString());
     }
     const yLabels: string[] = [];
     for (let i = 0; i < yBins; i++) {
-      const v = yMin + (i + 0.5) * yStep;
+      const v = yMin + i * yStep;
       yLabels.push(v.toFixed(2));
     }
 
-    // Convert flat bins to [x, y, value] triplets, skip zeros for sparse transfer
+    // Convert flat bins to [x, y, value] triplets, skip zeros for sparse
+    // transfer. Cells in the underflow row (xi=0 or yi=0) are dropped from
+    // both display and auto-zoom — they're typically "no-data sentinels"
+    // (e.g. AMax FW reports `energy=0` for every event, which would otherwise
+    // dominate the plot and defeat the auto-zoom). Real physics activity
+    // beyond the first bin still shows up normally.
     const data: [number, number, number][] = [];
     let maxCount = 0;
+    let xMinPop = xBins, xMaxPop = -1;
+    let yMinPop = yBins, yMaxPop = -1;
     for (let y = 0; y < yBins; y++) {
       for (let x = 0; x < xBins; x++) {
         const count = hist.bins[y * xBins + x];
-        if (count > 0) {
+        if (count > 0 && x > 0 && y > 0) {
           data.push([x, y, count]);
           if (count > maxCount) maxCount = count;
+          if (x < xMinPop) xMinPop = x;
+          if (x > xMaxPop) xMaxPop = x;
+          if (y < yMinPop) yMinPop = y;
+          if (y > yMaxPop) yMaxPop = y;
         }
       }
     }
+
+    // Auto-zoom to populated extent with padding (and a hard min of 8 bins
+    // so a single-bin peak still has some breathing room). When no cells
+    // outside the underflow row are populated we fall back to the full range.
+    const padBins = (lo: number, hi: number, total: number) => {
+      if (hi < lo) return [1, total - 1];
+      const pad = Math.max(8, Math.round((hi - lo + 1) * 0.5));
+      return [Math.max(1, lo - pad), Math.min(total - 1, hi + pad)];
+    };
+    const [xZoomLo, xZoomHi] = padBins(xMinPop, xMaxPop, xBins);
+    const [yZoomLo, yZoomHi] = padBins(yMinPop, yMaxPop, yBins);
 
     // Log scale: visualMap uses log of counts
     const useLog = this.logScale && maxCount > 1;
@@ -175,20 +199,35 @@ export class HeatmapChartComponent implements OnChanges {
     this.mergeOptions.set({
       xAxis: {
         data: xLabels,
+        // Zoom to the populated bin range — see padBins() above.
+        min: xZoomLo,
+        max: xZoomHi,
         axisLabel: {
-          interval: Math.max(0, Math.floor(xBins / 8) - 1),
+          interval: Math.max(0, Math.floor((xZoomHi - xZoomLo + 1) / 8) - 1),
           rotate: 0,
         },
       },
       yAxis: {
         data: yLabels,
+        min: yZoomLo,
+        max: yZoomHi,
         axisLabel: {
-          interval: Math.max(0, Math.floor(yBins / 8) - 1),
+          interval: Math.max(0, Math.floor((yZoomHi - yZoomLo + 1) / 8) - 1),
         },
       },
       visualMap: {
         min: vmMin,
         max: vmMax || 1,
+        // Always pin the selected range to the live [min, max] so the colour
+        // bar matches the current data (the previous "preserve user drag"
+        // behaviour caused the range to lag behind a growing histogram).
+        // Drag-to-filter is therefore transient — it resets on the next
+        // poll. Out-of-range cells are kept faintly visible so a mid-drag
+        // moment doesn't blank the plot.
+        range: [vmMin, vmMax || 1],
+        outOfRange: {
+          color: 'rgba(180,180,180,0.35)',
+        },
         formatter: useLog
           ? (value: number) => Math.round(Math.pow(10, value)).toString()
           : undefined,
