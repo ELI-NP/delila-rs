@@ -11,7 +11,8 @@ import {
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { ECharts } from 'echarts/core';
-import { Histogram1D, XAxisLabel, ViewCellFitResult } from '../../models/histogram.types';
+import { AxisView, Histogram1D, XAxisLabel, ViewCellFitResult } from '../../models/histogram.types';
+import { rebin1d } from '../../utils/rebin';
 import { evaluatePiecewiseBg, BG_RANGE } from '../../services/fitting.service';
 
 export interface RangeChangeEvent {
@@ -66,6 +67,8 @@ export class HistogramChartComponent implements OnChanges {
   @Input() logScale = false;
   @Input() xAxisLabel: XAxisLabel = 'Channel';
   @Input() fitResult: ViewCellFitResult | null = null;
+  /** Client-side view (range + bin count). Falls back to native server config. */
+  @Input() xView: AxisView | null = null;
 
   @Output() rangeChange = new EventEmitter<RangeChangeEvent>();
   @Output() logScaleChange = new EventEmitter<boolean>();
@@ -77,12 +80,21 @@ export class HistogramChartComponent implements OnChanges {
   readonly mergeOptions = signal<EChartsCoreOption>({});
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes['histogram'] && this.histogram) {
+    if ((changes['histogram'] || changes['xView']) && this.histogram) {
       this.updateData();
     }
     if (changes['xRange'] || changes['yRange'] || changes['logScale'] || changes['fitResult']) {
       this.updateMergeOptions();
     }
+  }
+
+  /** Histogram with client-side view applied (or the raw payload if none set). */
+  private get viewHistogram(): Histogram1D | null {
+    const raw = this.histogram;
+    if (!raw) return null;
+    const v = this.xView;
+    if (v?.bins == null || v?.min == null || v?.max == null) return raw;
+    return rebin1d(raw, { min: v.min, max: v.max, bins: v.bins }) as Histogram1D;
   }
 
   onChartInit(chart: ECharts): void {
@@ -165,9 +177,10 @@ export class HistogramChartComponent implements OnChanges {
   }
 
   private updateData(): void {
-    if (!this.histogram) return;
+    const view = this.viewHistogram;
+    if (!view) return;
 
-    const { bins, config } = this.histogram;
+    const { bins, config } = view;
     const binWidth = (config.max_value - config.min_value) / config.num_bins;
 
     // Convert to [x, y] pairs for bar chart
@@ -184,8 +197,10 @@ export class HistogramChartComponent implements OnChanges {
     const data = this.data();
     if (data.length === 0) return;
 
-    // Always use full histogram range for axis limits (allows zoom out)
-    const config = this.histogram?.config;
+    // Always use full histogram range for axis limits (allows zoom out).
+    // Use the rebinned view's range so the chart stays consistent with the
+    // user's slider position.
+    const config = this.viewHistogram?.config;
     const fullXMin = config?.min_value ?? 0;
     const fullXMax = config?.max_value ?? 65536;
 

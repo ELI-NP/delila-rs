@@ -7,7 +7,8 @@ import {
 } from '@angular/core';
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
-import { Histogram2D } from '../../models/histogram.types';
+import { AxisView, Histogram2D } from '../../models/histogram.types';
+import { rebin2d } from '../../utils/rebin';
 
 @Component({
   selector: 'app-heatmap-chart',
@@ -40,6 +41,10 @@ export class HeatmapChartComponent implements OnChanges {
   @Input() logScale = true;
   @Input() xAxisLabel = 'Energy (ADC)';
   @Input() yAxisLabel = 'PSD';
+  /** Client-side X view (range + bin count). Falls back to native server config. */
+  @Input() xView: AxisView | null = null;
+  /** Client-side Y view (range + bin count). Falls back to native server config. */
+  @Input() yView: AxisView | null = null;
 
   readonly chartOptions = signal<EChartsCoreOption>(this.buildInitialOptions());
   readonly mergeOptions = signal<EChartsCoreOption>({});
@@ -48,7 +53,7 @@ export class HeatmapChartComponent implements OnChanges {
     if (changes['xAxisLabel'] || changes['yAxisLabel']) {
       this.chartOptions.set(this.buildInitialOptions());
     }
-    if (changes['histogram'] || changes['logScale']) {
+    if (changes['histogram'] || changes['logScale'] || changes['xView'] || changes['yView']) {
       this.updateChart();
     }
   }
@@ -124,11 +129,25 @@ export class HeatmapChartComponent implements OnChanges {
   }
 
   private updateChart(): void {
-    const hist = this.histogram;
-    if (!hist) {
+    const raw = this.histogram;
+    if (!raw) {
       this.mergeOptions.set({ series: [{ data: [] }] });
       return;
     }
+    // Apply client-side rebin if the user has an explicit view; otherwise
+    // render the native server payload as-is.
+    const xv = this.xView;
+    const yv = this.yView;
+    const useRebin =
+      xv?.bins != null && xv?.min != null && xv?.max != null &&
+      yv?.bins != null && yv?.min != null && yv?.max != null;
+    const hist: Histogram2D = useRebin
+      ? (rebin2d(
+          raw,
+          { min: xv!.min!, max: xv!.max!, bins: xv!.bins! },
+          { min: yv!.min!, max: yv!.max!, bins: yv!.bins! },
+        ) as Histogram2D)
+      : raw;
 
     const xBins = hist.x_config.num_bins;
     const yBins = hist.y_config.num_bins;

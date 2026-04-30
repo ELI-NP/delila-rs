@@ -131,6 +131,22 @@ export const AXIS_SOURCE_OPTIONS: readonly AxisSource[] = [
 ];
 
 /**
+ * Sensible client-side defaults per axis — matches the Rust
+ * `AxisSource::default_axis()` values plus a `bins` count that's reasonable
+ * for screen rendering. Used to seed Setup tab inputs and as a fallback
+ * when a `ViewTab.xView` / `yView` field is missing.
+ */
+export const DEFAULT_AXIS_VIEW: Record<AxisSource, { min: number; max: number; bins: number }> = {
+  energy: { min: 0, max: 65536, bins: 512 },
+  energy_short: { min: 0, max: 65536, bins: 512 },
+  user_info0: { min: 0, max: 16384, bins: 512 },
+  user_info1: { min: 0, max: 16384, bins: 512 },
+  user_info2: { min: 0, max: 16384, bins: 512 },
+  user_info3: { min: 0, max: 16384, bins: 512 },
+  psd: { min: -0.2, max: 1.2, bins: 200 },
+};
+
+/**
  * Histogram type for tab-level selection.
  *
  * - `'energy'` / `'psd'`: 1D plot of the named axis.
@@ -177,6 +193,27 @@ export function migrateLegacyHistType(legacy: string): {
   return null;
 }
 
+/**
+ * Per-axis viewing range and binning, applied client-side.
+ *
+ * The backend always serves at its full native resolution (1D = 65536 bins
+ * for energy, 512 bins for psd / user_info; 2D = 512×512). These fields tell
+ * the chart how to *display* that data: zoom into `[min, max]` and merge
+ * adjacent native bins until `bins` slots remain. `bins` is therefore upper-
+ * bounded by the native resolution — going lower is "coarser plot", going
+ * higher is silently clamped.
+ *
+ * Optional everywhere; missing means "use the native config the server sent".
+ */
+export interface AxisView {
+  /** Lower edge of the visible range (in axis units, e.g. ADC). */
+  min?: number;
+  /** Upper edge of the visible range. */
+  max?: number;
+  /** Number of bins to show after client-side rebinning. */
+  bins?: number;
+}
+
 // Setup tab configuration (template for creating views)
 export interface SetupConfig {
   name: string;
@@ -188,6 +225,10 @@ export interface SetupConfig {
   xAxis?: AxisSource;
   /** Required when `histogramType === '2d'`. Default: `'psd'`. */
   yAxis?: AxisSource;
+  /** Client-side X axis view: zoom range + bin count (1D and 2D). */
+  xView?: AxisView;
+  /** Client-side Y axis view: zoom range + bin count (2D only). */
+  yView?: AxisView;
   cells: SetupCell[];
 }
 
@@ -209,6 +250,10 @@ export interface ViewTab {
   xAxis?: AxisSource;
   /** 2D Y axis (only meaningful when `histogramType === '2d'`). */
   yAxis?: AxisSource;
+  /** Client-side X axis view: zoom range + bin count. */
+  xView?: AxisView;
+  /** Client-side Y axis view (2D only). */
+  yView?: AxisView;
   cells: ViewCell[];
   lastModifiedCellIndex?: number;
 }
@@ -324,6 +369,8 @@ export function createViewTabFromSetup(setup: SetupConfig): ViewTab | null {
     histogramType: setup.histogramType,
     xAxis: setup.xAxis,
     yAxis: setup.yAxis,
+    xView: setup.xView,
+    yView: setup.yView,
     cells: setup.cells.map((cell) => ({
       sourceId: cell.sourceId ?? 0,
       channelId: cell.channelId ?? 0,

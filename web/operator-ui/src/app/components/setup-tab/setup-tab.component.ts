@@ -16,8 +16,10 @@ import {
   XAxisLabel,
   HistogramType,
   AxisSource,
+  AxisView,
   AXIS_SOURCE_LABEL,
   AXIS_SOURCE_OPTIONS,
+  DEFAULT_AXIS_VIEW,
   createDefaultSetupCell,
 } from '../../models/histogram.types';
 
@@ -167,6 +169,45 @@ import {
         </button>
       </div>
 
+      <!-- Binning controls (per-tab range + bin count). The chart components
+           rebin client-side; the View tab gets a live slider on top of these
+           initial values. -->
+      <div class="binning-row">
+        <span class="binning-section">{{ is2d() ? 'X (' + axisLabel(xAxisFor1dOr2d()) + '):' : 'Range:' }}</span>
+        <mat-form-field appearance="outline" class="binning-input">
+          <mat-label>Min</mat-label>
+          <input matInput type="number" [value]="xMin()" (change)="onXMinChange($any($event.target).value)" />
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="binning-input">
+          <mat-label>Max</mat-label>
+          <input matInput type="number" [value]="xMax()" (change)="onXMaxChange($any($event.target).value)" />
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="binning-input">
+          <mat-label>Bins</mat-label>
+          <input matInput type="number" [value]="xBins()" (change)="onXBinsChange($any($event.target).value)" />
+        </mat-form-field>
+
+        @if (is2d()) {
+          <span class="binning-section">Y ({{ axisLabel(yAxisOrDefault()) }}):</span>
+          <mat-form-field appearance="outline" class="binning-input">
+            <mat-label>Min</mat-label>
+            <input matInput type="number" [value]="yMin()" (change)="onYMinChange($any($event.target).value)" />
+          </mat-form-field>
+          <mat-form-field appearance="outline" class="binning-input">
+            <mat-label>Max</mat-label>
+            <input matInput type="number" [value]="yMax()" (change)="onYMaxChange($any($event.target).value)" />
+          </mat-form-field>
+          <mat-form-field appearance="outline" class="binning-input">
+            <mat-label>Bins</mat-label>
+            <input matInput type="number" [value]="yBins()" (change)="onYBinsChange($any($event.target).value)" />
+          </mat-form-field>
+        }
+
+        <button mat-button (click)="onResetBinning()" title="Reset to axis defaults">
+          <mat-icon>restart_alt</mat-icon> Defaults
+        </button>
+      </div>
+
       <div
         class="setup-grid"
         [style.grid-template-rows]="'repeat(' + config.gridRows + ', 1fr)'"
@@ -213,6 +254,33 @@ import {
       display: flex;
       align-items: center;
       gap: 12px;
+    }
+
+    .binning-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 4px 8px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .binning-row .binning-section {
+      font-weight: 500;
+      color: #666;
+      margin: 0 4px;
+      white-space: nowrap;
+    }
+
+    .binning-row .binning-input {
+      width: 110px;
+    }
+
+    /* Keep the form-field heights compact in this dense row */
+    .binning-row .mat-mdc-form-field {
+      font-size: 12px;
     }
 
     .quick-create-label {
@@ -364,6 +432,78 @@ export class SetupTabComponent {
 
   onYAxisChange(value: AxisSource): void {
     this.emitConfigChange({ yAxis: value });
+  }
+
+  // ---------------------------------------------------------------------
+  // Per-tab binning controls (range + bin count)
+  //
+  // Defaults come from `DEFAULT_AXIS_VIEW[axis]` so 1D Energy starts at
+  // [0, 65536] / 512 bins, AMax UserInfo at [0, 16384] / 512, etc. The
+  // chart components rebin client-side, so changes here apply on the very
+  // next poll without any backend round trip.
+  // ---------------------------------------------------------------------
+
+  /** True when the active histogram type renders as a 2D heatmap (= the
+   *  Y axis controls are shown). */
+  is2d(): boolean {
+    return this.config.histogramType === '2d';
+  }
+
+  /** Axis backing the X-axis defaults: the explicit `xAxis` for 2D, otherwise
+   *  derived from the 1D `histogramType`. */
+  xAxisFor1dOr2d(): AxisSource {
+    if (this.is2d()) return this.config.xAxis ?? 'energy';
+    const t = this.config.histogramType;
+    if (t === 'psd') return 'psd';
+    if (t === 'user_info0') return 'user_info0';
+    if (t === 'user_info1') return 'user_info1';
+    if (t === 'user_info2') return 'user_info2';
+    if (t === 'user_info3') return 'user_info3';
+    return 'energy';
+  }
+
+  yAxisOrDefault(): AxisSource {
+    return this.config.yAxis ?? 'psd';
+  }
+
+  /** Resolve a saved view (or undefined) against the axis defaults so the
+   *  inputs always show *something* concrete. */
+  private resolveView(view: AxisView | undefined, axis: AxisSource): AxisView {
+    const def = DEFAULT_AXIS_VIEW[axis];
+    return {
+      min: view?.min ?? def.min,
+      max: view?.max ?? def.max,
+      bins: view?.bins ?? def.bins,
+    };
+  }
+
+  xMin(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).min!; }
+  xMax(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).max!; }
+  xBins(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).bins!; }
+  yMin(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).min!; }
+  yMax(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).max!; }
+  yBins(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).bins!; }
+
+  private patchXView(patch: Partial<AxisView>): void {
+    const next = { ...this.resolveView(this.config.xView, this.xAxisFor1dOr2d()), ...patch };
+    this.emitConfigChange({ xView: next });
+  }
+  private patchYView(patch: Partial<AxisView>): void {
+    const next = { ...this.resolveView(this.config.yView, this.yAxisOrDefault()), ...patch };
+    this.emitConfigChange({ yView: next });
+  }
+
+  onXMinChange(raw: string | number): void { this.patchXView({ min: Number(raw) }); }
+  onXMaxChange(raw: string | number): void { this.patchXView({ max: Number(raw) }); }
+  onXBinsChange(raw: string | number): void { this.patchXView({ bins: Math.max(1, Math.floor(Number(raw))) }); }
+  onYMinChange(raw: string | number): void { this.patchYView({ min: Number(raw) }); }
+  onYMaxChange(raw: string | number): void { this.patchYView({ max: Number(raw) }); }
+  onYBinsChange(raw: string | number): void { this.patchYView({ bins: Math.max(1, Math.floor(Number(raw))) }); }
+
+  /** Drop the explicit overrides so the inputs fall back to the per-axis
+   *  defaults — useful after a long zoom session or when switching axes. */
+  onResetBinning(): void {
+    this.emitConfigChange({ xView: undefined, yView: undefined });
   }
 
   private updateGridSize(rows: number, cols: number): void {

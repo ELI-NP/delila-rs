@@ -17,7 +17,15 @@ import { MatIconModule } from '@angular/material/icon';
 import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/histogram-chart.component';
 import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
 import { HistogramService } from '../../services/histogram.service';
-import { AxisSource, ViewTab, Histogram1D, Histogram2D, AXIS_SOURCE_LABEL } from '../../models/histogram.types';
+import {
+  AxisSource,
+  AxisView,
+  ViewTab,
+  Histogram1D,
+  Histogram2D,
+  AXIS_SOURCE_LABEL,
+  DEFAULT_AXIS_VIEW,
+} from '../../models/histogram.types';
 
 @Component({
   selector: 'app-view-tab',
@@ -64,6 +72,35 @@ import { AxisSource, ViewTab, Histogram1D, Histogram2D, AXIS_SOURCE_LABEL } from
           <mat-icon>save_alt</mat-icon>
           {{ isSaving() ? 'Saving...' : 'Save Image' }}
         </button>
+        <!-- Live binning sliders (1D shows X only, 2D shows X+Y). Slider
+             values run from 16 to the matching axis default; dragging
+             rebins client-side so the picture updates within one frame. -->
+        <div class="binning-controls">
+          <label class="binning-control">
+            <span class="binning-label">{{ is2dHistType(histType()) ? 'X' : '' }} bins:</span>
+            <input
+              type="range"
+              [min]="MIN_BIN_SLIDER"
+              [max]="maxXBinSlider()"
+              [value]="xView().bins!"
+              (input)="onXBinsSlider($any($event.target).value)"
+            />
+            <span class="binning-value">{{ xView().bins }}</span>
+          </label>
+          @if (is2dHistType(histType())) {
+            <label class="binning-control">
+              <span class="binning-label">Y bins:</span>
+              <input
+                type="range"
+                [min]="MIN_BIN_SLIDER"
+                [max]="maxYBinSlider()"
+                [value]="yView().bins!"
+                (input)="onYBinsSlider($any($event.target).value)"
+              />
+              <span class="binning-value">{{ yView().bins }}</span>
+            </label>
+          }
+        </div>
         @if (!is2dHistType(histType())) {
           <span class="toolbar-hint">
             Drag to select range, Ctrl+Scroll for X-axis zoom
@@ -100,6 +137,7 @@ import { AxisSource, ViewTab, Histogram1D, Histogram2D, AXIS_SOURCE_LABEL } from
                     [showDataZoom]="true"
                     [logScale]="cell.logScale ?? false"
                     [xAxisLabel]="tab.xAxisLabel"
+                    [xView]="xView()"
                     (rangeChange)="onRangeChange(i, $event)"
                   ></app-histogram-chart>
                 } @else {
@@ -108,6 +146,8 @@ import { AxisSource, ViewTab, Histogram1D, Histogram2D, AXIS_SOURCE_LABEL } from
                     [logScale]="cell.logScale ?? true"
                     [xAxisLabel]="axisLabel(xAxis())"
                     [yAxisLabel]="axisLabel(yAxis())"
+                    [xView]="xView()"
+                    [yView]="yView()"
                   ></app-heatmap-chart>
                 }
               </div>
@@ -146,6 +186,39 @@ import { AxisSource, ViewTab, Histogram1D, Histogram2D, AXIS_SOURCE_LABEL } from
       font-size: 12px;
       color: #666;
       margin-left: auto;
+    }
+
+    .binning-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 8px;
+      border-left: 1px solid #ddd;
+      border-right: 1px solid #ddd;
+    }
+
+    .binning-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #444;
+      cursor: pointer;
+    }
+
+    .binning-control input[type='range'] {
+      width: 100px;
+    }
+
+    .binning-label {
+      white-space: nowrap;
+    }
+
+    .binning-value {
+      min-width: 32px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+      color: #1976d2;
     }
 
     .view-grid {
@@ -251,6 +324,67 @@ export class ViewTabComponent implements OnInit, OnDestroy {
    *  layout files written before Phase 2 still render something sensible. */
   readonly xAxis = computed<AxisSource>(() => this.tab.xAxis ?? 'energy');
   readonly yAxis = computed<AxisSource>(() => this.tab.yAxis ?? 'psd');
+
+  /**
+   * Live view config — the chart components apply this client-side rebin.
+   * Falls back to the matching `DEFAULT_AXIS_VIEW` for the current axis when
+   * the tab doesn't carry an explicit override (legacy layouts and freshly
+   * created views start there). The user's slider edits in Setup / Expand
+   * patch `tab.xView` / `yView` directly and these computeds re-fire.
+   */
+  readonly xView = computed<AxisView>(() => this.resolveView(this.tab.xView, this.histType() === '2d' ? this.xAxis() : this.energy1dAxis()));
+  readonly yView = computed<AxisView>(() => this.resolveView(this.tab.yView, this.yAxis()));
+
+  /**
+   * For 1D plots the axis is implied by the `histogramType` (energy / psd /
+   * user_info0..3 → matching `AxisSource` for default lookup).
+   */
+  private energy1dAxis(): AxisSource {
+    const t = this.histType();
+    if (t === 'psd') return 'psd';
+    if (t === 'user_info0') return 'user_info0';
+    if (t === 'user_info1') return 'user_info1';
+    if (t === 'user_info2') return 'user_info2';
+    if (t === 'user_info3') return 'user_info3';
+    return 'energy';
+  }
+
+  private resolveView(view: AxisView | undefined, axis: AxisSource): AxisView {
+    const def = DEFAULT_AXIS_VIEW[axis];
+    return {
+      min: view?.min ?? def.min,
+      max: view?.max ?? def.max,
+      bins: view?.bins ?? def.bins,
+    };
+  }
+
+  /** Minimum bin count exposed by the slider — below this the chart loses
+   *  too much shape to be useful (single peak collapses to one bar). */
+  readonly MIN_BIN_SLIDER = 16;
+
+  /** Slider upper bound — the axis' default bin count (server's native
+   *  resolution for that axis). Past it we'd just create empty bins. */
+  readonly maxXBinSlider = computed<number>(() => {
+    const axis = this.is2dHistType(this.histType()) ? this.xAxis() : this.energy1dAxis();
+    return DEFAULT_AXIS_VIEW[axis].bins;
+  });
+  readonly maxYBinSlider = computed<number>(() => DEFAULT_AXIS_VIEW[this.yAxis()].bins);
+
+  onXBinsSlider(raw: string | number): void {
+    const bins = Math.max(this.MIN_BIN_SLIDER, Math.floor(Number(raw)));
+    this.tabChange.emit({
+      ...this.tab,
+      xView: { ...(this.tab.xView ?? {}), ...this.xView(), bins },
+    });
+  }
+
+  onYBinsSlider(raw: string | number): void {
+    const bins = Math.max(this.MIN_BIN_SLIDER, Math.floor(Number(raw)));
+    this.tabChange.emit({
+      ...this.tab,
+      yView: { ...(this.tab.yView ?? {}), ...this.yView(), bins },
+    });
+  }
 
   /** Heatmap-rendered histogram type (single 2D variant under the new model). */
   is2dHistType(t: string): boolean {

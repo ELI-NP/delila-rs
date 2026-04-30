@@ -8,7 +8,7 @@ import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/hi
 import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
 import { HistogramService } from '../../services/histogram.service';
 import { FittingService } from '../../services/fitting.service';
-import { ViewCell, ViewCellFitResult, Histogram1D, Histogram2D, XAxisLabel, HistogramType, AxisSource, AXIS_SOURCE_LABEL } from '../../models/histogram.types';
+import { ViewCell, ViewCellFitResult, Histogram1D, Histogram2D, XAxisLabel, HistogramType, AxisSource, AxisView, AXIS_SOURCE_LABEL } from '../../models/histogram.types';
 
 export interface ExpandDialogData {
   cell: ViewCell;
@@ -19,6 +19,10 @@ export interface ExpandDialogData {
   xAxis?: AxisSource;
   /** Required when `histogramType === '2d'`. Default: `'psd'`. */
   yAxis?: AxisSource;
+  /** Client-side X view (range + bin count). Inherited from the source tab. */
+  xView?: AxisView;
+  /** Client-side Y view (2D only). */
+  yView?: AxisView;
 }
 
 export interface ExpandDialogResult {
@@ -96,6 +100,7 @@ export interface ExpandDialogResult {
               [logScale]="cell().logScale ?? false"
               [xAxisLabel]="data.xAxisLabel"
               [fitResult]="cell().fitResult ?? null"
+              [xView]="data.xView ?? null"
               (rangeChange)="onRangeChange($event)"
             ></app-histogram-chart>
           } @else {
@@ -104,6 +109,8 @@ export interface ExpandDialogResult {
               [logScale]="cell().logScale ?? true"
               [xAxisLabel]="axisLabel(xAxis())"
               [yAxisLabel]="axisLabel(yAxis())"
+              [xView]="data.xView ?? null"
+              [yView]="data.yView ?? null"
             ></app-heatmap-chart>
           }
         </div>

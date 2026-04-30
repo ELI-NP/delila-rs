@@ -338,6 +338,8 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
       histogramType: tab.histogramType ?? 'energy',
       xAxis: tab.xAxis,
       yAxis: tab.yAxis,
+      xView: tab.xView,
+      yView: tab.yView,
     };
 
     const dialogRef = this.dialog.open(HistogramExpandDialogComponent, {
