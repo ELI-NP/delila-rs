@@ -91,6 +91,37 @@ export const AMAX_DEFAULTS: Record<string, number> = {
   'amax.shap_bl_hold': 0,
 };
 
+/** All AMax dotted-path keys (`amax.<field>`). Used by the
+ *  Settings expand/compress logic in `digitizer.service.ts`. */
+export const AMAX_DOTTED_KEYS: readonly string[] = [
+  'amax.selector_wave',
+  'amax.pretrigger_input',
+  'amax.polarity',
+  'amax.offset',
+  'amax.thrs',
+  'amax.trig_k',
+  'amax.trig_m',
+  'amax.trap_k',
+  'amax.trap_m',
+  'amax.deconv_m',
+  'amax.trap_gain',
+  'amax.bl_len',
+  'amax.bl_inib',
+  'amax.sample_pos',
+  'amax.run_cfg',
+  'amax.amax_window',
+  'amax.window_maxim',
+  'amax.amax_len',
+  'amax.baseline_delay',
+  'amax.baseline_len',
+  'amax.baseline_offset',
+  'amax.pretrigger_trap',
+  'amax.pretrigger_amax',
+  'amax.delay_shaping',
+  'amax.shap_trigg',
+  'amax.shap_bl_hold',
+];
+
 export const AMAX_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], tooltip: "FW reg POLARITY • word 0x02 (ch0 @ 0x800002)" },
   { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x03 (ch0 @ 0x800003)" },

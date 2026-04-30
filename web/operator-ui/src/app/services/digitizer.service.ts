@@ -6,6 +6,7 @@ import {
   ApiResponse,
   DetectResponse,
 } from '../models/types';
+import { AMAX_DOTTED_KEYS } from '../models/amax-generated';
 import { firstValueFrom } from 'rxjs';
 
 /** Keys in ChannelConfig that are channel parameters (not extra) */
@@ -87,37 +88,12 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
 ];
 
 /**
- * AMax dotted-path keys. The backend stores these inside a nested
- * `ChannelConfig.amax: AMaxChannelConfig` struct; the channel-table UI uses
- * the dotted form so a single ChannelParamDef[] can address either flat or
- * nested fields. expand/compress walk these explicitly.
+ * AMax dotted-path keys are codegen-driven — the canonical list lives in
+ * `amax-generated.ts`, regenerated alongside the Rust struct + register
+ * map by `cargo run --bin amax_codegen`. The expand/compress logic below
+ * iterates that list so a new firmware register only needs to land in
+ * `fw_params.json`, not in this file.
  */
-const AMAX_DOTTED_KEYS: readonly string[] = [
-  'amax.polarity',
-  'amax.offset',
-  'amax.thrs',
-  'amax.trig_k',
-  'amax.trig_m',
-  'amax.run_cfg',
-  'amax.trap_k',
-  'amax.trap_m',
-  'amax.deconv_m',
-  'amax.trap_gain',
-  'amax.bl_len',
-  'amax.bl_inib',
-  'amax.sample_pos',
-  'amax.amax_window',
-  'amax.amax_delay',
-  'amax.amax_len',
-  'amax.window_maxim',
-  'amax.baseline_delay',
-  'amax.baseline_len',
-  'amax.baseline_offset',
-  'amax.pretrigger_input',
-  'amax.pretrigger_trap',
-  'amax.pretrigger_amax',
-  'amax.selector_wave',
-];
 
 /** Read a possibly-dotted key from a ChannelConfig, returning undefined when
  *  any segment is missing. Only `amax.<field>` is supported today. */

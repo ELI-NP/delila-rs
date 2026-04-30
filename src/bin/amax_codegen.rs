@@ -453,6 +453,18 @@ fn emit_typescript(
     }
     out.push_str("};\n\n");
 
+    // Dotted-key allowlist for `digitizer.service.ts` expand/compress —
+    // every per-channel AMax field the UI is allowed to round-trip. Adding
+    // a new register here used to require a hand edit; emitting it from the
+    // same canonical list keeps Settings tab in sync with the FW.
+    out.push_str("/** All AMax dotted-path keys (`amax.<field>`). Used by the\n");
+    out.push_str(" *  Settings expand/compress logic in `digitizer.service.ts`. */\n");
+    out.push_str("export const AMAX_DOTTED_KEYS: readonly string[] = [\n");
+    for r in resolved {
+        out.push_str(&format!("  'amax.{}',\n", r.field));
+    }
+    out.push_str("];\n\n");
+
     // Emit one const array per category, in stable order.
     for cat in ["input", "trigger", "energy", "waveform"] {
         let const_name = format!("AMAX_{}_PARAMS", category_label(cat).to_uppercase());
