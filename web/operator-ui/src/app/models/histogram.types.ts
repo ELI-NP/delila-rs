@@ -131,18 +131,24 @@ export const AXIS_SOURCE_OPTIONS: readonly AxisSource[] = [
 ];
 
 /**
- * Sensible client-side defaults per axis — matches the Rust
- * `AxisSource::default_axis()` values plus a `bins` count that's reasonable
- * for screen rendering. Used to seed Setup tab inputs and as a fallback
- * when a `ViewTab.xView` / `yView` field is missing.
+ * Client-side fallback defaults per axis — used to seed Setup tab inputs
+ * and as a fallback when a `ViewTab.xView` / `yView` field is missing **and**
+ * no histogram payload has arrived yet. Once a payload arrives, the actual
+ * server bin count from `Histogram1D.config` / `Histogram2D.x_config` is
+ * authoritative.
+ *
+ * `bins` here mirrors the Rust `AxisSource::default_axis()` 2D fallback
+ * (1024 native bins for integer axes, 200 for PSD). 1D histograms have
+ * higher native resolution on the server (Energy = 65536, UserInfo = 16384,
+ * PSD = 200) — `view-tab` reads those directly from the payload.
  */
 export const DEFAULT_AXIS_VIEW: Record<AxisSource, { min: number; max: number; bins: number }> = {
-  energy: { min: 0, max: 65536, bins: 512 },
-  energy_short: { min: 0, max: 65536, bins: 512 },
-  user_info0: { min: 0, max: 16384, bins: 512 },
-  user_info1: { min: 0, max: 16384, bins: 512 },
-  user_info2: { min: 0, max: 16384, bins: 512 },
-  user_info3: { min: 0, max: 16384, bins: 512 },
+  energy: { min: 0, max: 65536, bins: 1024 },
+  energy_short: { min: 0, max: 65536, bins: 1024 },
+  user_info0: { min: 0, max: 16384, bins: 1024 },
+  user_info1: { min: 0, max: 16384, bins: 1024 },
+  user_info2: { min: 0, max: 16384, bins: 1024 },
+  user_info3: { min: 0, max: 16384, bins: 1024 },
   psd: { min: -0.2, max: 1.2, bins: 200 },
 };
 
@@ -196,14 +202,19 @@ export function migrateLegacyHistType(legacy: string): {
 /**
  * Per-axis viewing range and binning, applied client-side.
  *
- * The backend always serves at its full native resolution (1D = 65536 bins
- * for energy, 512 bins for psd / user_info; 2D = 512×512). These fields tell
- * the chart how to *display* that data: zoom into `[min, max]` and merge
- * adjacent native bins until `bins` slots remain. `bins` is therefore upper-
- * bounded by the native resolution — going lower is "coarser plot", going
- * higher is silently clamped.
+ * The backend serves at its native resolution (1D Energy = 65536, 1D
+ * UserInfo = 16384, 1D PSD = 200; 2D = 1024×1024 by default, configurable
+ * via `histogram2d_overrides`). These fields tell the chart how to
+ * *display* that data: zoom into `[min, max]` and merge adjacent native
+ * bins until `bins` slots remain.
  *
- * Optional everywhere; missing means "use the native config the server sent".
+ * `bins` is the *displayed* bin count, derived from the user-chosen rebin
+ * factor: factor 1 → bins = native, factor N → bins = native / N. The
+ * view-tab slider drives this. Going below 1 (= more bins than native) is
+ * silently clamped by `rebin2d` / `rebin1d`.
+ *
+ * Optional everywhere; missing means "use the server's native config" (=
+ * rebin factor 1).
  */
 export interface AxisView {
   /** Lower edge of the visible range (in axis units, e.g. ADC). */

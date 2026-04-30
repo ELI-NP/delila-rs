@@ -579,7 +579,9 @@ pub struct MonitorNetworkConfig {
     #[serde(default = "default_psd_max")]
     pub psd_max: f32,
 
-    /// PSD 2D histogram: X axis (Energy) bins (default: 512)
+    /// PSD 2D histogram: X axis (Energy) bins (default: 1024).
+    /// 1024×1024 keeps a 2D plot at ~8 MB while giving the live rebin
+    /// slider a useful range; the slider rebins client-side.
     #[serde(default = "default_psd2d_x_bins")]
     pub psd2d_x_bins: u32,
     /// PSD 2D histogram: Y axis (PSD) bins (default: 200)
@@ -597,7 +599,7 @@ fn default_psd_max() -> f32 {
     1.2
 }
 fn default_psd2d_x_bins() -> u32 {
-    512
+    1024
 }
 fn default_psd2d_y_bins() -> u32 {
     200

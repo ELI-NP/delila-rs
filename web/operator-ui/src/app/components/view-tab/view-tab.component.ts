@@ -72,32 +72,39 @@ import {
           <mat-icon>save_alt</mat-icon>
           {{ isSaving() ? 'Saving...' : 'Save Image' }}
         </button>
-        <!-- Live binning sliders (1D shows X only, 2D shows X+Y). Slider
-             values run from 16 to the matching axis default; dragging
+        <!-- Live rebin sliders (1D shows X only, 2D shows X+Y). The slider
+             value is a *rebin factor*: 1 = server's native resolution,
+             N = combine N native bins into one displayed bin. The chart
              rebins client-side so the picture updates within one frame. -->
         <div class="binning-controls">
           <label class="binning-control">
-            <span class="binning-label">{{ is2dHistType(histType()) ? 'X' : '' }} bins:</span>
+            <span class="binning-label">{{ is2dHistType(histType()) ? 'X' : '' }} rebin:</span>
             <input
               type="range"
-              [min]="MIN_BIN_SLIDER"
-              [max]="maxXBinSlider()"
-              [value]="xView().bins!"
-              (input)="onXBinsSlider($any($event.target).value)"
+              [min]="1"
+              [max]="maxXRebinFactor()"
+              [step]="1"
+              [value]="xRebinFactor()"
+              (input)="onXRebinSlider($any($event.target).value)"
             />
-            <span class="binning-value">{{ xView().bins }}</span>
+            <span class="binning-value" [title]="xView().bins + ' bins displayed'">
+              {{ xRebinFactor() }}
+            </span>
           </label>
           @if (is2dHistType(histType())) {
             <label class="binning-control">
-              <span class="binning-label">Y bins:</span>
+              <span class="binning-label">Y rebin:</span>
               <input
                 type="range"
-                [min]="MIN_BIN_SLIDER"
-                [max]="maxYBinSlider()"
-                [value]="yView().bins!"
-                (input)="onYBinsSlider($any($event.target).value)"
+                [min]="1"
+                [max]="maxYRebinFactor()"
+                [step]="1"
+                [value]="yRebinFactor()"
+                (input)="onYRebinSlider($any($event.target).value)"
               />
-              <span class="binning-value">{{ yView().bins }}</span>
+              <span class="binning-value" [title]="yView().bins + ' bins displayed'">
+                {{ yRebinFactor() }}
+              </span>
             </label>
           }
         </div>
@@ -332,8 +339,16 @@ export class ViewTabComponent implements OnInit, OnDestroy {
    * created views start there). The user's slider edits in Setup / Expand
    * patch `tab.xView` / `yView` directly and these computeds re-fire.
    */
-  readonly xView = computed<AxisView>(() => this.resolveView(this.tab.xView, this.histType() === '2d' ? this.xAxis() : this.energy1dAxis()));
-  readonly yView = computed<AxisView>(() => this.resolveView(this.tab.yView, this.yAxis()));
+  readonly xView = computed<AxisView>(() =>
+    this.resolveView(
+      this.tab.xView,
+      this.histType() === '2d' ? this.xAxis() : this.energy1dAxis(),
+      this.serverXBins(),
+    ),
+  );
+  readonly yView = computed<AxisView>(() =>
+    this.resolveView(this.tab.yView, this.yAxis(), this.serverYBins()),
+  );
 
   /**
    * For 1D plots the axis is implied by the `histogramType` (energy / psd /
@@ -349,37 +364,78 @@ export class ViewTabComponent implements OnInit, OnDestroy {
     return 'energy';
   }
 
-  private resolveView(view: AxisView | undefined, axis: AxisSource): AxisView {
+  private resolveView(view: AxisView | undefined, axis: AxisSource, nativeBins: number): AxisView {
     const def = DEFAULT_AXIS_VIEW[axis];
     return {
       min: view?.min ?? def.min,
       max: view?.max ?? def.max,
-      bins: view?.bins ?? def.bins,
+      // Default = server's native bin count → rebin factor 1 (no rebin).
+      bins: view?.bins ?? nativeBins,
     };
   }
 
-  /** Minimum bin count exposed by the slider — below this the chart loses
-   *  too much shape to be useful (single peak collapses to one bar). */
-  readonly MIN_BIN_SLIDER = 16;
+  /** Minimum *displayed* bin count after rebinning — below this the chart
+   *  loses too much shape (single peak collapses to one bar). The slider's
+   *  upper bound is `serverBins / MIN_DISPLAY_BINS`. */
+  readonly MIN_DISPLAY_BINS = 16;
 
-  /** Slider upper bound — the axis' default bin count (server's native
-   *  resolution for that axis). Past it we'd just create empty bins. */
-  readonly maxXBinSlider = computed<number>(() => {
+  /** Server's native X bin count for the current view. Read from the latest
+   *  histogram payload when available — the server is the source of truth.
+   *  Falls back to the axis' DEFAULT_AXIS_VIEW.bins (used as a 2D-context
+   *  default) until the first payload arrives. */
+  readonly serverXBins = computed<number>(() => {
+    if (this.is2dHistType(this.histType())) {
+      const h = this.histograms2d().find((x) => x !== null);
+      if (h) return h.x_config.num_bins;
+    } else {
+      const h = this.histograms().find((x) => x !== null);
+      if (h) return h.config.num_bins;
+    }
     const axis = this.is2dHistType(this.histType()) ? this.xAxis() : this.energy1dAxis();
     return DEFAULT_AXIS_VIEW[axis].bins;
   });
-  readonly maxYBinSlider = computed<number>(() => DEFAULT_AXIS_VIEW[this.yAxis()].bins);
 
-  onXBinsSlider(raw: string | number): void {
-    const bins = Math.max(this.MIN_BIN_SLIDER, Math.floor(Number(raw)));
+  readonly serverYBins = computed<number>(() => {
+    if (!this.is2dHistType(this.histType())) return 1;
+    const h = this.histograms2d().find((x) => x !== null);
+    if (h) return h.y_config.num_bins;
+    return DEFAULT_AXIS_VIEW[this.yAxis()].bins;
+  });
+
+  /** Slider upper bound — the largest rebin factor we let the user pick
+   *  before the displayed bin count would drop below `MIN_DISPLAY_BINS`. */
+  readonly maxXRebinFactor = computed<number>(() =>
+    Math.max(1, Math.floor(this.serverXBins() / this.MIN_DISPLAY_BINS)),
+  );
+  readonly maxYRebinFactor = computed<number>(() =>
+    Math.max(1, Math.floor(this.serverYBins() / this.MIN_DISPLAY_BINS)),
+  );
+
+  /** Current rebin factor derived from `xView.bins` (= displayed bins).
+   *  factor 1 = native (no rebin), factor N = combine N native bins. */
+  readonly xRebinFactor = computed<number>(() => {
+    const sb = this.serverXBins();
+    const db = Math.max(1, this.xView().bins ?? sb);
+    return Math.max(1, Math.round(sb / db));
+  });
+  readonly yRebinFactor = computed<number>(() => {
+    const sb = this.serverYBins();
+    const db = Math.max(1, this.yView().bins ?? sb);
+    return Math.max(1, Math.round(sb / db));
+  });
+
+  onXRebinSlider(raw: string | number): void {
+    const factor = Math.max(1, Math.floor(Number(raw)));
+    const bins = Math.max(this.MIN_DISPLAY_BINS, Math.floor(this.serverXBins() / factor));
     this.tabChange.emit({
       ...this.tab,
       xView: { ...(this.tab.xView ?? {}), ...this.xView(), bins },
     });
   }
 
-  onYBinsSlider(raw: string | number): void {
-    const bins = Math.max(this.MIN_BIN_SLIDER, Math.floor(Number(raw)));
+  onYRebinSlider(raw: string | number): void {
+    const factor = Math.max(1, Math.floor(Number(raw)));
+    const bins = Math.max(this.MIN_DISPLAY_BINS, Math.floor(this.serverYBins() / factor));
     this.tabChange.emit({
       ...this.tab,
       yView: { ...(this.tab.yView ?? {}), ...this.yView(), bins },

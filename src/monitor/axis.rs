@@ -75,15 +75,23 @@ impl AxisSource {
 
     /// Sensible default histogram range and bin count for this axis.
     /// Returns `(min, max, num_bins)`.
+    ///
+    /// These defaults are tuned for *2D* histogram fallback (when no explicit
+    /// `histogram2d_overrides` entry is set). 1D histograms have their own
+    /// dedicated config fields on `MonitorConfig` (`histogram_config`,
+    /// `psd_histogram_config`, `userinfo_histogram_config`) that carry the
+    /// per-axis 1D native resolution (1 bin per ADC count for integer axes).
+    /// 1024 bins keeps a 2D plot at ~8 MB (1024×1024 × u64) while still
+    /// giving the live rebin slider a useful range.
     pub fn default_axis(self) -> (f32, f32, u32) {
         match self {
             // 16-bit raw ADC counts.
-            AxisSource::Energy | AxisSource::EnergyShort => (0.0, 65536.0, 512),
+            AxisSource::Energy | AxisSource::EnergyShort => (0.0, 65536.0, 1024),
             // amax_viewer convention (matches Phase 1 amax2d default).
             AxisSource::UserInfo0
             | AxisSource::UserInfo1
             | AxisSource::UserInfo2
-            | AxisSource::UserInfo3 => (0.0, 16384.0, 512),
+            | AxisSource::UserInfo3 => (0.0, 16384.0, 1024),
             // Psd ratio is bounded [0, 1] in theory but noise pushes events
             // slightly outside both ends — we keep the same -0.2..1.2 / 200-bin
             // window the legacy psd2d_y_config used so existing users see no

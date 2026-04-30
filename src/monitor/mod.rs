@@ -52,6 +52,11 @@ pub struct MonitorConfig {
     pub histogram_config: HistogramConfig,
     /// PSD 1D histogram configuration
     pub psd_histogram_config: HistogramConfig,
+    /// 1D `UserInfo[i]` histogram configuration (shared across the four slots).
+    /// Default = 16384 bins on `[0, 16384)` (1 bin per ADC count, matches the
+    /// 14-bit AMax user-info field). The view-tab slider rebins this down
+    /// client-side via the rebin factor.
+    pub userinfo_histogram_config: HistogramConfig,
     /// Per-axis range/bin overrides for 2D plots. Any axis not present here
     /// falls back to `AxisSource::default_axis()`. Used to honor the legacy
     /// `monitor.psd2d_x_bins` / `monitor.psd2d_y_bins` TOML knobs (see
@@ -73,6 +78,11 @@ impl Default for MonitorConfig {
                 num_bins: 200,
                 min_value: -0.2,
                 max_value: 1.2,
+            },
+            userinfo_histogram_config: HistogramConfig {
+                num_bins: 16384,
+                min_value: 0.0,
+                max_value: 16384.0,
             },
             histogram2d_overrides: HashMap::new(),
             channel_capacity: 1000,
@@ -302,6 +312,8 @@ pub struct MonitorState {
     pub start_time: Option<Instant>,
     pub histogram_config: HistogramConfig,
     pub psd_histogram_config: HistogramConfig,
+    /// 1D `UserInfo[i]` histogram config (mirrors `MonitorConfig`).
+    pub userinfo_histogram_config: HistogramConfig,
     /// Per-axis overrides for 2D plot ranges (see `MonitorConfig`).
     pub histogram2d_overrides: HashMap<AxisSource, HistogramConfig>,
     /// Pre-registered channels from Operator (preserved across Clear, cleared on Reset)
@@ -322,6 +334,7 @@ impl MonitorState {
             start_time: None,
             histogram_config: config.histogram_config,
             psd_histogram_config: config.psd_histogram_config,
+            userinfo_histogram_config: config.userinfo_histogram_config,
             histogram2d_overrides: config.histogram2d_overrides.clone(),
             registered_channels: Vec::new(),
             channel_names: HashMap::new(),
@@ -517,7 +530,10 @@ impl MonitorState {
                 AxisSource::UserInfo2,
                 AxisSource::UserInfo3,
             ] {
-                let cfg = self.axis_config(axis);
+                // 1D UserInfo uses its own dedicated config (native ADC
+                // resolution, 16384 bins by default), independent of the 2D
+                // override map. Frontend rebins live via the slider.
+                let cfg = self.userinfo_histogram_config;
                 self.userinfo_histograms
                     .entry((key, axis))
                     .or_insert_with(|| Histogram1D::new(ch.module_id, ch.channel_id, cfg));
@@ -1752,9 +1768,11 @@ mod tests {
         let h1 = state.userinfo_histograms.get(&(key, AxisSource::UserInfo1)).unwrap();
         assert_eq!(h0.total_counts, 1);
         assert_eq!(h1.total_counts, 1);
-        // Bins are wide (default 0..16384, 512 bins); slot 0 (=42) ends up in bin 1.
-        let cfg = AxisSource::UserInfo0.default_axis();
-        let bin = ((42.0 - cfg.0) / (cfg.1 - cfg.0) * cfg.2 as f32) as usize;
+        // 1D UserInfo defaults to native (1 bin per ADC count, 16384 bins on
+        // [0, 16384)); slot 0 (=42) lands in bin 42.
+        let cfg = config.userinfo_histogram_config;
+        let bin = ((42.0 - cfg.min_value) / (cfg.max_value - cfg.min_value) * cfg.num_bins as f32)
+            as usize;
         assert_eq!(h0.bins[bin], 1);
     }
 
