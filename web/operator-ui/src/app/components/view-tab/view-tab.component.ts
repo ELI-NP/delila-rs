@@ -313,7 +313,21 @@ import {
   `,
 })
 export class ViewTabComponent implements OnInit, OnDestroy {
-  @Input() tab!: ViewTab;
+  /**
+   * `tab` is exposed as a normal property (preserving the existing
+   * `this.tab.xxx` call-sites) but backed by a signal so `computed()`s
+   * that read it (xView, xRebinFactor, etc.) invalidate when the parent
+   * passes a new tab object. Without this the slider's displayed value
+   * stays frozen at its initial reading because the cached computed
+   * never sees the parent's update.
+   */
+  private readonly _tab = signal<ViewTab>(undefined as unknown as ViewTab);
+  @Input({ required: true }) set tab(value: ViewTab) {
+    this._tab.set(value);
+  }
+  get tab(): ViewTab {
+    return this._tab();
+  }
   @Output() tabChange = new EventEmitter<ViewTab>();
   @Output() cellExpand = new EventEmitter<number>();
 
