@@ -4,6 +4,13 @@
 Pre-req: operator+reader+merger+monitor already running with the matching
 throughput TOML (e.g. config/config_psd2_thrput.toml or config/config_pha2_thrput.toml).
 
+Each iteration is judged "healthy" when the reader delivered ≥50% of the
+target rate. When PHA2's firmware enters its known low-rate stuck state
+after rapid Configure cycles, the script logs the result, idles for
+`--stuck-cool-down` seconds (default 60s = enough for FW self-recovery)
+and retries up to `--max-retries` times. A short `--cool-down` (default
+5s) is also applied between healthy iterations to keep the FW happy.
+
 Usage:
     # PSD2 (default JSON path)
     scripts/throughput_sweep.py --mode 1ch  --out throughput_psd2_1ch.csv
@@ -98,7 +105,10 @@ def safe_post(path: str, body=None) -> bool:
         return False
 
 
-def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration: float, warmup: float, run_seq: int):
+def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration: float, warmup: float, run_seq: int, healthy_pct: float):
+    """Run one Configure→Arm→Start→Stop cycle. Returns measurement dict or
+    None on infrastructure failure (use `is_healthy` on the result to tell
+    success from FW-stuck states like events≈0)."""
     period_ns = int(1_000_000_000 // rate_hz)
     print(f"\n=== mode={mode} samples={samples} rate={rate_hz} Hz period={period_ns} ns")
 
@@ -149,7 +159,11 @@ def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration
     bpe = (db / de) if de > 0 else 0.0
     nch = NCH_BY_MODE[mode]
     ach = eps / nch
-    print(f"  result events={de} bytes={db} loss={dl}  -> {eps:.1f} ev/s, {bps/1e6:.2f} MB/s, {bpe:.1f} B/ev, ach/ch={ach:.1f} Hz")
+    expected = rate_hz * nch * duration
+    pct = (de / expected * 100.0) if expected > 0 else 0.0
+    healthy = pct >= healthy_pct  # below this = retry candidate (stuck or genuine saturation)
+    health_tag = "OK" if healthy else "STUCK?"
+    print(f"  result events={de} bytes={db} loss={dl}  -> {eps:.1f} ev/s, {bps/1e6:.2f} MB/s, {bpe:.1f} B/ev, ach/ch={ach:.1f} Hz  [{health_tag} {pct:.0f}% of target]")
     return {
         "samples": samples, "target_rate_hz": rate_hz, "n_channels": nch,
         "duration_s": duration,
@@ -157,6 +171,8 @@ def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration
         "events_per_sec": round(eps, 1), "bytes_per_sec": round(bps, 1),
         "trigger_loss": dl, "bytes_per_event": round(bpe, 1),
         "achieved_per_ch_hz": round(ach, 1),
+        "expected_total": int(expected), "pct_of_target": round(pct, 1),
+        "healthy": healthy,
     }
 
 
@@ -168,6 +184,16 @@ def main():
                     help="Path to the per-firmware thrput JSON the script edits in-place")
     ap.add_argument("--duration", type=float, default=15.0)
     ap.add_argument("--warmup", type=float, default=3.0)
+    ap.add_argument("--cool-down", type=float, default=5.0,
+                    help="Seconds to idle between healthy iterations (default 5)")
+    ap.add_argument("--stuck-cool-down", type=float, default=60.0,
+                    help="Seconds to idle when an iteration looks stuck before retrying (default 60)")
+    ap.add_argument("--max-retries", type=int, default=1,
+                    help="Per-iteration retries when STUCK is detected (default 1)")
+    ap.add_argument("--healthy-pct", type=float, default=30.0,
+                    help="Min %% of target rate to consider an iteration healthy "
+                         "(default 30; lower for high-rate sweeps where the FW "
+                         "saturates below 50%%)")
     args = ap.parse_args()
 
     json_path = Path(args.json_path)
@@ -181,8 +207,10 @@ def main():
         "events_total", "bytes_total",
         "events_per_sec", "bytes_per_sec",
         "trigger_loss", "bytes_per_event", "achieved_per_ch_hz",
+        "expected_total", "pct_of_target", "healthy", "attempt",
     ]
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    stuck_count = 0
     with open(args.out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -190,14 +218,41 @@ def main():
         run_seq = int(time.time())
         for samples in SAMPLES_LIST:
             for rate_hz in rates:
-                run_seq += 1
-                row = measure_one(json_path, samples, rate_hz, args.mode, args.duration, args.warmup, run_seq)
+                row = None
+                attempt = 0
+                while attempt <= args.max_retries:
+                    run_seq += 1
+                    attempt += 1
+                    row = measure_one(json_path, samples, rate_hz, args.mode,
+                                      args.duration, args.warmup, run_seq,
+                                      args.healthy_pct)
+                    if row is None:
+                        # infrastructure failure (timeout etc.) — bail this iter
+                        break
+                    if row["healthy"]:
+                        break
+                    if attempt > args.max_retries:
+                        print(f"  [stuck] giving up after {attempt} attempts, "
+                              f"recording last result anyway")
+                        break
+                    print(f"  [stuck] attempt {attempt} unhealthy "
+                          f"({row['pct_of_target']}% of target), "
+                          f"sleeping {args.stuck_cool_down}s for FW recovery...")
+                    stuck_count += 1
+                    time.sleep(args.stuck_cool_down)
                 if row is None:
                     continue
+                row["attempt"] = attempt
                 rows.append(row)
-                w.writerow(row)
+                w.writerow({k: row.get(k, "") for k in fields})
                 f.flush()
-    print(f"\nDone. Wrote {len(rows)} rows to {args.out}")
+                # Cool-down between iterations (FW seems to need brief idle
+                # to fully settle Configure-cycle state).
+                if args.cool_down > 0:
+                    time.sleep(args.cool_down)
+    healthy_n = sum(1 for r in rows if r.get("healthy"))
+    print(f"\nDone. Wrote {len(rows)} rows ({healthy_n} healthy, "
+          f"{len(rows) - healthy_n} stuck after retries, {stuck_count} retries triggered) to {args.out}")
 
 
 if __name__ == "__main__":
