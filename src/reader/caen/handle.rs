@@ -1051,6 +1051,13 @@ impl CaenHandle {
     }
 
     /// Internal: validate and apply a list of parameters.
+    ///
+    /// After every successful `set_value`, this also reads the value back
+    /// via `get_value` ("loopback verification") and logs at INFO level if
+    /// the firmware rounded or otherwise modified what we sent — typical
+    /// for ns-denominated trapezoid params that the FW snaps to the
+    /// nearest sample. Loopback is skipped for range-broadcast paths
+    /// (`/ch/0..N/par/foo`) since they aren't readable in that form.
     fn apply_params_validated(
         &self,
         params: &[crate::config::digitizer::CaenParameter],
@@ -1064,6 +1071,7 @@ impl CaenHandle {
             total: params.len(),
             ..Default::default()
         };
+        let mut loopback_mismatches: Vec<String> = Vec::new();
 
         for param in params {
             // Extract parameter name from path (last segment after '/')
@@ -1094,10 +1102,30 @@ impl CaenHandle {
                                 ParamApplyStatus::Ok
                             };
                             debug!(path = %param.path, value = %validated.value, "Parameter set");
+
+                            // Loopback verification (Gemini #5): read back to
+                            // capture FW rounding so unexpected FWHM regressions
+                            // can be traced to specific param adjustments.
+                            let applied_value = self
+                                .verify_loopback(&param.path, &validated.value)
+                                .unwrap_or_else(|| validated.value.clone());
+                            if applied_value != validated.value {
+                                info!(
+                                    path = %param.path,
+                                    sent = %validated.value,
+                                    applied = %applied_value,
+                                    "Parameter FW-rounded (loopback mismatch)",
+                                );
+                                loopback_mismatches.push(format!(
+                                    "{}: {} → {}",
+                                    param.path, validated.value, applied_value
+                                ));
+                            }
+
                             result.details.push(ParamApplyResult {
                                 path: param.path.clone(),
                                 original_value: param.value.clone(),
-                                applied_value: validated.value,
+                                applied_value,
                                 status,
                                 message: validated.message,
                             });
@@ -1162,6 +1190,7 @@ impl CaenHandle {
             adjusted = result.adjusted,
             failed = result.failed,
             skipped = result.skipped,
+            loopback_mismatches = loopback_mismatches.len(),
             "Validated configuration applied"
         );
 
@@ -1173,6 +1202,13 @@ impl CaenHandle {
                 .map(|d| format!("{}: {} → {}", d.path, d.original_value, d.applied_value))
                 .collect();
             info!("Adjusted parameters: {:?}", adjusted_params);
+        }
+
+        if !loopback_mismatches.is_empty() {
+            info!(
+                "FW-rounded parameters (loopback mismatch): {:?}",
+                loopback_mismatches
+            );
         }
 
         // Defense in depth: detect if ALL channel parameters failed
@@ -1206,6 +1242,43 @@ impl CaenHandle {
 
         Ok(result)
     }
+
+    /// Verify a `set_value` succeeded by reading the value back. Returns
+    /// `Some(actual)` when the FW reports a different value than `expected`
+    /// (typical for ns→sample rounding on trapezoid params), `None` when
+    /// the values are equivalent or readback isn't possible (range paths,
+    /// write-only params).
+    fn verify_loopback(&self, path: &str, expected: &str) -> Option<String> {
+        // Range-broadcast paths like /ch/0..7/par/foo aren't readable.
+        if path.contains("..") {
+            return None;
+        }
+        match self.get_value(path) {
+            Ok(actual) => {
+                if values_equivalent(expected, &actual) {
+                    None
+                } else {
+                    Some(actual)
+                }
+            }
+            // get_value can fail for write-only params or transient errors.
+            // Either way, we can't verify — skip silently.
+            Err(_) => None,
+        }
+    }
+}
+
+/// Compare two parameter strings as the firmware sees them. Numeric strings
+/// are compared as `f64` with a 1 ppm tolerance to absorb harmless float
+/// roundtrip jitter (e.g. `"100"` vs `"100.0"` vs `"1e2"`); everything else
+/// is case-insensitive equal (`"True"` vs `"true"`).
+fn values_equivalent(a: &str, b: &str) -> bool {
+    let at = a.trim();
+    let bt = b.trim();
+    if let (Ok(af), Ok(bf)) = (at.parse::<f64>(), bt.parse::<f64>()) {
+        return (af - bf).abs() <= 1e-6 * af.abs().max(bf.abs()).max(1.0);
+    }
+    at.eq_ignore_ascii_case(bt)
 }
 
 impl EndpointHandle {
@@ -1513,6 +1586,29 @@ impl Drop for CaenHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_equivalent_handles_numeric_and_case() {
+        // Identical strings.
+        assert!(values_equivalent("100", "100"));
+        // Different formattings of the same number.
+        assert!(values_equivalent("100", "100.0"));
+        assert!(values_equivalent("1.0", "1"));
+        assert!(values_equivalent("5000", "5e3"));
+        // Whitespace tolerance.
+        assert!(values_equivalent("  42 ", "42"));
+        // Case-insensitive enum strings.
+        assert!(values_equivalent("True", "true"));
+        assert!(values_equivalent("LowAVG", "lowavg"));
+        // Real differences.
+        assert!(!values_equivalent("100", "104"));
+        assert!(!values_equivalent("True", "False"));
+        assert!(!values_equivalent("LowAVG", "MediumAVG"));
+        // Float jitter under 1 ppm tolerance.
+        assert!(values_equivalent("1.0000001", "1.0"));
+        // Float jitter above 1 ppm tolerance.
+        assert!(!values_equivalent("1.0001", "1.0"));
+    }
 
     #[test]
     fn test_raw_data_struct() {
