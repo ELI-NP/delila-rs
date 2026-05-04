@@ -203,6 +203,11 @@ path = "src/bin/oxyroot_bench.rs"
 required-features = ["root"]
 
 [[bin]]
+name = "delila_to_root"
+path = "src/bin/delila_to_root.rs"
+required-features = ["root"]
+
+[[bin]]
 name = "trigger_loss_test"
 path = "src/bin/trigger_loss_test.rs"
 
