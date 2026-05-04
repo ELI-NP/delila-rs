@@ -272,7 +272,7 @@ import {
                     <mat-form-field appearance="outline">
                       <mat-label>Start Source</mat-label>
                       <mat-select panelClass="fit-content-panel" [(value)]="config.board.start_source">
-                        @if (config.firmware === 'PSD2') {
+                        @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                           <mat-option value="EncodedClkIn">EncodedClkIn</mat-option>
                           <mat-option value="SINlevel">SINlevel</mat-option>
                           <mat-option value="SINedge">SINedge</mat-option>
@@ -287,7 +287,7 @@ import {
                       </mat-select>
                     </mat-form-field>
 
-                    @if (config.firmware === 'PSD2') {
+                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Clock Source</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['clocksource']">
@@ -339,7 +339,7 @@ import {
                   <mat-divider></mat-divider>
                   <h3 class="section-title">Trigger &amp; I/O</h3>
                   <div class="form-grid">
-                    @if (config.firmware === 'PSD2') {
+                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Global Trigger Source</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.global_trigger_source">
@@ -362,7 +362,7 @@ import {
                     <mat-form-field appearance="outline">
                       <mat-label>FPIO Type</mat-label>
                       <mat-select panelClass="fit-content-panel" [(value)]="config.board.io_level">
-                        @if (config.firmware === 'PSD2') {
+                        @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                           <mat-option value="NIM">NIM</mat-option>
                           <mat-option value="TTL">TTL</mat-option>
                         } @else {
@@ -372,7 +372,7 @@ import {
                       </mat-select>
                     </mat-form-field>
 
-                    @if (config.firmware === 'PSD2') {
+                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                       <mat-form-field appearance="outline">
                         <mat-label>GPO Mode</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.gpio_mode">
@@ -383,7 +383,7 @@ import {
                       </mat-form-field>
                     }
 
-                    @if (config.firmware === 'PSD2') {
+                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                       <mat-form-field appearance="outline">
                         <mat-label>TRG OUT Mode</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['trgoutmode']">
@@ -418,7 +418,7 @@ import {
                     </mat-form-field>
                   </div>
 
-                  @if (config.firmware === 'PSD2') {
+                  @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
                     <mat-divider></mat-divider>
                     <h3 class="section-title">Board Veto</h3>
                     <div class="form-grid">
@@ -461,7 +461,7 @@ import {
                       Enable Waveforms
                     </mat-slide-toggle>
 
-                    @if (config.firmware !== 'PSD2') {
+                    @if (config.firmware !== 'PSD2' && config.firmware !== 'PHA2') {
                       <mat-form-field appearance="outline">
                         <mat-label>Fine TS Mode</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.fine_ts_mode">
@@ -1020,7 +1020,7 @@ export class DigitizerSettingsComponent {
   // ===========================================================================
 
   gpoModeOptions(fw: FirmwareType): string[] {
-    if (fw === 'PSD2') {
+    if (fw === 'PSD2' || fw === 'PHA2') {
       return ['Disabled', 'TrgIn', 'SwTrg', 'Run', 'RefClk', 'TestPulse', 'Busy',
               'Fixed0', 'Fixed1', 'SyncIn', 'SIN', 'GPIO', 'AcceptTrg', 'EncodedClkIn'];
     }

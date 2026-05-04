@@ -124,7 +124,14 @@ export interface ButtonStates {
 
 // Firmware types for digitizer
 // 'AMax' = DELILA custom MCA + amplitude-maximum FW for VX2730 (DPP_OPEN endpoint).
-export type FirmwareType = 'PSD1' | 'PSD2' | 'PHA1' | 'X743Std' | 'AMax';
+// 'PHA2' = CAEN DPP-PHA on VX2730 (RAW endpoint, trapezoidal-filter MCA).
+export type FirmwareType =
+  | 'PSD1'
+  | 'PSD2'
+  | 'PHA1'
+  | 'PHA2'
+  | 'X743Std'
+  | 'AMax';
 
 // Board-level configuration
 export interface BoardConfig {
@@ -242,6 +249,27 @@ export interface ChannelConfig {
   digital_probe_1?: string;
   digital_probe_2?: string;
   digital_probe_3?: string;
+  // --- FirmwareType.PHA2 only: trapezoidal filter (separate from PHA1 trap_*) ---
+  time_filter_rise_time_ns?: number;
+  time_filter_retrigger_guard_ns?: number;
+  energy_filter_rise_time_ns?: number;
+  energy_filter_flat_top_ns?: number;
+  energy_filter_pole_zero_ns?: number;
+  energy_filter_peaking_position?: number; // 10-90 %
+  energy_filter_peaking_avg?: string; // "LowAVG" | "MediumAVG" | "HighAVG"
+  energy_filter_baseline_avg?: string; // "Fixed" | "VeryLow" | ... | "High"
+  energy_filter_baseline_guard_ns?: number;
+  energy_filter_pileup_guard_ns?: number;
+  energy_filter_fine_gain?: number; // 1.000-10.000
+  energy_filter_lf_limitation?: string; // "On" | "Off"
+  /**
+   * PHA2 only: per-channel S_IN behaviour. "None" (default) | "ResetTimestamp".
+   * Avoid "ResetTimestamp" mid-run — it injects Run-to-Run timestamp variability
+   * (see TODO/51 注意点 §Multi-board sync).
+   */
+  sin_function?: string;
+  /** PHA2 only: per-channel GPI behaviour. Same allowed values as sin_function. */
+  gpi_function?: string;
   // --- FirmwareType.AMax only: nested 24-field register block ---
   amax?: AMaxChannelConfig;
   // --- FW-specific overflow ---

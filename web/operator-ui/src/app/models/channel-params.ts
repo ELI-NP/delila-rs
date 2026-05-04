@@ -36,6 +36,16 @@ const PSD1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 80, max: 4032, step: 8 },
 ];
 
+const PHA2_INPUT_PARAMS: ChannelParamDef[] = [
+  { key: 'enabled', label: 'Enable', type: 'boolean', setInRun: true },
+  { key: 'polarity', label: 'Polarity', type: 'enum', options: ['Positive', 'Negative'] },
+  { key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%', min: 0, max: 100, step: 0.001, setInRun: true },
+  { key: 'vga_gain', label: 'VGA Gain', type: 'number', unit: 'dB', min: 0, max: 29, step: 1, setInRun: true },
+  { key: 'record_length_ns', label: 'Record Length', type: 'number', unit: 'ns', min: 32, max: 16200, step: 8 },
+  { key: 'pre_trigger_ns', label: 'Pre-trigger', type: 'number', unit: 'ns', min: 16, max: 4000, step: 8, setInRun: true },
+  { key: 'wave_downsampling', label: 'Wave Downsampling', type: 'enum', options: ['1', '2', '4', '8'] },
+];
+
 const PHA1_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'enabled', label: 'Enable', type: 'boolean', setInRun: true },
   { key: 'polarity', label: 'Polarity', type: 'enum', options: ['POLARITY_POSITIVE', 'POLARITY_NEGATIVE'], setInRun: true },
@@ -91,6 +101,16 @@ const X743STD_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'self_trigger', label: 'Self Trigger', type: 'boolean' },
 ];
 
+const PHA2_TRIGGER_PARAMS: ChannelParamDef[] = [
+  // PHA2 trigger threshold acts on the time-filter signal output, not on raw ADC.
+  // DevTree: 1..8191 ADC count, default 50.
+  { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'ADC', min: 1, max: 8191, step: 1, setInRun: true },
+  { key: 'time_filter_rise_time_ns', label: 'Time Filter Rise', type: 'number', unit: 'ns', min: 16, max: 500, step: 2, setInRun: true },
+  { key: 'time_filter_retrigger_guard_ns', label: 'Time Filter Retrig Guard', type: 'number', unit: 'ns', min: 0, max: 8000, step: 8, setInRun: true },
+  { key: 'event_trigger_source', label: 'Event Trigger', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'ChSelfTrigger', 'SwTrg', 'TRGIN', 'GlobalTriggerSource', 'LVDS', 'ITLA', 'ITLB'], setInRun: true },
+  { key: 'wave_trigger_source', label: 'Wave Trigger', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'ChSelfTrigger', 'SwTrg', 'ADCOverSaturation', 'ADCUnderSaturation', 'ExternalInhibit', 'TRGIN', 'GlobalTriggerSource', 'LVDS', 'ITLA', 'ITLB'], setInRun: true },
+];
+
 const PHA1_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'trigger_threshold', label: 'Threshold', type: 'number', unit: 'LSB', min: 0, max: 16383, step: 1, setInRun: true },
   { key: 'trigger_holdoff_ns', label: 'Trigger Holdoff', type: 'number', unit: 'ns', min: 16, max: 16368, step: 8, setInRun: true },
@@ -121,6 +141,19 @@ const PSD1_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'gate_short_ns', label: 'Gate Short', type: 'number', unit: 'ns', min: 4, max: 4092, step: 2, setInRun: true },
   { key: 'gate_pre_ns', label: 'Pre-gate', type: 'number', unit: 'ns', min: 0, max: 1020, step: 2 },
   { key: 'charge_pedestal_en', label: 'Charge Pedestal', type: 'enum', options: ['FALSE', 'TRUE'] },
+];
+
+const PHA2_ENERGY_PARAMS: ChannelParamDef[] = [
+  { key: 'energy_filter_rise_time_ns', label: 'Energy Filter Rise', type: 'number', unit: 'ns', min: 16, max: 13000, step: 8, setInRun: true },
+  { key: 'energy_filter_flat_top_ns', label: 'Energy Filter Flat Top', type: 'number', unit: 'ns', min: 32, max: 3000, step: 8, setInRun: true },
+  { key: 'energy_filter_pole_zero_ns', label: 'Energy Filter Pole Zero', type: 'number', unit: 'ns', min: 32, max: 131000, step: 2, setInRun: true },
+  { key: 'energy_filter_peaking_position', label: 'Peaking Position', type: 'number', unit: '%', min: 10, max: 90, step: 1, setInRun: true },
+  { key: 'energy_filter_peaking_avg', label: 'Peaking Avg', type: 'enum', options: ['LowAVG', 'MediumAVG', 'HighAVG'], setInRun: true },
+  { key: 'energy_filter_baseline_avg', label: 'Baseline Avg', type: 'enum', options: ['Fixed', 'VeryLow', 'Low', 'MediumLow', 'Medium', 'MediumHigh', 'High'], setInRun: true },
+  { key: 'energy_filter_baseline_guard_ns', label: 'Baseline Guard', type: 'number', unit: 'ns', min: 0, max: 8000, step: 8, setInRun: true },
+  { key: 'energy_filter_pileup_guard_ns', label: 'Pile-up Guard', type: 'number', unit: 'ns', min: 0, max: 64000, step: 64, setInRun: true },
+  { key: 'energy_filter_fine_gain', label: 'Fine Gain', type: 'number', min: 1.0, max: 10.0, step: 0.001, setInRun: true },
+  { key: 'energy_filter_lf_limitation', label: 'LF Limitation', type: 'enum', options: ['Off', 'On'], setInRun: true },
 ];
 
 const PHA1_ENERGY_PARAMS: ChannelParamDef[] = [
@@ -158,6 +191,17 @@ const PSD1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'pileup_counting_en', label: 'Pileup Counting', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
 ];
 
+// PHA2 coincidence is identical to PSD2 in path/values; bound from DevTree.
+const PHA2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
+  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'enum', options: [], setInRun: true },
+  { key: 'coincidence_mask', label: 'Coincidence Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
+  { key: 'anti_coincidence_mask', label: 'Anti-coinc Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
+  { key: 'coincidence_window_ns', label: 'Coinc Window', type: 'number', unit: 'ns', min: 0, max: 524280, step: 8, setInRun: true },
+  { key: 'ch_veto_source', label: 'Veto Source', type: 'enum', options: ['Disabled', 'BoardVeto', 'ADCOverSaturation', 'ADCUnderSaturation'], setInRun: true },
+  { key: 'ch_veto_width_ns', label: 'Veto Width', type: 'number', unit: 'ns', min: 0, max: 524280, step: 8, setInRun: true },
+  { key: 'event_selector', label: 'Event Selector', type: 'enum', options: ['All', 'PileUp', 'EnergySkim'], setInRun: true },
+];
+
 const PHA1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
   { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, step: 1, setInRun: true },
@@ -184,6 +228,19 @@ const PSD2_WAVEFORM_PARAMS: ChannelParamDef[] = [
 const PSD1_WAVEFORM_PARAMS: ChannelParamDef[] = [];
 
 const PHA1_WAVEFORM_PARAMS: ChannelParamDef[] = [];
+
+// PHA2 waveform — analog probes are PHA-flavoured (TimeFilter, EnergyFilter,
+// EnergyFilterBaseline, EnergyFilterMinusBaseline) and digital probes carry
+// 13 PHA-specific signals plus Trigger.
+const PHA2_WAVEFORM_PARAMS: ChannelParamDef[] = [
+  { key: 'wave_saving', label: 'Wave Saving', type: 'enum', options: ['Always', 'OnRequest'], setInRun: true },
+  { key: 'analog_probe_0', label: 'Analog Probe 0', type: 'enum', options: ['ADCInput', 'ADCInput16', 'TimeFilter', 'EnergyFilter', 'EnergyFilterBaseline', 'EnergyFilterMinusBaseline'], setInRun: true },
+  { key: 'analog_probe_1', label: 'Analog Probe 1', type: 'enum', options: ['ADCInput', 'TimeFilter', 'EnergyFilter', 'EnergyFilterBaseline', 'EnergyFilterMinusBaseline'], setInRun: true },
+  { key: 'digital_probe_0', label: 'Digital Probe 0', type: 'enum', options: ['Trigger', 'TimeFilterArmed', 'ReTriggerGuard', 'EnergyFilterBaselineFreeze', 'EnergyFilterPeaking', 'EnergyFilterPeakReady', 'EnergyFilterPileupGuard', 'EventPileUp', 'ADCSaturation', 'ADCSaturationProtection', 'PostSaturationEvent', 'EnergyFilterSaturation', 'AcquisitionInhibit', 'CoincidenceAnticoincidence'], setInRun: true },
+  { key: 'digital_probe_1', label: 'Digital Probe 1', type: 'enum', options: ['Trigger', 'TimeFilterArmed', 'ReTriggerGuard', 'EnergyFilterBaselineFreeze', 'EnergyFilterPeaking', 'EnergyFilterPeakReady', 'EnergyFilterPileupGuard', 'EventPileUp', 'ADCSaturation', 'ADCSaturationProtection', 'PostSaturationEvent', 'EnergyFilterSaturation', 'AcquisitionInhibit', 'CoincidenceAnticoincidence'], setInRun: true },
+  { key: 'digital_probe_2', label: 'Digital Probe 2', type: 'enum', options: ['Trigger', 'TimeFilterArmed', 'ReTriggerGuard', 'EnergyFilterBaselineFreeze', 'EnergyFilterPeaking', 'EnergyFilterPeakReady', 'EnergyFilterPileupGuard', 'EventPileUp', 'ADCSaturation', 'ADCSaturationProtection', 'PostSaturationEvent', 'EnergyFilterSaturation', 'AcquisitionInhibit', 'CoincidenceAnticoincidence'], setInRun: true },
+  { key: 'digital_probe_3', label: 'Digital Probe 3', type: 'enum', options: ['Trigger', 'TimeFilterArmed', 'ReTriggerGuard', 'EnergyFilterBaselineFreeze', 'EnergyFilterPeaking', 'EnergyFilterPeakReady', 'EnergyFilterPileupGuard', 'EventPileUp', 'ADCSaturation', 'ADCSaturationProtection', 'PostSaturationEvent', 'EnergyFilterSaturation', 'AcquisitionInhibit', 'CoincidenceAnticoincidence'], setInRun: true },
+];
 
 // AMax custom-firmware per-channel registers. Keys are dotted paths into the
 // nested `ChannelConfig.amax` struct; the digitizer.service expand/compress
@@ -225,6 +282,16 @@ const CATEGORY_PARAMS: Record<FirmwareType, Record<ChannelCategory, ChannelParam
     energy: PHA1_ENERGY_PARAMS,
     coincidence: PHA1_COINCIDENCE_PARAMS,
     waveform: PHA1_WAVEFORM_PARAMS,
+  },
+  // PHA2: same DIG2 envelope as PSD2 (RAW endpoint, individual trigger
+  // mode, common 46 channel params) + 14 PHA-only trapezoid + time-filter
+  // params under Energy/Trigger.
+  PHA2: {
+    input: PHA2_INPUT_PARAMS,
+    trigger: PHA2_TRIGGER_PARAMS,
+    energy: PHA2_ENERGY_PARAMS,
+    coincidence: PHA2_COINCIDENCE_PARAMS,
+    waveform: PHA2_WAVEFORM_PARAMS,
   },
   // V1743 Standard mode: Energy/Coincidence/Waveform are board-level (handled in Settings component).
   X743Std: {
