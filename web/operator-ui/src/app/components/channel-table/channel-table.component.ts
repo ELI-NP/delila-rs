@@ -107,9 +107,10 @@ export interface ChannelValueChange {
                       [min]="param.min"
                       [max]="param.max"
                       [step]="param.step ?? 'any'"
+                      [title]="rangeHint(param)"
                       [disabled]="isDisabled(param.key)"
                       (change)="onDefaultInput(param.key, $event)"
-                      (blur)="snapValue($event, param)"
+                      (blur)="snapValue($event, param, null)"
                     />
                   }
                   @case ('enum') {
@@ -151,9 +152,10 @@ export interface ChannelValueChange {
                         [min]="param.min"
                         [max]="param.max"
                         [step]="param.step ?? 'any'"
+                        [title]="rangeHint(param)"
                         [disabled]="isDisabled(param.key)"
                         (change)="onChannelInput(ch, param.key, $event)"
-                        (blur)="snapValue($event, param)"
+                        (blur)="snapValue($event, param, ch)"
                       />
                     }
                     @case ('enum') {
@@ -304,6 +306,19 @@ export interface ChannelValueChange {
       border-color: #1976d2;
     }
 
+    /* Out-of-range / non-step input gets clamped on blur — flash the
+     * background and outline so the user sees the auto-fix instead of
+     * silently watching their typed value mutate. ~1 s, then back to
+     * normal. */
+    @keyframes clamped-flash {
+      0%   { background-color: #fff3cd; box-shadow: 0 0 0 2px #f0ad4e inset; }
+      80%  { background-color: #fff3cd; box-shadow: 0 0 0 2px #f0ad4e inset; }
+      100% { background-color: transparent; box-shadow: none; }
+    }
+    .cell-input.clamped-flash {
+      animation: clamped-flash 1s ease-out;
+    }
+
     .cell-select {
       width: 72px;
       padding: 2px;
@@ -424,8 +439,23 @@ export class ChannelTableComponent {
     this.channelChange.emit({ channel: ch, key, value });
   }
 
-  /** Snap a number input to the nearest valid step on blur (CoMPASS-style round-to-nearest) */
-  snapValue(event: Event, param: ChannelParamDef): void {
+  /**
+   * Snap a number input to the nearest valid step on blur (CoMPASS-style
+   * round-to-nearest) and clamp to [min, max]. When the value the user
+   * typed differs from the clamped/snapped value:
+   *   1. Update the visible input value (so they see what was actually
+   *      kept).
+   *   2. Re-emit the change event so the parent's model also reflects
+   *      the clamped value — without this the bound model would still
+   *      hold the user-typed 20000 and Apply would send that to the
+   *      backend, which would clamp it server-side and silently
+   *      overwrite the UI on the next config refresh.
+   *   3. Briefly flash the cell so the operator notices the auto-fix.
+   *
+   * `ch === null` means the "All" column (default-row); a numeric `ch`
+   * is a per-channel override cell.
+   */
+  snapValue(event: Event, param: ChannelParamDef, ch: number | null): void {
     if (!param.step || param.min == null) return;
     const el = event.target as HTMLInputElement;
     if (el.value === '') return;
@@ -433,9 +463,39 @@ export class ChannelTableComponent {
     if (isNaN(value)) return;
     const snapped = Math.round((value - param.min) / param.step) * param.step + param.min;
     const clamped = Math.min(Math.max(snapped, param.min), param.max ?? Infinity);
-    if (clamped !== value) {
-      el.value = String(clamped);
+    if (clamped === value) return;
+
+    el.value = String(clamped);
+    if (ch === null) {
+      this.defaultChange.emit({ key: param.key, value: clamped });
+    } else {
+      this.channelChange.emit({ channel: ch, key: param.key, value: clamped });
     }
+    // CSS animation hook — auto-removed after the keyframe finishes.
+    el.classList.remove('clamped-flash');
+    // Force reflow so re-adding the class restarts the animation.
+    void el.offsetWidth;
+    el.classList.add('clamped-flash');
+  }
+
+  /** Tooltip text shown on hover ("Range: 32 – 16200, step 8") so the
+   * valid range is visible without diving into the docs. */
+  rangeHint(param: ChannelParamDef): string {
+    const parts: string[] = [];
+    if (param.min != null && param.max != null) {
+      parts.push(`Range: ${param.min} – ${param.max}`);
+    } else if (param.min != null) {
+      parts.push(`Min: ${param.min}`);
+    } else if (param.max != null) {
+      parts.push(`Max: ${param.max}`);
+    }
+    if (param.step != null) {
+      parts.push(`step ${param.step}`);
+    }
+    if (param.unit) {
+      parts.push(`(${param.unit})`);
+    }
+    return parts.join(', ');
   }
 
   /** Handle select change in a channel column */
