@@ -4,12 +4,17 @@
 Pre-req: operator+reader+merger+monitor already running with the matching
 throughput TOML (e.g. config/config_psd2_thrput.toml or config/config_pha2_thrput.toml).
 
-Each iteration is judged "healthy" when the reader delivered ≥50% of the
-target rate. When PHA2's firmware enters its known low-rate stuck state
-after rapid Configure cycles, the script logs the result, idles for
-`--stuck-cool-down` seconds (default 60s = enough for FW self-recovery)
-and retries up to `--max-retries` times. A short `--cool-down` (default
-5s) is also applied between healthy iterations to keep the FW happy.
+Each iteration is tagged STUCK / SAT / OK:
+  STUCK  delivery < `--stuck-floor-eps` events/s (default 100/s) — looks
+         like a wedged FW state, retried up to `--max-retries` times
+         after `--stuck-cool-down` seconds idle (default 60 s).
+  SAT    delivery < 90 % of target but well above the stuck floor —
+         genuine bandwidth saturation (1 Gb/s ethernet ceiling at
+         ~108 MB/s for samples=1000), recorded as healthy and NOT retried.
+  OK     delivery within 10 % of target.
+
+A short `--cool-down` (default 5 s) is also applied between healthy
+iterations to keep the FW happy across rate transitions.
 
 Usage:
     # PSD2 (default JSON path)
@@ -105,10 +110,14 @@ def safe_post(path: str, body=None) -> bool:
         return False
 
 
-def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration: float, warmup: float, run_seq: int, healthy_pct: float):
+def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration: float, warmup: float, run_seq: int, stuck_floor_eps: float):
     """Run one Configure→Arm→Start→Stop cycle. Returns measurement dict or
-    None on infrastructure failure (use `is_healthy` on the result to tell
-    success from FW-stuck states like events≈0)."""
+    None on infrastructure failure. The returned `stuck` flag is True only
+    when delivery looks catastrophically wedged (events_per_sec below
+    `stuck_floor_eps`); genuine FW/network saturation reaches the
+    bandwidth ceiling but still delivers many events, and is reported as
+    `saturation=True / stuck=False` so retries don't burn cool-down time
+    chasing a physical limit."""
     period_ns = int(1_000_000_000 // rate_hz)
     print(f"\n=== mode={mode} samples={samples} rate={rate_hz} Hz period={period_ns} ns")
 
@@ -161,8 +170,19 @@ def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration
     ach = eps / nch
     expected = rate_hz * nch * duration
     pct = (de / expected * 100.0) if expected > 0 else 0.0
-    healthy = pct >= healthy_pct  # below this = retry candidate (stuck or genuine saturation)
-    health_tag = "OK" if healthy else "STUCK?"
+    # Stuck = catastrophic delivery failure. Distinguishing from genuine
+    # bandwidth saturation: a saturated 1 Gb/s link still delivers tens
+    # of thousands of events/s; a stuck FW state delivers ~0.
+    stuck = eps < stuck_floor_eps
+    # Saturation flag is informational: events flowing but well under
+    # target rate (likely network or per-event-bytes ceiling).
+    saturated = (not stuck) and pct < 90.0
+    if stuck:
+        health_tag = "STUCK"
+    elif saturated:
+        health_tag = "SAT"
+    else:
+        health_tag = "OK"
     print(f"  result events={de} bytes={db} loss={dl}  -> {eps:.1f} ev/s, {bps/1e6:.2f} MB/s, {bpe:.1f} B/ev, ach/ch={ach:.1f} Hz  [{health_tag} {pct:.0f}% of target]")
     return {
         "samples": samples, "target_rate_hz": rate_hz, "n_channels": nch,
@@ -172,7 +192,8 @@ def measure_one(json_path: Path, samples: int, rate_hz: int, mode: str, duration
         "trigger_loss": dl, "bytes_per_event": round(bpe, 1),
         "achieved_per_ch_hz": round(ach, 1),
         "expected_total": int(expected), "pct_of_target": round(pct, 1),
-        "healthy": healthy,
+        "healthy": not stuck,
+        "saturated": saturated,
     }
 
 
@@ -190,10 +211,12 @@ def main():
                     help="Seconds to idle when an iteration looks stuck before retrying (default 60)")
     ap.add_argument("--max-retries", type=int, default=1,
                     help="Per-iteration retries when STUCK is detected (default 1)")
-    ap.add_argument("--healthy-pct", type=float, default=30.0,
-                    help="Min %% of target rate to consider an iteration healthy "
-                         "(default 30; lower for high-rate sweeps where the FW "
-                         "saturates below 50%%)")
+    ap.add_argument("--stuck-floor-eps", type=float, default=100.0,
+                    help="Events/s below this counts as a wedged FW state "
+                         "and triggers a retry (default 100). Leave well "
+                         "below the lowest sweep rate; bandwidth-saturated "
+                         "iterations stay above this floor and are recorded "
+                         "as SAT, not STUCK.")
     args = ap.parse_args()
 
     json_path = Path(args.json_path)
@@ -207,7 +230,7 @@ def main():
         "events_total", "bytes_total",
         "events_per_sec", "bytes_per_sec",
         "trigger_loss", "bytes_per_event", "achieved_per_ch_hz",
-        "expected_total", "pct_of_target", "healthy", "attempt",
+        "expected_total", "pct_of_target", "healthy", "saturated", "attempt",
     ]
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     stuck_count = 0
@@ -225,7 +248,7 @@ def main():
                     attempt += 1
                     row = measure_one(json_path, samples, rate_hz, args.mode,
                                       args.duration, args.warmup, run_seq,
-                                      args.healthy_pct)
+                                      args.stuck_floor_eps)
                     if row is None:
                         # infrastructure failure (timeout etc.) — bail this iter
                         break
@@ -251,8 +274,11 @@ def main():
                 if args.cool_down > 0:
                     time.sleep(args.cool_down)
     healthy_n = sum(1 for r in rows if r.get("healthy"))
-    print(f"\nDone. Wrote {len(rows)} rows ({healthy_n} healthy, "
-          f"{len(rows) - healthy_n} stuck after retries, {stuck_count} retries triggered) to {args.out}")
+    saturated_n = sum(1 for r in rows if r.get("saturated"))
+    print(f"\nDone. Wrote {len(rows)} rows ({healthy_n} healthy "
+          f"[{saturated_n} bandwidth-saturated], "
+          f"{len(rows) - healthy_n} stuck after retries, "
+          f"{stuck_count} retries triggered) to {args.out}")
 
 
 if __name__ == "__main__":
