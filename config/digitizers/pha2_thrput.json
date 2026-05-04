@@ -1,0 +1,37 @@
+{
+  "digitizer_id": 0,
+  "name": "PHA2 Throughput Test (TestPulse)",
+  "firmware": "PHA2",
+  "num_channels": 32,
+  "board": {
+    "start_source": "SWcmd",
+    "global_trigger_source": "TestPulse",
+    "test_pulse_period": 1000000,
+    "test_pulse_width": 100,
+    "test_pulse_low_level": 1000,
+    "test_pulse_high_level": 3000,
+    "record_length": 400,
+    "waveforms_enabled": true
+  },
+  "channel_defaults": {
+    "enabled": "False",
+    "polarity": "Positive",
+    "dc_offset": 30.0,
+    "trigger_threshold": 100,
+    "time_filter_rise_time_ns": 296,
+    "energy_filter_rise_time_ns": 5000,
+    "energy_filter_flat_top_ns": 1000,
+    "energy_filter_pole_zero_ns": 50000,
+    "energy_filter_peaking_position": 50,
+    "energy_filter_peaking_avg": "LowAVG",
+    "energy_filter_baseline_avg": "Medium",
+    "event_trigger_source": "GlobalTriggerSource",
+    "wave_trigger_source": "GlobalTriggerSource",
+    "wave_saving": "Always"
+  },
+  "channel_overrides": {
+    "0": {
+      "enabled": "True"
+    }
+  }
+}

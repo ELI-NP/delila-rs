@@ -324,7 +324,7 @@ pub use crate::config::FirmwareType;
 pub use caen::{CaenError, CaenHandle, EndpointHandle, OpenDppEvent};
 pub use decoder::{
     AMaxConfig, AMaxDecoder, DataType, DecodeResult, EventData, Pha1Config, Pha1Decoder,
-    Psd1Config, Psd1Decoder, Psd2Config, Psd2Decoder, Waveform,
+    Pha2Config, Pha2Decoder, Psd1Config, Psd1Decoder, Psd2Config, Psd2Decoder, Waveform,
 };
 
 use crate::common::{
@@ -439,11 +439,12 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
     }
 }
 
-/// Enum-based decoder dispatch (KISS: PSD1/PSD2/PHA1/AMax, no trait object needed)
+/// Enum-based decoder dispatch (KISS: PSD1/PSD2/PHA1/PHA2/AMax, no trait object needed)
 enum DecoderKind {
     Psd2(Psd2Decoder),
     Psd1(Psd1Decoder),
     Pha1(Pha1Decoder),
+    Pha2(Pha2Decoder),
     AMax(AMaxDecoder),
 }
 
@@ -453,6 +454,7 @@ impl DecoderKind {
             Self::Psd2(d) => d.classify(raw),
             Self::Psd1(d) => d.classify(raw),
             Self::Pha1(d) => d.classify(raw),
+            Self::Pha2(d) => d.classify(raw),
             Self::AMax(d) => d.classify(raw),
         }
     }
@@ -462,6 +464,7 @@ impl DecoderKind {
             Self::Psd2(d) => d.decode_into(raw, events),
             Self::Psd1(d) => d.decode_into(raw, events),
             Self::Pha1(d) => d.decode_into(raw, events),
+            Self::Pha2(d) => d.decode_into(raw, events),
             Self::AMax(d) => {
                 // AMax decoder returns AMaxEventData, extract base EventData
                 let mut amax_events = Vec::new();
@@ -476,6 +479,7 @@ impl DecoderKind {
         match self {
             Self::Psd1(d) => d.reset_for_new_run(),
             Self::Pha1(d) => d.reset_for_new_run(),
+            Self::Pha2(d) => d.reset_for_new_run(),
             Self::Psd2(_) | Self::AMax(_) => {} // No run-level state to reset
         }
     }
@@ -541,6 +545,7 @@ impl ReaderConfig {
             crate::config::SourceType::Psd2 => FirmwareType::PSD2,
             crate::config::SourceType::Psd1 => FirmwareType::PSD1,
             crate::config::SourceType::Pha1 => FirmwareType::PHA1,
+            crate::config::SourceType::Pha2 => FirmwareType::PHA2,
             crate::config::SourceType::AMax => FirmwareType::AMax,
             crate::config::SourceType::X743CI => {
                 tracing::warn!(
@@ -1867,10 +1872,7 @@ impl Reader {
                         Ok(ep) => {
                             conn.endpoint = ep;
                             conn.include_waveform = include_waveform;
-                            info!(
-                                include_waveform,
-                                "Endpoint reconfigured after reset"
-                            );
+                            info!(include_waveform, "Endpoint reconfigured after reset");
                         }
                         Err(e) => error!(error = %e, "Failed to reconfigure endpoint after reset"),
                     }
@@ -2942,6 +2944,15 @@ impl Reader {
                     dump_enabled: false,
                 };
                 DecoderKind::Pha1(Pha1Decoder::new(pha1_config))
+            }
+            FirmwareType::PHA2 => {
+                let pha2_config = Pha2Config {
+                    time_step_ns: config.time_step_ns,
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 32,
+                };
+                DecoderKind::Pha2(Pha2Decoder::new(pha2_config))
             }
             FirmwareType::AMax => {
                 let amax_config = AMaxConfig {

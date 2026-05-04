@@ -498,6 +498,8 @@ pub enum FirmwareType {
     PSD2,
     /// DPP-PHA1 firmware (for spectroscopy, x725/x730)
     PHA1,
+    /// DPP-PHA2 firmware (trapezoidal-filter spectroscopy, x274x series)
+    PHA2,
     /// DELILA AMax firmware (Trapezoidal Filter MCA, custom DPP_OPEN on VX2730)
     AMax,
     /// V1743 Charge Integration mode (CAENDigitizer Library)
@@ -513,6 +515,7 @@ impl FirmwareType {
             FirmwareType::PSD1 => "dig1://",
             FirmwareType::PSD2 => "dig2://",
             FirmwareType::PHA1 => "dig1://",
+            FirmwareType::PHA2 => "dig2://",
             FirmwareType::AMax => "dig2://",
             FirmwareType::X743CI | FirmwareType::X743Std => {
                 panic!("x743 does not use FELib URL scheme")
@@ -521,9 +524,12 @@ impl FirmwareType {
     }
 
     /// Whether the readout endpoint needs N_EVENTS configured.
-    /// DIG2 (PSD2, AMax) requires DATA + SIZE + N_EVENTS; DIG1 (PSD1/PHA) uses DATA + SIZE only.
+    /// DIG2 (PSD2/PHA2/AMax) requires DATA + SIZE + N_EVENTS; DIG1 (PSD1/PHA1) uses DATA + SIZE only.
     pub fn includes_n_events(&self) -> bool {
-        matches!(self, FirmwareType::PSD2 | FirmwareType::AMax)
+        matches!(
+            self,
+            FirmwareType::PSD2 | FirmwareType::PHA2 | FirmwareType::AMax
+        )
     }
 
     /// Whether this firmware uses the DIG1 (legacy FELib) protocol.
@@ -655,6 +661,14 @@ pub struct BoardConfig {
     /// "hardware" = FPGA Fine TS (default), "software" = SAZC/SBZC zero-crossing samples.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fine_ts_mode: Option<FineTsMode>,
+
+    /// Per-VGA-group input delay (PHA2 only). VX2730 analog input is organized
+    /// into 16 groups of 2 channels sharing one VGA. `inputdelay` compensates
+    /// inter-channel skew (cable length differences) at the hardware level —
+    /// critical for coincidence timing. Vector length must be 16; `None` means
+    /// use FPGA defaults. Phase 1 plumbing only — UI surfacing TBD.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_input_delay: Option<Vec<u16>>,
 
     /// Additional board parameters as key-value pairs
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -828,6 +842,52 @@ pub struct ChannelConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_fine_gain: Option<f32>,
 
+    // ---- PHA2 trapezoidal-filter (energy + time) ----
+    /// PHA2 time-filter rise time in ns (16-500, step 2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_filter_rise_time_ns: Option<u32>,
+    /// PHA2 time-filter retrigger guard in ns (0-8000, step 8)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_filter_retrigger_guard_ns: Option<u32>,
+    /// PHA2 energy-filter rise time in ns (16-13000, step 8)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_rise_time_ns: Option<u32>,
+    /// PHA2 energy-filter flat-top in ns (32-3000, step 8)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_flat_top_ns: Option<u32>,
+    /// PHA2 energy-filter pole-zero in ns (32-131000, step 2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_pole_zero_ns: Option<u32>,
+    /// PHA2 energy-filter peaking position as % of flat-top (10-90)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_peaking_position: Option<u8>,
+    /// PHA2 energy-filter peak averaging ("LowAVG"/"MediumAVG"/"HighAVG")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_peaking_avg: Option<String>,
+    /// PHA2 energy-filter baseline averaging
+    /// ("Fixed"/"VeryLow"/"Low"/"MediumLow"/"Medium"/"MediumHigh"/"High")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_baseline_avg: Option<String>,
+    /// PHA2 energy-filter baseline guard in ns (0-8000, step 8) — setinrun
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_baseline_guard_ns: Option<u32>,
+    /// PHA2 energy-filter pile-up guard in ns (0-64000, step 64) — setinrun
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_pileup_guard_ns: Option<u32>,
+    /// PHA2 energy-filter fine gain (1.000-10.000)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_fine_gain: Option<f32>,
+    /// PHA2 energy-filter low-frequency limitation ("On"/"Off") — setinrun
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_filter_lf_limitation: Option<String>,
+    /// PHA2 per-channel S_IN function ("None"/"ResetTimestamp"). Default None;
+    /// see TODO/51 for sync-strategy notes (NOT a synchronization tool).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sin_function: Option<String>,
+    /// PHA2 per-channel GPI function ("None"/"ResetTimestamp"). Default None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpi_function: Option<String>,
+
     // ---- Coincidence ----
     /// Channel trigger mask (PSD2, hex string)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -987,7 +1047,7 @@ impl DigitizerConfig {
     pub fn force_software_trigger(&mut self) {
         let sw_value = match self.firmware {
             FirmwareType::PSD1 | FirmwareType::PHA1 => "START_MODE_SW",
-            FirmwareType::PSD2 | FirmwareType::AMax => "SWcmd",
+            FirmwareType::PSD2 | FirmwareType::PHA2 | FirmwareType::AMax => "SWcmd",
             FirmwareType::X743CI | FirmwareType::X743Std => return, // x743 uses SW_CONTROLLED via CAENDigitizer API
         };
         self.board.start_source = Some(sw_value.to_string());
@@ -1035,7 +1095,7 @@ impl DigitizerConfig {
     pub fn new(digitizer_id: u32, name: impl Into<String>, firmware: FirmwareType) -> Self {
         let num_channels = match firmware {
             FirmwareType::PSD1 => 8,
-            FirmwareType::PSD2 | FirmwareType::PHA1 | FirmwareType::AMax => 32,
+            FirmwareType::PSD2 | FirmwareType::PHA1 | FirmwareType::PHA2 | FirmwareType::AMax => 32,
             FirmwareType::X743CI | FirmwareType::X743Std => 16, // 8 groups × 2 ch/group
         };
 
@@ -1166,6 +1226,21 @@ impl DigitizerConfig {
             merge_field!(digital_probe_1);
             merge_field!(digital_probe_2);
             merge_field!(digital_probe_3);
+            // PHA2 trapezoidal filter
+            merge_field!(time_filter_rise_time_ns);
+            merge_field!(time_filter_retrigger_guard_ns);
+            merge_field!(energy_filter_rise_time_ns);
+            merge_field!(energy_filter_flat_top_ns);
+            merge_field!(energy_filter_pole_zero_ns);
+            merge_field!(energy_filter_peaking_position);
+            merge_field!(energy_filter_peaking_avg);
+            merge_field!(energy_filter_baseline_avg);
+            merge_field!(energy_filter_baseline_guard_ns);
+            merge_field!(energy_filter_pileup_guard_ns);
+            merge_field!(energy_filter_fine_gain);
+            merge_field!(energy_filter_lf_limitation);
+            merge_field!(sin_function);
+            merge_field!(gpi_function);
             // Extra
             for (k, v) in &ov.extra {
                 config.extra.insert(k.clone(), v.clone());
@@ -1251,6 +1326,41 @@ impl DigitizerConfig {
                 "wavedigitalprobe1",
                 "wavedigitalprobe2",
                 "wavedigitalprobe3",
+            ]),
+            FirmwareType::PHA2 => HashSet::from([
+                // Board (subset of PSD2 + PHA2 specifics)
+                "testpulseperiod",
+                "testpulsewidth",
+                "syncoutmode",
+                "boardvetosource",
+                "boardvetopolarity",
+                "boardvetowidth",
+                // Channel — common with PSD2
+                "chenable",
+                "chpretriggert",
+                "dcoffset",
+                "chgain",
+                "triggerthr",
+                "channelvetosource",
+                "adcvetowidth",
+                "channelstriggermask",
+                "coincidencemask",
+                "anticoincidencemask",
+                "coincidencelengtht",
+                "eventselector",
+                "eventtriggersource",
+                "wavetriggersource",
+                "wavesaving",
+                "waveanalogprobe0",
+                "waveanalogprobe1",
+                "wavedigitalprobe0",
+                "wavedigitalprobe1",
+                "wavedigitalprobe2",
+                "wavedigitalprobe3",
+                // PHA2-specific (trapezoidal filter)
+                "energyfilterbaselineguardt",
+                "energyfilterpileupguardt",
+                "energyfilterlflimitation",
             ]),
             FirmwareType::PSD1 => HashSet::from([
                 // Board
@@ -1539,6 +1649,20 @@ impl DigitizerConfig {
             }
         }
 
+        // PHA2-specific: per-VGA-group input delay (16 groups of 2 ch).
+        // VX2730 channels share a VGA per pair; this compensates inter-channel
+        // skew at the hardware level. Required path: /group/N/par/inputdelay.
+        if matches!(self.firmware, FirmwareType::PHA2) {
+            if let Some(ref delays) = board.group_input_delay {
+                for (group_idx, &delay) in delays.iter().enumerate() {
+                    params.push(CaenParameter {
+                        path: format!("/group/{}/par/inputdelay", group_idx),
+                        value: delay.to_string(),
+                    });
+                }
+            }
+        }
+
         // Extra parameters
         for (key, value) in &board.extra {
             let path = if key.starts_with('/') {
@@ -1694,6 +1818,129 @@ impl DigitizerConfig {
                     push_str!("EventSelector", v);
                 }
                 // ---- Waveform ----
+                if let Some(ref v) = config.wave_saving {
+                    push_str!("WaveSaving", v);
+                }
+                if let Some(ref v) = config.analog_probe_0 {
+                    push_str!("WaveAnalogProbe0", v);
+                }
+                if let Some(ref v) = config.analog_probe_1 {
+                    push_str!("WaveAnalogProbe1", v);
+                }
+                if let Some(ref v) = config.digital_probe_0 {
+                    push_str!("WaveDigitalProbe0", v);
+                }
+                if let Some(ref v) = config.digital_probe_1 {
+                    push_str!("WaveDigitalProbe1", v);
+                }
+                if let Some(ref v) = config.digital_probe_2 {
+                    push_str!("WaveDigitalProbe2", v);
+                }
+                if let Some(ref v) = config.digital_probe_3 {
+                    push_str!("WaveDigitalProbe3", v);
+                }
+            }
+            FirmwareType::PHA2 => {
+                // ---- Input (common with PSD2 — same DevTree paths) ----
+                if let Some(ref v) = config.enabled {
+                    push_str!("ChEnable", v);
+                }
+                if let Some(ref v) = config.polarity {
+                    push_str!("PulsePolarity", v);
+                }
+                if let Some(v) = config.dc_offset {
+                    push_num!("DCOffset", v);
+                }
+                if let Some(v) = config.vga_gain {
+                    push_num!("ChGain", v);
+                }
+                if let Some(v) = config.record_length_ns {
+                    push_num!("ChRecordLengthT", v);
+                }
+                if let Some(v) = config.pre_trigger_ns {
+                    push_num!("ChPreTriggerT", v);
+                }
+                if let Some(ref v) = config.wave_downsampling {
+                    push_str!("WaveDownSamplingFactor", v);
+                }
+                // ---- Trigger (common subset) ----
+                if let Some(v) = config.trigger_threshold {
+                    push_num!("TriggerThr", v);
+                }
+                if let Some(ref v) = config.event_trigger_source {
+                    push_str!("EventTriggerSource", v);
+                }
+                if let Some(ref v) = config.wave_trigger_source {
+                    push_str!("WaveTriggerSource", v);
+                }
+                // ---- Time filter (PHA2 specific) ----
+                if let Some(v) = config.time_filter_rise_time_ns {
+                    push_num!("TimeFilterRiseTimeT", v);
+                }
+                if let Some(v) = config.time_filter_retrigger_guard_ns {
+                    push_num!("TimeFilterRetriggerGuardT", v);
+                }
+                // ---- Energy filter (PHA2 specific, trapezoidal) ----
+                if let Some(v) = config.energy_filter_rise_time_ns {
+                    push_num!("EnergyFilterRiseTimeT", v);
+                }
+                if let Some(v) = config.energy_filter_flat_top_ns {
+                    push_num!("EnergyFilterFlatTopT", v);
+                }
+                if let Some(v) = config.energy_filter_pole_zero_ns {
+                    push_num!("EnergyFilterPoleZeroT", v);
+                }
+                if let Some(v) = config.energy_filter_peaking_position {
+                    push_num!("EnergyFilterPeakingPosition", v);
+                }
+                if let Some(ref v) = config.energy_filter_peaking_avg {
+                    push_str!("EnergyFilterPeakingAvg", v);
+                }
+                if let Some(ref v) = config.energy_filter_baseline_avg {
+                    push_str!("EnergyFilterBaselineAvg", v);
+                }
+                if let Some(v) = config.energy_filter_baseline_guard_ns {
+                    push_num!("EnergyFilterBaselineGuardT", v);
+                }
+                if let Some(v) = config.energy_filter_pileup_guard_ns {
+                    push_num!("EnergyFilterPileupGuardT", v);
+                }
+                if let Some(v) = config.energy_filter_fine_gain {
+                    push_num!("EnergyFilterFineGain", v);
+                }
+                if let Some(ref v) = config.energy_filter_lf_limitation {
+                    push_str!("EnergyFilterLFLimitation", v);
+                }
+                // ---- Per-channel S_IN/GPI (PHA2 specific). Default None. ----
+                if let Some(ref v) = config.sin_function {
+                    push_str!("SINFunction", v);
+                }
+                if let Some(ref v) = config.gpi_function {
+                    push_str!("GPIFunction", v);
+                }
+                // ---- Coincidence (common with PSD2) ----
+                if let Some(ref v) = config.ch_trigger_mask {
+                    push_str!("ChannelsTriggerMask", v);
+                }
+                if let Some(ref v) = config.coincidence_mask {
+                    push_str!("CoincidenceMask", v);
+                }
+                if let Some(ref v) = config.anti_coincidence_mask {
+                    push_str!("AntiCoincidenceMask", v);
+                }
+                if let Some(v) = config.coincidence_window_ns {
+                    push_num!("CoincidenceLengthT", v);
+                }
+                if let Some(ref v) = config.ch_veto_source {
+                    push_str!("ChannelVetoSource", v);
+                }
+                if let Some(v) = config.ch_veto_width_ns {
+                    push_num!("ADCVetoWidth", v);
+                }
+                if let Some(ref v) = config.event_selector {
+                    push_str!("EventSelector", v);
+                }
+                // ---- Waveform (common with PSD2) ----
                 if let Some(ref v) = config.wave_saving {
                     push_str!("WaveSaving", v);
                 }

@@ -1,0 +1,30 @@
+{
+  "digitizer_id": 0,
+  "name": "PSD2 Throughput Test (TestPulse)",
+  "firmware": "PSD2",
+  "num_channels": 32,
+  "board": {
+    "start_source": "SWcmd",
+    "global_trigger_source": "TestPulse",
+    "test_pulse_period": 1000000,
+    "test_pulse_width": 100,
+    "test_pulse_low_level": 1000,
+    "test_pulse_high_level": 3000,
+    "record_length": 400
+  },
+  "channel_defaults": {
+    "enabled": "False",
+    "polarity": "Positive",
+    "dc_offset": 30.0,
+    "trigger_threshold": 100,
+    "gate_long_ns": 400,
+    "gate_short_ns": 100,
+    "event_trigger_source": "GlobalTriggerSource",
+    "wave_trigger_source": "GlobalTriggerSource"
+  },
+  "channel_overrides": {
+    "0": {
+      "enabled": "True"
+    }
+  }
+}

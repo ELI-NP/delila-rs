@@ -273,6 +273,9 @@ pub enum SourceType {
     /// CAEN PHA firmware (via CAEN library)
     #[serde(alias = "PHA1", alias = "pha1")]
     Pha1,
+    /// CAEN DPP-PHA2 firmware (trapezoidal-filter spectroscopy on x274x series)
+    #[serde(alias = "PHA2", alias = "pha2")]
+    Pha2,
     /// CAEN DPP-ZLE firmware (future)
     #[serde(alias = "ZLE", alias = "zle")]
     Zle,
@@ -294,6 +297,7 @@ impl SourceType {
             SourceType::Psd1 => Some(FirmwareType::PSD1),
             SourceType::Psd2 => Some(FirmwareType::PSD2),
             SourceType::Pha1 => Some(FirmwareType::PHA1),
+            SourceType::Pha2 => Some(FirmwareType::PHA2),
             SourceType::AMax => Some(FirmwareType::AMax),
             // SourceType::X743CI is kept for TOML backward compatibility but maps to
             // FirmwareType::X743Std — DPP-CI (Charge Mode) was retired 2026-04-20 because
@@ -311,6 +315,7 @@ impl std::fmt::Display for SourceType {
             SourceType::Psd1 => write!(f, "PSD1"),
             SourceType::Psd2 => write!(f, "PSD2"),
             SourceType::Pha1 => write!(f, "PHA1"),
+            SourceType::Pha2 => write!(f, "PHA2"),
             SourceType::Zle => write!(f, "ZLE"),
             SourceType::AMax => write!(f, "AMax"),
             SourceType::X743CI => write!(f, "X743CI"),

@@ -1,0 +1,32 @@
+# DELILA DAQ Configuration - PSD2 Throughput Sweep
+# Purpose: 172.18.4.56 → reader host throughput measurement (TestPulse trigger)
+# Usage: ./scripts/start_daq.sh config/config_psd2_thrput.toml --no-mongo
+
+[operator]
+experiment_name = "PSD2_Throughput"
+port = 9090
+
+[network]
+[[network.sources]]
+id = 0
+name = "psd2-thrput"
+type = "psd2"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig2://172.18.4.56"
+config_file = "config/digitizers/psd2_thrput.json"
+pipeline_order = 1
+
+[network.merger]
+subscribe = ["tcp://localhost:5555"]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+# Monitor consumes the merger output without disk I/O,
+# so the reader→merger pipeline can keep flowing at line rate.
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

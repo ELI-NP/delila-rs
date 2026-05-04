@@ -1,0 +1,46 @@
+# DELILA DAQ Configuration - PHA2 Physical Input (Phase 3)
+# Hardware: VX2730 (Serial: 52622, DPP_PHA, 32ch, Ethernet, 172.18.4.56)
+# Phase 3: physical pulser / source on ch0 (Positive polarity).
+#   - global_trigger_source = UserTrg (no internal pulser)
+#   - event_trigger_source  = ChSelfTrigger (each channel triggers itself)
+#   - waveforms_enabled     = true (verify pulse shape on first physical signal)
+#   - ch0 override: polarity=Positive, dc_offset=20% (baseline near ADC bottom)
+# See TODO/51_pha2_integration.md (Phase 3) for the full integration plan.
+# Usage: ./scripts/start_daq.sh config/config_pha2_56_phys.toml
+
+[operator]
+experiment_name = "PHA2_Phys"
+port = 9090
+
+[network]
+# Real PHA2 digitizer (physical input on ch0)
+[[network.sources]]
+id = 0
+name = "pha2-real"
+type = "pha2"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig2://172.18.4.56"
+config_file = "config/digitizers/pha2_56_phys.json"
+pipeline_order = 1
+
+# Merger
+[network.merger]
+subscribe = ["tcp://localhost:5555"]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+# Recorder
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+# Monitor
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

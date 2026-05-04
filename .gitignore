@@ -44,6 +44,12 @@ __pycache__/
 # Test output files
 *.root
 
+# Throughput / stress sweep CSV output
+/throughput_*.csv
+/stress*.csv
+
 tmp
 memo*
 shift_manual
+2026_pid
+results

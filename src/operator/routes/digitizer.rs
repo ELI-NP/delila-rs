@@ -299,6 +299,7 @@ fn firmware_from_device_info(device_info: &serde_json::Value) -> FirmwareType {
         "DPP-PHA" => FirmwareType::PHA1,
         // DIG2 firmware strings use underscores
         "DPP_PSD" => FirmwareType::PSD2,
+        "DPP_PHA" => FirmwareType::PHA2,
         "DPP_OPEN" => FirmwareType::AMax,
         // Fallback: use model name to guess generation
         _ => {
@@ -331,6 +332,10 @@ fn default_board_config(firmware: FirmwareType) -> BoardConfig {
             ..BoardConfig::default()
         },
         FirmwareType::AMax => BoardConfig {
+            start_source: Some("SWcmd".to_string()),
+            ..BoardConfig::default()
+        },
+        FirmwareType::PHA2 => BoardConfig {
             start_source: Some("SWcmd".to_string()),
             ..BoardConfig::default()
         },
@@ -372,6 +377,23 @@ fn default_channel_config(firmware: FirmwareType) -> ChannelConfig {
         FirmwareType::AMax => ChannelConfig {
             enabled: Some("False".to_string()),
             dc_offset: Some(50.0),
+            ..ChannelConfig::default()
+        },
+        FirmwareType::PHA2 => ChannelConfig {
+            enabled: Some("False".to_string()),
+            dc_offset: Some(50.0),
+            polarity: Some("Negative".to_string()),
+            trigger_threshold: Some(100),
+            // Trapezoidal-filter DevTree defaults (see PHA2 DevTree)
+            energy_filter_rise_time_ns: Some(5000),
+            energy_filter_flat_top_ns: Some(1000),
+            energy_filter_pole_zero_ns: Some(50000),
+            energy_filter_peaking_position: Some(50),
+            energy_filter_peaking_avg: Some("LowAVG".to_string()),
+            energy_filter_baseline_avg: Some("Medium".to_string()),
+            time_filter_rise_time_ns: Some(296),
+            event_trigger_source: Some("Disabled".to_string()),
+            wave_trigger_source: Some("Disabled".to_string()),
             ..ChannelConfig::default()
         },
         FirmwareType::X743CI | FirmwareType::X743Std => ChannelConfig {
