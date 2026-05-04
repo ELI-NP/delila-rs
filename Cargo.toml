@@ -208,6 +208,10 @@ path = "src/bin/delila_to_root.rs"
 required-features = ["root"]
 
 [[bin]]
+name = "pha2_simple_test"
+path = "src/bin/pha2_simple_test.rs"
+
+[[bin]]
 name = "trigger_loss_test"
 path = "src/bin/trigger_loss_test.rs"
 

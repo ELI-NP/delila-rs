@@ -477,35 +477,21 @@ impl Pha2Decoder {
         let mut digital_probe3 = Vec::with_capacity(n_samples);
         let mut digital_probe4 = Vec::with_capacity(n_samples);
 
-        // PHA2 firmware sometimes truncates waveforms under load: the wf_size
-        // word reports N words but the FW emits fewer, then jumps directly
-        // to the next event's wf_header. Detect mid-loop by spotting the
-        // wf_header pattern (bit63=1, bits[62:60]=0). Sample bytes can never
-        // match this — analog probes are only 14 bits, so bit63 is always 0.
-        // When detected, back up so the outer aggregate loop re-reads the
-        // preceding 2 words (next event's first/second) and the wf_header
-        // itself in normal sequence, and drop the same 2 words from the
-        // sample buffers (those reads were really the next event's headers).
-        let mut truncated_at: Option<usize> = None;
-        for i in 0..n_waveform_words {
+        // Trust wf_size from the FW. The previous "mid-loop wf_header
+        // pattern" rewind was a misdiagnosis: sample words have bit63=1
+        // whenever digital_probe_4 is asserted (e.g. EnergyFilterPeaking
+        // around the trigger), and bits[62:60]=0 whenever DP3=0 and
+        // analog_probe_2 is small (baseline) — both routinely satisfied
+        // during normal acquisition. The "truncation" we observed in
+        // Phase 3 stress tests was the FW genuinely wedging into a low-
+        // rate state under rapid Configure cycles (waveforms came back
+        // healthy after a few minutes idle); the FW does not partial-write
+        // a waveform mid-event. Verified 2026-05-04 with `pha2_simple_test`
+        // (`--wave-downsampling 1` and `8`): wf_size=2048 in both cases,
+        // event-to-event spacing is exactly 2052 words, no actual
+        // truncation observed.
+        for _ in 0..n_waveform_words {
             let word = self.read_u64(data, *word_index);
-            // Truncation check — only trigger after we've collected at
-            // least the 2-word "lookahead" required for the rewind to be
-            // safe (otherwise we'd back up past the wf_size word).
-            if i >= 2 {
-                let test_check1 = (word >> constants::WAVEFORM_CHECK1_SHIFT) & 0x1;
-                let test_check2 =
-                    (word >> constants::WAVEFORM_CHECK2_SHIFT) & constants::WAVEFORM_CHECK2_MASK;
-                if test_check1 == 1 && test_check2 == 0 {
-                    // word IS the next event's wf_header. Rewind 2 words so
-                    // the outer loop reads next event's first_word + second_word
-                    // before reaching this wf_header again. Note: word_index has
-                    // NOT been advanced for this iteration yet.
-                    *word_index = word_index.saturating_sub(2);
-                    truncated_at = Some(i);
-                    break;
-                }
-            }
             *word_index += 1;
 
             for shift in [0u32, 32u32] {
@@ -526,27 +512,6 @@ impl Pha2Decoder {
                 digital_probe3.push(dp3);
                 digital_probe4.push(dp4);
             }
-        }
-
-        // If we detected truncation, the last 2 sample words pushed into
-        // the buffers were really the next event's first_word + second_word.
-        // Drop those 4 sample slots (2 words × 2 samples/word) so the
-        // returned waveform stays clean.
-        if let Some(stop_iter) = truncated_at {
-            let drop = 4.min(analog_probe1.len());
-            let new_len = analog_probe1.len() - drop;
-            analog_probe1.truncate(new_len);
-            analog_probe2.truncate(new_len);
-            digital_probe1.truncate(new_len);
-            digital_probe2.truncate(new_len);
-            digital_probe3.truncate(new_len);
-            digital_probe4.truncate(new_len);
-            warn!(
-                expected_words = n_waveform_words,
-                actual_words = stop_iter.saturating_sub(2),
-                rewound_to = *word_index,
-                "[PHA2] FW-truncated waveform — resyncing to next event",
-            );
         }
 
         Some(Waveform {
@@ -850,58 +815,47 @@ mod tests {
     }
 
     #[test]
-    fn fw_truncated_waveform_resyncs_to_next_event() {
-        // Phase 3 reproducer: PHA2 firmware sometimes claims wf_size=200 but
-        // emits only ~20 sample words before jumping to the next event's
-        // wf_header. The decoder must detect this and rewind so the next
-        // call to decode_event picks up the next event cleanly.
+    fn dp4_set_in_sample_does_not_truncate_waveform() {
+        // Regression: in 2026-05-04 we briefly added a "mid-loop truncation
+        // detector" that flagged any sample word with bit63=1 ∧ bits[62:60]=0
+        // as the next event's wf_header. That misfired catastrophically
+        // because PHA2 sample words have bit63 = digital_probe_4 of the upper
+        // 32-bit half — every event with EnergyFilterPeaking (a default DP)
+        // has DP4 transiently set, and AP2 is small near baseline so the
+        // bits[62:60]=0 condition is also met. Live capture via
+        // `pha2_simple_test --wave-downsampling 8` showed `wf_size = 0x800`
+        // and event-to-event spacing of exactly 2052 words on the wire —
+        // i.e. NO firmware truncation. The decoder must trust wf_size and
+        // deliver the full sample buffer even when sample bytes mimic the
+        // wf_header bit pattern.
         //
-        // Synthesised aggregate that reproduces the live capture from
-        // 172.18.4.56 stress test (2026-05-04). FW announces wf_size=8 but
-        // only emits 5 sample words before jumping to the next event.
-        //   word 0: agg header (total_size=18)
-        //   word 1: ev1 first_word (ch=0, ts=10)
+        // Synthetic aggregate:
+        //   word 0: agg header
+        //   word 1: ev1 first_word
         //   word 2: ev1 second_word (bit62 = waveform present)
-        //   word 3: ev1 wf_header (constant probe-info word)
-        //   word 4: ev1 wf_size = 8  (decoder will TRY to read 8 samples)
-        //   words 5-9: only 5 sample words emitted (instead of 8) — truncation
-        //   word 10: ev2 first_word (ch=1, ts=20)
-        //   word 11: ev2 second_word (bit62 = waveform present)
-        //   word 12: ev2 wf_header (same constant — TRIGGERS truncation detect)
-        //   word 13: ev2 wf_size = 4 (small full waveform)
-        //   words 14-17: 4 sample words
-        let total_words: u64 = 18;
+        //   word 3: ev1 wf_header
+        //   word 4: ev1 wf_size = 4
+        //   words 5..8: 4 sample words; word 6 has bit63=1 ∧ bits[62:60]=0
+        //               (mimics a real "DP4 fluke" sample)
+        let total_words: u64 = 9;
         let agg_header = (0x2u64 << 60) | total_words;
-
         let ev1_w1 = (0u64 << 56) | 10;
         let ev1_w2 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | (1u64 << 63);
-        let wf_hdr_const: u64 = 1u64 << 63; // check1=1, check2=0, rest 0
-        let wf_size_8: u64 = 8;
-        let sample = 0x0000_135C_0000_135Cu64; // baseline pattern, bit63=0
-
-        let ev2_w1 = (1u64 << 56) | 20;
-        let ev2_w2 = ev1_w2;
+        let wf_hdr_const: u64 = 1u64 << 63; // check1=1, check2=0
         let wf_size_4: u64 = 4;
+        let baseline_sample: u64 = 0x0000_135C_0000_135C;
+        let dp4_fluke_sample: u64 = 0x80f7_1fd6_00f7_1fdb; // bit63=1, bits[62:60]=0
 
         let words: Vec<u64> = vec![
             agg_header,
             ev1_w1,
             ev1_w2,
             wf_hdr_const,
-            wf_size_8,
-            sample,
-            sample,
-            sample,
-            sample,
-            sample,
-            ev2_w1,
-            ev2_w2,
-            wf_hdr_const,
             wf_size_4,
-            sample,
-            sample,
-            sample,
-            sample,
+            baseline_sample,
+            dp4_fluke_sample,
+            baseline_sample,
+            baseline_sample,
         ];
 
         let bytes = pack_be(&words);
@@ -914,22 +868,24 @@ mod tests {
         let mut events = Vec::new();
         dec.decode_into(&raw, &mut events);
 
+        assert_eq!(events.len(), 1, "decoder must NOT split on DP4-fluke samples");
+        let wf = events[0]
+            .waveform
+            .as_ref()
+            .expect("waveform must be present");
+        // 4 sample words × 2 samples/word = 8 samples — the full configured length.
         assert_eq!(
-            events.len(),
-            2,
-            "decoder must recover both events after truncation"
+            wf.analog_probe1.len(),
+            8,
+            "all 4 sample words (8 samples) must be delivered"
         );
-        assert_eq!(events[0].channel, 0);
-        assert_eq!(events[1].channel, 1);
-        assert!(events[0].waveform.is_some());
-        assert!(events[1].waveform.is_some());
-        // ev1 truncated: 5 real sample words emitted before next event,
-        // and we drop the 2 sample words that were really ev2's headers
-        // → 10 samples remain (5 words × 2 samples/word).
-        let wf1 = events[0].waveform.as_ref().unwrap();
-        assert_eq!(wf1.analog_probe1.len(), 10);
-        // ev2 full: 4 sample words × 2 = 8 samples
-        let wf2 = events[1].waveform.as_ref().unwrap();
-        assert_eq!(wf2.analog_probe1.len(), 8);
+        // The DP4 fluke must end up as a normal sample, with DP4=1 in its slot.
+        // Iteration order: low half first, then high half. The fluke is
+        // 0x80f71fd6_00f71fdb, so high-half upper sample is 0x80f71fd6 → DP4=1.
+        // That's index 1*2 + 1 = 3 (event 1's word index 1, upper half).
+        assert_eq!(
+            wf.digital_probe4[3], 1,
+            "DP4 fluke bit must be preserved in the sample buffer"
+        );
     }
 }
