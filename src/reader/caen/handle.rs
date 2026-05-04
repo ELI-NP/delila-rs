@@ -977,7 +977,11 @@ impl CaenHandle {
                         match Self::extract_param_info(name, node) {
                             Ok(info) => {
                                 debug!(param = %name, "Cached board param");
-                                cache.insert(name.clone(), info);
+                                // Insert under the lowercased name (DevTree
+                                // already uses lowercase; this just makes the
+                                // contract explicit so a future DevTree dump
+                                // with mixed case still maps cleanly).
+                                cache.insert(name.to_lowercase(), info);
                             }
                             Err(e) => {
                                 warn!(param = %name, error = %e, "Failed to parse board param");
@@ -1001,11 +1005,12 @@ impl CaenHandle {
                     continue;
                 }
                 if let Some(obj) = node.as_object() {
-                    if obj.contains_key("datatype") && !cache.contains_key(name) {
+                    let key_lower = name.to_lowercase();
+                    if obj.contains_key("datatype") && !cache.contains_key(&key_lower) {
                         match Self::extract_param_info(name, node) {
                             Ok(info) => {
                                 debug!(param = %name, "Cached channel param");
-                                cache.insert(name.clone(), info);
+                                cache.insert(key_lower, info);
                             }
                             Err(e) => {
                                 warn!(param = %name, error = %e, "Failed to parse channel param");
@@ -1074,10 +1079,24 @@ impl CaenHandle {
         let mut loopback_mismatches: Vec<String> = Vec::new();
 
         for param in params {
-            // Extract parameter name from path (last segment after '/')
-            let param_name = param.path.rsplit('/').next().unwrap_or("");
+            // Extract parameter name from path (last segment after '/').
+            //
+            // FELib accepts paths case-insensitively, so `to_caen_parameters`
+            // emits CamelCase (`ChRecordLengthT`) while the DevTree — and
+            // therefore `param_cache` — uses lowercase (`chrecordlengtht`).
+            // Look the cache up case-insensitively so out-of-range values
+            // get clamped by validation instead of silently rejected by the
+            // firmware. (Pre-2026-05-04, every CamelCase write bypassed
+            // validation; e.g. record_length_ns=17000 → CAEN error -6 on
+            // /ch/0..31/par/ChRecordLengthT, with the channel left at the
+            // previous value and no UI feedback.)
+            let param_name_raw = param.path.rsplit('/').next().unwrap_or("");
+            let param_name_lower = param_name_raw.to_lowercase();
+            let cache_hit = param_cache
+                .get(param_name_raw)
+                .or_else(|| param_cache.get(param_name_lower.as_str()));
 
-            match param_cache.get(param_name) {
+            match cache_hit {
                 Some(info) => {
                     // Validate against DevTree metadata
                     let validated = validation::validate_param(&param.value, info);
@@ -2013,5 +2032,58 @@ mod tests {
         let result = validation::validate_param("50.35", dc);
         assert!(result.adjusted);
         assert_eq!(result.value, "50.4");
+    }
+
+    /// Regression: 2026-05-04 we discovered that `to_caen_parameters`
+    /// emits CamelCase param names (`ChRecordLengthT`) while the DevTree
+    /// uses lowercase (`chrecordlengtht`), so every CamelCase path was
+    /// silently bypassing validation. The visible bug was a user typing
+    /// record_length_ns=17000 (above the 16200-ns DevTree max) into the
+    /// PHA2 settings — the FW rejected the broadcast write with CAEN
+    /// error -6 and the channel got stuck at the previous value.
+    /// This test pins the case-insensitive cache contract.
+    #[test]
+    fn param_cache_lookup_is_case_insensitive() {
+        let json_str =
+            std::fs::read_to_string("docs/devtree_examples/vx2730_pha2_sn52622.json").unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let mut cache = HashMap::new();
+        if let Some(ch0_par) = tree
+            .get("ch")
+            .and_then(|ch| ch.get("0"))
+            .and_then(|ch0| ch0.get("par"))
+            .and_then(|v| v.as_object())
+        {
+            for (name, node) in ch0_par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    if obj.contains_key("datatype") {
+                        if let Ok(info) = CaenHandle::extract_param_info(name, node) {
+                            // Same normalization the production cache uses.
+                            cache.insert(name.to_lowercase(), info);
+                        }
+                    }
+                }
+            }
+        }
+
+        // CamelCase as emitted by to_caen_parameters → must hit the cache.
+        let path = "/ch/0..31/par/ChRecordLengthT";
+        let param_name_raw = path.rsplit('/').next().unwrap();
+        let lookup_key = param_name_raw.to_lowercase();
+        let info = cache
+            .get(lookup_key.as_str())
+            .expect("CamelCase param must resolve via lowercased key");
+
+        // 17000 ns is above the PHA2 DevTree max (16200) → must clamp.
+        let result = validation::validate_param("17000", info);
+        assert!(result.adjusted, "out-of-range value must be adjusted");
+        assert_eq!(
+            result.value, "16200",
+            "17000 ns must clamp to the 16200-ns max",
+        );
     }
 }
