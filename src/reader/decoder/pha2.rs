@@ -68,6 +68,24 @@ mod constants {
     pub const TRIGGER_THRESHOLD_SHIFT: u32 = 28;
     pub const TRIGGER_THRESHOLD_MASK: u64 = 0xFFFF;
 
+    // Per-probe info packed in the wf-header low bits (per CAEN doxygen
+    // a00108.html DPP-PHA waveform extra-word section).
+    //
+    //   a.p. #0 info: bits[5:0]  = type[2:0] | is_signed[3] | factor[5:4]
+    //   a.p. #1 info: bits[11:6] = same layout, shifted by 6
+    //   d.p. #N info: bits[15+4N : 12+4N]
+    //
+    // The is_signed bit is what we need to switch the sample loop between
+    // sign-extending 14-bit (Time filter, Energy filter, Energy filter
+    // minus baseline) and unsigned 14-bit (ADC input, Energy filter
+    // baseline). The frontend already knows how to add the +8191 visual
+    // centring offset for signed probes — see PHA1's
+    // analog_probe_X_is_signed plumbing.
+    pub const ANALOG_PROBE0_INFO_SHIFT: u32 = 0;
+    pub const ANALOG_PROBE1_INFO_SHIFT: u32 = 6;
+    pub const ANALOG_PROBE_INFO_MASK: u64 = 0x3F; // 6 bits
+    pub const ANALOG_PROBE_IS_SIGNED_BIT: u64 = 0x08; // bit 3 inside the 6-bit slot
+
     // Waveform size word
     pub const WAVEFORM_WORDS_MASK: u64 = 0xFFF;
 
@@ -454,6 +472,22 @@ impl Pha2Decoder {
         let trigger_threshold = ((wf_header >> constants::TRIGGER_THRESHOLD_SHIFT)
             & constants::TRIGGER_THRESHOLD_MASK) as u16;
 
+        // Per-probe `is_signed` flag from the wf-header low bits. Time
+        // filter / Energy filter / Energy-filter-minus-baseline probes
+        // arrive as 14-bit signed and would wrap to the top of the visible
+        // band if interpreted unsigned (the original "weird Time-filter
+        // plot" bug). We mirror PHA1 here: sign-extend on the way in,
+        // leave the multiplication factor for offline analysis (see
+        // doxygen DPP-PHA waveform extras docs — factor is auto-set by
+        // the FW per probe choice and only affects absolute scale, never
+        // shape).
+        let ap0_info = (wf_header >> constants::ANALOG_PROBE0_INFO_SHIFT)
+            & constants::ANALOG_PROBE_INFO_MASK;
+        let ap1_info = (wf_header >> constants::ANALOG_PROBE1_INFO_SHIFT)
+            & constants::ANALOG_PROBE_INFO_MASK;
+        let ap0_is_signed = (ap0_info & constants::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
+        let ap1_is_signed = (ap1_info & constants::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
+
         let size_word = self.read_u64(data, *word_index);
         *word_index += 1;
 
@@ -490,6 +524,14 @@ impl Pha2Decoder {
         // (`--wave-downsampling 1` and `8`): wf_size=2048 in both cases,
         // event-to-event spacing is exactly 2052 words, no actual
         // truncation observed.
+        let decode_ap = |raw: u32, signed: bool| -> i16 {
+            if signed {
+                super::common::sign_extend_14bit(raw)
+            } else {
+                (raw & constants::ANALOG_PROBE_MASK) as i16
+            }
+        };
+
         for _ in 0..n_waveform_words {
             let word = self.read_u64(data, *word_index);
             *word_index += 1;
@@ -497,9 +539,11 @@ impl Pha2Decoder {
             for shift in [0u32, 32u32] {
                 let sample = ((word >> shift) & 0xFFFFFFFF) as u32;
 
-                let ap1 = (sample & constants::ANALOG_PROBE_MASK) as i16;
-                let ap2 = ((sample >> constants::ANALOG_PROBE2_SHIFT)
-                    & constants::ANALOG_PROBE_MASK) as i16;
+                let ap1 = decode_ap(sample & constants::ANALOG_PROBE_MASK, ap0_is_signed);
+                let ap2 = decode_ap(
+                    (sample >> constants::ANALOG_PROBE2_SHIFT) & constants::ANALOG_PROBE_MASK,
+                    ap1_is_signed,
+                );
                 let dp1 = ((sample >> constants::DIGITAL_PROBE1_SHIFT) & 0x1) as u8;
                 let dp2 = ((sample >> constants::DIGITAL_PROBE2_SHIFT) & 0x1) as u8;
                 let dp3 = ((sample >> constants::DIGITAL_PROBE3_SHIFT) & 0x1) as u8;
@@ -524,13 +568,13 @@ impl Pha2Decoder {
             time_resolution,
             trigger_threshold,
             ns_per_sample: self.config.time_step_ns,
-            // PHA2 trapezoid / energy-filter probes carry signed 14-bit
-            // values per CAEN spec ("is_signed" flag in the extras header).
-            // Phase 2 default = false (raw 14-bit unsigned, [0, 16383]).
-            // Phase 4 will read the per-probe is_signed flag from the
-            // waveform extras header and set this correctly.
-            analog_probe1_is_signed: false,
-            analog_probe2_is_signed: false,
+            // Per-probe signed flag, parsed from the wf-header
+            // analog-probe-info bits (see ANALOG_PROBE*_INFO_SHIFT).
+            // Frontend uses these to add the +8191 visual centring
+            // offset so signed probes share the 0..16383 visible band
+            // with unsigned ADC-input probes.
+            analog_probe1_is_signed: ap0_is_signed,
+            analog_probe2_is_signed: ap1_is_signed,
         })
     }
 
@@ -812,6 +856,56 @@ mod tests {
         dec.reset_for_new_run();
         assert_eq!(dec.last_aggregate_counter, 0);
         assert!(!dec.fine_ts_clamp_warned);
+    }
+
+    #[test]
+    fn analog_probe_is_signed_flag_is_parsed_from_wf_header() {
+        // wf_header layout (PHA2 doxygen a00108.html):
+        //   bit 63        = check1 = 1
+        //   bits[62:60]   = check2 = 0
+        //   bits[5:0]     = a.p. #0 info = type[2:0] | is_signed[3] | factor[5:4]
+        //   bits[11:6]    = a.p. #1 info, same layout shifted by 6
+        //
+        // Build a header with: a.p.#0 = TimeFilter signed, a.p.#1 = ADCInput unsigned.
+        // → analog_probe1_is_signed must be true, analog_probe2_is_signed must be false.
+        // → with samples that are `0x3fff` (= -1 if signed, +16383 if unsigned),
+        //   the decoded buffer should hold -1 in analog_probe1 and +16383 in analog_probe2.
+        let ap0_info: u64 = 0b001_1_00; // type=1 (TimeFilter), is_signed=1, factor=×1
+        let ap1_info: u64 = 0b000_0_00; // type=0 (ADCInput),  is_signed=0, factor=×1
+        let wf_hdr: u64 = (1u64 << 63) | (ap1_info << 6) | ap0_info;
+        let wf_size: u64 = 1; // 1 word = 2 samples
+        // sample-word: lower 32-bit = ap0=0x3fff, ap1=0x3fff (with all DPs cleared)
+        let sample: u64 = 0x3fff_3fff_3fff_3fff;
+
+        let total_words: u64 = 6;
+        let agg_header = (0x2u64 << 60) | total_words;
+        let ev1_w1 = 0u64; // ch=0, ts=0
+        let ev1_w2 = 1u64 << constants::WAVEFORM_FLAG_SHIFT; // bit62 = waveform present
+
+        let bytes = pack_be(&[agg_header, ev1_w1, ev1_w2, wf_hdr, wf_size, sample]);
+        let mut dec = Pha2Decoder::with_defaults();
+        let raw = RawData {
+            size: bytes.len(),
+            data: bytes,
+            n_events: 1,
+        };
+        let mut events = Vec::new();
+        dec.decode_into(&raw, &mut events);
+
+        assert_eq!(events.len(), 1);
+        let wf = events[0].waveform.as_ref().expect("waveform missing");
+        assert!(
+            wf.analog_probe1_is_signed,
+            "TimeFilter probe must be flagged signed",
+        );
+        assert!(
+            !wf.analog_probe2_is_signed,
+            "ADCInput probe must be flagged unsigned",
+        );
+        // Signed AP0 = sign_extend(0x3fff) = -1
+        assert_eq!(wf.analog_probe1[0], -1);
+        // Unsigned AP1 = 0x3fff = 16383
+        assert_eq!(wf.analog_probe2[0], 16383);
     }
 
     #[test]
