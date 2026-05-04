@@ -119,41 +119,55 @@ Phase 2 へ持ち越す課題:
 
 Decoder 単独は 500 kHz/200 samples ストレスでも完全動作。**FW の rate cliff は ~70-100 kHz/board 付近**(PSD2 の ~43 kHz より高い)。安全運転 ~30 kHz/board は OK。
 
-### ⏳ Phase 3 残作業
+### ✅ Phase 3 残作業 — 2026-05-04 後半に追加完了
 
-5. **校正源 (60Co/137Cs) フォトピーク確認** — 物理パルサーは確認済み。次は実放射線源で energy linearity / resolution 測定
+**3-5: apply config loopback logging (Gemini #5)** — `512368c`
+- `verify_loopback`: set_value 後に同 path を get_value して FW 適用値と比較
+- `values_equivalent`: f64 1 ppm tolerance + case-insensitive string compare
+- 範囲 broadcast path (`/ch/0..N/par/foo`) は読み取り不可のため skip
+- Mismatch は INFO ログ + サマリ行に `loopback_mismatches=<N>` カウンタ + 詳細リスト
+- `applied_value` フィールド (REST `/api/status` の history) に FW 報告値を反映
+- 実機 PHA2 SN:52622: 45 params Apply、0 mismatches (DevTree validation で既に正しく snap されているため想定通り)
+- 21/21 unit test PASS
 
-6. **設定ループバック検証実装 (Gemini #5)** — 30 分
-   - 場所: `src/reader/caen/handle.rs::apply_validated_parameters` (もしくは類似)
-   - 動作: `set_value(path, val)` 直後に `get_value(path)` を呼んで applied 値を `tracing::info!` でログ
-   - 対象: PHA2 trapezoid params (`energyfilterrisetimet`, `energyfilterflattopt`, `energyfilterpolezerot`, `timefilterrisetimet`)
-   - 影響: 全 FW (PSD2/PSD1/PHA1) で動くべき
-   - cost: configure 時の I/O が 2x、それ以外は影響なし
+**3-6: `.delila` → ROOT 出力** — `e423692`
+- 新 binary `src/bin/delila_to_root.rs` (`cargo run --release --features root --bin delila_to_root`)
+- 既存 C++ `tools/delila2root` は AMax 以前の wire format (6 scalar fields) を期待するため、`user_info[4]` が増えた現行 .delila ではパース失敗していた → Rust 側 DataFileReader + EventDataBatch path で実装
+- 1 event = 1 TTree row、scalar branches: Module / Channel / TimestampNs / Energy / EnergyShort / Flags / UserInfo0..3 / HasWaveform
+- Waveform は skip (event_builder + recover 系で対応)
+- 実機検証 (PHA2 ch0 物理パルサー): 220 MB .delila → 344 KB root, 5950 events, **Mean=6317.14, StdDev=2.61, FWHM≈6.13** (Monitor の Gauss fit 6.4 と一致 ✓)
 
-7. **`.delila` → ROOT 出力** — 30 分
-   - 既存の oxyroot pipeline を PHA2 で動かす
-   - 確認項目: timestamp, energy, channel, fine_ts が TBranch に正しく入っている
-   - PHA2 で energy_short = 0 なので、TBranch も 0 のまま (PSD2 と同じスキーマ)
+**3-7: Throughput sweep 堅牢化** — `a3aa0be`
+- `--healthy-pct` (default 30%) で iter を OK/STUCK? 判定
+- STUCK 時は `--stuck-cool-down` (default 60s) idle 後 `--max-retries` (default 1) 回 retry
+- Healthy iter 間も `--cool-down` (default 5s) で FW を settling
+- CSV 列追加: `expected_total`, `pct_of_target`, `healthy`, `attempt`
+- End-of-run summary: `<N healthy> / <M stuck after retries> / <R retries triggered>`
+- 実機検証: 36 iter / 32 healthy / 4 stuck / 9 retries triggered
 
-8. **(新) Throughput sweep スクリプト堅牢化** — 30 分
-   - iter 間 cool-down を 30s 以上に延長(現状 sleep 0.5s)
-   - `events_per_sec < expected × 0.5` を検出したら自動 retry / abort
-   - 連続失敗時は idle wait (60s+) を挟む
-   - もしくは `ApplyConfigRunning` を使う rate-only sweep モード追加(Configure cycle 不要)
+### ⏳ Phase 3 残: 校正源テストのみ
+
+8. **校正源 (60Co/137Cs) フォトピーク確認** — ハード準備待ち
+   - 物理パルサーは FWHM 0.101% で確認済み
+   - 校正源は線量計許可 + 検出器接続が必要なため別セッション
 
 ### 注意点
 - PHA2 と PSD2 は同一ハード SN:52622 を共有するため、firmware 切り替えは flash 焼き直しが必要 (~5 分 + 設定再 apply)
 - Phase 3 中に PSD2 ランも回したい場合は `start_daq.sh` の前に flash 確認
 
-### Phase 3 で生まれた成果物
+### Phase 3 で生まれた成果物 (commits)
 
-- [src/reader/decoder/pha2.rs](../src/reader/decoder/pha2.rs) — fault-dump 機能 + truncation resync (FW bug workaround)
-- [config/digitizers/pha2_56_phys.json](../config/digitizers/pha2_56_phys.json) — 物理入力 ch0 Positive 用
-- [config/config_pha2_56_phys.toml](../config/config_pha2_56_phys.toml)
-- [config/digitizers/pha2_thrput.json](../config/digitizers/pha2_thrput.json) — throughput sweep 用
-- [config/config_pha2_thrput.toml](../config/config_pha2_thrput.toml) — recorder 抜き、reader→merger→monitor のみ
-- [scripts/throughput_sweep.py](../scripts/throughput_sweep.py) — `--json-path` で PSD2/PHA2 切り替え対応
-- [scripts/pha2_transition_stress.py](../scripts/pha2_transition_stress.py) — Configure-cycle stress 用ストレステスト
+- `fb8f66e` — feat(pha2): integrate DPP-PHA firmware on x2730 (Phase 1+2+3)
+  - [src/reader/decoder/pha2.rs](../src/reader/decoder/pha2.rs) decoder + fault-dump + truncation resync
+  - [config/digitizers/pha2_56*.json](../config/digitizers/) + corresponding TOMLs (TestPulse, 物理入力, throughput)
+  - [scripts/throughput_sweep.py](../scripts/throughput_sweep.py) `--json-path` PSD2/PHA2 対応
+  - [scripts/pha2_transition_stress.py](../scripts/pha2_transition_stress.py) Configure-cycle stress reproducer
+- `512368c` — feat(caen): loopback-verify every applied parameter (Gemini #5)
+  - [src/reader/caen/handle.rs](../src/reader/caen/handle.rs) `verify_loopback` + `values_equivalent`
+- `a3aa0be` — feat(scripts): robustify throughput_sweep with cool-down + auto-retry
+  - [scripts/throughput_sweep.py](../scripts/throughput_sweep.py) `--cool-down`/`--stuck-cool-down`/`--max-retries`/`--healthy-pct`
+- `e423692` — feat(bin): add delila_to_root — flat TTree exporter (oxyroot)
+  - [src/bin/delila_to_root.rs](../src/bin/delila_to_root.rs) PHA2/AMax 対応 .delila → ROOT
 
 ## ゴール
 
@@ -321,11 +335,13 @@ Phase 3 部分完了 (✅ 2026-05-04):
 - [x] **Decoder bug 発見・修正 + 10 unit test PASS** (FW truncation resync) — 詳細は「Phase 3 進捗サマリ」参照
 - [x] FW state スタック現象の原因究明 (rapid Configure cycles, 数分 idle で自然回復)
 
-Phase 3 残作業:
+Phase 3 完了 (✅ 2026-05-04 後半):
+- [x] Recorder の `.delila` を oxyroot で ROOT 化 (`delila_to_root` 新 binary, FWHM 6.13 ≈ Monitor fit 6.4)
+- [x] `apply_validated_parameters` set→get→log loopback (Gemini #5)
+- [x] Throughput sweep スクリプト堅牢化 (cool-down + auto-retry + healthy-pct 検出)
+
+Phase 3 残作業 (ハード準備待ち):
 - [ ] 校正源 (60Co/137Cs) でフォトピーク確認(物理パルサーは確認済み)
-- [ ] Recorder の `.delila` を oxyroot で ROOT 化できる
-- [ ] `apply_digitizer_config` で `energyfilterrisetimet` 等の applied 値ループバックログを実装 (Gemini レビュー#5)
-- [ ] Throughput sweep スクリプト堅牢化 (cool-down 30s+ / auto-retry / `ApplyConfigRunning` mode)
 
 Phase 4 着手待ち:
 - [ ] Operator UI で source type=PHA2 を選んだ時に trap-filter param 群が表示される
