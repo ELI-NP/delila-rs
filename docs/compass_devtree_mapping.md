@@ -176,6 +176,59 @@
 
 ---
 
+## PHA2 (VX2730, DPP_PHA, FW 1.0.88)
+
+VX2730 に DPP-PHA firmware を flash した DIG2 系。**PSD2 と同一ハード SN:52622** で
+firmware を切り替えて運用する。Channel 共通 46 params は PSD2 と一致、PHA-only
+の 19 params が trapezoid filter まわり。
+
+### Channel Parameters — 共通 46 (PSD2 と同じパス・型)
+
+`enabled` / `pulsepolarity` / `dcoffset` / `chgain` / `chrecordlengtht` /
+`chpretriggert` / `wavedownsamplingfactor` / `triggerthr` (PSD2 と field 名違い:
+PSD2 は `triggerthreshold`) / `triggerholdoffl` / `eventtriggersource` /
+`wavetriggersource` / `wavesaving` / `waveanalogprobe0..1` /
+`wavedigitalprobe0..3` / coincidence (`channelstriggermask`,
+`coincidencemask`, `anticoincidencemask`, `coincidencelengtht`,
+`channelvetosource`, `adcvetowidth`) / `eventselector`
+
+### Channel Parameters — PHA2-only 19
+
+| # | CoMPASS名 | DevTree名 | 型 | 範囲/選択肢 | SetInRun | UI実装 |
+|---|---|---|---|---|---|---|
+| 1 | Time filter rise time | `timefilterrisetimet` | NUMBER | 16–500 ns, step 2 | Yes | **Phase 4 待ち** |
+| 2 | Time filter retrigger guard | `timefilterretriggerguardt` | NUMBER | 0–8000 ns, step 8 | Yes | **Phase 4 待ち** |
+| 3 | Energy filter rise time | `energyfilterrisetimet` | NUMBER | 16–13000 ns, step 8, def 5000 | Yes | **Phase 4 待ち** |
+| 4 | Energy filter flat top | `energyfilterflattopt` | NUMBER | 32–3000 ns, step 8, def 1000 | Yes | **Phase 4 待ち** |
+| 5 | Energy filter pole zero | `energyfilterpolezerot` | NUMBER | 32–131000 ns, step 2, def 50000 | Yes | **Phase 4 待ち** |
+| 6 | Energy filter peaking position | `energyfilterpeakingposition` | NUMBER | 10–90 %, step 1, def 50 | Yes | **Phase 4 待ち** |
+| 7 | Energy filter peaking avg | `energyfilterpeakingavg` | STRING | LowAVG, MediumAVG, HighAVG | Yes | **Phase 4 待ち** |
+| 8 | Energy filter baseline avg | `energyfilterbaselineavg` | STRING | Fixed, VeryLow, Low, MediumLow, Medium, MediumHigh, High | Yes | **Phase 4 待ち** |
+| 9 | Energy filter baseline guard | `energyfilterbaselineguardt` | NUMBER | 0–8000 ns, step 8 | Yes | **Phase 4 待ち** |
+| 10 | Energy filter pile-up guard | `energyfilterpileupguardt` | NUMBER | 0–64000 ns, step 64, def 240 | Yes | **Phase 4 待ち** |
+| 11 | Energy filter fine gain | `energyfilterfinegain` | NUMBER | 1.000–10.000, step 0.001, def 1.000 | Yes | **Phase 4 待ち** |
+| 12 | Energy filter LF limitation | `energyfilterlflimitation` | STRING | On, Off | Yes | **Phase 4 待ち** |
+| 13 | S_IN function | `sinfunction` | STRING | None, ResetTimestamp | No | (デフォルト None で良い、UI 不要) |
+| 14 | GPI function | `gpifunction` | STRING | None, ResetTimestamp | No | (デフォルト None で良い、UI 不要) |
+
+### Board Parameters
+
+PSD2 と同一(94 params 共通)。**IPE pulser 系(`ipeamplitude`, `iperate`,
+`ipebaseline`, `ipedecaytime`, `ipetimemode`)は PSD2 のみで PHA2 にはない**。
+逆に PHA2 のみ `/group/N/par/inputdelay`(VGA group 単位、16 group)が存在。
+
+### Event Format (`dpppha` endpoint)
+
+PSD2 と同じ Individual Trigger Mode (`format=0x2`) ベースだが、per-event 第 2
+ワードで `bits[41:26]` が未使用(PSD2 はここに `charge_short`)。`EventData::energy_short = 0` 固定で運用。Decoder は [src/reader/decoder/pha2.rs](../src/reader/decoder/pha2.rs)。
+
+**Decoder quirk(2026-05-04 fixed):** PHA2 firmware は bad state で waveform を
+truncate するが `wf_size` word は嘘の値(200)を保つ。decoder は sample loop 中
+の wf_header pattern (`bit63=1 ∧ bits[62:60]=0`) 検出で next event 境界に rewind
+する resync ロジックを持つ。
+
+---
+
 ## 注記
 
 ### Unit問題: PSD1/PHA1 のタイミングパラメーター
