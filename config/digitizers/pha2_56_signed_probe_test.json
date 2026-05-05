@@ -1,0 +1,64 @@
+{
+  "digitizer_id": 1,
+  "name": "PHA2 Signed Probe Test",
+  "firmware": "PHA2",
+  "serial_number": "52622",
+  "model": "VX2730",
+  "num_channels": 32,
+  "is_master": false,
+  "board": {
+    "start_source": "SWcmd",
+    "gpio_mode": "Run",
+    "global_trigger_source": "UserTrg",
+    "waveforms_enabled": true,
+    "extra": {
+      "boardvetopolarity": "ActiveHigh",
+      "clocksource": "Internal",
+      "enclockoutfp": "True",
+      "syncoutmode": "SyncIn",
+      "iolevel": "NIM",
+      "trgoutmode": "GPIO",
+      "boardvetosource": "Disabled"
+    }
+  },
+  "channel_defaults": {
+    "enabled": "False",
+    "polarity": "Negative",
+    "dc_offset": 50.0,
+    "vga_gain": 0,
+    "record_length_ns": 16000,
+    "pre_trigger_ns": 1024,
+    "wave_downsampling": "1",
+    "trigger_threshold": 100,
+    "trigger_holdoff_ns": 480,
+    "time_filter_rise_time_ns": 296,
+    "time_filter_retrigger_guard_ns": 0,
+    "energy_filter_rise_time_ns": 5000,
+    "energy_filter_flat_top_ns": 1000,
+    "energy_filter_pole_zero_ns": 50000,
+    "energy_filter_peaking_position": 50,
+    "energy_filter_peaking_avg": "LowAVG",
+    "energy_filter_baseline_avg": "Medium",
+    "energy_filter_baseline_guard_ns": 0,
+    "energy_filter_pileup_guard_ns": 240,
+    "energy_filter_fine_gain": 1.0,
+    "energy_filter_lf_limitation": "Off",
+    "event_trigger_source": "ChSelfTrigger",
+    "wave_trigger_source": "ChSelfTrigger",
+    "wave_saving": "Always",
+    "analog_probe_0": "ADCInput",
+    "analog_probe_1": "TimeFilter",
+    "digital_probe_0": "Trigger",
+    "digital_probe_1": "TimeFilterArmed",
+    "digital_probe_2": "ReTriggerGuard",
+    "digital_probe_3": "EnergyFilterPileupGuard",
+    "event_selector": "All"
+  },
+  "channel_overrides": {
+    "0": {
+      "enabled": "True",
+      "polarity": "Positive",
+      "dc_offset": 10.0
+    }
+  }
+}
