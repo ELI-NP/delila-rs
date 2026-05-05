@@ -1,6 +1,6 @@
 # TODO 51: PHA2 (DPP-PHA on x2730) firmware integration
 
-**Status:** Phase 1〜5 ほぼ完了 (2026-05-05)。Phase 4 surface (UI) ✅ 完了 (`b258ab0`), Phase 5 docs ✅ 完了 (`6ba6cea`)。残: 校正源テスト (ハード待ち) + Phase 4.5 probe_type cross-cutting 拡張 (設計合意済、実装未着手)
+**Status:** Phase 1〜5 + Phase 4.5 完了 (2026-05-05)。残: 校正源テスト (ハード待ち) のみ
 **Created:** 2026-05-04
 **Hardware:** VX2730 SN:52622 @ 172.18.4.56, FwType=`DPP_PHA`, FPGA FW 1.0.88, 32 ch, 500 MS/s, 14-bit
 **DevTree (live):** [docs/devtree_examples/vx2730_pha2_sn52622.json](../docs/devtree_examples/vx2730_pha2_sn52622.json)
@@ -350,14 +350,15 @@ Phase 4 完了 (✅ 2026-05-04, commits `b258ab0` `d980d79` `7ed3285`):
 - [x] `analog_probe_is_signed` を wf-extras header bit3 から自動設定 (TimeFilter / EnergyFilter / EnergyFilterMinusBaseline で signed=true) (`7ed3285`)
 - [x] Channel-table clamp 表示 (yellow flash + re-emit、隠さない設計) (`d980d79`)
 
-Phase 4.5 — probe_type cross-cutting 拡張 (設計合意済、follow-up):
-- [ ] `EventData.Waveform` に `analog_probe_type: [u8; 2], digital_probe_type: [u8; 4]` 追加 (`#[serde(default)]` で BC、`user_info` 前例踏襲)
-- [ ] PHA2 wf-extras header bits[2:0] / bits[8:6] (analog) + 4-bit digital probe type を decoder でパース
-- [ ] 他 FW (PSD1/PSD2/PHA1/AMax/V1743) は当面 `0xFF`=Unknown を出す
-- [ ] `delila_to_root` に `AnalogProbeType0/1, DigitalProbeType0..3` の TBranch 追加
-- [ ] Frontend `waveform.component.ts` の "A0/A1/D0..D3" hardcoded label を probe_type ベースで動的化 ("A0: TimeFilter" 等)
-- 設計: u8 + PHA2 spec を canonical (analog: 0=ADCInput, 1=TimeFilter, 2=EnergyFilter, 3=EnergyFilterBaseline, 4=EnergyFilterMinusBaseline, 0xFF=Unknown)
-- A1 decoder + Waveform fields → A2 ROOT branches → A3 Frontend model の 3 commit に分割
+Phase 4.5 完了 (✅ 2026-05-05):
+- [x] `Waveform` (両 struct: `src/common/mod.rs` + `src/reader/decoder/common.rs`) に `analog_probe_type: [u8; 2]` + `digital_probe_type: [u8; 4]` 追加。`#[serde(default = "default_unknown_*")]` + `pub const UNKNOWN_PROBE_TYPE: u8 = 0xFF` 定義。`Default` impl でも 0xFF にフィルされる
+- [x] PHA2 wf-extras header から analog (bits[2:0]/bits[8:6]) + digital (bits[15+4N:12+4N]) probe-type を decoder でパース、新 unit test `digital_probe_types_are_parsed_from_wf_header` + 既存 `analog_probe_is_signed_flag_is_parsed_from_wf_header` に probe_type アサート追加
+- [x] 他 FW (PSD1/PSD2/PHA1/AMax/V1743(x743)) は `[UNKNOWN_PROBE_TYPE; 2]` / `[UNKNOWN_PROBE_TYPE; 4]` を出す。V1743 の Waveform 構築サイトは 7ed3285 で `analog_probe_*_is_signed` を入れ忘れていた latent bug も同時に修正
+- [x] `delila_to_root` に `AnalogProbeType0/1, DigitalProbeType0..3` の TBranch 追加。BC 検証: 既存の 5/4 `.delila` (`run99300_0000_SmokeTest.delila` 51300 events) を新 binary で読めること確認
+- [x] Frontend `histogram.types.ts` Waveform interface に optional `analog_probe_type` / `digital_probe_type` + `ANALOG_PROBE_TYPE_LABELS` / `DIGITAL_PROBE_TYPE_LABELS` 定数 + `UNKNOWN_PROBE_TYPE`
+- [x] `waveform.component.ts` に `probeLabels` computed signal 追加、Tune Up + Live 両方の probe-toggle ラベルを動的化 ("A0" → "A0: TimeFilter" 等、Unknown は generic にフォールバック)
+- 数値表現: u8 + PHA2 spec を canonical (analog: 0=ADCInput, 1=TimeFilter, 2=EnergyFilter, 3=EnergyFilterBaseline, 4=EnergyFilterMinusBaseline, 0xFF=Unknown)
+- 562 unit tests (新規 1) PASS、`cargo clippy --release --lib --tests -- -D warnings` 緑、`cargo build --release --features x743 --lib` 緑、`npm run build` 緑 + `dist/` 同梱
 
 Phase 5 完了 (✅ 2026-05-04, commit `6ba6cea`):
 - [x] `docs/digitizer_system_spec.md` / `docs/compass_devtree_mapping.md` に PHA2 列追加
