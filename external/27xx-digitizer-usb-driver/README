@@ -1,0 +1,51 @@
+----------------------------------------------------------------------
+
+              --- CAEN SpA - Computing Systems Division --- 
+
+----------------------------------------------------------------------
+        
+        CAENDGTZ USB Driver Readme file
+        
+----------------------------------------------------------------------
+
+        Package for Linux kernels 3.x or greater
+
+        April	 2022
+
+----------------------------------------------------------------------
+
+ The complete documentation can be found in the User's Manual on CAEN's web
+ site at: http://www.caen.it.
+
+
+ Content
+ -------
+
+ Readme.txt		: This file.
+
+ install.sh		: The script file that setup the driver
+ 
+ regPID.sh		: The script file to register the USB Digitizer name into PC
+
+
+ System Requirements
+ -------------------
+
+ - Linux kernel with udev
+ 
+ Installation notes
+ ------------------
+
+  To install the CAENDGTZ USB driver:
+
+  - Execute: sudo ./install.sh 
+  
+  Some Linux distribution are not able to automatically retrieve the Digitizer USB name (CAENDGTZ-USB-{PIDNUMBER})
+  (you receive an error from your web browser when you try to access the digitizer using its USB name)
+
+  To resolve this issue please connect the digitizer to a PC USB port (the must be only one CAEN divice at a time connected!) then:
+  
+  - Execute sudo ./regPID.sh
+  
+  The connected digitizer will be register in your pc.
+  If you have more than one digitizer you have to do the same procedure for each digitizer.
