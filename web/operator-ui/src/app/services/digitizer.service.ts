@@ -9,7 +9,20 @@ import {
 import { AMAX_DOTTED_KEYS } from '../models/amax-generated';
 import { firstValueFrom } from 'rxjs';
 
-/** Keys in ChannelConfig that are channel parameters (not extra) */
+/**
+ * Keys in `ChannelConfig` that the expand/compress round-trip iterates
+ * over. **MUST** stay in sync with the `ChannelConfig` interface in
+ * `types.ts` for every flat (non-`amax.*`) channel parameter — any key
+ * present in the type but missing here is silently dropped on Apply
+ * (regression caught 2026-05-05: PHA2 trap-filter fields shipped in
+ * `types.ts` via b258ab0 but were missed here, so typing
+ * `energy_filter_rise_time_ns` in Tune Up never reached the digitizer
+ * and re-entering Tune Up "lost" every typed value when the round-trip
+ * wrote a JSON without those keys).
+ *
+ * The dotted `amax.*` keys are codegen-driven via `AMAX_DOTTED_KEYS`
+ * and intentionally NOT listed here.
+ */
 const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   // --- Input ---
   'enabled',
@@ -58,6 +71,23 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   'peak_nsmean',
   'peak_holdoff_ns',
   'energy_fine_gain',
+  // --- PHA2 Time Filter ---
+  'time_filter_rise_time_ns',
+  'time_filter_retrigger_guard_ns',
+  // --- PHA2 Energy Filter (trapezoidal) ---
+  'energy_filter_rise_time_ns',
+  'energy_filter_flat_top_ns',
+  'energy_filter_pole_zero_ns',
+  'energy_filter_peaking_position',
+  'energy_filter_peaking_avg',
+  'energy_filter_baseline_avg',
+  'energy_filter_baseline_guard_ns',
+  'energy_filter_pileup_guard_ns',
+  'energy_filter_fine_gain',
+  'energy_filter_lf_limitation',
+  // --- PHA2 per-channel S_IN/GPI ---
+  'sin_function',
+  'gpi_function',
   // --- Coincidence ---
   'ch_trigger_mask',
   'coincidence_mask',
@@ -77,6 +107,7 @@ const CHANNEL_PARAM_KEYS: (keyof ChannelConfig)[] = [
   'coinc_trgsw',
   'pileup_gap',
   'pileup_counting_en',
+  'pileup_flag_en',
   // --- Waveform ---
   'wave_saving',
   'analog_probe_0',
