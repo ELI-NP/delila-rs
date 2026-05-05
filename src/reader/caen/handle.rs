@@ -1168,18 +1168,32 @@ impl CaenHandle {
                     }
                 }
                 None => {
-                    // Parameter not in cache — apply without validation
-                    // (e.g., dt_ext_clock on VME, or range-expanded paths)
+                    // Parameter not in cache — apply without DevTree
+                    // validation. Legitimate cases: range-expanded paths
+                    // like `/ch/0..31/par/foo` (cache holds the broadcast
+                    // base, not the expansion), or hand-crafted paths
+                    // like `dt_ext_clock` for VME side-channels.
+                    //
+                    // 2026-05-04 post-mortem: this branch was a `debug!`
+                    // log + `result.ok += 1`, so a CamelCase / lowercase
+                    // cache-key bug routed every channel-broadcast write
+                    // here for months — silent clamp bypass. We now log
+                    // at `info!` level + count separately as `no_cache`
+                    // so a regression is visible in the apply summary.
                     match self.set_value(&param.path, &param.value) {
                         Ok(()) => {
-                            debug!(path = %param.path, value = %param.value, "Parameter set (no cache)");
-                            result.ok += 1;
+                            info!(
+                                path = %param.path,
+                                value = %param.value,
+                                "Parameter applied without DevTree validation (no cache hit)"
+                            );
+                            result.no_cache += 1;
                             result.details.push(ParamApplyResult {
                                 path: param.path.clone(),
                                 original_value: param.value.clone(),
                                 applied_value: param.value.clone(),
-                                status: ParamApplyStatus::Ok,
-                                message: None,
+                                status: ParamApplyStatus::NoCache,
+                                message: Some("no cache entry — passed unvalidated to FW".into()),
                             });
                         }
                         Err(e) => {
@@ -1209,6 +1223,7 @@ impl CaenHandle {
             adjusted = result.adjusted,
             failed = result.failed,
             skipped = result.skipped,
+            no_cache = result.no_cache,
             loopback_mismatches = loopback_mismatches.len(),
             "Validated configuration applied"
         );
@@ -1221,6 +1236,20 @@ impl CaenHandle {
                 .map(|d| format!("{}: {} → {}", d.path, d.original_value, d.applied_value))
                 .collect();
             info!("Adjusted parameters: {:?}", adjusted_params);
+        }
+
+        if result.no_cache > 0 {
+            let no_cache_params: Vec<_> = result
+                .details
+                .iter()
+                .filter(|d| d.status == ParamApplyStatus::NoCache)
+                .map(|d| format!("{}={}", d.path, d.applied_value))
+                .collect();
+            info!(
+                count = result.no_cache,
+                "Parameters applied without DevTree validation (no cache hit): {:?}",
+                no_cache_params
+            );
         }
 
         if !loopback_mismatches.is_empty() {
@@ -2085,5 +2114,90 @@ mod tests {
             result.value, "16200",
             "17000 ns must clamp to the 16200-ns max",
         );
+    }
+
+    /// Regression: unknown parameter names must miss the cache so that
+    /// `apply_params_validated` routes them through the **loud** no-cache
+    /// branch (logged at `info!`, counted in `result.no_cache`). The 5/4
+    /// silent-clamp-bypass bug was a CamelCase path that *should* have
+    /// hit the cache but didn't — this test pins the inverse: when a name
+    /// genuinely doesn't exist in the DevTree, the cache must say None
+    /// rather than fishing for partial matches.
+    #[test]
+    fn unknown_param_name_misses_cache() {
+        let json_str =
+            std::fs::read_to_string("docs/devtree_examples/vx2730_pha2_sn52622.json").unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let mut cache = HashMap::new();
+        if let Some(ch0_par) = tree
+            .get("ch")
+            .and_then(|ch| ch.get("0"))
+            .and_then(|ch0| ch0.get("par"))
+            .and_then(|v| v.as_object())
+        {
+            for (name, node) in ch0_par {
+                if name == "handle" {
+                    continue;
+                }
+                if let Some(obj) = node.as_object() {
+                    if obj.contains_key("datatype") {
+                        if let Ok(info) = CaenHandle::extract_param_info(name, node) {
+                            cache.insert(name.to_lowercase(), info);
+                        }
+                    }
+                }
+            }
+        }
+
+        let raw = "ThisParamDefinitelyDoesNotExist";
+        let lower = raw.to_lowercase();
+        assert!(
+            !cache.contains_key(raw) && !cache.contains_key(lower.as_str()),
+            "unknown param name must miss both raw and lowercase cache lookup",
+        );
+    }
+
+    /// Pin the wire format of `ApplyConfigResult.no_cache` + the new
+    /// `ParamApplyStatus::NoCache` variant. The Operator REST API exposes
+    /// these in `/api/digitizers/.../apply` responses, so the contract
+    /// must roundtrip cleanly through serde_json.
+    #[test]
+    fn apply_config_result_round_trips_no_cache_status() {
+        use crate::reader::caen::validation::{
+            ApplyConfigResult, ParamApplyResult, ParamApplyStatus,
+        };
+
+        let original = ApplyConfigResult {
+            total: 1,
+            ok: 0,
+            adjusted: 0,
+            failed: 0,
+            skipped: 0,
+            no_cache: 1,
+            details: vec![ParamApplyResult {
+                path: "/par/dt_ext_clock".into(),
+                original_value: "true".into(),
+                applied_value: "true".into(),
+                status: ParamApplyStatus::NoCache,
+                message: Some("no cache entry — passed unvalidated to FW".into()),
+            }],
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: ApplyConfigResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.no_cache, 1);
+        assert_eq!(restored.details.len(), 1);
+        assert_eq!(restored.details[0].status, ParamApplyStatus::NoCache);
+
+        // Backward-compat: an old wire payload without `no_cache` must
+        // still deserialize (default to 0). #[serde(default)] on the field
+        // gates this.
+        let old_wire = serde_json::json!({
+            "total": 0, "ok": 0, "adjusted": 0, "failed": 0,
+            "skipped": 0, "details": []
+        });
+        let restored: ApplyConfigResult = serde_json::from_value(old_wire).unwrap();
+        assert_eq!(restored.no_cache, 0);
     }
 }

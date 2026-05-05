@@ -19,14 +19,19 @@ pub struct ValidateResult {
 /// Status of a parameter apply operation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum ParamApplyStatus {
-    /// Value accepted as-is
+    /// Value accepted as-is after DevTree validation
     Ok,
     /// Value was snapped to nearest valid step
     Adjusted,
     /// Hardware rejected the value
     Failed,
-    /// Parameter not found in DevTree (e.g., dt_ext_clock on VME)
+    /// Parameter not found in DevTree, set_value failed
     Skipped,
+    /// Parameter not found in DevTree, set_value succeeded — value was
+    /// passed straight to FW without min/max/step validation. Pre-2026-05-04
+    /// this was silently counted as `Ok` and helped hide a CamelCase /
+    /// lowercase cache-key bug for months. Always inspect these.
+    NoCache,
 }
 
 /// Result of applying a single parameter
@@ -55,8 +60,16 @@ pub struct ApplyConfigResult {
     pub adjusted: usize,
     /// Number that failed on hardware
     pub failed: usize,
-    /// Number skipped (not in DevTree)
+    /// Number skipped (not in DevTree, set_value failed)
     pub skipped: usize,
+    /// Number applied without DevTree validation (set_value succeeded but
+    /// no cache entry was found — typically range-expanded paths or
+    /// hand-crafted paths like `dt_ext_clock`). These are loud-by-default
+    /// in the apply log so a regression of the 2026-05-04 case-insensitive
+    /// lookup bug is visible — back then every CamelCase write missed the
+    /// cache and silently bypassed validation.
+    #[serde(default)]
+    pub no_cache: usize,
     /// Per-parameter details
     pub details: Vec<ParamApplyResult>,
 }
