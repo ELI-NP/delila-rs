@@ -753,14 +753,7 @@ impl CommandHandlerExt for ReaderCommandExt {
     }
 
     fn effective_state(&self, software_state: ComponentState) -> ComponentState {
-        let hw = *self.hw_state.lock().unwrap();
-        // Report the lesser of software and hardware state so Operator waits
-        // until hardware actually reaches the target state.
-        if state_rank(hw) < state_rank(software_state) {
-            hw
-        } else {
-            software_state
-        }
+        effective_state_for(software_state, *self.hw_state.lock().unwrap())
     }
 
     fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
@@ -1105,6 +1098,39 @@ fn state_rank(s: ComponentState) -> u8 {
         ComponentState::Running => 3,
         _ => 0,
     }
+}
+
+/// Decide which state to report to the operator on `GetStatus`.
+///
+/// `software_state` is the operator-facing state, set immediately by
+/// `handle_command` when a command is accepted — i.e. before the
+/// hardware has actually moved. `hw_state` is the hardware-confirmed
+/// state, updated by the read_loop only after the underlying FELib
+/// transition (configure_endpoint / arm / start / disarm+drain+cleardata
+/// / reset) actually completes.
+///
+/// We always trust `hw_state`. Lying about progress in either direction
+/// lets the operator race in-flight transitions:
+///
+///   * **Up direction** (Configure / Arm / Start) — sw advances first,
+///     hw catches up. Reporting sw too early would let the operator
+///     fire the next command (e.g. Start before Arm finished) against
+///     a hardware that isn't ready yet.
+///   * **Down direction** (Stop / Reset) — sw drops first, hw lags by
+///     the disarm / drain / cleardata window (~hundreds of ms). The
+///     classic failure is rapid `Stop → Apply` in Tune Up: the previous
+///     `state_rank(hw) < state_rank(sw)` heuristic only handled the up
+///     direction, so during Stop it lied with `Configured` while the
+///     FELib was still mid-disarm. The next `set_value` then locked
+///     the handle at CAEN -15 (COMMUNICATION ERROR), recoverable only
+///     by dropping and re-Open-ing the handle. See memory
+///     `felib_stuck_after_rapid_stop_apply` for the 2026-05-04 PHA2
+///     incident.
+///
+/// Returning `hw_state` unconditionally collapses both cases into the
+/// same simple rule.
+fn effective_state_for(_software_state: ComponentState, hw_state: ComponentState) -> ComponentState {
+    hw_state
 }
 
 /// Reconnection backoff parameters.
@@ -3444,6 +3470,79 @@ mod tests {
         assert_eq!(config.source_id, 0);
         assert_eq!(config.firmware, FirmwareType::PSD2);
         assert_eq!(config.buffer_size, 64 * 1024 * 1024);
+    }
+
+    /// Regression: GetStatus must report the *hardware*-confirmed state in
+    /// both transition directions, not just the upward (Idle → Running)
+    /// direction the original `state_rank(hw) < state_rank(sw)` heuristic
+    /// covered.
+    ///
+    /// The 2026-05-04 PHA2 incident (memory:
+    /// `felib_stuck_after_rapid_stop_apply`) was Stop → rapid Apply: sw
+    /// dropped to Configured immediately, hw was still Running mid-disarm,
+    /// and the old code reported Configured → operator's
+    /// `wait_for_state(Configured)` returned in 263 µs → Apply ran during
+    /// disarm/drain → FELib permanent CAEN -15.
+    #[test]
+    fn effective_state_for_stop_reports_running_until_hw_settles() {
+        assert_eq!(
+            effective_state_for(ComponentState::Configured, ComponentState::Running),
+            ComponentState::Running,
+        );
+    }
+
+    #[test]
+    fn effective_state_for_reset_reports_running_until_hw_settles() {
+        assert_eq!(
+            effective_state_for(ComponentState::Idle, ComponentState::Running),
+            ComponentState::Running,
+        );
+        assert_eq!(
+            effective_state_for(ComponentState::Idle, ComponentState::Armed),
+            ComponentState::Armed,
+        );
+    }
+
+    #[test]
+    fn effective_state_for_configure_reports_idle_until_hw_settles() {
+        assert_eq!(
+            effective_state_for(ComponentState::Configured, ComponentState::Idle),
+            ComponentState::Idle,
+        );
+    }
+
+    #[test]
+    fn effective_state_for_arm_and_start_report_lower_until_hw_settles() {
+        assert_eq!(
+            effective_state_for(ComponentState::Armed, ComponentState::Configured),
+            ComponentState::Configured,
+        );
+        assert_eq!(
+            effective_state_for(ComponentState::Running, ComponentState::Armed),
+            ComponentState::Armed,
+        );
+    }
+
+    #[test]
+    fn effective_state_for_settled_states_pass_through() {
+        for s in [
+            ComponentState::Idle,
+            ComponentState::Configured,
+            ComponentState::Armed,
+            ComponentState::Running,
+        ] {
+            assert_eq!(effective_state_for(s, s), s);
+        }
+    }
+
+    #[test]
+    fn effective_state_for_error_hw_is_reported_through() {
+        // If the read_loop ever flips hw_state to Error mid-flight, GetStatus
+        // must surface that — never mask it behind the operator-facing sw.
+        assert_eq!(
+            effective_state_for(ComponentState::Running, ComponentState::Error),
+            ComponentState::Error,
+        );
     }
 
     #[test]
