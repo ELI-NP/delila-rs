@@ -13,7 +13,11 @@
 //! Output branches:
 //!     Module (u8), Channel (u8), TimestampNs (f64), Energy (u16),
 //!     EnergyShort (u16), Flags (u64),
-//!     UserInfo0..UserInfo3 (u64), HasWaveform (u8)
+//!     UserInfo0..UserInfo3 (u64), HasWaveform (u8),
+//!     AnalogProbeType0/1 (u8), DigitalProbeType0..3 (u8) — PHA2 canonical
+//!     codes (0=ADCInput / 1=TimeFilter / … for analog, 0=Trigger / … for
+//!     digital, 0xFF=`UNKNOWN_PROBE_TYPE` for FW that doesn't carry typed
+//!     probe info on the wire). Events without a waveform get all 0xFF.
 //!
 //! Note: the on-disk schema folds the decoder's `fine_time` into
 //! `timestamp_ns` (= coarse_ns + fine_time/1024 × time_step), so there
@@ -27,6 +31,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use delila_rs::common::UNKNOWN_PROBE_TYPE;
 use delila_rs::recorder::DataFileReader;
 use oxyroot::{RootFile, WriterTree};
 
@@ -95,6 +100,12 @@ fn main() {
     let mut user_info2: Vec<u64> = Vec::new();
     let mut user_info3: Vec<u64> = Vec::new();
     let mut has_waveform: Vec<u8> = Vec::new();
+    let mut analog_probe_type0: Vec<u8> = Vec::new();
+    let mut analog_probe_type1: Vec<u8> = Vec::new();
+    let mut digital_probe_type0: Vec<u8> = Vec::new();
+    let mut digital_probe_type1: Vec<u8> = Vec::new();
+    let mut digital_probe_type2: Vec<u8> = Vec::new();
+    let mut digital_probe_type3: Vec<u8> = Vec::new();
 
     let start = Instant::now();
     let mut total_events = 0usize;
@@ -147,6 +158,19 @@ fn main() {
                         user_info2.push(ev.user_info[2]);
                         user_info3.push(ev.user_info[3]);
                         has_waveform.push(if ev.waveform.is_some() { 1 } else { 0 });
+                        // Probe-type codes carried by PHA2 wf-extras header.
+                        // Other FW emit UNKNOWN_PROBE_TYPE (=0xFF), and an
+                        // event without a waveform also gets 0xFF.
+                        let (apt, dpt) = match ev.waveform.as_ref() {
+                            Some(wf) => (wf.analog_probe_type, wf.digital_probe_type),
+                            None => ([UNKNOWN_PROBE_TYPE; 2], [UNKNOWN_PROBE_TYPE; 4]),
+                        };
+                        analog_probe_type0.push(apt[0]);
+                        analog_probe_type1.push(apt[1]);
+                        digital_probe_type0.push(dpt[0]);
+                        digital_probe_type1.push(dpt[1]);
+                        digital_probe_type2.push(dpt[2]);
+                        digital_probe_type3.push(dpt[3]);
                         file_events += 1;
                     }
                 }
@@ -195,6 +219,12 @@ fn main() {
     tree.new_branch("UserInfo2", user_info2.into_iter());
     tree.new_branch("UserInfo3", user_info3.into_iter());
     tree.new_branch("HasWaveform", has_waveform.into_iter());
+    tree.new_branch("AnalogProbeType0", analog_probe_type0.into_iter());
+    tree.new_branch("AnalogProbeType1", analog_probe_type1.into_iter());
+    tree.new_branch("DigitalProbeType0", digital_probe_type0.into_iter());
+    tree.new_branch("DigitalProbeType1", digital_probe_type1.into_iter());
+    tree.new_branch("DigitalProbeType2", digital_probe_type2.into_iter());
+    tree.new_branch("DigitalProbeType3", digital_probe_type3.into_iter());
 
     tree.write(&mut file)
         .unwrap_or_else(|e| panic!("tree.write failed: {:?}", e));
