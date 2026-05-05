@@ -40,7 +40,15 @@ import {
 import { HistogramService } from '../../services/histogram.service';
 import { OperatorService } from '../../services/operator.service';
 import { DigitizerService } from '../../services/digitizer.service';
-import { WaveformChannelInfo, LatestWaveform, Histogram1D, Histogram2D } from '../../models/histogram.types';
+import {
+  WaveformChannelInfo,
+  LatestWaveform,
+  Histogram1D,
+  Histogram2D,
+  ANALOG_PROBE_TYPE_LABELS,
+  DIGITAL_PROBE_TYPE_LABELS,
+  UNKNOWN_PROBE_TYPE,
+} from '../../models/histogram.types';
 import { DigitizerConfig } from '../../models/types';
 import {
   ChannelTableComponent,
@@ -118,22 +126,22 @@ interface ChannelChart {
 
           <div class="probe-toggles">
             <mat-checkbox [checked]="probeConfig().analog1" (change)="toggleProbe('analog1')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">A0</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">{{ probeLabels().a0Short }}</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().analog2" (change)="toggleProbe('analog2')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">A1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">{{ probeLabels().a1Short }}</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital1" (change)="toggleProbe('digital1')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">D0</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">{{ probeLabels().d0Short }}</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital2" (change)="toggleProbe('digital2')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">D1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">{{ probeLabels().d1Short }}</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital3" (change)="toggleProbe('digital3')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">D2</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">{{ probeLabels().d2Short }}</span>
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital4" (change)="toggleProbe('digital4')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">D3</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">{{ probeLabels().d3Short }}</span>
             </mat-checkbox>
           </div>
 
@@ -379,42 +387,42 @@ interface ChannelChart {
               (change)="toggleProbe('analog1')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">Analog 0</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog1">{{ probeLabels().a0Long }}</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().analog2"
               (change)="toggleProbe('analog2')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">Analog 1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">{{ probeLabels().a1Long }}</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital1"
               (change)="toggleProbe('digital1')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">Digital 0</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">{{ probeLabels().d0Long }}</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital2"
               (change)="toggleProbe('digital2')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">Digital 1</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">{{ probeLabels().d1Long }}</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital3"
               (change)="toggleProbe('digital3')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">Digital 2</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">{{ probeLabels().d2Long }}</span>
             </mat-checkbox>
             <mat-checkbox
               [checked]="probeConfig().digital4"
               (change)="toggleProbe('digital4')"
               color="primary"
             >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">Digital 3</span>
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">{{ probeLabels().d3Long }}</span>
             </mat-checkbox>
           </div>
 
@@ -977,6 +985,45 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly probeOptions = computed((): ProbeOption[][] => {
     const fw = this.tuneUpConfig()?.firmware;
     return fw ? [0, 1, 2, 3].map((i) => getProbeOptions(fw, i)) : [[], [], [], []];
+  });
+
+  /** Probe labels for the toggle checkboxes — falls through "A0: TimeFilter"
+   *  when the FW carries typed probe info on the wire (PHA2 today; future
+   *  PSD2/PHA1 if/when their decoders parse it), otherwise "A0/A1/D0..D3"
+   *  generic. We pick the first available waveform from `waveforms()`,
+   *  falling back to the most recent in `waveformHistory()` so the
+   *  labels survive a "Hold" / "Single Shot" pause. */
+  readonly probeLabels = computed(() => {
+    const wf = this.waveforms()[0]?.waveform
+      ?? this.waveformHistory()[this.waveformHistory().length - 1]?.waveform;
+    const apt = wf?.analog_probe_type;
+    const dpt = wf?.digital_probe_type;
+    const apLabel = (idx: 0 | 1, fallback: string) => {
+      const code = apt?.[idx];
+      if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
+      const name = ANALOG_PROBE_TYPE_LABELS[code];
+      return name ? `${fallback}: ${name}` : fallback;
+    };
+    const dpLabel = (idx: 0 | 1 | 2 | 3, fallback: string) => {
+      const code = dpt?.[idx];
+      if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
+      const name = DIGITAL_PROBE_TYPE_LABELS[code];
+      return name ? `${fallback}: ${name}` : fallback;
+    };
+    return {
+      a0Short: apLabel(0, 'A0'),
+      a1Short: apLabel(1, 'A1'),
+      d0Short: dpLabel(0, 'D0'),
+      d1Short: dpLabel(1, 'D1'),
+      d2Short: dpLabel(2, 'D2'),
+      d3Short: dpLabel(3, 'D3'),
+      a0Long: apLabel(0, 'Analog 0'),
+      a1Long: apLabel(1, 'Analog 1'),
+      d0Long: dpLabel(0, 'Digital 0'),
+      d1Long: dpLabel(1, 'Digital 1'),
+      d2Long: dpLabel(2, 'Digital 2'),
+      d3Long: dpLabel(3, 'Digital 3'),
+    };
   });
 
   readonly histLogScale = signal(false);

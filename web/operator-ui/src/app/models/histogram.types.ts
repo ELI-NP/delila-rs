@@ -425,7 +425,52 @@ export interface Waveform {
   analog_probe1_is_signed?: boolean;
   /** Same as `analog_probe1_is_signed` for the second analog probe. */
   analog_probe2_is_signed?: boolean;
+  /** Probe-type identifier per analog probe — PHA2 canonical encoding:
+   *  0=ADCInput / 1=TimeFilter / 2=EnergyFilter / 3=EnergyFilterBaseline
+   *  / 4=EnergyFilterMinusBaseline / 0xFF=Unknown (FW that doesn't carry
+   *  typed probe info on the wire). The waveform UI maps these to display
+   *  labels like "A0: TimeFilter". Optional for BC with old `.delila`. */
+  analog_probe_type?: [number, number];
+  /** Probe-type identifier per digital probe — PHA2 canonical encoding:
+   *  0=Trigger / 1=TimeFilterArmed / 2=ReTriggerGuard /
+   *  3=EnergyFilterBaselineFreeze / 4=EnergyFilterPeaking /
+   *  5=EnergyFilterPeakReady / 6=EnergyFilterPileUpGuard / 7=EventPileUp
+   *  / 8=ADCSaturation / 9=ADCSaturationProtection / A=PostSaturationEvent
+   *  / B=EnergyFilterSaturation / C=SignalInhibit / 0xFF=Unknown. */
+  digital_probe_type?: [number, number, number, number];
 }
+
+/** Sentinel matching `UNKNOWN_PROBE_TYPE` in src/common/mod.rs.
+ *  FW that doesn't carry typed probe info on the wire emits this so the
+ *  UI falls back to a generic "A0" / "D0" label. */
+export const UNKNOWN_PROBE_TYPE = 0xff;
+
+/** PHA2 canonical analog-probe-type → label, per CAEN doxygen
+ *  `legacy/PHA2_Parameters/a00108.html`. */
+export const ANALOG_PROBE_TYPE_LABELS: Record<number, string> = {
+  0x00: 'ADCInput',
+  0x01: 'TimeFilter',
+  0x02: 'EnergyFilter',
+  0x03: 'EnergyFilterBaseline',
+  0x04: 'EnergyFilterMinusBaseline',
+};
+
+/** PHA2 canonical digital-probe-type → label. */
+export const DIGITAL_PROBE_TYPE_LABELS: Record<number, string> = {
+  0x00: 'Trigger',
+  0x01: 'TimeFilterArmed',
+  0x02: 'ReTriggerGuard',
+  0x03: 'EnergyFilterBaselineFreeze',
+  0x04: 'EnergyFilterPeaking',
+  0x05: 'EnergyFilterPeakReady',
+  0x06: 'EnergyFilterPileUpGuard',
+  0x07: 'EventPileUp',
+  0x08: 'ADCSaturation',
+  0x09: 'ADCSaturationProtection',
+  0x0a: 'PostSaturationEvent',
+  0x0b: 'EnergyFilterSaturation',
+  0x0c: 'SignalInhibit',
+};
 
 // Latest waveform response
 export interface LatestWaveform {
