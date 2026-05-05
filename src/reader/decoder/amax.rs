@@ -364,6 +364,10 @@ impl AMaxDecoder {
             // AMax FW emits the raw 14-bit ADC stream — unsigned.
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
+            // AMax custom OpenDPP FW doesn't carry typed probe info on
+            // the wire; emit UNKNOWN.
+            analog_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 4],
         })
     }
 

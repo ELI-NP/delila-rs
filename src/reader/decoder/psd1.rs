@@ -687,6 +687,10 @@ impl Psd1Decoder {
             // PSD1 masks with `0x3FFF` so values land in `[0, 16383]` — unsigned.
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
+            // PSD1 wf-extras header doesn't carry probe-type info; emit
+            // UNKNOWN so the UI falls back to "A0/A1/D0..D3" generic labels.
+            analog_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 4],
         }
     }
 }

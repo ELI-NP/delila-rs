@@ -695,6 +695,11 @@ impl Pha1Decoder {
             // negative around baseline.
             analog_probe1_is_signed: true,
             analog_probe2_is_signed: true,
+            // PHA1 (DIG1) doesn't carry typed probe info on the wire — the
+            // probe identity comes from the host-side `vtrace_probe`
+            // setting, not from the event header. Emit UNKNOWN.
+            analog_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 4],
         }
     }
 }

@@ -105,8 +105,21 @@ pub mod flags {
     pub const FLAG_N_LOST_TRIGGER: u64 = 0x10;
 }
 
+/// Sentinel value for "probe type unknown / not parsed". FW that doesn't
+/// carry probe-type info on the wire (PSD1/PSD2/PHA1/AMax/V1743) emits
+/// this so the UI falls back to a generic "A0" / "D0" label rather than
+/// claiming a specific probe identity.
+pub const UNKNOWN_PROBE_TYPE: u8 = 0xFF;
+
+fn default_unknown_analog_probe_types() -> [u8; 2] {
+    [UNKNOWN_PROBE_TYPE; 2]
+}
+fn default_unknown_digital_probe_types() -> [u8; 4] {
+    [UNKNOWN_PROBE_TYPE; 4]
+}
+
 /// Waveform data from digitizer
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Waveform {
     /// Analog probe 1 samples
     pub analog_probe1: Vec<i16>,
@@ -138,6 +151,44 @@ pub struct Waveform {
     /// Same as `analog_probe1_is_signed` for the second analog probe.
     #[serde(default)]
     pub analog_probe2_is_signed: bool,
+    /// Probe-type identifier for analog probes 0 and 1 — PHA2 canonical
+    /// encoding (CAEN doxygen `legacy/PHA2_Parameters/a00108.html`):
+    /// 0=ADCInput, 1=TimeFilter, 2=EnergyFilter, 3=EnergyFilterBaseline,
+    /// 4=EnergyFilterMinusBaseline, 0xFF=`UNKNOWN_PROBE_TYPE` (FW that
+    /// doesn't carry probe-type info on the wire). The frontend maps
+    /// these to display labels like "A0: TimeFilter". Old `.delila`
+    /// files (pre-2026-05-05) without this field deserialize to all-
+    /// `UNKNOWN_PROBE_TYPE` via the custom default fn.
+    #[serde(default = "default_unknown_analog_probe_types")]
+    pub analog_probe_type: [u8; 2],
+    /// Probe-type identifier for digital probes 0..3 — PHA2 canonical
+    /// encoding: 0=Trigger, 1=TimeFilterArmed, 2=ReTriggerGuard,
+    /// 3=EnergyFilterBaselineFreeze, 4=EnergyFilterPeaking,
+    /// 5=EnergyFilterPeakReady, 6=EnergyFilterPileUpGuard, 7=EventPileUp,
+    /// 8=ADCSaturation, 9=ADCSaturationProtection, A=PostSaturationEvent,
+    /// B=EnergyFilterSaturation, C=SignalInhibit, 0xFF=`UNKNOWN_PROBE_TYPE`.
+    #[serde(default = "default_unknown_digital_probe_types")]
+    pub digital_probe_type: [u8; 4],
+}
+
+impl Default for Waveform {
+    fn default() -> Self {
+        Self {
+            analog_probe1: Vec::new(),
+            analog_probe2: Vec::new(),
+            digital_probe1: Vec::new(),
+            digital_probe2: Vec::new(),
+            digital_probe3: Vec::new(),
+            digital_probe4: Vec::new(),
+            time_resolution: 0,
+            trigger_threshold: 0,
+            ns_per_sample: 0.0,
+            analog_probe1_is_signed: false,
+            analog_probe2_is_signed: false,
+            analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
+        }
+    }
 }
 
 /// Event data with optional waveform
@@ -638,6 +689,8 @@ mod tests {
             ns_per_sample: 2.0,
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
+            analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
         };
 
         let event = EventData::with_waveform(1, 2, 1000, 800, 123456789.0, 0, wf);

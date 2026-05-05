@@ -85,6 +85,14 @@ mod constants {
     pub const ANALOG_PROBE1_INFO_SHIFT: u32 = 6;
     pub const ANALOG_PROBE_INFO_MASK: u64 = 0x3F; // 6 bits
     pub const ANALOG_PROBE_IS_SIGNED_BIT: u64 = 0x08; // bit 3 inside the 6-bit slot
+    pub const ANALOG_PROBE_TYPE_MASK: u64 = 0x07; // bits[2:0] of the 6-bit slot
+
+    // Digital probe info slots. Per doxygen: d.p. #N at bits[15+4N : 12+4N].
+    pub const DIGITAL_PROBE0_INFO_SHIFT: u32 = 12;
+    pub const DIGITAL_PROBE1_INFO_SHIFT: u32 = 16;
+    pub const DIGITAL_PROBE2_INFO_SHIFT: u32 = 20;
+    pub const DIGITAL_PROBE3_INFO_SHIFT: u32 = 24;
+    pub const DIGITAL_PROBE_INFO_MASK: u64 = 0x0F; // 4-bit type field
 
     // Waveform size word
     pub const WAVEFORM_WORDS_MASK: u64 = 0xFFF;
@@ -487,6 +495,21 @@ impl Pha2Decoder {
             & constants::ANALOG_PROBE_INFO_MASK;
         let ap0_is_signed = (ap0_info & constants::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
         let ap1_is_signed = (ap1_info & constants::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
+        // Probe-type identifiers (PHA2 canonical encoding — see Waveform
+        // doc-comment in src/reader/decoder/common.rs). The 4-bit digital
+        // probe slots and 3-bit analog probe slots are extracted here so
+        // the frontend can render the actual probe label ("A0: TimeFilter")
+        // instead of the generic "A0".
+        let ap0_type = (ap0_info & constants::ANALOG_PROBE_TYPE_MASK) as u8;
+        let ap1_type = (ap1_info & constants::ANALOG_PROBE_TYPE_MASK) as u8;
+        let dp0_type = ((wf_header >> constants::DIGITAL_PROBE0_INFO_SHIFT)
+            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
+        let dp1_type = ((wf_header >> constants::DIGITAL_PROBE1_INFO_SHIFT)
+            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
+        let dp2_type = ((wf_header >> constants::DIGITAL_PROBE2_INFO_SHIFT)
+            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
+        let dp3_type = ((wf_header >> constants::DIGITAL_PROBE3_INFO_SHIFT)
+            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
 
         let size_word = self.read_u64(data, *word_index);
         *word_index += 1;
@@ -575,6 +598,12 @@ impl Pha2Decoder {
             // with unsigned ADC-input probes.
             analog_probe1_is_signed: ap0_is_signed,
             analog_probe2_is_signed: ap1_is_signed,
+            // PHA2 carries probe-type info on the wire — propagate it
+            // verbatim so the UI can render labels like "A0: TimeFilter"
+            // and offline analysis (delila_to_root TBranches) gets per-
+            // event probe identity.
+            analog_probe_type: [ap0_type, ap1_type],
+            digital_probe_type: [dp0_type, dp1_type, dp2_type, dp3_type],
         })
     }
 
@@ -910,6 +939,55 @@ mod tests {
         assert_eq!(wf.analog_probe1[0], -1);
         // Unsigned AP1 = 0x3fff = 16383
         assert_eq!(wf.analog_probe2[0], 16383);
+        // Probe-type identifiers are also taken from the same wf-header
+        // slots — pin the canonical PHA2 encoding so a future refactor
+        // can't silently drop the type bits while keeping is_signed.
+        assert_eq!(
+            wf.analog_probe_type,
+            [1, 0],
+            "AP0 type=1 (TimeFilter), AP1 type=0 (ADCInput)",
+        );
+    }
+
+    #[test]
+    fn digital_probe_types_are_parsed_from_wf_header() {
+        // d.p. #N info at bits[15+4N : 12+4N], 4-bit type per probe.
+        // Build a header with d.p.#0=Trigger(0), #1=TimeFilterArmed(1),
+        // #2=ReTriggerGuard(2), #3=EnergyFilterBaselineFreeze(3) — the
+        // canonical default probe assignment so a typical run captures
+        // these values from the wire and surfaces them through the
+        // Waveform.digital_probe_type array. Keeping this pinned protects
+        // the frontend's "D0: Trigger" label rendering.
+        let dp0: u64 = 0;
+        let dp1: u64 = 1;
+        let dp2: u64 = 2;
+        let dp3: u64 = 3;
+        let wf_hdr: u64 = (1u64 << 63)
+            | (dp3 << constants::DIGITAL_PROBE3_INFO_SHIFT)
+            | (dp2 << constants::DIGITAL_PROBE2_INFO_SHIFT)
+            | (dp1 << constants::DIGITAL_PROBE1_INFO_SHIFT)
+            | (dp0 << constants::DIGITAL_PROBE0_INFO_SHIFT);
+        let wf_size: u64 = 1;
+        let sample: u64 = 0;
+
+        let total_words: u64 = 6;
+        let agg_header = (0x2u64 << 60) | total_words;
+        let ev1_w1 = 0u64;
+        let ev1_w2 = 1u64 << constants::WAVEFORM_FLAG_SHIFT;
+
+        let bytes = pack_be(&[agg_header, ev1_w1, ev1_w2, wf_hdr, wf_size, sample]);
+        let mut dec = Pha2Decoder::with_defaults();
+        let raw = RawData {
+            size: bytes.len(),
+            data: bytes,
+            n_events: 1,
+        };
+        let mut events = Vec::new();
+        dec.decode_into(&raw, &mut events);
+
+        assert_eq!(events.len(), 1);
+        let wf = events[0].waveform.as_ref().expect("waveform missing");
+        assert_eq!(wf.digital_probe_type, [0, 1, 2, 3]);
     }
 
     #[test]

@@ -423,6 +423,8 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
             // AMax raw ADC stream — unsigned 14-bit.
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
+            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 4],
         }
     });
 
@@ -1274,6 +1276,8 @@ impl Reader {
                     ns_per_sample: wf.ns_per_sample,
                     analog_probe1_is_signed: wf.analog_probe1_is_signed,
                     analog_probe2_is_signed: wf.analog_probe2_is_signed,
+                    analog_probe_type: wf.analog_probe_type,
+                    digital_probe_type: wf.digital_probe_type,
                 },
             )
         } else {
@@ -2846,6 +2850,13 @@ impl Reader {
                         time_resolution: 0,
                         trigger_threshold: 0,
                         ns_per_sample: params.ns_per_sample,
+                        // V1743 Standard mode samples are unsigned 12-bit
+                        // ADC values masked into 14-bit range; no probe-
+                        // type info on the wire.
+                        analog_probe1_is_signed: false,
+                        analog_probe2_is_signed: false,
+                        analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
+                        digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 4],
                     })
                 } else {
                     None
@@ -3544,6 +3555,8 @@ mod tests {
             ns_per_sample: 2.0,
             analog_probe1_is_signed: true,
             analog_probe2_is_signed: true,
+            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 4],
         };
 
         let event = EventData {

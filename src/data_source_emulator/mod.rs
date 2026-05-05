@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::common::{
     flags, handle_command, run_command_task, CommandHandlerExt, ComponentSharedState,
     ComponentState, EmulatorRuntimeConfig, EventData, EventDataBatch, Message, Waveform,
+    UNKNOWN_PROBE_TYPE,
 };
 
 /// Waveform probe bit masks
@@ -462,6 +463,8 @@ impl Emulator {
             ns_per_sample: 2.0,
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
+            analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
         }
     }
 
