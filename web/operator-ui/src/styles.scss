@@ -1,4 +1,8 @@
 @use '@angular/material' as mat;
+// CDK overlay positioning + backdrop CSS. Material 3's mat.core() no
+// longer pulls this in transitively; without it `flexibleConnectedTo`
+// pop-ups collapse to the top-left of the viewport.
+@import '@angular/cdk/overlay-prebuilt.css';
 
 // Include core styles
 @include mat.core();

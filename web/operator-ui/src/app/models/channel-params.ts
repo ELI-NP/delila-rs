@@ -169,7 +169,7 @@ const PHA1_ENERGY_PARAMS: ChannelParamDef[] = [
 // --- Coincidence -------------------------------------------------------------
 
 const PSD2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
-  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'enum', options: [], setInRun: true },
+  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'ch-mask', bitWidth: 32, encoding: 'hex-string', setInRun: true },
   { key: 'coincidence_mask', label: 'Coincidence Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
   { key: 'anti_coincidence_mask', label: 'Anti-coinc Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
   { key: 'coincidence_window_ns', label: 'Coinc Window', type: 'number', unit: 'ns', min: 0, max: 524280, step: 8, setInRun: true },
@@ -180,7 +180,7 @@ const PSD2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
 
 const PSD1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
-  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, step: 1, setInRun: true },
+  { key: 'coinc_mask', label: 'Coinc Mask', type: 'ch-mask', bitWidth: 4, encoding: 'number', setInRun: true },
   { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
   { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, step: 1, setInRun: true },
   { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -193,7 +193,7 @@ const PSD1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
 
 // PHA2 coincidence is identical to PSD2 in path/values; bound from DevTree.
 const PHA2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
-  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'enum', options: [], setInRun: true },
+  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'ch-mask', bitWidth: 32, encoding: 'hex-string', setInRun: true },
   { key: 'coincidence_mask', label: 'Coincidence Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
   { key: 'anti_coincidence_mask', label: 'Anti-coinc Mask', type: 'enum', options: ['Disabled', 'Ch64Trigger', 'TRGIN', 'GlobalTriggerSource', 'ITLA', 'ITLB'], setInRun: true },
   { key: 'coincidence_window_ns', label: 'Coinc Window', type: 'number', unit: 'ns', min: 0, max: 524280, step: 8, setInRun: true },
@@ -204,7 +204,7 @@ const PHA2_COINCIDENCE_PARAMS: ChannelParamDef[] = [
 
 const PHA1_COINCIDENCE_PARAMS: ChannelParamDef[] = [
   { key: 'coincidence_mode', label: 'Coincidence Mode', type: 'enum', options: ['TRIGGER_MODE_NORMAL', 'TRIGGER_MODE_COINC', 'TRIGGER_MODE_ANTICOINC'], setInRun: true },
-  { key: 'coinc_mask', label: 'Coinc Mask', type: 'number', min: 0, max: 15, step: 1, setInRun: true },
+  { key: 'coinc_mask', label: 'Coinc Mask', type: 'ch-mask', bitWidth: 4, encoding: 'number', setInRun: true },
   { key: 'coinc_operation', label: 'Coinc Operation', type: 'enum', options: ['COINC_OPERATION_OR', 'COINC_OPERATION_AND', 'COINC_OPERATION_MAJ'], setInRun: true },
   { key: 'coinc_majority_level', label: 'Majority Level', type: 'number', min: 0, max: 7, step: 1, setInRun: true },
   { key: 'coinc_trgext', label: 'Coinc TrgExt', type: 'enum', options: ['FALSE', 'TRUE'], setInRun: true },
@@ -257,6 +257,14 @@ import {
   AMAX_WAVEFORM_PARAMS,
 } from './amax-generated';
 
+// AMax shares PSD2's per-channel `channelstriggermask` DevTree path
+// (see `FirmwareType::PSD2 | FirmwareType::AMax` branch in
+// src/config/digitizer.rs). The codegen output omits coincidence params,
+// so add the single relevant entry by hand here.
+const AMAX_COINCIDENCE_PARAMS: ChannelParamDef[] = [
+  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'ch-mask', bitWidth: 32, encoding: 'hex-string', setInRun: true },
+];
+
 // --- Category lookup ---------------------------------------------------------
 
 export type ChannelCategory = 'input' | 'trigger' | 'energy' | 'coincidence' | 'waveform';
@@ -301,13 +309,14 @@ const CATEGORY_PARAMS: Record<FirmwareType, Record<ChannelCategory, ChannelParam
     coincidence: [],
     waveform: [],
   },
-  // AMax custom MCA+AMax FW: no coincidence section. Energy tab packs trap +
-  // AMax HLS + baseline; Waveform tab carries pre-trigger + selector.
+  // AMax custom MCA+AMax FW: shares PSD2's per-channel trigger mask. Energy
+  // tab packs trap + AMax HLS + baseline; Waveform tab carries pre-trigger
+  // + selector.
   AMax: {
     input: AMAX_INPUT_PARAMS,
     trigger: AMAX_TRIGGER_PARAMS,
     energy: AMAX_ENERGY_PARAMS,
-    coincidence: [],
+    coincidence: AMAX_COINCIDENCE_PARAMS,
     waveform: AMAX_WAVEFORM_PARAMS,
   },
 };

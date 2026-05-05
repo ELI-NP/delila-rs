@@ -6,6 +6,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ChMaskEditorComponent } from '../ch-mask-editor/ch-mask-editor.component';
 
 /**
  * Definition of a channel parameter (one row in the table)
@@ -16,7 +17,7 @@ export interface ChannelParamDef {
   /** Display label (e.g., 'Threshold') */
   label: string;
   /** Input type */
-  type: 'number' | 'enum' | 'boolean';
+  type: 'number' | 'enum' | 'boolean' | 'ch-mask';
   /** Options for enum type (e.g., ['Positive', 'Negative']) */
   options?: string[];
   /** Unit label (e.g., 'ns', '%', 'ADC') */
@@ -31,6 +32,11 @@ export interface ChannelParamDef {
   setInRun?: boolean;
   /** Optional hover tooltip (e.g. FW register address for AMax). */
   tooltip?: string;
+  /** Width of the bit mask (only meaningful when type === 'ch-mask'). */
+  bitWidth?: number;
+  /** Wire-format encoding for ch-mask values: hex string (PSD2/PHA2/AMax)
+   *  or plain number (PSD1/PHA1). */
+  encoding?: 'hex-string' | 'number';
 }
 
 /**
@@ -72,7 +78,7 @@ export interface ChannelValueChange {
 @Component({
   selector: 'app-channel-table',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ChMaskEditorComponent],
   template: `
     <div class="channel-table-wrapper">
       <table class="channel-table">
@@ -136,6 +142,16 @@ export interface ChannelValueChange {
                       <option value="False">OFF</option>
                     </select>
                   }
+                  @case ('ch-mask') {
+                    <app-ch-mask-editor
+                      [value]="$any(getDefault(param.key))"
+                      [bitWidth]="param.bitWidth ?? 32"
+                      [encoding]="param.encoding ?? 'hex-string'"
+                      [chCount]="numChannels()"
+                      [disabled]="isDisabled(param.key)"
+                      (valueChange)="defaultChange.emit({ key: param.key, value: $event })"
+                    />
+                  }
                 }
               </td>
               @for (ch of channelIndices(); track ch) {
@@ -180,6 +196,17 @@ export interface ChannelValueChange {
                         <option value="True">ON</option>
                         <option value="False">OFF</option>
                       </select>
+                    }
+                    @case ('ch-mask') {
+                      <app-ch-mask-editor
+                        [value]="$any(getChannel(ch, param.key))"
+                        [bitWidth]="param.bitWidth ?? 32"
+                        [encoding]="param.encoding ?? 'hex-string'"
+                        [chCount]="numChannels()"
+                        [selfBit]="ch"
+                        [disabled]="isDisabled(param.key)"
+                        (valueChange)="channelChange.emit({ channel: ch, key: param.key, value: $event })"
+                      />
                     }
                   }
                 </td>
