@@ -1,6 +1,6 @@
 # TODO 51: PHA2 (DPP-PHA on x2730) firmware integration
 
-**Status:** Phase 1 + Phase 2 + Phase 3 部分 ✅ COMPLETED (2026-05-04). Phase 3 残 (校正源 + 設定ループバック + ROOT) / Phase 4 (UI) 着手待ち
+**Status:** Phase 1〜5 ほぼ完了 (2026-05-05)。Phase 4 surface (UI) ✅ 完了 (`b258ab0`), Phase 5 docs ✅ 完了 (`6ba6cea`)。残: 校正源テスト (ハード待ち) + Phase 4.5 probe_type cross-cutting 拡張 (設計合意済、実装未着手)
 **Created:** 2026-05-04
 **Hardware:** VX2730 SN:52622 @ 172.18.4.56, FwType=`DPP_PHA`, FPGA FW 1.0.88, 32 ch, 500 MS/s, 14-bit
 **DevTree (live):** [docs/devtree_examples/vx2730_pha2_sn52622.json](../docs/devtree_examples/vx2730_pha2_sn52622.json)
@@ -343,17 +343,61 @@ Phase 3 完了 (✅ 2026-05-04 後半):
 Phase 3 残作業 (ハード準備待ち):
 - [ ] 校正源 (60Co/137Cs) でフォトピーク確認(物理パルサーは確認済み)
 
-Phase 4 着手待ち:
-- [ ] Operator UI で source type=PHA2 を選んだ時に trap-filter param 群が表示される
-- [ ] Tune Up モードで PHA2 の Apply が通る
-- [ ] `EventData` に `analog_probe_type: [u8; 2], digital_probe_type: [u8; 4]` 拡張 (cross-cutting change)
-- [ ] PHA2 waveform extras header の probe-type 情報を decoder で読み取り `EventData` に伝搬
-- [ ] `analog_probe_is_signed` を probe type ベースで自動設定 (EnergyFilter / TimeFilter / EnergyFilterBaseline / EnergyFilterMinusBaseline = signed)
+Phase 4 完了 (✅ 2026-05-04, commits `b258ab0` `d980d79` `7ed3285`):
+- [x] Operator UI で source type=PHA2 を選んだ時に trap-filter param 群が表示される (`b258ab0`)
+- [x] Tune Up モードで PHA2 の Apply が通る (FW-agnostic、`b258ab0` で同時に検証済)
+- [x] PHA2 waveform extras header の `is_signed` ビットを decoder で読み取り `Waveform.analog_probe[12]_is_signed` に伝搬 (`7ed3285`)
+- [x] `analog_probe_is_signed` を wf-extras header bit3 から自動設定 (TimeFilter / EnergyFilter / EnergyFilterMinusBaseline で signed=true) (`7ed3285`)
+- [x] Channel-table clamp 表示 (yellow flash + re-emit、隠さない設計) (`d980d79`)
 
-Phase 5 着手待ち:
-- [ ] `/test-daq` PASS
-- [ ] `docs/digitizer_system_spec.md` / `docs/compass_devtree_mapping.md` に PHA2 列追加
-- [ ] CURRENT.md 更新 (PHA2 を最近完了に移動)
+Phase 4.5 — probe_type cross-cutting 拡張 (設計合意済、follow-up):
+- [ ] `EventData.Waveform` に `analog_probe_type: [u8; 2], digital_probe_type: [u8; 4]` 追加 (`#[serde(default)]` で BC、`user_info` 前例踏襲)
+- [ ] PHA2 wf-extras header bits[2:0] / bits[8:6] (analog) + 4-bit digital probe type を decoder でパース
+- [ ] 他 FW (PSD1/PSD2/PHA1/AMax/V1743) は当面 `0xFF`=Unknown を出す
+- [ ] `delila_to_root` に `AnalogProbeType0/1, DigitalProbeType0..3` の TBranch 追加
+- [ ] Frontend `waveform.component.ts` の "A0/A1/D0..D3" hardcoded label を probe_type ベースで動的化 ("A0: TimeFilter" 等)
+- 設計: u8 + PHA2 spec を canonical (analog: 0=ADCInput, 1=TimeFilter, 2=EnergyFilter, 3=EnergyFilterBaseline, 4=EnergyFilterMinusBaseline, 0xFF=Unknown)
+- A1 decoder + Waveform fields → A2 ROOT branches → A3 Frontend model の 3 commit に分割
+
+Phase 5 完了 (✅ 2026-05-04, commit `6ba6cea`):
+- [x] `docs/digitizer_system_spec.md` / `docs/compass_devtree_mapping.md` に PHA2 列追加
+- [x] supported-digitizers ドキュメント + ベンチマーク結果 close-out
+
+Phase 5 残:
+- [ ] `/test-daq` PASS (校正源テスト後の最終確認に組み込む)
+
+## 5/4 後半の bug fixes と 5/5 の re-hardening
+
+5/4 後半に「Phase 3 で書いた decoder 修正そのものが回帰だった」事案 + 設定検証の silent 経路 + UI が clamp を隠す設計、の 3 つの根の深い問題が連続発覚。本日 (5/5) の作業はこれらの再発防止に注力した。
+
+### 5/4 後半に判明したバグ (4 件)
+- `e641e99` PHA2 decoder の「mid-loop wf-header truncation 検出」 が legitimate sample (DP4 + AP2 baseline) を hit して全イベントの波形後半を drop していた。`pha2_simple_test` (CAEN-only 最小クライアント) で wf_size=2048 / event-spacing=2052 を直接検証して FW truncation が幻だと確定 → revert
+- `e45e0ec` `param_cache` が case-sensitive で DevTree=lowercase / emit=CamelCase の毎回 cache miss → unvalidated `set_value` 経路に fallthrough → silent clamp bypass
+- `d980d79` channel-table clamp 表示を「隠す」設計を「黄色 flash + re-emit」に
+- `7ed3285` PHA2 wf-extras header の per-probe `is_signed` bit を hardcode `false` のまま放置 → Time-filter probe の +8191 オフセット欠落で wrap
+
+### 5/5 re-hardening (本ファイル commit 群):
+- **D**: `pha2_56.json` の未コミット ad-hoc を revert + signed-probe 検証用は `pha2_56_signed_probe_test.json` に分離
+- **E1** ([handle.rs](../src/reader/caen/handle.rs)): `apply_params_validated` の cache-miss 経路 (旧 `debug!` + `result.ok += 1`) を `info!` + 新 `ParamApplyStatus::NoCache` + 新カウンタ `result.no_cache` + サマリログ + 詳細リスト出力に変更。新規 unit test 2 本 (`unknown_param_name_misses_cache`, `apply_config_result_round_trips_no_cache_status`)。前者は cache 引きの contract、後者は新フィールドの serde BC を pin
+- **E2** ([caen_simple_test.rs](../src/bin/caen_simple_test.rs)): `pha2_simple_test` を `caen_simple_test --firmware {pha2,psd2,pha1}` に汎用化。PHA2/PSD2 は FELib path 互換、PHA1 (DIG1) は早期 bail で stub 化
+- **E3** ([decoder/mod.rs](../src/reader/decoder/mod.rs) + [CLAUDE.md](../CLAUDE.md)): decoder hot-path heuristic 禁止 policy を明文化。spec page reference 必須 + `caen_simple_test` 検証必須
+
+### 手動検証 — channel-table clamp 表示 (`d980d79` の retention)
+
+Cypress 自動化は follow-up。以下の手動手順を残す:
+1. `cd web/operator-ui && ng serve` → Settings tab → PHA2 channel
+2. record_length_ns に DevTree max を超える値 (e.g. 17000) を入力 → blur
+3. 期待: 黄色フラッシュ + 値が DevTree max (16200) にスナップ + reflect immediately
+4. 期待しない: 値が見かけ反映されたまま FW では prev value 維持 (5/4 以前のバグ)
+5. Backend log を確認: `Validated configuration applied total=N adjusted=1 ... no_cache=0` が出ること (E1 の新サマリ列)
+
+### Follow-up TODOs (本日 out-of-scope)
+
+- Phase 4.5 probe_type cross-cutting 拡張 (上述、3 commit 想定)
+- `caen_simple_test --firmware pha1` の DIG1 namespace 実装 (PSD1/PHA1 decoder bug 調査時に着手)
+- AMax 用 simple-test (OpenDPP endpoint, 別 binary 検討)
+- Cypress による channel-table clamp e2e
+- Grafana cache-miss metric 連携 (`no_cache` counter を panel に出す)
 
 ## Gemini Pro 協議メモ (2026-05-04)
 
