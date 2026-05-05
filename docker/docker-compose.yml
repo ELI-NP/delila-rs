@@ -1,6 +1,10 @@
 services:
   mongo:
-    image: mongo:7
+    # Pinned to digest to survive image churn during boot retries on
+    # power-loss recovery (see incident 2026-05-05). Bump by hand alongside
+    # `mongo:7` upstream releases — `docker pull mongo:7 && docker inspect
+    # mongo:7 --format '{{.RepoDigests}}'` gives the new digest.
+    image: mongo@sha256:6159d784bc2ed3e6e97648bb28d93d43cf9660401c1230f4f340d14d68421119  # mongo:7
     container_name: delila_mongo
     restart: unless-stopped
     environment:
@@ -34,9 +38,23 @@ services:
         condition: service_healthy
 
   influxdb:
-    image: quay.io/influxdb/influxdb3-core:latest
+    # Pinned to a specific digest (was `:latest`). Two reasons:
+    # 1. Boot-storm protection — if the host comes back from a power cut and
+    #    the docker daemon happens to pull a *new* `:latest` build between
+    #    crash-loop retries, the data dir's catalog can find itself in an
+    #    incompatible binary. Pinning eliminates that class of incident.
+    # 2. Reproducibility — the digest is what we tested against. Bump with
+    #    intent: `docker pull quay.io/influxdb/influxdb3-core:latest &&
+    #    docker inspect quay.io/influxdb/influxdb3-core:latest --format
+    #    '{{.RepoDigests}}'`.
+    image: quay.io/influxdb/influxdb3-core@sha256:95e8b3f7ef31d3876e987a8e1e9fd2110dd25217c18fae494d181f82591ff7bd  # influxdb3-core:latest as of 2026-05-05
     container_name: delila_influxdb
-    restart: unless-stopped
+    # `on-failure:5` (was `unless-stopped`) so a crash loop hits the docker
+    # daemon's max-attempts cap and surfaces as a *visibly stopped* container
+    # instead of pinning a CPU and silently dropping every metric for hours.
+    # If we hit the limit, the operator sees `Restarting … (5/5)` then
+    # `Exited`, which is unmistakable.
+    restart: on-failure:5
     user: "${DAO_UID:-1000}:${DAO_GID:-1000}"
     stop_grace_period: 30s
     ulimits:
@@ -48,6 +66,23 @@ services:
     volumes:
       - ./data/influxdb:/var/lib/influxdb3
       - ./data/influxdb-plugins:/plugins
+    # Pre-clean step before exec'ing the daemon: delete any 0-byte WAL files
+    # left over from an unclean shutdown. InfluxDB v3 Core's WAL replay
+    # *skips* these files (logs `WARN Skipping corrupt WAL file`) but the
+    # *write path* re-uses the same numeric filenames, hitting EEXIST and
+    # invoking graceful shutdown (exit 0). Combined with `restart`, the
+    # container then loops forever. We saw this at 2026-05-05 after a
+    # power cut on daq@172.18.4.76 — 22 zero-byte WALs (1580283..1580304)
+    # blocked startup. The `find … -delete` is data-loss-free: those bytes
+    # never made it to disk, the replayer already declared them "skip".
+    # Upstream bug class: WAL skip path and write path don't share state.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        find /var/lib/influxdb3 -size 0 -name '*.wal' -print -delete 2>/dev/null
+        exec influxdb3 "$@"
+      - --
     command: ["serve", "--node-id", "delila", "--object-store", "file", "--data-dir", "/var/lib/influxdb3", "--without-auth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8181/health"]
@@ -67,7 +102,8 @@ services:
       - ./data/elog:/usr/local/elog/logbooks
 
   grafana:
-    image: grafana/grafana:latest
+    # Pinned to digest, same reasoning as InfluxDB above.
+    image: grafana/grafana@sha256:83749231c3835e390a3144e5e940203e42b9589761f20ef3169c716e734ad505  # grafana/grafana:latest as of 2026-05-05
     container_name: delila_grafana
     restart: unless-stopped
     user: "${DAO_UID:-1000}:${DAO_GID:-1000}"
