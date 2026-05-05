@@ -1,0 +1,49 @@
+# DELILA DAQ Configuration - PHA2 signed-probe verification (Phase 4.5)
+# Hardware: VX2730 (Serial: 52622, DPP_PHA, 32ch, Ethernet, 172.18.4.56)
+#
+# Purpose: exercise the per-probe `is_signed` plumbing (commit 7ed3285)
+# *and* the probe-type dynamic-label work (Phase 4.5, commits 783c77e
+# / b7484b4) end-to-end:
+#   - analog_probe_1 = TimeFilter (signed) → frontend shows "A1: TimeFilter"
+#                                              instead of generic "A1"
+#   - digital_probe_1..3 = TimeFilterArmed / ReTriggerGuard /
+#       EnergyFilterPileupGuard → "D1: TimeFilterArmed" etc.
+#   - ch0 override polarity=Positive, dc_offset=10% for a physical pulser
+#   - record_length=16000 ns (longer than the base config) so the
+#     trapezoid shape is visible
+#
+# See TODO/51_pha2_integration.md and pha2_56_signed_probe_test.json.
+# Usage: ./scripts/start_daq.sh config/config_pha2_56_signed_probe_test.toml
+
+[operator]
+experiment_name = "PHA2_SignedProbeTest"
+port = 9090
+
+[network]
+[[network.sources]]
+id = 0
+name = "pha2-real"
+type = "pha2"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+digitizer_url = "dig2://172.18.4.56"
+config_file = "config/digitizers/pha2_56_signed_probe_test.json"
+pipeline_order = 1
+
+[network.merger]
+subscribe = ["tcp://localhost:5555"]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
