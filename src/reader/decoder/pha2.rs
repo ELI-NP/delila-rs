@@ -870,8 +870,12 @@ mod tests {
         // → analog_probe1_is_signed must be true, analog_probe2_is_signed must be false.
         // → with samples that are `0x3fff` (= -1 if signed, +16383 if unsigned),
         //   the decoded buffer should hold -1 in analog_probe1 and +16383 in analog_probe2.
-        let ap0_info: u64 = 0b001_1_00; // type=1 (TimeFilter), is_signed=1, factor=×1
-        let ap1_info: u64 = 0b000_0_00; // type=0 (ADCInput),  is_signed=0, factor=×1
+        // Manually encode the 6-bit slots (factor[5:4] | is_signed[3] | type[2:0])
+        // with field-aligned readability (groups intentionally non-equal).
+        #[allow(clippy::unusual_byte_groupings)]
+        let ap0_info: u64 = 0b00_1_001; // factor=×1, is_signed=1, type=1 (TimeFilter)
+        #[allow(clippy::unusual_byte_groupings)]
+        let ap1_info: u64 = 0b00_0_000; // factor=×1, is_signed=0, type=0 (ADCInput)
         let wf_hdr: u64 = (1u64 << 63) | (ap1_info << 6) | ap0_info;
         let wf_size: u64 = 1; // 1 word = 2 samples
         // sample-word: lower 32-bit = ap0=0x3fff, ap1=0x3fff (with all DPs cleared)
@@ -933,7 +937,7 @@ mod tests {
         //               (mimics a real "DP4 fluke" sample)
         let total_words: u64 = 9;
         let agg_header = (0x2u64 << 60) | total_words;
-        let ev1_w1 = (0u64 << 56) | 10;
+        let ev1_w1: u64 = 10; // ch=0 in bits[62:55], ts=10 in bits[47:0]
         let ev1_w2 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | (1u64 << 63);
         let wf_hdr_const: u64 = 1u64 << 63; // check1=1, check2=0
         let wf_size_4: u64 = 4;

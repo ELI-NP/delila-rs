@@ -39,6 +39,9 @@ Rust 2021 + tokio + tmq (ZMQ) + serde/rmp-serde (MessagePack) + axum (REST) + An
 - `unsafe` は CAEN FFI wrapper layer のみ
 - `Result<T, E>` + `?` で伝播。`.unwrap()` 禁止（production）
 - `cargo fmt && cargo clippy -- -D warnings && cargo test` をコミット前に通す
+  - **`--tests` を含めて clippy 通すこと**（テストコードでも `-D warnings` 維持）
+- **Decoder hot-path で pattern-matching ヒューリスティック禁止**: spec page reference 必須 + `caen_simple_test` で実機検証必須。詳細は `src/reader/decoder/mod.rs` の "Hot-path heuristic policy" を参照（2026-05-04 PHA2 truncation 誤判定事案、commit `e641e99`）
+- **Silent failure を作らない**: cache miss / 範囲外値 / FW 拒否は必ず `info!` 以上で可視化。debug! のまま埋めると数ヶ月後に発見される（2026-05-04 case-insensitive cache 事案、commit `e45e0ec`）
 
 ## Frontend Deployment Policy
 - **`web/operator-ui/dist/` はリポジトリにコミット済み**。ユーザーは Rust のみでデプロイ可能、Node.js 不要
