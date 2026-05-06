@@ -11,7 +11,7 @@
 | Phase | 状態 | 主な成果 |
 |---|---|---|
 | **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
-| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR landed (`649980f` `a5b5398` `37d252a`)、 family net -1531 行 (3710→2179)。 **R-D7 (PSD2/PHA2 generic)** = 3 PR landed (`23274d4` `14ee5cd` `53696b5`)、 psd2.rs 1316→196 (-85%)、 pha2.rs 1086→392 (-64%)、 +dualchannel_common 1134 行、 family net -680 行 (2402→1722)。 **decoder family 累計 -2211 行**。 560 tests pass、 PHA2 critical regressions (DP4 truncation + probe metadata + start signal real bytes) 全保持。 残 Phase 2: R-D1/D2/C1/C2/P3/P4/P5/X1 |
+| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR (`649980f` `a5b5398` `37d252a`)、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR (`23274d4` `14ee5cd` `53696b5`)、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs 4000→3112 (-22%)、 +read_loop_dig1.rs 463 / read_loop_dig2.rs 470 行。 **decoder family 累計 -2211 行 + reader/mod.rs -888 行**。 560 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-C1/C2 (config tables) / R-P3/P4/P5 / R-X1 |
 | **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
@@ -106,8 +106,14 @@ R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議
   - **PR2** (`14ee5cd`): `Psd2Decoder = Dig2Decoder<Psd2Variant>` 型エイリアス化。 psd2.rs 1316 → 196 行 (-85%)。 PSD2 固有のみ retain: `decode_energy_short` (bits[41:26] charge_short) + `parse_waveform_metadata` 既定値 (unsigned + UNKNOWN) + 7 PSD2 tests
   - **PR3** (`53696b5`): `Pha2Decoder = Dig2Decoder<Pha2Variant>` 型エイリアス化。 pha2.rs 1086 → 392 行 (-64%)。 PHA2 固有のみ retain: `decode_energy_short = 0` + `parse_waveform_metadata` で wf-header 低 16 bits 解析 (analog/digital probe-type + is_signed flag) + 10 PHA2 tests。 **critical regressions 全保持**: `dp4_set_in_sample_does_not_truncate_waveform` (2026-05-04 e641e99 truncation 事案) + `analog_probe_is_signed_flag_is_parsed_from_wf_header` (7ed3285 hardcoded-false 事案) + `classify_start_signal_real_bytes` (172.18.4.56 captured bytes)
   - **Total**: family LoC 2402 → 1722 (-680、 -28%)、 公開 API 不変、 560 tests pass、 clippy clean。 R-D6 と合算で **decoder family 累計 -2211 行**
-- [ ] **R-D1**: `read_loop_raw` (1369–1812) → `src/reader/read_loop_dig1.rs`
-- [ ] **R-D2**: `read_loop_opendpp` (1812–2261) → `src/reader/read_loop_dig2.rs`
+- [x] **R-D1**: `read_loop_raw` → `src/reader/read_loop_dig1.rs` (`1059709`、 2026-05-06)
+  - Pure mechanical move: `Reader::read_loop_raw` (associated fn、 no `&self`) → `read_loop_dig1::run` 自由関数。 関数本体バイト同一
+  - 463 行新ファイル、 PSD1/PSD2/PHA1/PHA2 (RAW endpoint) 全部の DIG1/DIG2 read loop を担当
+  - 共有 helper を `pub(crate)` にバンプ: `DeviceConnection` (struct + 9 fields) / `try_connect_raw` / `try_connect_opendpp` / `Dig2PollState` / `poll_dig2_counters` / `send_arm_command` / `send_start_command` / `get_enabled_channels_from_config` / `opendpp_to_event_data` / `ReadLoopOutput` / `ReadLoopRequest`
+- [x] **R-D2**: `read_loop_opendpp` → `src/reader/read_loop_dig2.rs` (`1059709`、 2026-05-06、 R-D1 と同 PR)
+  - 同パターンで `read_loop_dig2::run` 自由関数化、 470 行
+  - AMax / DPP_OPEN firmware 用
+  - **総合**: reader/mod.rs 4000 → 3112 行 (-888、 -22%)。 Phase 2 目標 (~2000 行) には R-D3 (X743 read_loop、 Phase 3 へ delay) + R-D5 (connection extract、 Phase 3) で到達予定
 - [ ] **R-C1**: `add_channel_params` 366 行を `HashMap<FirmwareType, &[(ConfigField, &str)]>` 駆動 1 loop に
 - [ ] **R-C2**: `merge_field!` 38 fields を `#[derive(Merge)]` proc macro に
 - [ ] **R-P3**: Operator `AppState` RwLock 12 fields → DashMap or RCU read cache
