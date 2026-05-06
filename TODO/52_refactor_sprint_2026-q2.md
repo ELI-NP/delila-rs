@@ -1,6 +1,6 @@
 # TODO 52: Refactor Sprint 2026-Q2 (post-PHA2 cleanup, pre-7/24 experiment)
 
-**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6/D7/D1/D2/C1/C2/X1 完了 2026-05-06)**
+**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6/D7/D1/D2/C1/C2/X1/P5 完了 2026-05-06)**
 **Created:** 2026-05-05 (revised 2026-05-05 evening: 一枚岩撤回 → component system 維持)
 **Window:** 2026-05-12 〜 2026-07-03 (8 週間 active refactor) + 2026-07-03 〜 2026-07-24 (3 週間 stabilize)
 **Source of truth:** [clean_architecture_evaluation.md](../clean_architecture_evaluation.md)
@@ -11,7 +11,7 @@
 | Phase | 状態 | 主な成果 |
 |---|---|---|
 | **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
-| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 + R-C2 + R-X1 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **R-C2 (MergeOverride derive)** = 1 PR (`a7bb0d2`)、 新 workspace crate `delila-derive` で `#[derive(MergeOverride)]` proc macro 実装、 `ChannelConfig::get_channel_config` を ~100 行の `merge_field!` 列挙から `merge_from(ov)` 1 行へ、 digitizer.rs -103 行、 副次に silent override drop バグ 3 件 (`amax`/`trigger_edge`/`trigger_threshold_v`) を構造的に fix。 **R-X1 (production unwrap audit)** = 1 PR (`007b23f`)、 35 件 production unwrap を 26 件まで削減 (Mutex 22 + doc-comment 4 のみ残存)、 Production `Result::unwrap()` 0 件達成、 9 件中 2 件は `read_error_since` の Option パターンを `get_or_insert_with` で構造解消。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -554 行**。 574 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-P3/P4/P5 |
+| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 + R-C2 + R-X1 + R-P5 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **R-C2 (MergeOverride derive)** = 1 PR (`a7bb0d2`)、 新 workspace crate `delila-derive` で `#[derive(MergeOverride)]` proc macro 実装、 `ChannelConfig::get_channel_config` を ~100 行の `merge_field!` 列挙から `merge_from(ov)` 1 行へ、 digitizer.rs -103 行、 副次に silent override drop バグ 3 件 (`amax`/`trigger_edge`/`trigger_threshold_v`) を構造的に fix。 **R-X1 (production unwrap audit)** = 1 PR (`007b23f`)、 35 件 production unwrap を 26 件まで削減 (Mutex 22 + doc-comment 4 のみ残存)、 Production `Result::unwrap()` 0 件達成、 9 件中 2 件は `read_error_since` の Option パターンを `get_or_insert_with` で構造解消。 **R-P5 (digitizer route helpers)** = 1 PR (`43c3960`)、 6 helper (`mongodb_unavailable`/`require_digitizer_repo`/`require_digitizer_config`/`reject_path_id_mismatch`/`resolve_config_path`/`write_digitizer_config`) で digitizer.rs 7 ハンドラ + run.rs 1 ハンドラの重複を統合、 digitizer.rs 983→953 (-30、 ただし handler bodies は -140、 helpers が +110 doc 付き)、 run.rs -8。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -554 行 + operator/routes -38 行**。 574 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-P3/P4 |
 | **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
@@ -130,7 +130,12 @@ R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議
   - **結果**: 572 → 574 tests pass (+2)、 clippy clean、 `cargo build --release` (default) + `--features dev-tools,root` 両方緑、 公開 API 不変
 - [ ] **R-P3**: Operator `AppState` RwLock 12 fields → DashMap or RCU read cache
 - [ ] **R-P4**: digitizer/event-builder/emulator settings の base panel 抽出
-- [ ] **R-P5**: `digitizer.rs` (983 行) の 14 CRUD handler を generic factory 化
+- [x] **R-P5**: digitizer route handler の重複削減 (`43c3960`、 2026-05-06)
+  - `src/operator/routes/digitizer.rs` 冒頭に 6 helper を抽出: `mongodb_unavailable()` / `require_digitizer_repo()` (`pub(super)`) / `require_digitizer_config()` / `reject_path_id_mismatch()` / `resolve_config_path()` / `write_digitizer_config()`
+  - **migration の effort バランス**: 当初 plan の "generic factory `crud_get<T>/crud_update<T>/crud_save<T>`" は採用せず。 各ハンドラは axum の State/Path/Json 抽出 + 個別 OpenAPI annotation + 個別レスポンス message が固有のため、 generic 化のための型引数 + closure 渡しがむしろ可読性を下げる。 代わりに **「単機能 helper の合成で各ハンドラを書く」** スタイルで `get_digitizer` 12 行 → 1 行、 `save_digitizer` 75 行 → 24 行、 `save_all_digitizers` ループ本体 18 行 → 7 行 等の縮小を達成
+  - **cross-file 統合**: `run.rs::get_run_config_snapshot` も `digitizer_repo` の 503 builder を共有していた → `pub(super) require_digitizer_repo` でモジュール跨ぎ参照し 8 行 → 1 行。 R-P5 の本来の対象 (digitizer.rs 自身) と隣接ファイル両方を整理
+  - **behavior preservation 注記**: ① `save_digitizer` の mkdir 失敗時メッセージ prefix が "Failed to create config directory" → "Failed to write config file" に変わるが status code は 500 維持で error class は不変。 ② `detect_digitizers` の auto-save は意図的に migrate せず — sanitize_for_firmware() を呼ばずに保存する既存セマンティクス (Detect 直後にユーザーが見たフィールドをそのまま保存) を保つため
+  - **結果**: digitizer.rs 983 → 953 行 (-30 net、 ただし handler bodies 自体は ~140 行縮小、 helpers が ~110 行 doc 付きで追加されている)、 run.rs -8 行、 574 tests pass、 clippy clean、 公開 API 不変 (REST endpoint 仕様、 OpenAPI スキーマ、 status code、 success/error message 主要部分すべて維持)
 - [x] **R-X1**: production `unwrap()` audit + reduction (`007b23f`、 2026-05-06)
   - Python script (`/tmp/list_unwrap2.py`) で `#[cfg(test)]` / `mod *_tests` / `#[test]` ブロック内を除外して production unwrap を抽出。 35 件 → 修正 9 件 → 残 26 件 (Mutex 22 + doc-comment 4)
   - **Structural refactor (2 site)**: `read_loop_dig1.rs:414-420` + `read_loop_dig2.rs:431-437` の `is_none()→Some(Instant::now())→unwrap()` パターンを `*read_error_since.get_or_insert_with(\|\| { warn!(...); Instant::now() })` 1 行に collapse。 unwrap + order dependence の両方を構造的に解消
