@@ -54,6 +54,7 @@ pub mod common;
 pub mod pha1;
 pub mod pha2;
 pub mod psd1;
+pub mod psd1_pha1_common;
 pub mod psd2;
 pub mod rollover;
 
