@@ -1,6 +1,6 @@
 # TODO 52: Refactor Sprint 2026-Q2 (post-PHA2 cleanup, pre-7/24 experiment)
 
-**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6 完了 2026-05-06)**
+**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6/D7/D1/D2/C1/C2 完了 2026-05-06)**
 **Created:** 2026-05-05 (revised 2026-05-05 evening: 一枚岩撤回 → component system 維持)
 **Window:** 2026-05-12 〜 2026-07-03 (8 週間 active refactor) + 2026-07-03 〜 2026-07-24 (3 週間 stabilize)
 **Source of truth:** [clean_architecture_evaluation.md](../clean_architecture_evaluation.md)
@@ -11,7 +11,7 @@
 | Phase | 状態 | 主な成果 |
 |---|---|---|
 | **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
-| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -451 行**。 572 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-C2 (merge_field! derive macro) / R-P3/P4/P5 / R-X1 |
+| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 + R-C2 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **R-C2 (MergeOverride derive)** = 1 PR (`a7bb0d2`)、 新 workspace crate `delila-derive` で `#[derive(MergeOverride)]` proc macro 実装、 `ChannelConfig::get_channel_config` を ~100 行の `merge_field!` 列挙から `merge_from(ov)` 1 行へ、 digitizer.rs -103 行、 副次に silent override drop バグ 3 件 (`amax`/`trigger_edge`/`trigger_threshold_v`) を構造的に fix。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -554 行**。 574 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-P3/P4/P5 / R-X1 |
 | **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
@@ -121,7 +121,13 @@ R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議
   - 12 unit tests (polarity mapping / per-table non-emptiness / no-duplicate-paths invariant / accessor round-trip)
   - **per-FW 別テーブル維持の判断**: PSD2/AMax と PHA2 は Input/Coincidence/Waveform セクションで DevTree path を共有するが、 「PHA2 channel に baseline_avg を accidental set した場合は silent drop」という既存挙動の保全のため敢えて分離 (新コードで unified にするとそれが FELib reject に化けるため挙動変更になる)
   - **結果**: digitizer.rs 3080 → 2629 行 (-451)、 572 tests pass、 clippy clean、 公開 API 不変
-- [ ] **R-C2**: `merge_field!` 38 fields を `#[derive(Merge)]` proc macro に
+- [x] **R-C2**: `merge_field!` 65+ fields を `#[derive(MergeOverride)]` proc macro に置換 (`a7bb0d2`、 2026-05-06)
+  - **新クレート** `delila-derive/` (workspace member、 syn/quote/proc-macro2)。 唯一の export は `MergeOverride` derive
+  - **proc macro 設計**: `Option<T>` → `if ov.f.is_some() { self.f = ov.f.clone() }`、 `HashMap<K, V>` → entry を extend、 それ以外の field 形は compile error (silent skip させない、 `delila-derive/src/lib.rs` の `FieldKind::Other` arm)
+  - `ChannelConfig::get_channel_config` を ~100 行の `merge_field!` 列挙から `merge_from(ov)` 1 行へ。 digitizer.rs net -103 行
+  - **silent override drop バグ 3 件 fix**: 監査の結果、 旧 `merge_field!` リストから `amax`、 `trigger_edge`、 `trigger_threshold_v` の 3 フィールドが脱落していた (struct には存在するが merge されない → override が silent にドロップ)。 R-C2 で構造的に再発不可
+  - 2 regression tests (`test_get_channel_config_merges_previously_dropped_fields` で 3 漏れフィールドの override 反映を pin、 `test_get_channel_config_extends_extra_hashmap` で extra HashMap merge の collision-wins-override 挙動を pin)
+  - **結果**: 572 → 574 tests pass (+2)、 clippy clean、 `cargo build --release` (default) + `--features dev-tools,root` 両方緑、 公開 API 不変
 - [ ] **R-P3**: Operator `AppState` RwLock 12 fields → DashMap or RCU read cache
 - [ ] **R-P4**: digitizer/event-builder/emulator settings の base panel 抽出
 - [ ] **R-P5**: `digitizer.rs` (983 行) の 14 CRUD handler を generic factory 化
