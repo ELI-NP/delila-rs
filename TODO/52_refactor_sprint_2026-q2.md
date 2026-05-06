@@ -1,6 +1,6 @@
 # TODO 52: Refactor Sprint 2026-Q2 (post-PHA2 cleanup, pre-7/24 experiment)
 
-**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6/D7/D1/D2/C1/C2 完了 2026-05-06)**
+**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6/D7/D1/D2/C1/C2/X1 完了 2026-05-06)**
 **Created:** 2026-05-05 (revised 2026-05-05 evening: 一枚岩撤回 → component system 維持)
 **Window:** 2026-05-12 〜 2026-07-03 (8 週間 active refactor) + 2026-07-03 〜 2026-07-24 (3 週間 stabilize)
 **Source of truth:** [clean_architecture_evaluation.md](../clean_architecture_evaluation.md)
@@ -11,7 +11,7 @@
 | Phase | 状態 | 主な成果 |
 |---|---|---|
 | **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
-| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 + R-C2 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **R-C2 (MergeOverride derive)** = 1 PR (`a7bb0d2`)、 新 workspace crate `delila-derive` で `#[derive(MergeOverride)]` proc macro 実装、 `ChannelConfig::get_channel_config` を ~100 行の `merge_field!` 列挙から `merge_from(ov)` 1 行へ、 digitizer.rs -103 行、 副次に silent override drop バグ 3 件 (`amax`/`trigger_edge`/`trigger_threshold_v`) を構造的に fix。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -554 行**。 574 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-P3/P4/P5 / R-X1 |
+| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 + R-C2 + R-X1 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **R-C2 (MergeOverride derive)** = 1 PR (`a7bb0d2`)、 新 workspace crate `delila-derive` で `#[derive(MergeOverride)]` proc macro 実装、 `ChannelConfig::get_channel_config` を ~100 行の `merge_field!` 列挙から `merge_from(ov)` 1 行へ、 digitizer.rs -103 行、 副次に silent override drop バグ 3 件 (`amax`/`trigger_edge`/`trigger_threshold_v`) を構造的に fix。 **R-X1 (production unwrap audit)** = 1 PR (`007b23f`)、 35 件 production unwrap を 26 件まで削減 (Mutex 22 + doc-comment 4 のみ残存)、 Production `Result::unwrap()` 0 件達成、 9 件中 2 件は `read_error_since` の Option パターンを `get_or_insert_with` で構造解消。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -554 行**。 574 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-P3/P4/P5 |
 | **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
@@ -131,7 +131,13 @@ R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議
 - [ ] **R-P3**: Operator `AppState` RwLock 12 fields → DashMap or RCU read cache
 - [ ] **R-P4**: digitizer/event-builder/emulator settings の base panel 抽出
 - [ ] **R-P5**: `digitizer.rs` (983 行) の 14 CRUD handler を generic factory 化
-- [ ] **R-X1**: production `unwrap()` audit (Mutex は除外、Result/Option の bad case のみ修正)
+- [x] **R-X1**: production `unwrap()` audit + reduction (`007b23f`、 2026-05-06)
+  - Python script (`/tmp/list_unwrap2.py`) で `#[cfg(test)]` / `mod *_tests` / `#[test]` ブロック内を除外して production unwrap を抽出。 35 件 → 修正 9 件 → 残 26 件 (Mutex 22 + doc-comment 4)
+  - **Structural refactor (2 site)**: `read_loop_dig1.rs:414-420` + `read_loop_dig2.rs:431-437` の `is_none()→Some(Instant::now())→unwrap()` パターンを `*read_error_since.get_or_insert_with(\|\| { warn!(...); Instant::now() })` 1 行に collapse。 unwrap + order dependence の両方を構造的に解消
+  - **`expect("reason")` 化 (7 site)**: `reader/mod.rs:1459` (handle.as_ref、 上の is_none branch が continue する不変量)、 `reader/mod.rs:2491` (ephemeral port bind cannot fail — Result::unwrap 唯一の production 残骸を始末)、 `chunk_builder.rs:247-248` (is_empty check が return early)、 `l1_builder.rs:151` (VecDeque::remove with position-derived idx)、 `node_agent/process.rs:357` (select! arm の `if restart_at.is_some()` ガード)、 `data_source_emulator/mod.rs:504` (Normal::new with hardcoded sigma=50.0)
+  - **Production `Result::unwrap()` カウント: 0** (R-X1 success criterion 達成)
+  - 残 26 件は仕様で許容: 22 件 `Mutex::lock().unwrap()` (poison propagation = panic 適切)、 4 件 doc comment 内 example code (`///` / `//!`)
+  - **検証**: 574 tests pass、 clippy clean (`--release --tests --features dev-tools,root`)、 default + dev-tools/root features 両方ビルド緑、 公開 API 不変
 
 **完了基準**: `reader/mod.rs` ~4042 → 2000 行、`config/digitizer.rs` ~2890 → 1800 行、production `Result::unwrap()` 0、 baseline freeze + `git tag refactor-phase2-complete`。
 
