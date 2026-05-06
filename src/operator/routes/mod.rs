@@ -11,12 +11,14 @@ mod tuneup;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::{
     routing::{get, post, put},
     Router,
 };
+use dashmap::DashMap;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -65,13 +67,76 @@ use run::{
 use status::{arm, configure, get_status, reset, run_start, start, stop};
 use tuneup::{tuneup_apply, tuneup_start, tuneup_stop};
 
+/// Tune Up runtime state, packing the previous `tuneup_mode: RwLock<bool>` +
+/// `tuneup_digitizer_id: RwLock<Option<u32>>` pair into a single `AtomicU64`.
+///
+/// **Why one atomic instead of two locks**: the two fields were always written
+/// together (`enter` sets `(true, Some(id))`, `exit` sets `(false, None)`),
+/// but the writes were not atomic — between the two `RwLock::write().await`
+/// calls a concurrent reader could observe `tuneup_mode = true,
+/// tuneup_digitizer_id = None` (or vice versa). Packing both into one u64
+/// removes that race for free, and turns the GET /api/status hot path
+/// (polled every ~1s by the frontend) into a lock-free atomic load.
+///
+/// Encoding: `u64::MAX` = inactive, anything else = `Some(value as u32)`
+/// (valid digitizer ids fit in u32, so the discriminant never collides).
+pub struct TuneupState(AtomicU64);
+
+const TUNEUP_INACTIVE: u64 = u64::MAX;
+
+impl TuneupState {
+    pub const fn new() -> Self {
+        Self(AtomicU64::new(TUNEUP_INACTIVE))
+    }
+
+    /// Mark Tune Up active for `digitizer_id`. Idempotent re-entry just
+    /// rewrites the digitizer id.
+    pub fn enter(&self, digitizer_id: u32) {
+        self.0.store(digitizer_id as u64, Ordering::Release);
+    }
+
+    /// Clear Tune Up state.
+    pub fn exit(&self) {
+        self.0.store(TUNEUP_INACTIVE, Ordering::Release);
+    }
+
+    /// Whether Tune Up mode is currently active.
+    pub fn is_active(&self) -> bool {
+        self.0.load(Ordering::Acquire) != TUNEUP_INACTIVE
+    }
+
+    /// Snapshot `(active, digitizer_id)` from a single atomic load — both
+    /// fields agree by construction (no torn read across two locks).
+    pub fn snapshot(&self) -> (bool, Option<u32>) {
+        let v = self.0.load(Ordering::Acquire);
+        if v == TUNEUP_INACTIVE {
+            (false, None)
+        } else {
+            (true, Some(v as u32))
+        }
+    }
+}
+
+impl Default for TuneupState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Application state shared across handlers
 pub struct AppState {
     pub client: ComponentClient,
     pub components: Vec<ComponentConfig>,
     pub config: OperatorConfig,
-    /// Digitizer configurations (keyed by digitizer_id)
-    pub digitizer_configs: RwLock<HashMap<u32, DigitizerConfig>>,
+    /// Digitizer configurations (keyed by digitizer_id).
+    ///
+    /// `DashMap` instead of `RwLock<HashMap>` — per-shard locking keeps
+    /// individual `get(id)` / `insert(id, c)` operations from blocking
+    /// each other across digitizer ids, removes the `.read().await` /
+    /// `.write().await` boilerplate from every digitizer route handler,
+    /// and is a strict-superset replacement (same `get` / `insert` /
+    /// `iter` / `len` API surface).
+    pub digitizer_configs: DashMap<u32, DigitizerConfig>,
     /// Directory for storing digitizer config files
     pub config_dir: PathBuf,
     /// Source-specific config file paths (for reloading from disk at run start)
@@ -86,10 +151,8 @@ pub struct AppState {
     pub current_run: RwLock<Option<CurrentRunInfo>>,
     /// Emulator settings (runtime-configurable)
     pub emulator_settings: RwLock<EmulatorSettings>,
-    /// Whether Tune Up mode is active
-    pub tuneup_mode: RwLock<bool>,
-    /// Digitizer ID being tuned (when tuneup_mode is true)
-    pub tuneup_digitizer_id: RwLock<Option<u32>>,
+    /// Tune Up mode state (atomic — see `TuneupState` doc).
+    pub tuneup: TuneupState,
     /// Monitor layout state (opaque JSON, persisted to file)
     pub monitor_layout: RwLock<serde_json::Value>,
     /// Serializes tuneup_apply calls to prevent concurrent Stop→Apply→Start races
@@ -156,13 +219,15 @@ impl AppState {
     /// Build channel registrations from loaded digitizer configs.
     /// If `filter_id` is Some, only include channels for that digitizer.
     pub(super) fn build_channel_registrations_from(
-        configs: &HashMap<u32, DigitizerConfig>,
+        configs: &DashMap<u32, DigitizerConfig>,
         filter_id: Option<u32>,
     ) -> Vec<ChannelRegistration> {
         let mut registrations = Vec::new();
-        for (id, config) in configs {
+        for entry in configs.iter() {
+            let id = *entry.key();
+            let config = entry.value();
             if let Some(filter) = filter_id {
-                if *id != filter {
+                if id != filter {
                     continue;
                 }
             }
@@ -184,14 +249,20 @@ impl AppState {
 
     /// Reload digitizer configs from disk (JSON files).
     /// Called at run_start to ensure Phase 1.5 uses fresh configs.
-    pub(super) async fn reload_digitizer_configs(&self) {
+    pub(super) fn reload_digitizer_configs(&self) {
         let fresh = if self.config_files.is_empty() {
             load_digitizer_configs_from_dir(&self.config_dir).unwrap_or_default()
         } else {
             load_digitizer_configs_from_files(&self.config_files)
         };
         let count = fresh.len();
-        *self.digitizer_configs.write().await = fresh;
+        // DashMap doesn't expose a single-shot replace; clear+insert is the
+        // semantic equivalent. Existing readers see a brief empty window
+        // (~µs), the same race the previous `*write().await = fresh` had.
+        self.digitizer_configs.clear();
+        for (k, v) in fresh {
+            self.digitizer_configs.insert(k, v);
+        }
         tracing::info!(count, "Reloaded digitizer configs from disk");
     }
 
@@ -417,7 +488,7 @@ impl RouterBuilder {
             client: ComponentClient::new(),
             components: self.components,
             config: self.config,
-            digitizer_configs: RwLock::new(digitizer_configs),
+            digitizer_configs: digitizer_configs.into_iter().collect(),
             config_dir: self.config_dir.clone(),
             config_files: self.config_files,
             run_repo: self.run_repo,
@@ -425,8 +496,7 @@ impl RouterBuilder {
             event_builder_repo: self.event_builder_repo,
             current_run: RwLock::new(None),
             emulator_settings: RwLock::new(self.emulator_settings),
-            tuneup_mode: RwLock::new(false),
-            tuneup_digitizer_id: RwLock::new(None),
+            tuneup: TuneupState::new(),
             monitor_layout: RwLock::new(monitor_layout),
             tuneup_apply_lock: tokio::sync::Mutex::new(()),
         });
@@ -609,4 +679,49 @@ fn load_digitizer_configs_from_dir(
     }
 
     Ok(configs)
+}
+
+#[cfg(test)]
+mod tuneup_state_tests {
+    use super::TuneupState;
+
+    #[test]
+    fn new_is_inactive() {
+        let s = TuneupState::new();
+        assert!(!s.is_active());
+        assert_eq!(s.snapshot(), (false, None));
+    }
+
+    #[test]
+    fn enter_then_snapshot_returns_active_with_id() {
+        let s = TuneupState::new();
+        s.enter(7);
+        assert!(s.is_active());
+        assert_eq!(s.snapshot(), (true, Some(7)));
+    }
+
+    #[test]
+    fn exit_returns_to_inactive() {
+        let s = TuneupState::new();
+        s.enter(3);
+        s.exit();
+        assert!(!s.is_active());
+        assert_eq!(s.snapshot(), (false, None));
+    }
+
+    #[test]
+    fn enter_replaces_previous_id() {
+        let s = TuneupState::new();
+        s.enter(1);
+        s.enter(42);
+        assert_eq!(s.snapshot(), (true, Some(42)));
+    }
+
+    #[test]
+    fn high_digitizer_ids_round_trip() {
+        // u32::MAX is encoded as a non-sentinel value (the sentinel is u64::MAX).
+        let s = TuneupState::new();
+        s.enter(u32::MAX);
+        assert_eq!(s.snapshot(), (true, Some(u32::MAX)));
+    }
 }

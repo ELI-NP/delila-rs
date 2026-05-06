@@ -47,7 +47,7 @@ pub(super) async fn tuneup_start(
     let digitizer_id = request.digitizer_id;
 
     // Guard: must not already be in tune up mode
-    if *state.tuneup_mode.read().await {
+    if state.tuneup.is_active() {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::error(
@@ -113,9 +113,10 @@ pub(super) async fn tuneup_start(
         );
     }
 
-    // Set tune up mode before starting (so status reflects it immediately)
-    *state.tuneup_mode.write().await = true;
-    *state.tuneup_digitizer_id.write().await = Some(digitizer_id);
+    // Set tune up mode before starting (so status reflects it immediately).
+    // Atomic: a single store publishes both the active flag and the id —
+    // no torn read possible from concurrent /api/status pollers.
+    state.tuneup.enter(digitizer_id);
 
     // TuneUp RunConfig: run_number 0, exp_name "TuneUp" (not recorded in MongoDB)
     let run_config = RunConfig {
@@ -132,8 +133,7 @@ pub(super) async fn tuneup_start(
 
     if let Err(e) = configure_result {
         // Rollback tune up state
-        *state.tuneup_mode.write().await = false;
-        *state.tuneup_digitizer_id.write().await = None;
+        state.tuneup.exit();
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::error(format!(
@@ -152,8 +152,13 @@ pub(super) async fn tuneup_start(
     // destabilizes libCAENDigitizer.so and triggers SIGSEGV at `SWStartAcquisition`.
     // See TODO/48_v1743_tuneup_double_apply_crash.md for the crash analysis.
     {
-        let configs = state.digitizer_configs.read().await;
-        if let Some(config) = configs.get(&digitizer_id) {
+        // Clone the config out of the DashMap before any .await — DashMap
+        // shard guards are not Send, so they can't be held across awaits.
+        let config = state
+            .digitizer_configs
+            .get(&digitizer_id)
+            .map(|r| r.value().clone());
+        if let Some(config) = config {
             let reader_comp = filtered
                 .iter()
                 .find(|c| c.is_digitizer && c.source_id == Some(digitizer_id));
@@ -192,8 +197,7 @@ pub(super) async fn tuneup_start(
                         }
                         Ok(resp) => {
                             let _ = state.client.reset_all(&filtered).await;
-                            *state.tuneup_mode.write().await = false;
-                            *state.tuneup_digitizer_id.write().await = None;
+                            state.tuneup.exit();
                             return (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ApiResponse::error(format!(
@@ -204,8 +208,7 @@ pub(super) async fn tuneup_start(
                         }
                         Err(e) => {
                             let _ = state.client.reset_all(&filtered).await;
-                            *state.tuneup_mode.write().await = false;
-                            *state.tuneup_digitizer_id.write().await = None;
+                            state.tuneup.exit();
                             return (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ApiResponse::error(format!(
@@ -227,9 +230,10 @@ pub(super) async fn tuneup_start(
 
     // Register channels for the tuned digitizer with Monitor (best-effort)
     {
-        let configs = state.digitizer_configs.read().await;
-        let registrations =
-            AppState::build_channel_registrations_from(&configs, Some(digitizer_id));
+        let registrations = AppState::build_channel_registrations_from(
+            &state.digitizer_configs,
+            Some(digitizer_id),
+        );
         state.send_register_channels(registrations).await;
     }
 
@@ -239,8 +243,7 @@ pub(super) async fn tuneup_start(
         .await
     {
         let _ = state.client.reset_all(&filtered).await;
-        *state.tuneup_mode.write().await = false;
-        *state.tuneup_digitizer_id.write().await = None;
+        state.tuneup.exit();
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::error(format!("Tune Up arm failed: {}", e))),
@@ -260,8 +263,7 @@ pub(super) async fn tuneup_start(
         }
         Err(e) => {
             let _ = state.client.reset_all(&filtered).await;
-            *state.tuneup_mode.write().await = false;
-            *state.tuneup_digitizer_id.write().await = None;
+            state.tuneup.exit();
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::error(format!("Tune Up start failed: {}", e))),
@@ -285,7 +287,7 @@ pub(super) async fn tuneup_start(
 pub(super) async fn tuneup_stop(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    if !*state.tuneup_mode.read().await {
+    if !state.tuneup.is_active() {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::error("Not in Tune Up mode")),
@@ -297,8 +299,7 @@ pub(super) async fn tuneup_stop(
     let _reset_results = state.client.reset_all(&state.components).await;
 
     // Clear tune up state
-    *state.tuneup_mode.write().await = false;
-    *state.tuneup_digitizer_id.write().await = None;
+    state.tuneup.exit();
 
     let response = ApiResponse::success("Tune Up stopped").with_results(results);
     (StatusCode::OK, Json(response))
@@ -330,7 +331,7 @@ pub(super) async fn tuneup_apply(
     Json(config): Json<DigitizerConfig>,
 ) -> (StatusCode, Json<ApiResponse>) {
     // Guard: must be in tune up mode
-    if !*state.tuneup_mode.read().await {
+    if !state.tuneup.is_active() {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::error("Not in Tune Up mode")),
@@ -373,10 +374,7 @@ pub(super) async fn tuneup_apply(
     };
 
     // 1. Update in-memory config
-    {
-        let mut configs = state.digitizer_configs.write().await;
-        configs.insert(id, config.clone());
-    }
+    state.digitizer_configs.insert(id, config.clone());
 
     // 2. Save to disk (best-effort, sanitized)
     let file_path = reader_comp

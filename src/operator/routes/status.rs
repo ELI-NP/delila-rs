@@ -89,8 +89,8 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         (None, None)
     };
 
-    let tuneup_mode = *state.tuneup_mode.read().await;
-    let tuneup_digitizer_id = *state.tuneup_digitizer_id.read().await;
+    // Single atomic load — both fields agree by construction (no torn read).
+    let (tuneup_mode, tuneup_digitizer_id) = state.tuneup.snapshot();
 
     Json(SystemStatus {
         components,
@@ -132,13 +132,14 @@ pub(super) async fn configure(
 
     let status = if response.success {
         // Reload configs from disk so edits since Operator start take effect
-        state.reload_digitizer_configs().await;
+        state.reload_digitizer_configs();
         // Push digitizer configs to remote Readers
-        let configs = state.digitizer_configs.read().await;
         for comp in &state.components {
             if comp.is_digitizer {
                 if let Some(source_id) = comp.source_id {
-                    if let Some(config) = configs.get(&source_id) {
+                    if let Some(config) = state.digitizer_configs.get(&source_id) {
+                        let cfg = config.value().clone();
+                        drop(config);
                         tracing::info!(
                             source_id,
                             name = %comp.name,
@@ -148,7 +149,7 @@ pub(super) async fn configure(
                             .client
                             .send_command(
                                 &comp.address,
-                                &Command::ApplyDigitizerConfig(Box::new(config.clone())),
+                                &Command::ApplyDigitizerConfig(Box::new(cfg)),
                             )
                             .await
                         {
@@ -214,7 +215,7 @@ pub(super) async fn start(
     Json(request): Json<StartRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
     // Guard: reject if Tune Up mode is active
-    if *state.tuneup_mode.read().await {
+    if state.tuneup.is_active() {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::error(
@@ -309,10 +310,8 @@ pub(super) async fn start(
         if let Some(ref digitizer_repo) = state.digitizer_repo {
             let configs: Vec<_> = state
                 .digitizer_configs
-                .read()
-                .await
-                .values()
-                .cloned()
+                .iter()
+                .map(|r| r.value().clone())
                 .collect();
             if !configs.is_empty() {
                 if let Err(e) = digitizer_repo
@@ -504,7 +503,7 @@ pub(super) async fn run_start(
     Json(request): Json<ConfigureRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
     // Guard: reject if Tune Up mode is active
-    if *state.tuneup_mode.read().await {
+    if state.tuneup.is_active() {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::error(
@@ -580,7 +579,7 @@ pub(super) async fn run_start(
     // Reload digitizer configs from disk so Phase 1.5 uses fresh values.
     // Without this, edits to JSON files (e.g. fine_ts_mode) after Operator start
     // would be overwritten by stale in-memory configs.
-    state.reload_digitizer_configs().await;
+    state.reload_digitizer_configs();
 
     // Phase 1.5: Apply digitizer configs to remote Readers
     // This pushes configs over ZMQ so remote Readers don't need local config files
@@ -591,54 +590,61 @@ pub(super) async fn run_start(
     // + ADC cal) destabilizes libCAENDigitizer.so and triggers SIGSEGV after
     // SWStartAcquisition. See TODO/48_v1743_tuneup_double_apply_crash.md.
     {
-        let configs = state.digitizer_configs.read().await;
         for comp in &state.components {
             if comp.is_digitizer {
                 if let Some(source_id) = comp.source_id {
-                    // digitizer_id == source_id by convention
-                    if let Some(config) = configs.get(&source_id) {
-                        if config.firmware == FirmwareType::X743Std {
-                            tracing::info!(
-                                source_id,
-                                name = %comp.name,
-                                "X743Std: skipping redundant Phase 1.5 Apply (configure_all_sync already applied identical config)"
-                            );
-                            continue;
-                        }
+                    // digitizer_id == source_id by convention.
+                    // Clone the config so we don't hold a DashMap shard guard
+                    // across the .send_command().await below.
+                    let config = match state
+                        .digitizer_configs
+                        .get(&source_id)
+                        .map(|r| r.value().clone())
+                    {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    if config.firmware == FirmwareType::X743Std {
                         tracing::info!(
                             source_id,
                             name = %comp.name,
-                            "Pushing digitizer config to Reader"
+                            "X743Std: skipping redundant Phase 1.5 Apply (configure_all_sync already applied identical config)"
                         );
-                        match state
-                            .client
-                            .send_command(
-                                &comp.address,
-                                &Command::ApplyDigitizerConfig(Box::new(config.clone())),
-                            )
-                            .await
-                        {
-                            Ok(resp) if resp.success => {
-                                tracing::info!(
-                                    source_id,
-                                    params = resp.message,
-                                    "Digitizer config applied successfully"
-                                );
-                            }
-                            Ok(resp) => {
-                                tracing::warn!(
-                                    source_id,
-                                    error = %resp.message,
-                                    "Failed to apply digitizer config"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    source_id,
-                                    error = %e,
-                                    "Failed to send ApplyDigitizerConfig command"
-                                );
-                            }
+                        continue;
+                    }
+                    tracing::info!(
+                        source_id,
+                        name = %comp.name,
+                        "Pushing digitizer config to Reader"
+                    );
+                    match state
+                        .client
+                        .send_command(
+                            &comp.address,
+                            &Command::ApplyDigitizerConfig(Box::new(config)),
+                        )
+                        .await
+                    {
+                        Ok(resp) if resp.success => {
+                            tracing::info!(
+                                source_id,
+                                params = resp.message,
+                                "Digitizer config applied successfully"
+                            );
+                        }
+                        Ok(resp) => {
+                            tracing::warn!(
+                                source_id,
+                                error = %resp.message,
+                                "Failed to apply digitizer config"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                source_id,
+                                error = %e,
+                                "Failed to send ApplyDigitizerConfig command"
+                            );
                         }
                     }
                 }
@@ -648,8 +654,8 @@ pub(super) async fn run_start(
 
     // Register channels with Monitor (best-effort, after configure success)
     {
-        let configs = state.digitizer_configs.read().await;
-        let registrations = AppState::build_channel_registrations_from(&configs, None);
+        let registrations =
+            AppState::build_channel_registrations_from(&state.digitizer_configs, None);
         state.send_register_channels(registrations).await;
     }
 
@@ -734,10 +740,8 @@ pub(super) async fn run_start(
             if let Some(ref digitizer_repo) = state.digitizer_repo {
                 let configs: Vec<_> = state
                     .digitizer_configs
-                    .read()
-                    .await
-                    .values()
-                    .cloned()
+                    .iter()
+                    .map(|r| r.value().clone())
                     .collect();
                 if !configs.is_empty() {
                     if let Err(e) = digitizer_repo

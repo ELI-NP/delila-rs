@@ -48,18 +48,18 @@ pub(super) fn require_digitizer_repo(
 }
 
 /// Look up an in-memory digitizer config by id, cloning it. Returns the
-/// shared "Digitizer {id} not found" 404 on miss, dropping the read guard
-/// before returning so callers can take a write lock if they need to.
-async fn require_digitizer_config(
+/// shared "Digitizer {id} not found" 404 on miss.
+///
+/// `DashMap::get` returns a `Ref` guard scoped to the `.value().clone()`
+/// expression, so the caller never holds a shard lock across `.await`.
+fn require_digitizer_config(
     state: &AppState,
     id: u32,
 ) -> Result<DigitizerConfig, (StatusCode, Json<ApiResponse>)> {
     state
         .digitizer_configs
-        .read()
-        .await
         .get(&id)
-        .cloned()
+        .map(|r| r.value().clone())
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -185,8 +185,11 @@ pub struct RestoreVersionRequest {
 pub(super) async fn list_digitizers(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<DigitizerConfig>> {
-    let configs = state.digitizer_configs.read().await;
-    let mut list: Vec<DigitizerConfig> = configs.values().cloned().collect();
+    let mut list: Vec<DigitizerConfig> = state
+        .digitizer_configs
+        .iter()
+        .map(|r| r.value().clone())
+        .collect();
     list.sort_by_key(|c| c.digitizer_id);
     Json(list)
 }
@@ -263,10 +266,9 @@ pub(super) async fn detect_digitizers(
 
                     // If no config from MongoDB, check in-memory configs or create default
                     if config.is_none() {
-                        let configs = state.digitizer_configs.read().await;
-                        if let Some(existing) = configs.get(&source_id) {
+                        if let Some(existing) = state.digitizer_configs.get(&source_id) {
                             // Use existing config from JSON file, update hardware info
-                            let mut c = existing.clone();
+                            let mut c = existing.value().clone();
                             c.serial_number = serial.clone();
                             c.model = data
                                 .get("model")
@@ -309,8 +311,7 @@ pub(super) async fn detect_digitizers(
 
                     // Update in-memory config with detected hardware info
                     if let Some(ref cfg) = config {
-                        let mut configs = state.digitizer_configs.write().await;
-                        configs.insert(source_id, cfg.clone());
+                        state.digitizer_configs.insert(source_id, cfg.clone());
                     }
 
                     // Auto-save corrected config to disk (best-effort)
@@ -562,7 +563,7 @@ pub(super) async fn get_digitizer(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u32>,
 ) -> Result<Json<DigitizerConfig>, (StatusCode, Json<ApiResponse>)> {
-    require_digitizer_config(&state, id).await.map(Json)
+    require_digitizer_config(&state, id).map(Json)
 }
 
 /// Update a digitizer configuration (in memory)
@@ -590,7 +591,7 @@ pub(super) async fn update_digitizer(
         return resp;
     }
 
-    state.digitizer_configs.write().await.insert(id, config);
+    state.digitizer_configs.insert(id, config);
 
     (
         StatusCode::OK,
@@ -649,11 +650,7 @@ pub(super) async fn apply_digitizer_config(
     };
 
     // 2. Update in-memory config
-    state
-        .digitizer_configs
-        .write()
-        .await
-        .insert(id, config.clone());
+    state.digitizer_configs.insert(id, config.clone());
 
     // 3. Save to disk (best-effort, sanitized).
     // Same file Reader loads on Configure (resolve_config_path falls back
@@ -723,7 +720,7 @@ pub(super) async fn save_digitizer(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u32>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let mut config = match require_digitizer_config(&state, id).await {
+    let mut config = match require_digitizer_config(&state, id) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
@@ -779,15 +776,15 @@ pub(super) async fn save_all_digitizers(
         );
     }
 
-    let configs = state.digitizer_configs.read().await;
     let mut saved = 0;
     let mut errors = Vec::new();
 
-    for (id, config) in configs.iter() {
-        let file_path = resolve_config_path(&state, *id);
-        let mut config_for_disk = config.clone();
+    for entry in state.digitizer_configs.iter() {
+        let id = *entry.key();
+        let file_path = resolve_config_path(&state, id);
+        let mut config_for_disk = entry.value().clone();
         // Enforce ID consistency; sanitize_for_firmware() runs inside helper.
-        config_for_disk.digitizer_id = *id;
+        config_for_disk.digitizer_id = id;
         if let Err(e) = write_digitizer_config(&file_path, config_for_disk) {
             errors.push(format!("digitizer_{}: {}", id, e));
         } else {
@@ -842,7 +839,7 @@ pub(super) async fn save_digitizer_to_mongodb(
         Err(resp) => return resp,
     };
 
-    let config = match require_digitizer_config(&state, id).await {
+    let config = match require_digitizer_config(&state, id) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
@@ -931,8 +928,7 @@ pub(super) async fn restore_digitizer_version(
     match repo.restore_version(id, request.version).await {
         Ok(doc) => {
             // Also update in-memory config
-            let mut configs = state.digitizer_configs.write().await;
-            configs.insert(id, doc.config);
+            state.digitizer_configs.insert(id, doc.config);
 
             (
                 StatusCode::OK,
