@@ -51,6 +51,7 @@
 
 pub mod amax;
 pub mod common;
+pub mod dualchannel_common;
 pub mod pha1;
 pub mod pha2;
 pub mod psd1;
