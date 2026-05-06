@@ -631,6 +631,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
+name = "delila-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "delila-rs"
 version = "0.1.0"
 dependencies = [
@@ -644,6 +653,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "dashmap",
+ "delila-derive",
  "futures",
  "mongodb",
  "oxyroot",

@@ -5,7 +5,13 @@ edition = "2021"
 description = "High-performance DAQ system for nuclear physics experiments"
 license = "MIT"
 
+[workspace]
+members = ["delila-derive"]
+
 [dependencies]
+# Internal proc-macro helpers (R-C2: #[derive(MergeOverride)] for ChannelConfig)
+delila-derive = { path = "delila-derive" }
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 

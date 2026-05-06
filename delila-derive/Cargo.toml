@@ -1,0 +1,15 @@
+[package]
+name = "delila-derive"
+version = "0.1.0"
+edition = "2021"
+description = "Internal proc-macro helpers for delila-rs"
+license = "MIT"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
