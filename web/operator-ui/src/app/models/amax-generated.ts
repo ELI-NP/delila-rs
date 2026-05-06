@@ -123,9 +123,9 @@ export const AMAX_DOTTED_KEYS: readonly string[] = [
 ];
 
 export const AMAX_INPUT_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], tooltip: "FW reg POLARITY • word 0x02 (ch0 @ 0x800002)" },
+  { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg POLARITY • word 0x02 (ch0 @ 0x800002)" },
   { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x03 (ch0 @ 0x800003)" },
-  { key: 'amax.run_cfg', label: "Run Enable", type: 'enum', options: ["0", "1"], tooltip: "FW reg RUN_CFG • word 0x0F (ch0 @ 0x80000F)" },
+  { key: 'amax.run_cfg', label: "Run Enable", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg RUN_CFG • word 0x0F (ch0 @ 0x80000F)" },
 ];
 
 export const AMAX_TRIGGER_PARAMS: ChannelParamDef[] = [
@@ -154,7 +154,7 @@ export const AMAX_ENERGY_PARAMS: ChannelParamDef[] = [
 ];
 
 export const AMAX_WAVEFORM_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.selector_wave', label: "Wave Selector", type: 'enum', options: ["0", "1"], tooltip: "FW reg selector_wave • word 0x00 (ch0 @ 0x800000)" },
+  { key: 'amax.selector_wave', label: "Wave Selector", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg selector_wave • word 0x00 (ch0 @ 0x800000)" },
   { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_INPUT • word 0x01 (ch0 @ 0x800001)" },
   { key: 'amax.pretrigger_trap', label: "Pretrig Trap", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_TRAP • word 0x1E (ch0 @ 0x80001E)" },
   { key: 'amax.pretrigger_amax', label: "Pretrig AMax", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_AMAX • word 0x1F (ch0 @ 0x80001F)" },

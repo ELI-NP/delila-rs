@@ -174,7 +174,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ch0: Vec<&Register> = register_file
         .registers
         .iter()
-        .filter(|r| r.is_per_channel() && !r.path.as_deref().unwrap_or("").contains("page_amax_energy_1/"))
+        .filter(|r| {
+            r.is_per_channel()
+                && !r
+                    .path
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("page_amax_energy_1/")
+        })
         .collect();
     ch0.sort_by_key(|r| r.address);
 
@@ -184,11 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut skipped_no_meta: Vec<String> = Vec::new();
     for r in &ch0 {
         let Some(name) = r.fw_key() else { continue };
-        if fw_params
-            .readonly_patterns
-            .iter()
-            .any(|p| name.contains(p))
-        {
+        if fw_params.readonly_patterns.iter().any(|p| name.contains(p)) {
             skipped_readonly.push(name);
             continue;
         }
@@ -197,9 +200,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         };
         let bits = meta.bits;
-        let ui_max = meta
-            .ui_max
-            .unwrap_or_else(|| if bits >= 32 { (1u64 << 32) - 1 } else { (1u64 << bits) - 1 });
+        let ui_max = meta.ui_max.unwrap_or_else(|| {
+            if bits >= 32 {
+                (1u64 << 32) - 1
+            } else {
+                (1u64 << bits) - 1
+            }
+        });
         let ty = meta.ty.clone().unwrap_or_else(|| "number".to_string());
         // The "word offset" we emit is whatever `set_user_register` needs —
         // for the new FW (page_base = 0x100000) we treat the offset as the
@@ -239,9 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let rust_struct_path = cli.rust_out.join("config/amax_generated.rs");
-    let rust_reg_path = cli
-        .rust_out
-        .join("reader/caen/amax_registers_generated.rs");
+    let rust_reg_path = cli.rust_out.join("reader/caen/amax_registers_generated.rs");
 
     fs::write(
         &rust_struct_path,
@@ -249,7 +254,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     fs::write(
         &rust_reg_path,
-        emit_rust_registers(&resolved, cli.page_base, cli.page_stride, &cli.register_file),
+        emit_rust_registers(
+            &resolved,
+            cli.page_base,
+            cli.page_stride,
+            &cli.register_file,
+        ),
     )?;
     fs::write(
         &cli.ts_out,
@@ -322,7 +332,10 @@ fn emit_rust_registers(
     register_file: &std::path::Path,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&header_rust(register_file, std::path::Path::new("(addresses only)")));
+    out.push_str(&header_rust(
+        register_file,
+        std::path::Path::new("(addresses only)"),
+    ));
     out.push_str(
         "//!\n\
          //! AMax custom-firmware register address map. Byte address =\n\
@@ -339,7 +352,9 @@ fn emit_rust_registers(
          \n",
         page_base, page_stride
     ));
-    out.push_str("// ---- Per-channel register offsets (word, relative to the channel page base) ----\n\n");
+    out.push_str(
+        "// ---- Per-channel register offsets (word, relative to the channel page base) ----\n\n",
+    );
     for r in resolved {
         out.push_str(&format!("/// {}-bit {}\n", r.bits, r.label));
         out.push_str(&format!(
@@ -480,10 +495,7 @@ fn emit_typescript(
                 "FW reg {} • word 0x{:02X} (ch0 @ 0x{:06X})",
                 r.fw_name, r.word_offset, ch0_word
             );
-            let mut line = format!(
-                "  {{ key: 'amax.{}', label: {:?}",
-                r.field, r.label
-            );
+            let mut line = format!("  {{ key: 'amax.{}', label: {:?}", r.field, r.label);
             if r.ty == "enum" {
                 let opts = r
                     .options
@@ -491,7 +503,13 @@ fn emit_typescript(
                     .map(|o| format!("{:?}", o))
                     .collect::<Vec<_>>()
                     .join(", ");
-                line.push_str(&format!(", type: 'enum', options: [{}]", opts));
+                // AMax enums map 1:1 to firmware register bits, so the value
+                // must reach the backend as a Number — see channel-table's
+                // `coerceEnum` helper which honours `numeric: true`.
+                line.push_str(&format!(
+                    ", type: 'enum', options: [{}], numeric: true",
+                    opts
+                ));
             } else {
                 line.push_str(", type: 'number'");
                 if let Some(u) = &r.unit {

@@ -20,6 +20,10 @@ export interface ChannelParamDef {
   type: 'number' | 'enum' | 'boolean' | 'ch-mask';
   /** Options for enum type (e.g., ['Positive', 'Negative']) */
   options?: string[];
+  /** When true (enum type only), coerce the selected option to a Number before
+   *  emitting. Use for enums that map to Rust integer fields (e.g. AMax 1-bit
+   *  registers). String-valued enums (default) leave it false/undefined. */
+  numeric?: boolean;
   /** Unit label (e.g., 'ns', '%', 'ADC') */
   unit?: string;
   /** Min value for number type */
@@ -124,7 +128,7 @@ export interface ChannelValueChange {
                       class="cell-select"
                       [ngModel]="getDefault(param.key)"
                       [disabled]="isDisabled(param.key)"
-                      (ngModelChange)="defaultChange.emit({ key: param.key, value: $event })"
+                      (ngModelChange)="defaultChange.emit({ key: param.key, value: coerceEnum(param, $event) })"
                     >
                       @for (opt of param.options ?? []; track opt) {
                         <option [value]="opt">{{ opt }}</option>
@@ -179,7 +183,7 @@ export interface ChannelValueChange {
                         class="cell-select"
                         [ngModel]="getChannel(ch, param.key)"
                         [disabled]="isDisabled(param.key)"
-                        (ngModelChange)="channelChange.emit({ channel: ch, key: param.key, value: $event })"
+                        (ngModelChange)="channelChange.emit({ channel: ch, key: param.key, value: coerceEnum(param, $event) })"
                       >
                         @for (opt of param.options ?? []; track opt) {
                           <option [value]="opt">{{ opt }}</option>
@@ -529,5 +533,13 @@ export class ChannelTableComponent {
   onChannelSelect(ch: number, key: string, event: Event): void {
     const select = event.target as HTMLSelectElement;
     this.channelChange.emit({ channel: ch, key, value: select.value });
+  }
+
+  /** Coerce an enum <select> value to a Number when the param is marked
+   *  numeric — HTML option attributes are always strings, so AMax 1-bit
+   *  enums (Polarity / Run Enable / Wave Selector) would otherwise be sent
+   *  as "0"/"1" and rejected by the backend's Option<u32> deserializer. */
+  coerceEnum(param: ChannelParamDef, value: unknown): unknown {
+    return param.numeric ? Number(value) : value;
   }
 }
