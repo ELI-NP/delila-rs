@@ -551,6 +551,102 @@ impl FirmwareType {
     pub fn is_felib(&self) -> bool {
         !self.is_legacy_api()
     }
+
+    /// Aggregate capability descriptor for this firmware.
+    ///
+    /// Centralizes the per-FW capability flags that were previously scattered
+    /// across `is_dig1()` / `is_x743()` / `is_felib()` / per-firmware match
+    /// arms in `add_channel_params` etc. Phase 2 R-C1 will consume this to
+    /// drive parameter-table generation; Phase 1 ships the descriptor without
+    /// rewriting call sites yet (BC: existing helpers still work).
+    pub const fn capabilities(&self) -> FirmwareCapabilities {
+        match self {
+            FirmwareType::PSD1 => FirmwareCapabilities {
+                api: FirmwareApi::Dig1,
+                num_channels: 16,
+                supports_waveforms: true,
+                includes_n_events: false,
+                is_group_based: false,
+            },
+            FirmwareType::PHA1 => FirmwareCapabilities {
+                api: FirmwareApi::Dig1,
+                num_channels: 16,
+                supports_waveforms: true,
+                includes_n_events: false,
+                is_group_based: false,
+            },
+            FirmwareType::PSD2 => FirmwareCapabilities {
+                api: FirmwareApi::Dig2,
+                num_channels: 32,
+                supports_waveforms: true,
+                includes_n_events: true,
+                is_group_based: false,
+            },
+            FirmwareType::PHA2 => FirmwareCapabilities {
+                api: FirmwareApi::Dig2,
+                num_channels: 32,
+                supports_waveforms: true,
+                includes_n_events: true,
+                is_group_based: false,
+            },
+            FirmwareType::AMax => FirmwareCapabilities {
+                api: FirmwareApi::Dig2,
+                // VX2730 with AMax FW exposes 32 channels via OpenDPP, but the
+                // current FW build emits ch0/ch1 only (memory: AMax FW notes).
+                num_channels: 32,
+                supports_waveforms: true,
+                includes_n_events: true,
+                is_group_based: false,
+            },
+            FirmwareType::X743CI | FirmwareType::X743Std => FirmwareCapabilities {
+                api: FirmwareApi::CaenDigitizer,
+                num_channels: 8, // 4 groups × 2 channels
+                supports_waveforms: true,
+                includes_n_events: false,
+                is_group_based: true,
+            },
+        }
+    }
+}
+
+/// Which library / API surface this firmware uses to talk to the digitizer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirmwareApi {
+    /// Legacy FELib endpoint protocol (DIG1: PSD1, PHA1).
+    Dig1,
+    /// Modern FELib endpoint protocol (DIG2: PSD2, PHA2, AMax).
+    Dig2,
+    /// CAENDigitizer.h C library (V1743: X743CI, X743Std).
+    CaenDigitizer,
+}
+
+impl FirmwareApi {
+    /// Whether this API surface uses FELib (DIG1 or DIG2).
+    pub const fn is_felib(self) -> bool {
+        matches!(self, Self::Dig1 | Self::Dig2)
+    }
+}
+
+/// Capability summary for a `FirmwareType`. Constructed via
+/// [`FirmwareType::capabilities`].
+///
+/// Lifted out of scattered `is_*()` helper calls so per-FW differences are
+/// readable in one place. Phase 2 R-C1 (parameter-table refactor) will consume
+/// this; Phase 1 just ships the descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirmwareCapabilities {
+    /// Which API surface this firmware uses (DIG1 / DIG2 / CAENDigitizer).
+    pub api: FirmwareApi,
+    /// Total channel count exposed by the FW. For group-based devices
+    /// (V1743) this counts the per-channel "logical" channels, not groups.
+    pub num_channels: u8,
+    /// Whether the FW supports per-event waveform recording.
+    pub supports_waveforms: bool,
+    /// Whether the FELib readout endpoint requires `N_EVENTS` to be
+    /// configured (DIG2-only — DIG1 uses DATA + SIZE alone).
+    pub includes_n_events: bool,
+    /// Whether channels are grouped at the hardware level (V1743: 2ch / group).
+    pub is_group_based: bool,
 }
 
 /// Fine Timestamp calculation mode (DIG1 only: PSD1/PHA1)
@@ -1027,6 +1123,153 @@ impl From<serde_json::Error> for DigitizerConfigError {
     }
 }
 
+/// SetInRun-capable DevTree parameters for PSD2 / AMax.
+/// PSD2 and AMax share the FELib API so the set is identical.
+static SET_IN_RUN_PSD2: &[&str] = &[
+    // Board
+    "testpulseperiod",
+    "testpulsewidth",
+    "syncoutmode",
+    "boardvetosource",
+    "boardvetopolarity",
+    "boardvetowidth",
+    // Channel
+    "chenable",
+    "chpretriggert",
+    "absolutebaseline",
+    "dcoffset",
+    "chgain",
+    "triggerthr",
+    "smoothingfactor",
+    "chargesmoothing",
+    "timefiltersmoothing",
+    "channelvetosource",
+    "adcvetowidth",
+    "channelstriggermask",
+    "coincidencemask",
+    "anticoincidencemask",
+    "coincidencelengtht",
+    "eventselector",
+    "eventtriggersource",
+    "wavetriggersource",
+    "wavesaving",
+    "waveanalogprobe0",
+    "waveanalogprobe1",
+    "wavedigitalprobe0",
+    "wavedigitalprobe1",
+    "wavedigitalprobe2",
+    "wavedigitalprobe3",
+];
+
+/// SetInRun-capable DevTree parameters for PHA2. Differs from PSD2 by
+/// dropping the PSD-specific channel params (`absolutebaseline`,
+/// `smoothingfactor`, `chargesmoothing`, `timefiltersmoothing`) and adding
+/// the trapezoidal-filter params (`energyfilter*`).
+static SET_IN_RUN_PHA2: &[&str] = &[
+    // Board (subset of PSD2)
+    "testpulseperiod",
+    "testpulsewidth",
+    "syncoutmode",
+    "boardvetosource",
+    "boardvetopolarity",
+    "boardvetowidth",
+    // Channel — common with PSD2
+    "chenable",
+    "chpretriggert",
+    "dcoffset",
+    "chgain",
+    "triggerthr",
+    "channelvetosource",
+    "adcvetowidth",
+    "channelstriggermask",
+    "coincidencemask",
+    "anticoincidencemask",
+    "coincidencelengtht",
+    "eventselector",
+    "eventtriggersource",
+    "wavetriggersource",
+    "wavesaving",
+    "waveanalogprobe0",
+    "waveanalogprobe1",
+    "wavedigitalprobe0",
+    "wavedigitalprobe1",
+    "wavedigitalprobe2",
+    "wavedigitalprobe3",
+    // PHA2-specific (trapezoidal filter)
+    "energyfilterbaselineguardt",
+    "energyfilterpileupguardt",
+    "energyfilterlflimitation",
+];
+
+/// SetInRun-capable parameters for PSD1 (DIG1 RAW endpoint).
+static SET_IN_RUN_PSD1: &[&str] = &[
+    // Board
+    "dt_ext_clock",
+    "start_delay",
+    "coinc_trgout",
+    "iolevel",
+    // Channel
+    "ch_enabled",
+    "ch_polarity",
+    "ch_dcoffset",
+    "ch_indyn",
+    "ch_bline_fixed",
+    "ch_discr_mode",
+    "ch_threshold",
+    "ch_cfd_delay",
+    "ch_cfd_fraction",
+    "ch_trg_holdoff",
+    "ch_self_trg_enable",
+    "ch_trg_global_gen",
+    "ch_out_propagate",
+    "ch_energy_cgain",
+    "ch_gate",
+    "ch_gateshort",
+    "ch_veto_src",
+    "ch_pur_en",
+    // Extended Coincidence
+    "ch_trg_latency",
+    "ch_coinc_mask",
+    "ch_coinc_operation",
+    "ch_coinc_majlev",
+    "ch_coinc_trgext",
+    "ch_coinc_trgsw",
+    "ch_purgap",
+    "ch_pu_count_en",
+];
+
+/// SetInRun-capable parameters for PHA1 (DIG1 RAW endpoint).
+/// Differs from PSD1 by dropping PSD-specific gates and adding
+/// trapezoid-filter params.
+static SET_IN_RUN_PHA1: &[&str] = &[
+    // Board
+    "dt_ext_clock",
+    "start_delay",
+    "coinc_trgout",
+    "iolevel",
+    // Channel
+    "ch_enabled",
+    "ch_polarity",
+    "ch_dcoffset",
+    "ch_cgain",
+    "ch_threshold",
+    "ch_trg_holdoff",
+    "ch_self_trg_enable",
+    "ch_trg_global_gen",
+    "ch_out_propagate",
+    "ch_trap_ftd",
+    "ch_fgain",
+    "ch_veto_src",
+    // Extended Coincidence
+    "ch_trg_latency",
+    "ch_coinc_mask",
+    "ch_coinc_operation",
+    "ch_coinc_majlev",
+    "ch_coinc_trgext",
+    "ch_coinc_trgsw",
+    "ch_pu_flag_en",
+];
+
 impl DigitizerConfig {
     /// Load digitizer configuration from a JSON file
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> Result<Self, DigitizerConfigError> {
@@ -1288,146 +1531,22 @@ impl DigitizerConfig {
             .collect()
     }
 
-    /// Get the set of DevTree parameter names (lowercase) that support SetInRun
+    /// Get the set of DevTree parameter names (lowercase) that support SetInRun.
+    ///
+    /// Each firmware's tables live as module-level `&'static [&'static str]`
+    /// slices below so the per-firmware sets can be diffed by `grep` rather
+    /// than reading match arms. PSD2 and AMax share the same FELib API so
+    /// they share a slice; PHA2 / PSD1 / PHA1 each have their own.
     fn set_in_run_param_names(&self) -> std::collections::HashSet<&'static str> {
-        use std::collections::HashSet;
-        match self.firmware {
-            FirmwareType::PSD2 | FirmwareType::AMax => HashSet::from([
-                // Board
-                "testpulseperiod",
-                "testpulsewidth",
-                "syncoutmode",
-                "boardvetosource",
-                "boardvetopolarity",
-                "boardvetowidth",
-                // Channel
-                "chenable",
-                "chpretriggert",
-                "absolutebaseline",
-                "dcoffset",
-                "chgain",
-                "triggerthr",
-                "smoothingfactor",
-                "chargesmoothing",
-                "timefiltersmoothing",
-                "channelvetosource",
-                "adcvetowidth",
-                "channelstriggermask",
-                "coincidencemask",
-                "anticoincidencemask",
-                "coincidencelengtht",
-                "eventselector",
-                "eventtriggersource",
-                "wavetriggersource",
-                "wavesaving",
-                "waveanalogprobe0",
-                "waveanalogprobe1",
-                "wavedigitalprobe0",
-                "wavedigitalprobe1",
-                "wavedigitalprobe2",
-                "wavedigitalprobe3",
-            ]),
-            FirmwareType::PHA2 => HashSet::from([
-                // Board (subset of PSD2 + PHA2 specifics)
-                "testpulseperiod",
-                "testpulsewidth",
-                "syncoutmode",
-                "boardvetosource",
-                "boardvetopolarity",
-                "boardvetowidth",
-                // Channel — common with PSD2
-                "chenable",
-                "chpretriggert",
-                "dcoffset",
-                "chgain",
-                "triggerthr",
-                "channelvetosource",
-                "adcvetowidth",
-                "channelstriggermask",
-                "coincidencemask",
-                "anticoincidencemask",
-                "coincidencelengtht",
-                "eventselector",
-                "eventtriggersource",
-                "wavetriggersource",
-                "wavesaving",
-                "waveanalogprobe0",
-                "waveanalogprobe1",
-                "wavedigitalprobe0",
-                "wavedigitalprobe1",
-                "wavedigitalprobe2",
-                "wavedigitalprobe3",
-                // PHA2-specific (trapezoidal filter)
-                "energyfilterbaselineguardt",
-                "energyfilterpileupguardt",
-                "energyfilterlflimitation",
-            ]),
-            FirmwareType::PSD1 => HashSet::from([
-                // Board
-                "dt_ext_clock",
-                "start_delay",
-                "coinc_trgout",
-                "iolevel",
-                // Channel
-                "ch_enabled",
-                "ch_polarity",
-                "ch_dcoffset",
-                "ch_indyn",
-                "ch_bline_fixed",
-                "ch_discr_mode",
-                "ch_threshold",
-                "ch_cfd_delay",
-                "ch_cfd_fraction",
-                "ch_trg_holdoff",
-                "ch_self_trg_enable",
-                "ch_trg_global_gen",
-                "ch_out_propagate",
-                "ch_energy_cgain",
-                "ch_gate",
-                "ch_gateshort",
-                "ch_veto_src",
-                "ch_pur_en",
-                // Extended Coincidence
-                "ch_trg_latency",
-                "ch_coinc_mask",
-                "ch_coinc_operation",
-                "ch_coinc_majlev",
-                "ch_coinc_trgext",
-                "ch_coinc_trgsw",
-                "ch_purgap",
-                "ch_pu_count_en",
-            ]),
-            FirmwareType::PHA1 => HashSet::from([
-                // Board
-                "dt_ext_clock",
-                "start_delay",
-                "coinc_trgout",
-                "iolevel",
-                // Channel
-                "ch_enabled",
-                "ch_polarity",
-                "ch_dcoffset",
-                "ch_cgain",
-                "ch_threshold",
-                "ch_trg_holdoff",
-                "ch_self_trg_enable",
-                "ch_trg_global_gen",
-                "ch_out_propagate",
-                "ch_trap_ftd",
-                "ch_fgain",
-                "ch_veto_src",
-                // Extended Coincidence
-                "ch_trg_latency",
-                "ch_coinc_mask",
-                "ch_coinc_operation",
-                "ch_coinc_majlev",
-                "ch_coinc_trgext",
-                "ch_coinc_trgsw",
-                "ch_pu_flag_en",
-            ]),
+        let names: &[&str] = match self.firmware {
+            FirmwareType::PSD2 | FirmwareType::AMax => SET_IN_RUN_PSD2,
+            FirmwareType::PHA2 => SET_IN_RUN_PHA2,
+            FirmwareType::PSD1 => SET_IN_RUN_PSD1,
+            FirmwareType::PHA1 => SET_IN_RUN_PHA1,
             // x743 does not use FELib DevTree parameters
-            FirmwareType::X743CI | FirmwareType::X743Std => HashSet::new(),
-        }
+            FirmwareType::X743CI | FirmwareType::X743Std => &[],
+        };
+        names.iter().copied().collect()
     }
 
     fn add_board_parameters(&self, params: &mut Vec<CaenParameter>) {
@@ -2212,6 +2331,77 @@ mod tests {
         assert_eq!(config.name, "Test Digitizer");
         assert_eq!(config.firmware, FirmwareType::PSD2);
         assert_eq!(config.num_channels, 32);
+    }
+
+    /// PSD2 and AMax share the FELib API; their SetInRun-capable param sets
+    /// must stay identical after the R-C5 base+diff refactor (Phase 1).
+    /// Hand-rolled diff in match arms used to be the only way to tell — now
+    /// they reference the same `SET_IN_RUN_PSD2` slice, so this test is a
+    /// regression guard against accidentally splitting them again.
+    #[test]
+    fn set_in_run_psd2_and_amax_are_identical() {
+        let psd2 = DigitizerConfig::new(0, "PSD2", FirmwareType::PSD2).set_in_run_param_names();
+        let amax = DigitizerConfig::new(0, "AMax", FirmwareType::AMax).set_in_run_param_names();
+        assert_eq!(psd2, amax);
+    }
+
+    #[test]
+    fn set_in_run_x743_is_empty() {
+        let std = DigitizerConfig::new(0, "X743", FirmwareType::X743Std).set_in_run_param_names();
+        assert!(std.is_empty());
+    }
+
+    /// `FirmwareType::capabilities()` is the new central source of truth. It
+    /// must agree with the legacy `is_*()` helper methods for every FW —
+    /// otherwise call sites that switch from `fw.is_dig1()` to
+    /// `fw.capabilities().api` would drift.
+    #[test]
+    fn capabilities_match_legacy_predicates_for_all_firmware() {
+        let all = [
+            FirmwareType::PSD1,
+            FirmwareType::PSD2,
+            FirmwareType::PHA1,
+            FirmwareType::PHA2,
+            FirmwareType::AMax,
+            FirmwareType::X743CI,
+            FirmwareType::X743Std,
+        ];
+        for fw in all {
+            let cap = fw.capabilities();
+            assert_eq!(
+                fw.is_dig1(),
+                cap.api == FirmwareApi::Dig1,
+                "is_dig1 disagreed with capabilities for {fw:?}",
+            );
+            assert_eq!(
+                fw.is_legacy_api(),
+                cap.api == FirmwareApi::CaenDigitizer,
+                "is_legacy_api disagreed with capabilities for {fw:?}",
+            );
+            assert_eq!(
+                fw.is_felib(),
+                cap.api.is_felib(),
+                "is_felib disagreed with capabilities for {fw:?}",
+            );
+            assert_eq!(
+                fw.is_group_based(),
+                cap.is_group_based,
+                "is_group_based disagreed with capabilities for {fw:?}",
+            );
+            assert_eq!(
+                fw.includes_n_events(),
+                cap.includes_n_events,
+                "includes_n_events disagreed with capabilities for {fw:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn set_in_run_pha2_includes_energy_filter_params() {
+        let pha2 = DigitizerConfig::new(0, "PHA2", FirmwareType::PHA2).set_in_run_param_names();
+        assert!(pha2.contains("energyfilterbaselineguardt"));
+        assert!(pha2.contains("energyfilterpileupguardt"));
+        assert!(pha2.contains("energyfilterlflimitation"));
     }
 
     #[test]

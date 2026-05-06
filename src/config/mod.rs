@@ -12,6 +12,7 @@
 //! ```
 
 pub mod amax_generated;
+pub mod devtree_paths;
 pub mod digitizer;
 
 pub use digitizer::{
