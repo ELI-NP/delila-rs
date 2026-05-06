@@ -1,726 +1,120 @@
 //! PHA2 Decoder for CAEN x274x series digitizers (DPP-PHA, trapezoidal-filter MCA).
 //!
-//! Decodes 64-bit big-endian word format from the DIG2 RAW endpoint when the
-//! board is running DPP-PHA firmware. The aggregate-header / event-word
-//! layout is the same Individual Trigger Mode (`format=0x2`) used by PSD2;
-//! the only per-event difference is the absence of `energy_short` (PSD2 puts
-//! a charge_short value in bits [41:26]; PHA2 leaves that slot unused, so we
-//! force it to 0).
+//! Decodes the DIG2 RAW endpoint Individual-Trigger-Mode aggregate format
+//! (`format=0x2`), the same envelope as PSD2. All framing is shared in
+//! [`super::dualchannel_common`] — this module only supplies the per-firmware
+//! pieces:
 //!
-//! Waveform extras header carries PHA-specific probe-type info (analog probe
-//! type + sign + multiplication factor; digital probe type). Phase 2 keeps
-//! the probe-type bytes parsed locally for diagnostics; surfacing them on
-//! [`EventData`] is deferred to Phase 4 (cross-cutting wire-format change).
+//! - **`energy_short` slot is unused** (PSD2 carries `charge_short` here;
+//!   PHA2 leaves it 0 on the wire so we force it to 0 in the event).
+//! - **Waveform header low bits encode probe metadata** per CAEN doxygen
+//!   `legacy/PHA2_Parameters/a00108.html` (DPP-PHA waveform extras):
+//!   - bits[5:0]   = analog probe #0 info: `type[2:0] | is_signed[3] | factor[5:4]`
+//!   - bits[11:6]  = analog probe #1 info, same layout shifted
+//!   - bits[15+4N : 12+4N] = digital probe #N type (4 bits)
 //!
-//! Reference: `legacy/PHA2_Parameters/a00108.html` (CAEN FELib doxygen
-//! "Supported Endpoints" → DPPPHA Raw / DPPPHA decoded sections) and
-//! `docs/devtree_examples/vx2730_pha2_sn52622.json`.
+//! The is_signed bit drives sample sign-extension in the shared waveform
+//! decoder — Time-filter / Energy-filter / Energy-filter-minus-baseline
+//! probes arrive as 14-bit signed and would wrap to the top of the visible
+//! band if interpreted unsigned (the original "weird Time-filter plot" bug,
+//! commit `7ed3285`).
+//!
+//! 64-bit big-endian on the wire (VX274x hardware byte order).
 
-use super::common::{DataType, EventData, RawData, Waveform};
-use crate::extract_bits;
-use tracing::{debug, info, warn};
+use super::dualchannel_common::{Dig2Config, Dig2Decoder, Dig2Variant, WaveformMetadata};
 
-/// PHA2 wire constants — 64-bit big-endian words, same Individual Trigger
-/// Mode aggregate envelope as PSD2.
-mod constants {
-    pub const WORD_SIZE: usize = 8;
-
-    // Aggregate header (word 0)
-    pub const HEADER_TYPE_SHIFT: u32 = 60;
-    pub const HEADER_TYPE_MASK: u64 = 0xF;
-    pub const HEADER_TYPE_DATA: u64 = 0x2;
-    pub const HEADER_FAIL_CHECK_SHIFT: u32 = 56;
-    pub const HEADER_FAIL_CHECK_MASK: u64 = 0x1;
-    pub const AGGREGATE_COUNTER_SHIFT: u32 = 32;
-    pub const AGGREGATE_COUNTER_MASK: u64 = 0xFFFF;
-    pub const TOTAL_SIZE_MASK: u64 = 0xFFFFFFFF;
-
-    // Event first word
-    pub const LAST_WORD_SHIFT: u32 = 63;
-    pub const CHANNEL_SHIFT: u32 = 56;
-    pub const CHANNEL_MASK: u64 = 0x7F;
-    pub const SPECIAL_EVENT_SHIFT: u32 = 55;
-    pub const SPECIAL_EVENT_MASK: u64 = 0x1;
-    pub const TIMESTAMP_MASK: u64 = 0xFFFFFFFFFFFF;
-    pub const TIMESTAMP_REDUCED_MASK: u64 = 0xFFFFFFFF;
-
-    // Event second word — identical layout to PSD2 with bits[41:26] unused.
-    pub const WAVEFORM_FLAG_SHIFT: u32 = 62;
-    pub const FLAGS_LOW_PRIORITY_SHIFT: u32 = 50;
-    pub const FLAGS_LOW_PRIORITY_MASK: u64 = 0xFFF; // 12 bits
-    pub const FLAGS_HIGH_PRIORITY_SHIFT: u32 = 42;
-    pub const FLAGS_HIGH_PRIORITY_MASK: u64 = 0xFF; // 8 bits
-    pub const FINE_TIME_SHIFT: u32 = 16;
-    pub const FINE_TIME_MASK: u64 = 0x3FF;
-    pub const FINE_TIME_SCALE: f64 = 1024.0;
-    pub const ENERGY_MASK: u64 = 0xFFFF;
-
-    // Single-word event flag-high lives at bits[55:48] (per PSD2 convention).
-    pub const SINGLE_WORD_FLAG_HIGH_SHIFT: u32 = 48;
-
-    // Waveform header (word 0 of waveform extras)
-    pub const WAVEFORM_CHECK1_SHIFT: u32 = 63;
-    pub const WAVEFORM_CHECK2_SHIFT: u32 = 60;
-    pub const WAVEFORM_CHECK2_MASK: u64 = 0x7;
-    pub const TIME_RESOLUTION_SHIFT: u32 = 44;
-    pub const TIME_RESOLUTION_MASK: u64 = 0x3;
-    // Trigger-threshold field in PSD2 lives at bits[43:28]. PHA2 uses this
-    // slot for analog/digital probe info; we read but do not propagate.
-    pub const TRIGGER_THRESHOLD_SHIFT: u32 = 28;
-    pub const TRIGGER_THRESHOLD_MASK: u64 = 0xFFFF;
-
-    // Per-probe info packed in the wf-header low bits (per CAEN doxygen
-    // a00108.html DPP-PHA waveform extra-word section).
-    //
-    //   a.p. #0 info: bits[5:0]  = type[2:0] | is_signed[3] | factor[5:4]
-    //   a.p. #1 info: bits[11:6] = same layout, shifted by 6
-    //   d.p. #N info: bits[15+4N : 12+4N]
-    //
-    // The is_signed bit is what we need to switch the sample loop between
-    // sign-extending 14-bit (Time filter, Energy filter, Energy filter
-    // minus baseline) and unsigned 14-bit (ADC input, Energy filter
-    // baseline). The frontend already knows how to add the +8191 visual
-    // centring offset for signed probes — see PHA1's
-    // analog_probe_X_is_signed plumbing.
+/// PHA2 waveform-header low-bit layout. Per-probe info encoding from
+/// CAEN doxygen `legacy/PHA2_Parameters/a00108.html`.
+mod pha2_waveform_bits {
+    /// a.p. #0 info at bits[5:0].
     pub const ANALOG_PROBE0_INFO_SHIFT: u32 = 0;
+    /// a.p. #1 info at bits[11:6].
     pub const ANALOG_PROBE1_INFO_SHIFT: u32 = 6;
-    pub const ANALOG_PROBE_INFO_MASK: u64 = 0x3F; // 6 bits
-    pub const ANALOG_PROBE_IS_SIGNED_BIT: u64 = 0x08; // bit 3 inside the 6-bit slot
-    pub const ANALOG_PROBE_TYPE_MASK: u64 = 0x07; // bits[2:0] of the 6-bit slot
+    pub const ANALOG_PROBE_INFO_MASK: u64 = 0x3F; // 6-bit slot
+    /// is_signed lives at bit 3 inside the 6-bit slot.
+    pub const ANALOG_PROBE_IS_SIGNED_BIT: u64 = 0x08;
+    /// type[2:0] within the 6-bit slot.
+    pub const ANALOG_PROBE_TYPE_MASK: u64 = 0x07;
 
-    // Digital probe info slots. Per doxygen: d.p. #N at bits[15+4N : 12+4N].
+    /// d.p. #N at bits[15+4N : 12+4N] — 4-bit type field per probe.
     pub const DIGITAL_PROBE0_INFO_SHIFT: u32 = 12;
     pub const DIGITAL_PROBE1_INFO_SHIFT: u32 = 16;
     pub const DIGITAL_PROBE2_INFO_SHIFT: u32 = 20;
     pub const DIGITAL_PROBE3_INFO_SHIFT: u32 = 24;
-    pub const DIGITAL_PROBE_INFO_MASK: u64 = 0x0F; // 4-bit type field
-
-    // Waveform size word
-    pub const WAVEFORM_WORDS_MASK: u64 = 0xFFF;
-
-    // Sample format inside each 32-bit half-word (2 samples per 64-bit word)
-    pub const ANALOG_PROBE_MASK: u32 = 0x3FFF;
-    pub const ANALOG_PROBE2_SHIFT: u32 = 16;
-    pub const DIGITAL_PROBE1_SHIFT: u32 = 14;
-    pub const DIGITAL_PROBE2_SHIFT: u32 = 15;
-    pub const DIGITAL_PROBE3_SHIFT: u32 = 30;
-    pub const DIGITAL_PROBE4_SHIFT: u32 = 31;
-
-    // Start/Stop signals (special aggregates)
-    pub const SIGNAL_TYPE_SHIFT: u32 = 60;
-    pub const SIGNAL_SUBTYPE_SHIFT: u32 = 56;
-    pub const SIGNAL_TYPE_MASK: u64 = 0xF;
-    pub const START_SIGNAL_TYPE: u64 = 0x3;
-    pub const START_SIGNAL_SUBTYPE: u64 = 0x0;
-    pub const STOP_SIGNAL_TYPE: u64 = 0x3;
-    pub const STOP_SIGNAL_SUBTYPE: u64 = 0x2;
-
-    pub const MIN_DATA_SIZE: usize = 2 * WORD_SIZE;
-    pub const START_SIGNAL_SIZE: usize = 4 * WORD_SIZE;
-    pub const STOP_SIGNAL_SIZE: usize = 3 * WORD_SIZE;
+    pub const DIGITAL_PROBE_INFO_MASK: u64 = 0x0F;
 }
 
-/// PHA2 Decoder configuration
-#[derive(Debug, Clone)]
-pub struct Pha2Config {
-    /// ADC time step in nanoseconds (typically 2 ns for 500 MS/s).
-    pub time_step_ns: f64,
-    /// Module ID to stamp on every emitted event.
-    pub module_id: u8,
-    /// Verbose dump of every aggregate (slow — testing only).
-    pub dump_enabled: bool,
-    /// Number of physical channels; events with `channel >= num_channels`
-    /// are still emitted but logged once per aggregate as "out of range".
-    pub num_channels: u8,
-}
+// ---------------------------------------------------------------------------
+// Public type aliases
+// ---------------------------------------------------------------------------
 
-impl Default for Pha2Config {
-    fn default() -> Self {
-        Self {
-            time_step_ns: 2.0,
-            module_id: 0,
-            dump_enabled: false,
-            num_channels: 32,
-        }
-    }
-}
+/// Configuration for [`Pha2Decoder`]. Aliased to the shared [`Dig2Config`]
+/// so PSD2 and PHA2 callers can build configs with identical syntax.
+pub type Pha2Config = Dig2Config;
 
-/// PHA2 Decoder for x274x series digitizers
-#[derive(Debug, Clone)]
-pub struct Pha2Decoder {
-    config: Pha2Config,
-    last_aggregate_counter: u16,
-    /// Track fine-TS clamps so we warn at most once per run.
-    fine_ts_clamp_warned: bool,
-    /// Dump the first aggregate that triggers a wf-header check failure
-    /// (for Phase 3 throughput debugging; one-shot per run).
-    fault_dumped: bool,
-}
+/// PHA2 decoder = monomorphized [`Dig2Decoder`] over [`Pha2Variant`].
+pub type Pha2Decoder = Dig2Decoder<Pha2Variant>;
 
-impl Pha2Decoder {
-    pub fn new(config: Pha2Config) -> Self {
-        Self {
-            config,
-            last_aggregate_counter: 0,
-            fine_ts_clamp_warned: false,
-            fault_dumped: false,
-        }
+/// Per-firmware customization for VX274x DPP-PHA.
+pub struct Pha2Variant;
+
+impl Dig2Variant for Pha2Variant {
+    const FW_NAME: &'static str = "PHA2";
+
+    /// PHA2 leaves PSD2's `energy_short` slot (bits[41:26]) unused, so we
+    /// always emit 0. Downstream consumers can rely on the FW-distinct
+    /// "0 means PHA2" semantics for offline analysis.
+    fn decode_energy_short(_second_word: u64) -> u16 {
+        0
     }
 
-    pub fn with_defaults() -> Self {
-        Self::new(Pha2Config::default())
-    }
-
-    pub fn set_dump_enabled(&mut self, enabled: bool) {
-        self.config.dump_enabled = enabled;
-    }
-
-    /// Reset run-level state. Called by the Reader on Start signal.
-    pub fn reset_for_new_run(&mut self) {
-        self.last_aggregate_counter = 0;
-        self.fine_ts_clamp_warned = false;
-        self.fault_dumped = false;
-    }
-
-    /// Classify the data type by structural inspection.
-    pub fn classify(&self, raw: &RawData) -> DataType {
-        if raw.size < constants::MIN_DATA_SIZE {
-            return DataType::Unknown;
-        }
-        if raw.size == constants::STOP_SIGNAL_SIZE && self.is_stop_signal(&raw.data) {
-            return DataType::Stop;
-        }
-        if raw.size == constants::START_SIGNAL_SIZE && self.is_start_signal(&raw.data) {
-            return DataType::Start;
-        }
-        DataType::Event
-    }
-
-    pub fn decode(&mut self, raw: &RawData) -> Vec<EventData> {
-        let mut events = Vec::new();
-        self.decode_into(raw, &mut events);
-        events
-    }
-
-    /// Decode an aggregate into `events` (cleared first). Special events
-    /// (Start/Stop/per-event flagged) are logged and dropped — they never
-    /// enter the physics stream (per Gemini review note).
-    pub fn decode_into(&mut self, raw: &RawData, events: &mut Vec<EventData>) {
-        events.clear();
-
-        if self.config.dump_enabled {
-            self.dump_raw_data(raw);
-        }
-
-        match self.classify(raw) {
-            DataType::Start => {
-                info!(size = raw.size, "[PHA2] Start signal received");
-                return;
-            }
-            DataType::Stop => {
-                info!(size = raw.size, "[PHA2] Stop signal received");
-                return;
-            }
-            DataType::Unknown => {
-                warn!(size = raw.size, "[PHA2] Unknown data type, dropping");
-                return;
-            }
-            DataType::Event => {}
-        }
-
-        let header = self.read_u64(&raw.data, 0);
-        if !self.validate_header(header, raw.size) {
-            return;
-        }
-
-        let total_size = (header & constants::TOTAL_SIZE_MASK) as usize;
-        let total_words = raw.data.len() / constants::WORD_SIZE;
-        events.reserve(total_size / 2);
-        let mut word_index = 1; // skip aggregate header
-        let mut out_of_range_count = 0u32;
-
-        while word_index < total_size {
-            if let Some(event) = self.decode_event(&raw.data, &mut word_index) {
-                if event.channel >= self.config.num_channels {
-                    out_of_range_count += 1;
-                    if self.config.dump_enabled && out_of_range_count <= 5 {
-                        warn!(
-                            channel = event.channel,
-                            num_channels = self.config.num_channels,
-                            "[PHA2] channel out-of-range",
-                        );
-                    }
-                }
-                events.push(event);
-            }
-        }
-
-        if word_index != total_size {
-            warn!(
-                word_index,
-                total_size,
-                total_words,
-                "[PHA2] DECODE MISMATCH: words consumed != aggregate header size",
-            );
-        }
-
-        if out_of_range_count > 0 {
-            warn!(
-                out_of_range = out_of_range_count,
-                num_channels = self.config.num_channels,
-                decoded = events.len(),
-                "[PHA2] events with channel >= num_channels in aggregate",
-            );
-
-            // One-shot dump: capture the FIRST malformed aggregate so we can
-            // reverse-engineer the actual wire format from real bytes.
-            if !self.fault_dumped {
-                self.fault_dumped = true;
-                let num_words = raw.data.len() / constants::WORD_SIZE;
-                warn!(
-                    raw_size = raw.size,
-                    raw_n_events = raw.n_events,
-                    total_words = num_words,
-                    decoded = events.len(),
-                    "[PHA2-FAULT] dumping malformed aggregate (head 256 + sample around evt boundaries)",
-                );
-                for i in 0..num_words.min(256) {
-                    let w = self.read_u64(&raw.data, i);
-                    warn!(idx = i, word = format!("0x{:016x}", w), "[PHA2-FAULT] word");
-                }
-                // Probe deep into the aggregate: events appear to switch format mid-aggregate
-                // when the FW enters the bad state. Look at multiple positions including
-                // 1000, 2000, 5000, 10000, near-end.
-                let probe_starts: Vec<usize> = vec![
-                    400,
-                    612,
-                    820,
-                    1020,
-                    1024,
-                    2048,
-                    4096,
-                    8192,
-                    16384,
-                    num_words.saturating_sub(64),
-                ];
-                for start in probe_starts {
-                    if start + 32 <= num_words {
-                        warn!(range_start = start, "[PHA2-FAULT] probing range");
-                        for i in start..(start + 32).min(num_words) {
-                            let w = self.read_u64(&raw.data, i);
-                            warn!(idx = i, word = format!("0x{:016x}", w), "[PHA2-FAULT] word");
-                        }
-                    }
-                }
-            }
-        }
-
-        events.sort_by(|a, b| {
-            a.timestamp_ns
-                .partial_cmp(&b.timestamp_ns)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        if self.config.dump_enabled {
-            debug!(events = events.len(), "[PHA2] aggregate decoded");
-        }
-    }
-
-    fn decode_event(&mut self, data: &[u8], word_index: &mut usize) -> Option<EventData> {
-        let total_words = data.len() / constants::WORD_SIZE;
-
-        if *word_index >= total_words {
-            return None;
-        }
-
-        let first_word = self.read_u64(data, *word_index);
-        *word_index += 1;
-
-        let is_last_word = extract_bits!(first_word, constants::LAST_WORD_SHIFT, 0x1) != 0;
-        let channel = extract_bits!(
-            first_word,
-            constants::CHANNEL_SHIFT,
-            constants::CHANNEL_MASK,
-            u8
-        );
-
-        if is_last_word {
-            // Single-word compressed event (data-reduction mode).
-            return self.decode_single_word_event(first_word, channel);
-        }
-
-        let is_special_event = extract_bits!(
-            first_word,
-            constants::SPECIAL_EVENT_SHIFT,
-            constants::SPECIAL_EVENT_MASK
-        ) != 0;
-        let raw_timestamp = first_word & constants::TIMESTAMP_MASK;
-
-        if *word_index >= total_words {
-            return None;
-        }
-
-        let second_word = self.read_u64(data, *word_index);
-        *word_index += 1;
-
-        let has_waveform = extract_bits!(second_word, constants::WAVEFORM_FLAG_SHIFT, 0x1) != 0;
-        let is_last = extract_bits!(second_word, constants::LAST_WORD_SHIFT, 0x1) != 0;
-
-        if is_special_event {
-            // Per-event "stat" / time-counter words. Drain extra words to
-            // keep word alignment, then drop — these are not physics.
-            if !is_last {
-                while *word_index < total_words {
-                    let extra_word = self.read_u64(data, *word_index);
-                    *word_index += 1;
-                    if ((extra_word >> constants::LAST_WORD_SHIFT) & 0x1) != 0 {
-                        break;
-                    }
-                }
-            }
-            debug!(channel, "[PHA2] special event filtered");
-            return None;
-        }
-
-        let flags_low = extract_bits!(
-            second_word,
-            constants::FLAGS_LOW_PRIORITY_SHIFT,
-            constants::FLAGS_LOW_PRIORITY_MASK
-        );
-        let flags_high = extract_bits!(
-            second_word,
-            constants::FLAGS_HIGH_PRIORITY_SHIFT,
-            constants::FLAGS_HIGH_PRIORITY_MASK
-        );
-        let flags = ((flags_high << 12) | flags_low) as u32;
-
-        let energy = (second_word & constants::ENERGY_MASK) as u16;
-
-        // Fine-TS defensive parsing: spec says 10 bits, [0, 1023]. The mask
-        // already enforces this, but warn once if we ever observe it at the
-        // boundary so Phase 3 throughput tests can flag firmware quirks.
-        let raw_fine_ts = extract_bits!(
-            second_word,
-            constants::FINE_TIME_SHIFT,
-            constants::FINE_TIME_MASK,
-            u16
-        );
-        let fine_time = if raw_fine_ts >= 1024 {
-            if !self.fine_ts_clamp_warned {
-                warn!(raw_fine_ts, "[PHA2] fine_ts >= 1024 — clamping (one-shot)");
-                self.fine_ts_clamp_warned = true;
-            }
-            1023
-        } else {
-            raw_fine_ts
-        };
-
-        let coarse_time_ns = (raw_timestamp as f64) * self.config.time_step_ns;
-        let fine_time_ns =
-            (fine_time as f64 / constants::FINE_TIME_SCALE) * self.config.time_step_ns;
-        let timestamp_ns = coarse_time_ns + fine_time_ns;
-
-        let waveform = if has_waveform {
-            self.decode_waveform(data, word_index)
-        } else {
-            None
-        };
-
-        Some(EventData {
-            timestamp_ns,
-            module: self.config.module_id,
-            channel,
-            energy,
-            // PHA2 leaves PSD2's energy_short slot (bits[41:26]) unused.
-            energy_short: 0,
-            fine_time,
-            flags,
-            user_info: [0; 4],
-            waveform,
-        })
-    }
-
-    /// Single-word compressed event — same layout as PSD2 (no PHA2 spec
-    /// difference observed). No waveform, no extras2, no fine_ts.
-    fn decode_single_word_event(&self, word: u64, channel: u8) -> Option<EventData> {
-        let flags_high = ((word >> constants::SINGLE_WORD_FLAG_HIGH_SHIFT)
-            & constants::FLAGS_HIGH_PRIORITY_MASK) as u32;
-        let timestamp_reduced =
-            (word >> constants::FINE_TIME_SHIFT) & constants::TIMESTAMP_REDUCED_MASK;
-        let energy = (word & constants::ENERGY_MASK) as u16;
-
-        let timestamp_ns = (timestamp_reduced as f64) * self.config.time_step_ns;
-        let flags = flags_high << 12;
-
-        Some(EventData {
-            timestamp_ns,
-            module: self.config.module_id,
-            channel,
-            energy,
-            energy_short: 0,
-            fine_time: 0,
-            flags,
-            user_info: [0; 4],
-            waveform: None,
-        })
-    }
-
-    /// Decode waveform extras (header word + size word + N data words).
-    /// Sample bit-packing matches PSD2; the extras header carries PHA2-
-    /// specific probe-type info that we read but don't yet propagate (see
-    /// Phase 4 in TODO/51 for the cross-cutting `EventData` extension).
-    fn decode_waveform(&self, data: &[u8], word_index: &mut usize) -> Option<Waveform> {
-        let total_words = data.len() / constants::WORD_SIZE;
-        if *word_index + 2 > total_words {
-            return None;
-        }
-
-        let wf_header = self.read_u64(data, *word_index);
-        let check1 = (wf_header >> constants::WAVEFORM_CHECK1_SHIFT) & 0x1;
-        let check2 =
-            (wf_header >> constants::WAVEFORM_CHECK2_SHIFT) & constants::WAVEFORM_CHECK2_MASK;
-        if check1 != 1 || check2 != 0 {
-            warn!(
-                word_index = *word_index,
-                wf_header = format!("0x{:016x}", wf_header),
-                check1,
-                check2,
-                "[PHA2] invalid waveform header — skipping waveform"
-            );
-            return None;
-        }
-        *word_index += 1;
-
-        let time_resolution = ((wf_header >> constants::TIME_RESOLUTION_SHIFT)
-            & constants::TIME_RESOLUTION_MASK) as u8;
-        // PHA2 puts probe-type info where PSD2 carries trigger_threshold.
-        // We expose `trigger_threshold` raw for now — not strictly correct
-        // for PHA2, but harmless until Phase 4 exposes typed probe info.
-        let trigger_threshold = ((wf_header >> constants::TRIGGER_THRESHOLD_SHIFT)
-            & constants::TRIGGER_THRESHOLD_MASK) as u16;
-
-        // Per-probe `is_signed` flag from the wf-header low bits. Time
-        // filter / Energy filter / Energy-filter-minus-baseline probes
-        // arrive as 14-bit signed and would wrap to the top of the visible
-        // band if interpreted unsigned (the original "weird Time-filter
-        // plot" bug). We mirror PHA1 here: sign-extend on the way in,
-        // leave the multiplication factor for offline analysis (see
-        // doxygen DPP-PHA waveform extras docs — factor is auto-set by
-        // the FW per probe choice and only affects absolute scale, never
-        // shape).
-        let ap0_info = (wf_header >> constants::ANALOG_PROBE0_INFO_SHIFT)
-            & constants::ANALOG_PROBE_INFO_MASK;
-        let ap1_info = (wf_header >> constants::ANALOG_PROBE1_INFO_SHIFT)
-            & constants::ANALOG_PROBE_INFO_MASK;
-        let ap0_is_signed = (ap0_info & constants::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
-        let ap1_is_signed = (ap1_info & constants::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
-        // Probe-type identifiers (PHA2 canonical encoding — see Waveform
-        // doc-comment in src/reader/decoder/common.rs). The 4-bit digital
-        // probe slots and 3-bit analog probe slots are extracted here so
-        // the frontend can render the actual probe label ("A0: TimeFilter")
-        // instead of the generic "A0".
-        let ap0_type = (ap0_info & constants::ANALOG_PROBE_TYPE_MASK) as u8;
-        let ap1_type = (ap1_info & constants::ANALOG_PROBE_TYPE_MASK) as u8;
-        let dp0_type = ((wf_header >> constants::DIGITAL_PROBE0_INFO_SHIFT)
-            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
-        let dp1_type = ((wf_header >> constants::DIGITAL_PROBE1_INFO_SHIFT)
-            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
-        let dp2_type = ((wf_header >> constants::DIGITAL_PROBE2_INFO_SHIFT)
-            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
-        let dp3_type = ((wf_header >> constants::DIGITAL_PROBE3_INFO_SHIFT)
-            & constants::DIGITAL_PROBE_INFO_MASK) as u8;
-
-        let size_word = self.read_u64(data, *word_index);
-        *word_index += 1;
-
-        let n_waveform_words = (size_word & constants::WAVEFORM_WORDS_MASK) as usize;
-        let n_samples = n_waveform_words * 2;
-
-        if *word_index + n_waveform_words > total_words {
-            warn!(
-                need = n_waveform_words,
-                have = total_words - *word_index,
-                "[PHA2] truncated waveform — skipping"
-            );
-            *word_index = total_words.min(*word_index + n_waveform_words);
-            return None;
-        }
-
-        let mut analog_probe1 = Vec::with_capacity(n_samples);
-        let mut analog_probe2 = Vec::with_capacity(n_samples);
-        let mut digital_probe1 = Vec::with_capacity(n_samples);
-        let mut digital_probe2 = Vec::with_capacity(n_samples);
-        let mut digital_probe3 = Vec::with_capacity(n_samples);
-        let mut digital_probe4 = Vec::with_capacity(n_samples);
-
-        // Trust wf_size from the FW. The previous "mid-loop wf_header
-        // pattern" rewind was a misdiagnosis: sample words have bit63=1
-        // whenever digital_probe_4 is asserted (e.g. EnergyFilterPeaking
-        // around the trigger), and bits[62:60]=0 whenever DP3=0 and
-        // analog_probe_2 is small (baseline) — both routinely satisfied
-        // during normal acquisition. The "truncation" we observed in
-        // Phase 3 stress tests was the FW genuinely wedging into a low-
-        // rate state under rapid Configure cycles (waveforms came back
-        // healthy after a few minutes idle); the FW does not partial-write
-        // a waveform mid-event. Verified 2026-05-04 with `pha2_simple_test`
-        // (`--wave-downsampling 1` and `8`): wf_size=2048 in both cases,
-        // event-to-event spacing is exactly 2052 words, no actual
-        // truncation observed.
-        let decode_ap = |raw: u32, signed: bool| -> i16 {
-            if signed {
-                super::common::sign_extend_14bit(raw)
-            } else {
-                (raw & constants::ANALOG_PROBE_MASK) as i16
-            }
-        };
-
-        for _ in 0..n_waveform_words {
-            let word = self.read_u64(data, *word_index);
-            *word_index += 1;
-
-            for shift in [0u32, 32u32] {
-                let sample = ((word >> shift) & 0xFFFFFFFF) as u32;
-
-                let ap1 = decode_ap(sample & constants::ANALOG_PROBE_MASK, ap0_is_signed);
-                let ap2 = decode_ap(
-                    (sample >> constants::ANALOG_PROBE2_SHIFT) & constants::ANALOG_PROBE_MASK,
-                    ap1_is_signed,
-                );
-                let dp1 = ((sample >> constants::DIGITAL_PROBE1_SHIFT) & 0x1) as u8;
-                let dp2 = ((sample >> constants::DIGITAL_PROBE2_SHIFT) & 0x1) as u8;
-                let dp3 = ((sample >> constants::DIGITAL_PROBE3_SHIFT) & 0x1) as u8;
-                let dp4 = ((sample >> constants::DIGITAL_PROBE4_SHIFT) & 0x1) as u8;
-
-                analog_probe1.push(ap1);
-                analog_probe2.push(ap2);
-                digital_probe1.push(dp1);
-                digital_probe2.push(dp2);
-                digital_probe3.push(dp3);
-                digital_probe4.push(dp4);
-            }
-        }
-
-        Some(Waveform {
-            analog_probe1,
-            analog_probe2,
-            digital_probe1,
-            digital_probe2,
-            digital_probe3,
-            digital_probe4,
-            time_resolution,
-            trigger_threshold,
-            ns_per_sample: self.config.time_step_ns,
-            // Per-probe signed flag, parsed from the wf-header
-            // analog-probe-info bits (see ANALOG_PROBE*_INFO_SHIFT).
-            // Frontend uses these to add the +8191 visual centring
-            // offset so signed probes share the 0..16383 visible band
-            // with unsigned ADC-input probes.
-            analog_probe1_is_signed: ap0_is_signed,
-            analog_probe2_is_signed: ap1_is_signed,
-            // PHA2 carries probe-type info on the wire — propagate it
-            // verbatim so the UI can render labels like "A0: TimeFilter"
-            // and offline analysis (delila_to_root TBranches) gets per-
-            // event probe identity.
-            analog_probe_type: [ap0_type, ap1_type],
-            digital_probe_type: [dp0_type, dp1_type, dp2_type, dp3_type],
-        })
-    }
-
-    fn validate_header(&mut self, header: u64, data_size: usize) -> bool {
-        let header_type = (header >> constants::HEADER_TYPE_SHIFT) & constants::HEADER_TYPE_MASK;
-        if header_type != constants::HEADER_TYPE_DATA {
-            warn!(
-                header_type = format!("0x{:x}", header_type),
-                expected = format!("0x{:x}", constants::HEADER_TYPE_DATA),
-                "[PHA2] invalid aggregate header type"
-            );
-            return false;
-        }
-
-        let fail_check =
-            (header >> constants::HEADER_FAIL_CHECK_SHIFT) & constants::HEADER_FAIL_CHECK_MASK;
-        if fail_check != 0 {
-            warn!("[PHA2] board fail bit set in aggregate header");
-        }
-
-        let aggregate_counter = ((header >> constants::AGGREGATE_COUNTER_SHIFT)
-            & constants::AGGREGATE_COUNTER_MASK) as u16;
-        if aggregate_counter != 0
-            && aggregate_counter != self.last_aggregate_counter.wrapping_add(1)
-            && self.config.dump_enabled
-        {
-            debug!(
-                last = self.last_aggregate_counter,
-                current = aggregate_counter,
-                "[PHA2] aggregate counter discontinuity"
-            );
-        }
-        self.last_aggregate_counter = aggregate_counter;
-
-        let total_size = (header & constants::TOTAL_SIZE_MASK) as usize;
-        if total_size * constants::WORD_SIZE != data_size {
-            debug!(
-                header_bytes = total_size * constants::WORD_SIZE,
-                actual_bytes = data_size,
-                "[PHA2] aggregate size mismatch — using header value"
-            );
-        }
-
-        true
-    }
-
-    fn is_start_signal(&self, data: &[u8]) -> bool {
-        if data.len() < constants::START_SIGNAL_SIZE {
-            return false;
-        }
-        let w = self.read_u64(data, 0);
-        let t = (w >> constants::SIGNAL_TYPE_SHIFT) & constants::SIGNAL_TYPE_MASK;
-        let s = (w >> constants::SIGNAL_SUBTYPE_SHIFT) & constants::SIGNAL_TYPE_MASK;
-        t == constants::START_SIGNAL_TYPE && s == constants::START_SIGNAL_SUBTYPE
-    }
-
-    fn is_stop_signal(&self, data: &[u8]) -> bool {
-        if data.len() < constants::STOP_SIGNAL_SIZE {
-            return false;
-        }
-        let w = self.read_u64(data, 0);
-        let t = (w >> constants::SIGNAL_TYPE_SHIFT) & constants::SIGNAL_TYPE_MASK;
-        let s = (w >> constants::SIGNAL_SUBTYPE_SHIFT) & constants::SIGNAL_TYPE_MASK;
-        t == constants::STOP_SIGNAL_TYPE && s == constants::STOP_SIGNAL_SUBTYPE
-    }
-
-    fn read_u64(&self, data: &[u8], word_index: usize) -> u64 {
-        let offset = word_index * constants::WORD_SIZE;
-        u64::from_be_bytes(
-            data[offset..offset + constants::WORD_SIZE]
-                .try_into()
-                .unwrap_or([0; 8]),
-        )
-    }
-
-    fn dump_raw_data(&self, raw: &RawData) {
-        debug!(
-            size = raw.size,
-            n_events = raw.n_events,
-            "[PHA2] aggregate raw dump",
-        );
-        let num_words = raw.size / constants::WORD_SIZE;
-        for i in 0..num_words.min(8) {
-            let word = self.read_u64(&raw.data, i);
-            debug!(
-                word_index = i,
-                word = format!("0x{:016x}", word),
-                "[PHA2] word"
-            );
+    /// Parse the analog/digital probe metadata packed into the wf-header
+    /// low 16 bits. The is_signed bit decides whether the sample loop
+    /// sign-extends 14-bit values; the type bytes flow through to the
+    /// frontend so it can render labels like "A0: TimeFilter" instead of
+    /// the generic "A0".
+    fn parse_waveform_metadata(wf_header: u64) -> WaveformMetadata {
+        let ap0_info = (wf_header >> pha2_waveform_bits::ANALOG_PROBE0_INFO_SHIFT)
+            & pha2_waveform_bits::ANALOG_PROBE_INFO_MASK;
+        let ap1_info = (wf_header >> pha2_waveform_bits::ANALOG_PROBE1_INFO_SHIFT)
+            & pha2_waveform_bits::ANALOG_PROBE_INFO_MASK;
+        let analog_probe1_is_signed =
+            (ap0_info & pha2_waveform_bits::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
+        let analog_probe2_is_signed =
+            (ap1_info & pha2_waveform_bits::ANALOG_PROBE_IS_SIGNED_BIT) != 0;
+        let analog_probe_type = [
+            (ap0_info & pha2_waveform_bits::ANALOG_PROBE_TYPE_MASK) as u8,
+            (ap1_info & pha2_waveform_bits::ANALOG_PROBE_TYPE_MASK) as u8,
+        ];
+        let digital_probe_type = [
+            ((wf_header >> pha2_waveform_bits::DIGITAL_PROBE0_INFO_SHIFT)
+                & pha2_waveform_bits::DIGITAL_PROBE_INFO_MASK) as u8,
+            ((wf_header >> pha2_waveform_bits::DIGITAL_PROBE1_INFO_SHIFT)
+                & pha2_waveform_bits::DIGITAL_PROBE_INFO_MASK) as u8,
+            ((wf_header >> pha2_waveform_bits::DIGITAL_PROBE2_INFO_SHIFT)
+                & pha2_waveform_bits::DIGITAL_PROBE_INFO_MASK) as u8,
+            ((wf_header >> pha2_waveform_bits::DIGITAL_PROBE3_INFO_SHIFT)
+                & pha2_waveform_bits::DIGITAL_PROBE_INFO_MASK) as u8,
+        ];
+        WaveformMetadata {
+            analog_probe1_is_signed,
+            analog_probe2_is_signed,
+            analog_probe_type,
+            digital_probe_type,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests — PHA2-specific paths only. Framing tests live in dualchannel_common.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reader::decoder::common::{DataType, RawData};
+    use crate::reader::decoder::dualchannel_common::event_word;
 
-    /// Helper: build a synthetic 64-bit BE word stream from a slice of u64.
     fn pack_be(words: &[u64]) -> Vec<u8> {
         let mut out = Vec::with_capacity(words.len() * 8);
         for &w in words {
@@ -729,218 +123,108 @@ mod tests {
         out
     }
 
-    /// Build a minimal 1-event aggregate (header + event word 1 + event word 2).
-    /// Returns (bytes, total_words).
-    fn build_aggregate(channel: u8, ts: u64, energy: u16, fine_ts: u16) -> (Vec<u8>, u32) {
-        // word 0: aggregate header. type=0x2, total_words=3
+    fn raw_data(bytes: Vec<u8>, n_events: u32) -> RawData {
+        RawData {
+            size: bytes.len(),
+            data: bytes,
+            n_events,
+        }
+    }
+
+    /// Build a minimal 1-event aggregate (header + 2-word event, no waveform).
+    fn build_aggregate(channel: u8, ts: u64, energy: u16, fine_ts: u16) -> Vec<u8> {
         let total_words: u64 = 3;
         let header = (0x2u64 << 60) | total_words;
-        // word 1: event word 1. bit63=0, channel, special=0, ts in low 48 bits
-        let evt_w1 = ((channel as u64) << 56) | (ts & 0xFFFFFFFFFFFF);
-        // word 2: event word 2. bit63=1 (last header), bit62=0 (no wave), energy + fine_ts
+        let evt_w1 = ((channel as u64) << 56) | (ts & 0xFFFF_FFFF_FFFF);
         let evt_w2 = (1u64 << 63) | ((fine_ts as u64 & 0x3FF) << 16) | energy as u64;
-        let bytes = pack_be(&[header, evt_w1, evt_w2]);
-        (bytes, total_words as u32)
+        pack_be(&[header, evt_w1, evt_w2])
+    }
+
+    // -----------------------------------------------------------------------
+    // decode_energy_short — the one PHA2-specific event path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn decode_energy_short_always_zero_regardless_of_word() {
+        // PHA2 leaves PSD2's bits[41:26] slot unused; we always force 0.
+        for word in [0u64, !0u64, 0xCAFE_BABE_DEAD_BEEF, 1u64 << 30] {
+            assert_eq!(Pha2Variant::decode_energy_short(word), 0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_waveform_metadata — PHA2's whole reason to exist as a variant
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_metadata_unsigned_unsigned_when_low_bits_clear() {
+        let metadata = Pha2Variant::parse_waveform_metadata(0u64);
+        assert!(!metadata.analog_probe1_is_signed);
+        assert!(!metadata.analog_probe2_is_signed);
+        assert_eq!(metadata.analog_probe_type, [0, 0]);
+        assert_eq!(metadata.digital_probe_type, [0, 0, 0, 0]);
     }
 
     #[test]
-    fn classify_unknown_for_tiny_data() {
-        let dec = Pha2Decoder::with_defaults();
-        let raw = RawData {
-            data: vec![0u8; 8],
-            size: 8,
-            n_events: 0,
-        };
-        assert_eq!(dec.classify(&raw), DataType::Unknown);
+    fn parse_metadata_picks_up_analog_probe_signed_flags() {
+        // a.p.#0: factor=×1, is_signed=1, type=1 (TimeFilter)
+        // a.p.#1: factor=×1, is_signed=0, type=0 (ADCInput)
+        #[allow(clippy::unusual_byte_groupings)]
+        let ap0_info: u64 = 0b00_1_001;
+        #[allow(clippy::unusual_byte_groupings)]
+        let ap1_info: u64 = 0b00_0_000;
+        let wf_hdr: u64 = (1u64 << 63) | (ap1_info << 6) | ap0_info;
+        let m = Pha2Variant::parse_waveform_metadata(wf_hdr);
+        assert!(m.analog_probe1_is_signed);
+        assert!(!m.analog_probe2_is_signed);
+        assert_eq!(m.analog_probe_type, [1, 0]);
     }
 
     #[test]
-    fn classify_start_signal_real_bytes() {
-        // Captured from 172.18.4.56 PHA2 Start signal.
-        let bytes: Vec<u8> = vec![
-            0x30, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00,
-            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-        let dec = Pha2Decoder::with_defaults();
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
-        assert_eq!(dec.classify(&raw), DataType::Start);
+    fn parse_metadata_picks_up_digital_probe_types() {
+        // d.p. #0..3 = Trigger / TimeFilterArmed / ReTriggerGuard /
+        // EnergyFilterBaselineFreeze (canonical default assignment).
+        let dp0: u64 = 0;
+        let dp1: u64 = 1;
+        let dp2: u64 = 2;
+        let dp3: u64 = 3;
+        let wf_hdr: u64 = (1u64 << 63)
+            | (dp3 << pha2_waveform_bits::DIGITAL_PROBE3_INFO_SHIFT)
+            | (dp2 << pha2_waveform_bits::DIGITAL_PROBE2_INFO_SHIFT)
+            | (dp1 << pha2_waveform_bits::DIGITAL_PROBE1_INFO_SHIFT)
+            | (dp0 << pha2_waveform_bits::DIGITAL_PROBE0_INFO_SHIFT);
+        let m = Pha2Variant::parse_waveform_metadata(wf_hdr);
+        assert_eq!(m.digital_probe_type, [0, 1, 2, 3]);
     }
 
-    #[test]
-    fn decode_single_event_basic() {
-        let mut dec = Pha2Decoder::with_defaults();
-        let (bytes, _) = build_aggregate(
-            /*ch*/ 5, /*ts*/ 1_000_000, /*energy*/ 4242, /*fts*/ 200,
-        );
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
-        let mut events = Vec::new();
-        dec.decode_into(&raw, &mut events);
-        assert_eq!(events.len(), 1);
-        let e = &events[0];
-        assert_eq!(e.channel, 5);
-        assert_eq!(e.energy, 4242);
-        assert_eq!(e.energy_short, 0); // PHA2 leaves this unused
-        assert_eq!(e.fine_time, 200);
-        // 1_000_000 * 2 ns + 200/1024 * 2 ns ≈ 2_000_000.39 ns
-        assert!((e.timestamp_ns - 2_000_000.39).abs() < 1.0);
-    }
-
-    #[test]
-    fn decode_zero_event_aggregate_header_only() {
-        // CAEN sometimes sends keep-alive aggregates with header-only
-        // (total_words=1). Decoder must not panic and emits 0 events.
-        let header = (0x2u64 << 60) | 1; // total_words = 1
-        let bytes = pack_be(&[header]);
-        let mut dec = Pha2Decoder::with_defaults();
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 0,
-        };
-        let mut events = Vec::new();
-        dec.decode_into(&raw, &mut events);
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn pile_up_flag_propagated_in_flags_field() {
-        // FLAGS_LOW_PRIORITY bit 0 = pile-up per CAEN convention.
-        // Pack flags_low = 0x001 (pile-up only).
-        let mut dec = Pha2Decoder::with_defaults();
-        let total_words: u64 = 3;
-        let header = (0x2u64 << 60) | total_words;
-        let evt_w1 = (3u64 << 56) | 100;
-        let flags_low = 0x001u64;
-        let evt_w2 = (1u64 << 63) | (flags_low << 50) | 0xCAFE;
-        let bytes = pack_be(&[header, evt_w1, evt_w2]);
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
-        let mut events = Vec::new();
-        dec.decode_into(&raw, &mut events);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].flags & 0xFFF, 0x001);
-        assert_eq!(events[0].energy, 0xCAFE);
-    }
-
-    #[test]
-    fn fine_ts_at_max_does_not_clamp() {
-        // 10-bit max = 1023 → no clamp needed (mask already enforces).
-        let mut dec = Pha2Decoder::with_defaults();
-        let (bytes, _) = build_aggregate(0, 100, 1, 1023);
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
-        let mut events = Vec::new();
-        dec.decode_into(&raw, &mut events);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fine_time, 1023);
-    }
-
-    #[test]
-    fn ts_rollover_synthetic_does_not_panic() {
-        // 48-bit TS rollover boundary: emit one event near TS=0xFFFF_FFFF_FFFE
-        // and another at TS=0x0000_0000_0001 in the next aggregate, ensuring
-        // the decoder doesn't choke on backward-going coarse TS within the
-        // same call. (ReorderBuffer downstream handles cross-aggregate
-        // rollover via run-level state, not the decoder.)
-        let mut dec = Pha2Decoder::with_defaults();
-        let (b1, _) = build_aggregate(0, 0xFFFF_FFFF_FFFE, 100, 0);
-        let raw1 = RawData {
-            size: b1.len(),
-            data: b1,
-            n_events: 1,
-        };
-        let mut events = Vec::new();
-        dec.decode_into(&raw1, &mut events);
-        assert_eq!(events.len(), 1);
-        let (b2, _) = build_aggregate(0, 1, 200, 0);
-        let raw2 = RawData {
-            size: b2.len(),
-            data: b2,
-            n_events: 1,
-        };
-        dec.decode_into(&raw2, &mut events);
-        assert_eq!(events.len(), 1); // decode_into clears events
-    }
-
-    #[test]
-    fn special_event_filtered_out() {
-        // bit 55 of word 1 set → filter out without emitting an event.
-        let mut dec = Pha2Decoder::with_defaults();
-        let total_words: u64 = 3;
-        let header = (0x2u64 << 60) | total_words;
-        let evt_w1 = (1u64 << 55) | 100; // special bit set, no channel
-        let evt_w2 = 1u64 << 63; // last header, no waveform
-        let bytes = pack_be(&[header, evt_w1, evt_w2]);
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
-        let mut events = Vec::new();
-        dec.decode_into(&raw, &mut events);
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn reset_for_new_run_clears_state() {
-        let mut dec = Pha2Decoder::with_defaults();
-        dec.last_aggregate_counter = 42;
-        dec.fine_ts_clamp_warned = true;
-        dec.reset_for_new_run();
-        assert_eq!(dec.last_aggregate_counter, 0);
-        assert!(!dec.fine_ts_clamp_warned);
-    }
+    // -----------------------------------------------------------------------
+    // End-to-end via Pha2Decoder type alias — PHA2 wf-header parsing must
+    // flow into the emitted Waveform (regression for commit 7ed3285 which
+    // had hardcoded analog_probe_X_is_signed=false for PHA2).
+    // -----------------------------------------------------------------------
 
     #[test]
     fn analog_probe_is_signed_flag_is_parsed_from_wf_header() {
-        // wf_header layout (PHA2 doxygen a00108.html):
-        //   bit 63        = check1 = 1
-        //   bits[62:60]   = check2 = 0
-        //   bits[5:0]     = a.p. #0 info = type[2:0] | is_signed[3] | factor[5:4]
-        //   bits[11:6]    = a.p. #1 info, same layout shifted by 6
-        //
-        // Build a header with: a.p.#0 = TimeFilter signed, a.p.#1 = ADCInput unsigned.
+        // wf_header: a.p.#0 = TimeFilter signed, a.p.#1 = ADCInput unsigned.
         // → analog_probe1_is_signed must be true, analog_probe2_is_signed must be false.
-        // → with samples that are `0x3fff` (= -1 if signed, +16383 if unsigned),
+        // → with samples that are 0x3fff (= -1 if signed, +16383 if unsigned),
         //   the decoded buffer should hold -1 in analog_probe1 and +16383 in analog_probe2.
-        // Manually encode the 6-bit slots (factor[5:4] | is_signed[3] | type[2:0])
-        // with field-aligned readability (groups intentionally non-equal).
         #[allow(clippy::unusual_byte_groupings)]
-        let ap0_info: u64 = 0b00_1_001; // factor=×1, is_signed=1, type=1 (TimeFilter)
+        let ap0_info: u64 = 0b00_1_001;
         #[allow(clippy::unusual_byte_groupings)]
-        let ap1_info: u64 = 0b00_0_000; // factor=×1, is_signed=0, type=0 (ADCInput)
+        let ap1_info: u64 = 0b00_0_000;
         let wf_hdr: u64 = (1u64 << 63) | (ap1_info << 6) | ap0_info;
         let wf_size: u64 = 1; // 1 word = 2 samples
-        // sample-word: lower 32-bit = ap0=0x3fff, ap1=0x3fff (with all DPs cleared)
         let sample: u64 = 0x3fff_3fff_3fff_3fff;
 
         let total_words: u64 = 6;
         let agg_header = (0x2u64 << 60) | total_words;
-        let ev1_w1 = 0u64; // ch=0, ts=0
-        let ev1_w2 = 1u64 << constants::WAVEFORM_FLAG_SHIFT; // bit62 = waveform present
+        let ev1_w1 = 0u64;
+        let ev1_w2 = 1u64 << event_word::WAVEFORM_FLAG_SHIFT;
 
         let bytes = pack_be(&[agg_header, ev1_w1, ev1_w2, wf_hdr, wf_size, sample]);
         let mut dec = Pha2Decoder::with_defaults();
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
+        let raw = raw_data(bytes, 1);
         let mut events = Vec::new();
         dec.decode_into(&raw, &mut events);
 
@@ -948,59 +232,43 @@ mod tests {
         let wf = events[0].waveform.as_ref().expect("waveform missing");
         assert!(
             wf.analog_probe1_is_signed,
-            "TimeFilter probe must be flagged signed",
+            "TimeFilter probe must be flagged signed"
         );
         assert!(
             !wf.analog_probe2_is_signed,
-            "ADCInput probe must be flagged unsigned",
+            "ADCInput probe must be flagged unsigned"
         );
-        // Signed AP0 = sign_extend(0x3fff) = -1
-        assert_eq!(wf.analog_probe1[0], -1);
-        // Unsigned AP1 = 0x3fff = 16383
-        assert_eq!(wf.analog_probe2[0], 16383);
-        // Probe-type identifiers are also taken from the same wf-header
-        // slots — pin the canonical PHA2 encoding so a future refactor
-        // can't silently drop the type bits while keeping is_signed.
+        assert_eq!(wf.analog_probe1[0], -1, "signed AP0 sign-extends 0x3fff to -1");
+        assert_eq!(wf.analog_probe2[0], 16383, "unsigned AP1 reads 0x3fff as 16383");
         assert_eq!(
             wf.analog_probe_type,
             [1, 0],
-            "AP0 type=1 (TimeFilter), AP1 type=0 (ADCInput)",
+            "AP0 type=1 (TimeFilter), AP1 type=0 (ADCInput)"
         );
     }
 
     #[test]
     fn digital_probe_types_are_parsed_from_wf_header() {
-        // d.p. #N info at bits[15+4N : 12+4N], 4-bit type per probe.
-        // Build a header with d.p.#0=Trigger(0), #1=TimeFilterArmed(1),
-        // #2=ReTriggerGuard(2), #3=EnergyFilterBaselineFreeze(3) — the
-        // canonical default probe assignment so a typical run captures
-        // these values from the wire and surfaces them through the
-        // Waveform.digital_probe_type array. Keeping this pinned protects
-        // the frontend's "D0: Trigger" label rendering.
         let dp0: u64 = 0;
         let dp1: u64 = 1;
         let dp2: u64 = 2;
         let dp3: u64 = 3;
         let wf_hdr: u64 = (1u64 << 63)
-            | (dp3 << constants::DIGITAL_PROBE3_INFO_SHIFT)
-            | (dp2 << constants::DIGITAL_PROBE2_INFO_SHIFT)
-            | (dp1 << constants::DIGITAL_PROBE1_INFO_SHIFT)
-            | (dp0 << constants::DIGITAL_PROBE0_INFO_SHIFT);
+            | (dp3 << pha2_waveform_bits::DIGITAL_PROBE3_INFO_SHIFT)
+            | (dp2 << pha2_waveform_bits::DIGITAL_PROBE2_INFO_SHIFT)
+            | (dp1 << pha2_waveform_bits::DIGITAL_PROBE1_INFO_SHIFT)
+            | (dp0 << pha2_waveform_bits::DIGITAL_PROBE0_INFO_SHIFT);
         let wf_size: u64 = 1;
         let sample: u64 = 0;
 
         let total_words: u64 = 6;
         let agg_header = (0x2u64 << 60) | total_words;
         let ev1_w1 = 0u64;
-        let ev1_w2 = 1u64 << constants::WAVEFORM_FLAG_SHIFT;
+        let ev1_w2 = 1u64 << event_word::WAVEFORM_FLAG_SHIFT;
 
         let bytes = pack_be(&[agg_header, ev1_w1, ev1_w2, wf_hdr, wf_size, sample]);
         let mut dec = Pha2Decoder::with_defaults();
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
+        let raw = raw_data(bytes, 1);
         let mut events = Vec::new();
         dec.decode_into(&raw, &mut events);
 
@@ -1008,6 +276,10 @@ mod tests {
         let wf = events[0].waveform.as_ref().expect("waveform missing");
         assert_eq!(wf.digital_probe_type, [0, 1, 2, 3]);
     }
+
+    // -----------------------------------------------------------------------
+    // Pinned regression: 2026-05-04 truncation bug
+    // -----------------------------------------------------------------------
 
     #[test]
     fn dp4_set_in_sample_does_not_truncate_waveform() {
@@ -1018,25 +290,16 @@ mod tests {
         // 32-bit half — every event with EnergyFilterPeaking (a default DP)
         // has DP4 transiently set, and AP2 is small near baseline so the
         // bits[62:60]=0 condition is also met. Live capture via
-        // `pha2_simple_test --wave-downsampling 8` showed `wf_size = 0x800`
+        // `pha2_simple_test --wave-downsampling 8` showed wf_size = 0x800
         // and event-to-event spacing of exactly 2052 words on the wire —
         // i.e. NO firmware truncation. The decoder must trust wf_size and
         // deliver the full sample buffer even when sample bytes mimic the
         // wf_header bit pattern.
-        //
-        // Synthetic aggregate:
-        //   word 0: agg header
-        //   word 1: ev1 first_word
-        //   word 2: ev1 second_word (bit62 = waveform present)
-        //   word 3: ev1 wf_header
-        //   word 4: ev1 wf_size = 4
-        //   words 5..8: 4 sample words; word 6 has bit63=1 ∧ bits[62:60]=0
-        //               (mimics a real "DP4 fluke" sample)
         let total_words: u64 = 9;
         let agg_header = (0x2u64 << 60) | total_words;
-        let ev1_w1: u64 = 10; // ch=0 in bits[62:55], ts=10 in bits[47:0]
-        let ev1_w2 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | (1u64 << 63);
-        let wf_hdr_const: u64 = 1u64 << 63; // check1=1, check2=0
+        let ev1_w1: u64 = 10;
+        let ev1_w2 = (1u64 << event_word::WAVEFORM_FLAG_SHIFT) | (1u64 << 63);
+        let wf_hdr_const: u64 = 1u64 << 63;
         let wf_size_4: u64 = 4;
         let baseline_sample: u64 = 0x0000_135C_0000_135C;
         let dp4_fluke_sample: u64 = 0x80f7_1fd6_00f7_1fdb; // bit63=1, bits[62:60]=0
@@ -1055,26 +318,21 @@ mod tests {
 
         let bytes = pack_be(&words);
         let mut dec = Pha2Decoder::with_defaults();
-        let raw = RawData {
-            size: bytes.len(),
-            data: bytes,
-            n_events: 1,
-        };
+        let raw = raw_data(bytes, 1);
         let mut events = Vec::new();
         dec.decode_into(&raw, &mut events);
 
-        assert_eq!(events.len(), 1, "decoder must NOT split on DP4-fluke samples");
-        let wf = events[0]
-            .waveform
-            .as_ref()
-            .expect("waveform must be present");
-        // 4 sample words × 2 samples/word = 8 samples — the full configured length.
+        assert_eq!(
+            events.len(),
+            1,
+            "decoder must NOT split on DP4-fluke samples"
+        );
+        let wf = events[0].waveform.as_ref().expect("waveform must be present");
         assert_eq!(
             wf.analog_probe1.len(),
             8,
             "all 4 sample words (8 samples) must be delivered"
         );
-        // The DP4 fluke must end up as a normal sample, with DP4=1 in its slot.
         // Iteration order: low half first, then high half. The fluke is
         // 0x80f71fd6_00f71fdb, so high-half upper sample is 0x80f71fd6 → DP4=1.
         // That's index 1*2 + 1 = 3 (event 1's word index 1, upper half).
@@ -1082,5 +340,53 @@ mod tests {
             wf.digital_probe4[3], 1,
             "DP4 fluke bit must be preserved in the sample buffer"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Captured-from-hardware bytes regression
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_start_signal_real_bytes() {
+        // Captured from 172.18.4.56 PHA2 Start signal. Pinned so a future
+        // change to the signal classifier doesn't silently drop this.
+        let bytes: Vec<u8> = vec![
+            0x30, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        let dec = Pha2Decoder::with_defaults();
+        let raw = raw_data(bytes, 1);
+        assert_eq!(dec.classify(&raw), DataType::Start);
+    }
+
+    // -----------------------------------------------------------------------
+    // Smoke tests via the type alias
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pha2_decoder_decode_smoke_zeroes_energy_short() {
+        let mut dec = Pha2Decoder::new(Pha2Config {
+            time_step_ns: 2.0,
+            module_id: 9,
+            dump_enabled: false,
+            num_channels: 32,
+        });
+        let bytes = build_aggregate(/*ch*/ 5, /*ts*/ 1_000_000, /*e*/ 4242, /*fts*/ 200);
+        let raw = raw_data(bytes, 1);
+        let mut events = Vec::new();
+        dec.decode_into(&raw, &mut events);
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e.module, 9);
+        assert_eq!(e.channel, 5);
+        assert_eq!(e.energy, 4242);
+        assert_eq!(e.energy_short, 0); // PHA2 always 0 — the variant invariant
+        assert_eq!(e.fine_time, 200);
+    }
+
+    #[test]
+    fn pha2_variant_fw_name_is_pha2() {
+        assert_eq!(Pha2Variant::FW_NAME, "PHA2");
     }
 }
