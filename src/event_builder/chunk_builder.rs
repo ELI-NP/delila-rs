@@ -244,8 +244,15 @@ pub fn sort_and_split(
     // Sort by timestamp
     buffer.sort_unstable_by(|a, b| a.timestamp_ns.total_cmp(&b.timestamp_ns));
 
-    let earliest = buffer.first().unwrap().timestamp_ns;
-    let latest = buffer.last().unwrap().timestamp_ns;
+    // is_empty() check above returned early, so first/last are Some.
+    let earliest = buffer
+        .first()
+        .expect("buffer.is_empty() returns above")
+        .timestamp_ns;
+    let latest = buffer
+        .last()
+        .expect("buffer.is_empty() returns above")
+        .timestamp_ns;
     let core_end = latest - safe_horizon_ns;
 
     // Not enough data spread for safe extraction

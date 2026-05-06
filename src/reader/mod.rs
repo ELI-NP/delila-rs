@@ -1456,7 +1456,9 @@ impl Reader {
                 }
             }
 
-            let h = handle.as_ref().unwrap();
+            let h = handle
+                .as_ref()
+                .expect("handle.is_none() branch above continues the loop");
             let target_state = *state_rx.borrow();
             let target_rank = state_rank(target_state);
 
@@ -2487,8 +2489,11 @@ impl Reader {
         // Take ownership of data_socket for decode loop
         let data_socket = std::mem::replace(
             &mut self.data_socket,
-            // Dummy socket - will not be used after this
-            publish(&Context::new()).bind("tcp://127.0.0.1:0").unwrap(),
+            // Dummy socket - will not be used after this; bind to port 0 cannot
+            // fail in practice (kernel always assigns an ephemeral port).
+            publish(&Context::new())
+                .bind("tcp://127.0.0.1:0")
+                .expect("ephemeral-port bind on 127.0.0.1 cannot fail"),
         );
 
         // Spawn DecodeLoop task

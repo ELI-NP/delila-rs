@@ -148,7 +148,11 @@ impl L1Builder {
             .iter()
             .position(|h| self.trigger_channels.contains_key(&(h.module, h.channel)))?;
 
-        Some(self.pending_hits.remove(trigger_idx).unwrap())
+        Some(
+            self.pending_hits
+                .remove(trigger_idx)
+                .expect("trigger_idx came from .position() on this VecDeque just above"),
+        )
     }
 
     /// Build a single event from a trigger hit

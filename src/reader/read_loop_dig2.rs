@@ -428,13 +428,13 @@ pub(crate) fn run(
                     }
                     if target_state == ComponentState::Running {
                         // Transient error — retry (same logic as RAW loop)
-                        if read_error_since.is_none() {
-                            read_error_since = Some(Instant::now());
+                        let started = *read_error_since.get_or_insert_with(|| {
                             warn!(error = %e, code = e.code,
                                 "Read error during acquisition (OpenDPP), will retry for {:?}",
                                 READ_ERROR_TIMEOUT);
-                        }
-                        if read_error_since.unwrap().elapsed() > READ_ERROR_TIMEOUT {
+                            Instant::now()
+                        });
+                        if started.elapsed() > READ_ERROR_TIMEOUT {
                             error!(
                                 timeout_secs = READ_ERROR_TIMEOUT.as_secs(),
                                 error = %e, code = e.code,

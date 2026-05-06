@@ -411,13 +411,13 @@ pub(crate) fn run(
                         // dropping connection. The digitizer continues buffering
                         // data internally; we just need to wait for the optical
                         // link / driver to recover.
-                        if read_error_since.is_none() {
-                            read_error_since = Some(Instant::now());
+                        let started = *read_error_since.get_or_insert_with(|| {
                             warn!(error = %e, code = e.code,
                                 "Read error during acquisition, will retry for {:?}",
                                 READ_ERROR_TIMEOUT);
-                        }
-                        if read_error_since.unwrap().elapsed() > READ_ERROR_TIMEOUT {
+                            Instant::now()
+                        });
+                        if started.elapsed() > READ_ERROR_TIMEOUT {
                             error!(
                                 timeout_secs = READ_ERROR_TIMEOUT.as_secs(),
                                 error = %e, code = e.code,

@@ -354,7 +354,10 @@ async fn process_monitor(
                 }
             }
             _ = async {
-                tokio::time::sleep_until(restart_at.unwrap()).await
+                tokio::time::sleep_until(
+                    restart_at.expect("guarded by `if restart_at.is_some()` below"),
+                )
+                .await
             }, if restart_at.is_some() => {
                 // Restart timer fired
                 restart_at = None;

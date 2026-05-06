@@ -501,7 +501,8 @@ impl Emulator {
                 // Gaussian peak: mean = module*1000 + channel*50 + 500, sigma = 50
                 let mean = (module as f64) * 1000.0 + (channel as f64) * 50.0 + 500.0;
                 let sigma = 50.0;
-                let normal = Normal::new(mean, sigma).unwrap();
+                let normal = Normal::new(mean, sigma)
+                    .expect("sigma is the hardcoded literal 50.0 (must be > 0)");
                 let energy_f64 = normal.sample(&mut rng);
                 // Clamp to valid u16 range
                 energy_f64.clamp(0.0, 65535.0) as u16
