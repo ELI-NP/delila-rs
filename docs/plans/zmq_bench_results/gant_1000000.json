@@ -1,0 +1,34 @@
+{
+  "label": "gant-1000000-d5ae2c4-phase1pre",
+  "timestamp_unix": 1778048961,
+  "git_commit": "unknown",
+  "rust_version": "unknown",
+  "args": {
+    "rate": 1000000,
+    "duration_s": 30,
+    "batch_size": 100,
+    "waveform_samples": 0
+  },
+  "pipeline": {
+    "events_sent": 30000000,
+    "events_received": 30000000,
+    "batches_sent": 300000,
+    "batches_received": 300000,
+    "drops": 0,
+    "throughput_eps": 999986.9176378172,
+    "throughput_mbps": 23.40058932767677,
+    "latency_p50_us": 98,
+    "latency_p95_us": 133,
+    "latency_p99_us": 242
+  },
+  "per_boundary_us": {
+    "encode_mean": 19.04533,
+    "send_mean": 4.166623333333333,
+    "recv_mean": 71.79386,
+    "decode_mean": 25.254656666666666
+  },
+  "bytes": {
+    "total_wire_bytes": 702026864,
+    "bytes_per_event": 23.400895466666668
+  }
+}

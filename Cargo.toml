@@ -72,6 +72,11 @@ crossbeam-channel = "0.5"
 default = []
 root = ["oxyroot"]
 x743 = []  # CAENDigitizer Library for V1743 (Linux only)
+# Developer / hardware-in-the-loop tools (one-shot probes, register dumpers,
+# benchmarks). Excluded from `cargo build --release` so production builds
+# only ship the 15 service binaries (emulator/reader/merger/.../delila_to_root).
+# Enable with `--features dev-tools` to build the full set locally.
+dev-tools = []
 
 [build-dependencies]
 bindgen = "0.70"
@@ -105,6 +110,7 @@ path = "src/bin/operator.rs"
 [[bin]]
 name = "caen_info"
 path = "src/bin/caen_info.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "monitor"
@@ -117,6 +123,7 @@ path = "src/bin/recorder.rs"
 [[bin]]
 name = "storage_bench"
 path = "src/bin/storage_bench.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "recover"
@@ -133,34 +140,42 @@ path = "src/bin/reader.rs"
 [[bin]]
 name = "amax_codegen"
 path = "src/bin/amax_codegen.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_register_test"
 path = "src/bin/amax_register_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_data_test"
 path = "src/bin/amax_data_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_selftrigger_test"
 path = "src/bin/amax_selftrigger_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_testpulse_test"
 path = "src/bin/amax_testpulse_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_rawdump"
 path = "src/bin/amax_rawdump.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_opendpp_test"
 path = "src/bin/amax_opendpp_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "amax_energy_check"
 path = "src/bin/amax_energy_check.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "event_builder"
@@ -175,19 +190,22 @@ required-features = ["root"]
 [[bin]]
 name = "eb_test_sender"
 path = "src/bin/eb_test_sender.rs"
-required-features = ["root"]
+required-features = ["root", "dev-tools"]
 
 [[bin]]
 name = "psd1_waveform_test"
 path = "src/bin/psd1_waveform_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "psd1_raw_dump"
 path = "src/bin/psd1_raw_dump.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "fine_ts_verify"
 path = "src/bin/fine_ts_verify.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "node_agent"
@@ -196,11 +214,12 @@ path = "src/bin/node_agent.rs"
 [[bin]]
 name = "psd1_timing_test"
 path = "src/bin/psd1_timing_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "oxyroot_bench"
 path = "src/bin/oxyroot_bench.rs"
-required-features = ["root"]
+required-features = ["root", "dev-tools"]
 
 [[bin]]
 name = "delila_to_root"
@@ -210,29 +229,73 @@ required-features = ["root"]
 [[bin]]
 name = "caen_simple_test"
 path = "src/bin/caen_simple_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "trigger_loss_test"
 path = "src/bin/trigger_loss_test.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "trigger_loss_test_dig2"
 path = "src/bin/trigger_loss_test_dig2.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "x743_test"
 path = "src/bin/x743_test.rs"
-required-features = ["x743"]
+required-features = ["x743", "dev-tools"]
 
 [[bin]]
 name = "x743_cycle_test"
 path = "src/bin/x743_cycle_test.rs"
-required-features = ["x743"]
+required-features = ["x743", "dev-tools"]
 
 [[bin]]
 name = "x743_stop"
 path = "src/bin/x743_stop.rs"
-required-features = ["x743"]
+required-features = ["x743", "dev-tools"]
+
+# --- Bins added by R-C6 (Phase 1 dev-tools feature-gate) ---
+
+[[bin]]
+name = "amax_firmware_check"
+path = "src/bin/amax_firmware_check.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "amax_fw_test"
+path = "src/bin/amax_fw_test.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "amax_trgout_test"
+path = "src/bin/amax_trgout_test.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "configure_benchmark"
+path = "src/bin/configure_benchmark.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "register_test"
+path = "src/bin/register_test.rs"
+required-features = ["dev-tools"]
+
+# event_dump is a production diagnostic tool (referenced by docs/plans/start_stop_restructure.md);
+# kept on the default build path so operators can run it from a stock release.
+[[bin]]
+name = "event_dump"
+path = "src/bin/event_dump.rs"
+
+# R-X3 baseline benchmark for ZMQ boundary cost (Phase 1 refactor sprint 2026-Q2).
+# Dev-tools-gated because it exists for the sprint's measurement workflow,
+# not for production. Run on gant@172.18.6.114 for the canonical baseline.
+[[bin]]
+name = "zmq_boundary_bench"
+path = "src/bin/zmq_boundary_bench.rs"
+required-features = ["dev-tools"]
 
 [[example]]
 name = "test_oxyroot"

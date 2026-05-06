@@ -1,0 +1,34 @@
+{
+  "label": "mac-1000000-d5ae2c4",
+  "timestamp_unix": 1778048621,
+  "git_commit": "unknown",
+  "rust_version": "unknown",
+  "args": {
+    "rate": 1000000,
+    "duration_s": 30,
+    "batch_size": 100,
+    "waveform_samples": 0
+  },
+  "pipeline": {
+    "events_sent": 30000000,
+    "events_received": 30000000,
+    "batches_sent": 300000,
+    "batches_received": 300000,
+    "drops": 0,
+    "throughput_eps": 999990.584788647,
+    "throughput_mbps": 23.400675142289998,
+    "latency_p50_us": 85,
+    "latency_p95_us": 158,
+    "latency_p99_us": 232
+  },
+  "per_boundary_us": {
+    "encode_mean": 10.708393333333333,
+    "send_mean": 19.59661,
+    "recv_mean": 83.74798666666666,
+    "decode_mean": 14.51949
+  },
+  "bytes": {
+    "total_wire_bytes": 702026864,
+    "bytes_per_event": 23.400895466666668
+  }
+}
