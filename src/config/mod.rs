@@ -12,6 +12,7 @@
 //! ```
 
 pub mod amax_generated;
+pub mod channel_param_tables;
 pub mod devtree_paths;
 pub mod digitizer;
 
