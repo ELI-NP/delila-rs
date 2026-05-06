@@ -1,9 +1,18 @@
 # TODO 52: Refactor Sprint 2026-Q2 (post-PHA2 cleanup, pre-7/24 experiment)
 
-**Status:** 📋 計画中 (2026-05-12 着手予定)
+**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 着手可**
 **Created:** 2026-05-05 (revised 2026-05-05 evening: 一枚岩撤回 → component system 維持)
 **Window:** 2026-05-12 〜 2026-07-03 (8 週間 active refactor) + 2026-07-03 〜 2026-07-24 (3 週間 stabilize)
 **Source of truth:** [clean_architecture_evaluation.md](../clean_architecture_evaluation.md)
+**Plan file:** `~/.claude/plans/phase1-todo-hidden-panda.md` (Phase 1 詳細)
+
+## Status Summary (2026-05-06)
+
+| Phase | 状態 | 主な成果 |
+|---|---|---|
+| **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
+| **Phase 2 — Structural Refactor** | 📋 **着手可 (R-D6 PSD1/PHA1 generic Decoder から)** | R-D6/D7/D1/D2/C1/C2/P3/P4/P5/X1。 5/12 着手予定だが Phase 1 の 1 セッション完了で前倒し可能 |
+| **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
 
@@ -42,25 +51,46 @@
 | **D7** | アーキテクチャ方針 (NEW) | **現行 component system (Reader/Merger/Recorder/Monitor/Operator が ZMQ で繋がる process 隔離型) を維持**。重複削減・構造整理は component 内部 + 横断 trait 化で対処、 process 境界は触らない |
 | **D8** | ZMQ 境界 cost benchmark (NEW、 **commit、 2 点測定**) | **R-X3 として実施**。 baseline (Phase 1 Week 1) + post-refactor (Phase 3 Week 11) の 2 点で測定し、差分を `docs/plans/zmq_boundary_cost_2026-Q2.md` に記録。 Throughput / Latency / per-boundary encode-decode + ZMQ 送受信時間 / per-event bytes。 sprint 設計を gate しないが、 「ZMQ 境界 cost が実際どれくらいか」という長年の宿題に数字で答え、 将来の意思決定材料にする |
 
-## Phase 1 — Mechanical Cleanup (Week 1–3, 2026-05-12 〜 2026-05-30)
+### Decision review — D7 reaffirmed (2026-05-06)
 
-低リスク・動作不変。各 PR は独立 test 緑、来週ラン (March bin) と並行可。**変更なし**。
+R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議論し **「現状しない」** で再確定:
 
-- [ ] **R-X3 baseline (NEW)**: ZMQ 境界 cost benchmark の baseline 測定 (Week 1、 重複削減着手前)。 `bin/zmq_boundary_bench` 新設、 emulator → reader → merger → recorder で 10k / 100k / 1M ev/s の 3 段階で計測。 結果を `docs/plans/zmq_boundary_cost_2026-Q2.md` に「Baseline (refactor 前)」として記録
-- [ ] **R-D4**: `state_rank` / `effective_state_for` / `next_reconnect_cooldown` → `src/reader/state.rs`
-- [ ] **R-D8**: `extract_bits!(word, shift, mask)` macro → `common.rs`
-- [ ] **R-D9**: 関数名統一 (`decode_charge_word` ↔ `decode_energy_word` 等)
-- [ ] **R-D10**: `opendpp_to_event_data` doc + smell 整理
-- [ ] **R-C3**: `FirmwareCapabilities` 構造体 (is_dig1 / is_x743 / is_felib / num_channels / api_version)
-- [ ] **R-C4**: DevTree path 文字列定数化 (`mod devtree_paths`)
-- [ ] **R-C5**: `set_in_run_param_names()` を base + diff 化
-- [ ] **R-C6**: `dev-tools` feature-gate 27 dev binary (D1)
-- [ ] **R-P1**: `network::zmq_helper` で HWM=0 socket init を encapsulate
-- [ ] **R-P2**: ECharts wrapper 統合 (histogram-chart ↔ heatmap-chart)
-- [ ] **R-P7**: Operator に `CommandHandlerExt` 実装
-- [ ] **R-X2**: `cargo audit` + `cargo outdated` を CI に追加
+- Mac M4 Pro: encode+decode = 0.25 µs/event。 4 MHz aggregate で 1 コアちょうど飽和
+- gant Xeon W-3223: 0.44 µs/event。 4 MHz で ~1.76 コア相当
+- Production 単一デジタイザ rate ~700k ev/s (memory: PSD2 並列化 record) なので現状余裕は ~5x
+- **Monolithic 化のレバレッジは「同一マシン内の 2 ZMQ hop 削減」に絞られる**。 fan-out コストは Arc<EventDataBatch> なら Arc::clone 数 ns で済むので逆に減る方向。 ただし **クロスマシン境界 (172.18.4.56 ↔ 76 ↔ 147 等) は monolithic 化しても消えない** ので encode/decode 関数自体は維持必須
+- 加えて `.delila` ファイル / recover ツール / online EB の wire format 互換性が MessagePack 前提なので、 monolithic 化と並行して別の serializer を維持する負担が発生
 
-**完了基準**: 568 tests 緑、clippy clean、binary 整理、CI で audit/outdated 走る、`-300 LoC` 程度。
+→ **D7 (component system 維持) を継続**。 Phase 3 R-X3 post-refactor で再計測し、 R-P8 ComponentRunner の boilerplate 削減が encode/decode 時間に影響しないことを確認できれば、 「D7 = 0.5 µs/event の境界コストを許容した判断」と明文化する。 7/24 後の monolithic 再検討議論があった場合の出発点になる。
+
+## Phase 1 — Mechanical Cleanup ✅ 完了 (2026-05-06)
+
+低リスク・動作不変。 1 セッションで 13 項目すべて landed (動作不変 + テスト緑 + clippy clean)。
+
+- [x] **R-X3 baseline**: `src/bin/zmq_boundary_bench.rs` 新設 (in-process inproc:// PUB→SUB)。 Mac M4 Pro + gant Xeon W-3223 で 10k/100k/1M ev/s × 30s 計測、 全 0 drops。 `docs/plans/zmq_boundary_cost_2026-Q2.md` に Baseline テーブル記録 (raw JSON: `docs/plans/zmq_bench_results/`)。 主要発見: encode+decode = 0.25 µs/ev (Mac) / 0.44 µs/ev (gant) — **4 MHz aggregate で 1 コア飽和ライン** に来る
+- [x] **R-D4**: `state_rank` / `effective_state_for` / `next_reconnect_cooldown` + 4 const → `src/reader/state.rs` (10 unit test)
+- [x] **R-D8**: `extract_bits!` macro → `decoder/common.rs` (3 unit test) + PHA2 で 6 site パイロット採用
+- [x] **R-D9**: PSD1 `decode_charge_word` ↔ PHA1 `decode_energy_word` の semantic equivalence を doc 化 (R-D6 への布石)
+- [x] **R-D10**: `opendpp_to_event_data` smell 整理 — magic constants 命名、 silent truncation を `info!`-once 化、 4 unit test 追加
+- [x] **R-C3**: `FirmwareCapabilities` struct + `FirmwareApi` enum (`Dig1` / `Dig2` / `CaenDigitizer`) を `digitizer.rs` に追加。 7 FW 全部 legacy helper と整合 (1 cross-check test)
+- [x] **R-C4**: `src/config/devtree_paths.rs` 新設、 `cmd::*` 6 const + `par::*` 13 const。 `/cmd/` 18 site (`reader/mod.rs`) + `/par/activeendpoint` 2 site (`caen/handle.rs`) + `startmode` 2 site を定数化
+- [x] **R-C5**: `set_in_run_param_names()` を 5 個の static `&'static [&'static str]` に抽出。 PSD2 と AMax は同一 slice 共有 (regression test 付き)
+- [x] **R-C6**: `dev-tools` feature gate 追加。 27 dev binary を gate、 未登録 6 binary (`amax_firmware_check` / `amax_fw_test` / `amax_trgout_test` / `configure_benchmark` / `event_dump` / `register_test`) を Cargo.toml 登録 (`event_dump` のみ production 維持、 残り 5 は dev-tools)
+- [x] **R-P1**: `src/common/zmq_helper.rs` 新設、 `pub_no_hwm` / `sub_no_hwm` で HWM=0 設定の **12 箇所** 手書きを統合 (Reader/Merger/Recorder/Monitor/DataSink/Emulator/online EB/event_bridge/eb_test_sender/x743_cycle_test)
+- [x] **R-P2**: `web/operator-ui/src/app/components/echarts-base/echarts-base.utils.ts` 新設、 `siCountFormatter('linear'|'log')` / `defaultGrid` / `buildDualSliderDataZoom`。 11 spec、 histogram-chart で 2 site migrate (twin SI formatter → 1 関数)
+- [x] **R-P7**: `src/operator/command_ext.rs` で `OperatorCommandExt` stateless shim 実装。 R-P8 ComponentRunner (Phase 3) で 7th component として enumerate される下地
+- [x] **R-X2**: `.github/workflows/ci.yml` に `outdated` job 追加 (warn-only, `continue-on-error: true`)。 `cargo-deny` は既存で CVE をカバー済 → `cargo audit` は冗長で skip
+
+**完了基準達成**:
+- ✅ 568 → 598 tests pass (+30 new)、 clippy clean (`--release --tests --features dev-tools,root -- -D warnings`)
+- ✅ ng test 57 → 68 pass (+11 new spec)、 ng build clean、 dist/ 再ビルド済
+- ✅ `cargo build --release` (default features) で production 15 binary のみコンパイル、 `--features dev-tools` で +27 dev binary
+- ✅ CI で `cargo outdated` warn-only job 追加
+- ✅ 副次の clippy fix 2 件: `caen_legacy/handle.rs:204` unused-assignment、 `x743_cycle_test.rs` unused `error` import + dead store (どちらも pre-existing、 `--all-features` で surface)
+
+**LoC 影響**:
+- `+706 / -428 = net +278` (測定: `git diff --stat`)。 期待 `-300` から増えた理由は (a) 新規 module の doc + test が大きい (R-D4 state.rs / R-C4 devtree_paths / R-P1 zmq_helper / R-P7 command_ext + bench bin)、 (b) R-C5 の base+diff 化で各 slice に doc コメント付加、 (c) bench bin (zmq_boundary_bench) 自体が ~370 LoC。 機械的削減は予定通りだが、 Phase 1 で**追加された** test/doc/bench の方が大きかった
+- 主要ファイルの収縮: `reader/mod.rs` 4042 → ~3700 行 (state extract + opendpp 整理 + import 整理)、 残り削減は Phase 2 R-D1/D2 で実現
 
 ## Phase 2 — Structural Refactor (Week 4–8, 2026-06-02 〜 2026-07-03)
 
