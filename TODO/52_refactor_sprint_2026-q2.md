@@ -11,7 +11,7 @@
 | Phase | 状態 | 主な成果 |
 |---|---|---|
 | **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
-| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR (`649980f` `a5b5398` `37d252a`)、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR (`23274d4` `14ee5cd` `53696b5`)、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs 4000→3112 (-22%)、 +read_loop_dig1.rs 463 / read_loop_dig2.rs 470 行。 **decoder family 累計 -2211 行 + reader/mod.rs -888 行**。 560 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-C1/C2 (config tables) / R-P3/P4/P5 / R-X1 |
+| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 + R-D7 + R-D1/D2 + R-C1 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic)** = 3 PR、 family -1531 行。 **R-D7 (PSD2/PHA2 generic)** = 3 PR、 family -680 行。 **R-D1/D2 (read_loop split)** = 1 PR (`1059709`)、 reader/mod.rs -888 行。 **R-C1 (channel param tables)** = 1 PR (`aff8ccd`)、 add_channel_params 497→35 行 (-93%)、 digitizer.rs 3080→2629 (-451 行)、 +channel_param_tables.rs 360 行 (4 const テーブル合計 121 entries)。 **累計 decoder -2211 行 + reader/mod.rs -888 行 + digitizer.rs -451 行**。 572 tests pass、 clippy clean、 公開 API 完全互換。 残 Phase 2: R-C2 (merge_field! derive macro) / R-P3/P4/P5 / R-X1 |
 | **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
@@ -114,7 +114,13 @@ R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議
   - 同パターンで `read_loop_dig2::run` 自由関数化、 470 行
   - AMax / DPP_OPEN firmware 用
   - **総合**: reader/mod.rs 4000 → 3112 行 (-888、 -22%)。 Phase 2 目標 (~2000 行) には R-D3 (X743 read_loop、 Phase 3 へ delay) + R-D5 (connection extract、 Phase 3) で到達予定
-- [ ] **R-C1**: `add_channel_params` 366 行を `HashMap<FirmwareType, &[(ConfigField, &str)]>` 駆動 1 loop に
+- [x] **R-C1**: `add_channel_params` 497 行 → 35 行 (-93%) を const テーブル駆動の 1 loop に (`aff8ccd`、 2026-05-06)
+  - `src/config/channel_param_tables.rs` 新設、 4 const テーブル (PSD2_AMAX 37 / PHA2 30 / PSD1 28 / PHA1 26 = 121 entries 合計、 X743 は空 slice)
+  - 各 entry = `(devtree_path, fn(&ChannelConfig) -> Option<String>)`。 non-capturing closure → fn pointer coercion で const 化、 hot-path overhead ゼロ
+  - PSD1/PHA1 polarity (`negative`→`POLARITY_NEGATIVE`) のマッピングは accessor closure に折り畳み
+  - 12 unit tests (polarity mapping / per-table non-emptiness / no-duplicate-paths invariant / accessor round-trip)
+  - **per-FW 別テーブル維持の判断**: PSD2/AMax と PHA2 は Input/Coincidence/Waveform セクションで DevTree path を共有するが、 「PHA2 channel に baseline_avg を accidental set した場合は silent drop」という既存挙動の保全のため敢えて分離 (新コードで unified にするとそれが FELib reject に化けるため挙動変更になる)
+  - **結果**: digitizer.rs 3080 → 2629 行 (-451)、 572 tests pass、 clippy clean、 公開 API 不変
 - [ ] **R-C2**: `merge_field!` 38 fields を `#[derive(Merge)]` proc macro に
 - [ ] **R-P3**: Operator `AppState` RwLock 12 fields → DashMap or RCU read cache
 - [ ] **R-P4**: digitizer/event-builder/emulator settings の base panel 抽出
