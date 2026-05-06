@@ -1,37 +1,50 @@
 # TODO 52: Refactor Sprint 2026-Q2 (post-PHA2 cleanup, pre-7/24 experiment)
 
-**Status:** 📋 計画中 (2026-05-05 着手予定)
-**Created:** 2026-05-05
+**Status:** 📋 計画中 (2026-05-12 着手予定)
+**Created:** 2026-05-05 (revised 2026-05-05 evening: 一枚岩撤回 → component system 維持)
 **Window:** 2026-05-12 〜 2026-07-03 (8 週間 active refactor) + 2026-07-03 〜 2026-07-24 (3 週間 stabilize)
 **Source of truth:** [clean_architecture_evaluation.md](../clean_architecture_evaluation.md)
 
+## 方針 (revised 2026-05-05 evening)
+
+**現在の component system (Reader → Merger → Recorder/Monitor、ZMQ 境界、process 隔離) を維持**したまま重複を削減し、可読性を上げる。Pure 一枚岩 (D3) と gating benchmark (D4) は撤回。
+
+### 撤回した理由
+
+- 既存 component アーキテクチャは [docs/component_architecture.md](../docs/component_architecture.md) で確立済 (Receiver/Main/Sender/Command タスク分離 + lock-free shared state)
+- cross-machine 構成 (172.18.4.56/76/147 + gant@172.18.6.114) は実運用しており、 ZMQ 境界の配備柔軟性は失えない
+- 性能ボトルネックはすでに別の場所 (decode loop は並列化済 7M ev/s、ROOT 出力 0.79M ev/s/writer) で解決済、ZMQ 境界の実コストは「気になる」レベルで投資対効果が見えない
+- 一枚岩化のレバレッジは「readable」だが、**重複削減 (R-D6 PSD1/PHA1 generic、R-C1 param tables 等) でも同じ効果が低リスクで得られる** ことが re-evaluation で判明
+
 ## ゴール
 
-7 FW (PSD1/PSD2/PHA1/PHA2/AMax/V1743/X743Std) サポート完了後の重複削減 + 単一 binary monolithic 化。**動作不変** + **可読性向上** + **OSS 公開に耐える整理状態**。
+7 FW (PSD1/PSD2/PHA1/PHA2/AMax/V1743/X743Std) サポート完了後の **重複削減 + 構造整理** を、 component system 維持のまま実施。**動作不変** + **可読性向上** + **OSS 公開に耐える整理状態**。
 
 ## 動機
 
 - `src/reader/mod.rs` 4042 行、`src/config/digitizer.rs` 2890 行に肥大
 - PSD1 ↔ PHA1 が ~95% 重複 (1878/1816 行)、PSD2 ↔ PHA2 も aggregate header 同一
 - `src/bin/` 42 binary (production 15 / dev 27)、デフォルト build noise
-- ZMQ 5+ 境界 + MessagePack encode/decode が単一マシン内で発生
+- component 自体の構造は健全 (CommandHandlerExt 8/10 浸透、HWM=0 統一、`RolloverTracker` 統一済) — **しかしハンドル間の Receiver/Main/Sender 配線は手書き反復**
 - 来週 (2026-05-12〜) のラン中は March bin 使用なので master refactor は影響しない
 - 7/24 次実験までに 11 週間の余裕あり
 
-## 確定 Decisions (2026-05-05)
+## 確定 Decisions (2026-05-05 evening 改版)
 
 | # | 項目 | 決定 |
 |---|---|---|
 | D1 | Dev binary archive | `dev-tools` feature-gate (`required-features` に付与、 default build から外す) |
 | D2 | PSD1/PHA1 共通化深さ | trait + generic (zero-cost monomorphization) |
-| D3 | 単一マシン内 component 境界 | **Pure 一枚岩** (1 process, tokio task + `Arc<[u8]>`) |
-| D4 | D3 の benchmark | Quick (1 日) — Throughput + Latency、社内記録用 |
+| ~~D3~~ | ~~単一マシン内 component 境界 = Pure 一枚岩~~ | **撤回**。 component system 維持 (D7 参照) |
+| ~~D4~~ | ~~D3 の gating benchmark~~ | **撤回**。判断 gate ではなくなったので不要 |
 | D5 | 旧 `clean_architecture_evaluation.md` (2026-04-15) | 削除のまま、新規 (2026-05-05) が正規版 |
 | D6 | Branch 戦略 | Daily merge to master、`git tag march-bin-baseline` 運用 |
+| **D7** | アーキテクチャ方針 (NEW) | **現行 component system (Reader/Merger/Recorder/Monitor/Operator が ZMQ で繋がる process 隔離型) を維持**。重複削減・構造整理は component 内部 + 横断 trait 化で対処、 process 境界は触らない |
+| **D8** | ZMQ 境界 cost benchmark (NEW) | **optional、 低優先**。記録のために 1 日かけても良いが、 設計判断には連動しない。Phase 3 の buffer week に余裕があれば実施 |
 
 ## Phase 1 — Mechanical Cleanup (Week 1–3, 2026-05-12 〜 2026-05-30)
 
-低リスク・動作不変。各 PR は独立 test 緑、来週ラン (March bin) と並行可。
+低リスク・動作不変。各 PR は独立 test 緑、来週ラン (March bin) と並行可。**変更なし**。
 
 - [ ] **R-D4**: `state_rank` / `effective_state_for` / `next_reconnect_cooldown` → `src/reader/state.rs`
 - [ ] **R-D8**: `extract_bits!(word, shift, mask)` macro → `common.rs`
@@ -50,7 +63,7 @@
 
 ## Phase 2 — Structural Refactor (Week 4–8, 2026-06-02 〜 2026-07-03)
 
-中リスク。各 PR で test を厚く張ってから着手。Week 8 末で baseline freeze。
+中リスク。各 PR で test を厚く張ってから着手。Week 8 末で baseline freeze。**変更なし**。
 
 - [ ] **R-D6**: PSD1/PHA1 `Decoder<C: DecoderConfig>` generic 化 (D2、 3-4 PR)
   - `decoder/psd1_pha1_common.rs` 新設
@@ -68,59 +81,75 @@
 
 **完了基準**: `reader/mod.rs` ~4042 → 2000 行、`config/digitizer.rs` ~2890 → 1800 行、production `Result::unwrap()` 0、 baseline freeze + `git tag refactor-phase2-complete`。
 
-## Phase 3 — Monolithic Consolidation + Stabilize (Week 9–11, 2026-07-06 〜 2026-07-24)
+## Phase 3 — Component System Hardening + Stabilize (Week 9–11, 2026-07-06 〜 2026-07-24) ★REVISED★
 
-D3 (Pure 一枚岩) 採用済の実装 + 7/24 実験前 stabilize。
+D7 で component system 維持決定済。**Phase 3 は monolithic 化ではなく、 component 内部の delayed structural refactor + component 横断の lifecycle 整理 + 7/24 実験前 stabilize**。
 
-- [ ] Week 9 day 1: **R-A2** Quick benchmark (D4) — ZMQ vs in-process baseline
-  - Throughput (events/s)
-  - Latency (Stop → EOS、 Apply → Configured、 Start → first event)
-  - 結果は `docs/plans/monolithic_benchmark_2026-07.md` に記録
-- [ ] **R-A1**: Monolithic skeleton — Reader/Merger/Recorder/Monitor/Operator を 1 process、tokio mpsc + `Arc<[u8]>`、ZMQ 境界は cross-machine config-flag 用に縮退 (4-6 PR)
-  - `src/bin/{merger,recorder,monitor,operator}.rs` を thin wrapper or 撤廃
-  - cross-machine 用 aggregator は既存 `online_event_builder` を流用
-- [ ] **R-D3**: `read_loop_x743_std` → `src/reader/read_loop_x743.rs` + `x743_decode_params.rs`
-- [ ] **R-D5**: `try_connect_*` + DeviceConnection → `src/reader/connection.rs`
-- [ ] **R-A1 後計測**: monolithic 化後の Throughput + Latency 取得、 改善値を記録
-- [ ] 実機 dry run + 回帰テスト (PSD2 / PHA2 / V1743 各 10 分以上)
+### Week 9 (2026-07-06〜) — Delayed Reader split + 横断統一
 
-**完了基準**: 単一 delila-rs binary、 ZMQ 境界 5+ → 1-2、 7/24 実験で March bin と同等以上の rate で安定動作。
+- [ ] **R-D3**: `read_loop_x743_std` (mod.rs:2261–2741) + `x743_std_event_to_event_data` → `src/reader/read_loop_x743.rs` + `x743_decode_params.rs`。Phase 2 で X743 hardware-only path のテスト不足リスクのため delayed
+- [ ] **R-D5**: `try_connect_raw/opendpp` + `DeviceConnection` struct → `src/reader/connection.rs`。Phase 1/2 で他の reader 整理が済んでから着手するのが安全
+- [ ] **R-P6**: event_builder routes (565 行) の `ch_settings` / `l2_settings` / `time_settings` parallel structure を generic factory に統合 (R-P5 完了後)
+
+### Week 10 (2026-07-13〜) — Component lifecycle 統一 (NEW)
+
+- [ ] **R-P8 (NEW)**: `Component` trait + `ComponentRunner` builder 抽出
+  - 各 component (Reader / Merger / Recorder / Monitor) は `docs/component_architecture.md` の Receiver/Main/Sender/Command パターンに従っているが、 配線は **手書き反復** (4 component 分)
+  - `ComponentRunner::new(name).receiver(...).main(...).sender(...).command_ext(...).run()` のような builder で boilerplate を 1 箇所に集約
+  - 各 component 本体は **ビジネスロジックのみ** に専念、 ZMQ 接続・channel 配線・shutdown 伝播は trait の default impl が処理
+  - 効果: component_architecture.md のルールが trait の compile-time invariant になり、新規コンポーネント追加時の boilerplate ゼロ
+  - 工数 M、リスク 中 (4 component 同時マイグレーション)、PR 3-4
+- [ ] **R-D11**: `X743WaveformStats::analyze` (mod.rs:80–191) を `src/reader/x743_waveform/` サブモジュールへ抽出。 R-D3 後の延長
+- [ ] **R-D12** (optional, buffer): `DecoderKind` enum → `Box<dyn Decoder>` trait object 化。hot path 影響を bench で確認してから判断、 影響あれば revert
+
+### Week 11 (2026-07-20〜) — Stabilize + 7/24 実験前準備
+
+- [ ] hardware-in-the-loop dry run: PSD2 / PHA2 / V1743 各 10 分以上、 0 events 検出、loopback mismatch 0
+- [ ] 回帰テスト: `cargo test --release && cargo clippy --release --tests -- -D warnings && ng test`
+- [ ] **D8 optional benchmark**: 余裕があれば ZMQ 境界 cost (Throughput + Latency) を測って `docs/plans/zmq_boundary_cost_2026-07.md` に記録 (judgment gate ではなく「将来 monolithic 化を再検討するときの数字」)
+- [ ] `git tag refactor-sprint-2026-q2-complete`、 7/24 実験本番に投入
+
+**完了基準**:
+- component system 維持のまま `reader/mod.rs` < 1500 行
+- ComponentRunner 経由で 4 component の boilerplate 削減
+- 7/24 実験で **新 binary が March bin と同等以上の rate で安定動作**
 
 ## Out of Scope
 
-- 完全モノリシック化 (cross-machine 統合) — 7/24 後検討
-- 新 FW 追加 (V2745, DT5725) — 7/24 後、capability table (R-C3) 整備後
-- ROOT スキーマ変更 / wire format breaking change
-- C++ EventBuilder 撤退 (online EB Phase 4 別タスク)
-- PHA FW wedge SOP の自動化 (memory `pha_fw_misbehavior_sop` 維持)
-- TIME_STEP_NS 動的化 (DT5725 サポート時別 PR)
+- **Pure 一枚岩 (D3 撤回)** — 性能・可読性の両面で投資対効果が見えず、 cross-machine 配備柔軟性も失うので 7/24 後も再検討予定なし。 将来再検討するなら D8 benchmark 結果が出発点
+- **新 FW 追加 (V2745, DT5725)** — 7/24 後、capability table (R-C3) 整備後の方が楽
+- **ROOT スキーマ変更 / wire format breaking change** — `EventData` は既に Phase 4.5 で probe_type 追加済、今 sprint では追加変更しない
+- **C++ EventBuilder 撤退** — 別タスク (online EB Phase 4)
+- **PHA FW wedge SOP の自動化** — memory `pha_fw_misbehavior_sop`、現状の post-Start 確認運用を維持
+- **TIME_STEP_NS 動的化** — DT5725 (250 MS/s) サポート時、別 PR
+- **process 境界の変更** — D7 で凍結、Phase 3 R-P8 は process 数を変えない (boilerplate 削減のみ)
 
 ## Risk Register
 
 | Risk | Mitigation |
 |---|---|
-| Phase 2 で X743 hardware-only path を壊す | R-D3 を Phase 3 後半に回す、Week 9-10 で実機検証 |
+| Phase 2 で X743 hardware-only path を壊す | R-D3/D11 を Phase 3 に delay、Week 9-11 で実機検証 |
 | `merge_field!` proc macro (R-C2) で serde 互換崩す | snapshot test + JSON round-trip test を先に追加してから着手 |
-| Monolithic 化 (R-A1) で multi-machine 構成を壊す | feature flag `single-process` を導入、 既存 ZMQ path を残す |
+| **R-P8 ComponentRunner で 4 component 同時マイグレーション失敗** (NEW) | 1 component (Merger 推奨、最も小さい) で先行 PR、緑になってから他 3 へ展開。 PR ごとに smoke test (start_daq / stop_daq) |
 | 来週ランで March bin と master の挙動差が見つかる | refactor PR を一旦 stash、March bin 側 patch → master 反映 |
-| Phase 3 benchmark で in-process が逆に遅い病的 case | 着手前に snapshot 取り、回帰時は revert で対処 |
+| Phase 3 D8 benchmark でハードウェア占有競合 | 7/24 実験前の hardware-in-the-loop と日程衝突しないよう Week 11 buffer 内で実施、優先度 (validation > benchmark) を厳守 |
 
 ## Success Criteria
 
 - `cargo test --release` 568 → 600+ tests pass
 - `cargo clippy --release --tests -- -D warnings` clean
 - `ng test` 57+ tests pass、 `ng build` clean
-- `src/reader/mod.rs` < 2000 行
+- `src/reader/mod.rs` < 1500 行 (Phase 3 後)
 - `src/config/digitizer.rs` < 1900 行
 - `src/bin/` production 15 / dev 27 を `dev-tools` feature-gate で隔離
 - 重複検出: PSD1↔PHA1 / PSD2↔PHA2 で意味的同一の関数ゼロ
 - production `Result::unwrap()` ゼロ
+- 4 pipeline component (Reader / Merger / Recorder / Monitor) が `ComponentRunner` 経由で起動、boilerplate 削減
 - 7/24 実験で **新 binary が March bin と同等以上の rate で安定動作**
 
 ## 関連ドキュメント
 
-- [clean_architecture_evaluation.md](../clean_architecture_evaluation.md) — 28 candidates 詳細 + 工数/リスク/Impact
-- [REFACTORING_SUGGESTIONS.md](../REFACTORING_SUGGESTIONS.md) — Gemini Flash の高レベル提案 (R-X1/R-X2 の起点)
-- [docs/component_architecture.md](../docs/component_architecture.md) — タスク分離 + mpsc の現状アーキテクチャ
-- memory: [architecture_reflection](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/architecture_reflection.md) — 2026-04-22 の前段議論
+- [clean_architecture_evaluation.md](../clean_architecture_evaluation.md) — 28 candidates 詳細 + 工数/リスク/Impact (revised 2026-05-05 evening、§2.5 R-A* 削除、§3 Phase 3 書き換え、§5 Decisions に D7/D8 追加)
+- [docs/component_architecture.md](../docs/component_architecture.md) — タスク分離 + mpsc 現状アーキテクチャ (D7 で維持決定)
+- memory: [architecture_reflection](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/architecture_reflection.md) — 2026-04-22 の前段議論、2026-05-05 evening に「component 維持で進む」と決定
 - memory: [layering_principle_clock_sync](/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/layering_principle_clock_sync.md) — refactor 中も守る原則
