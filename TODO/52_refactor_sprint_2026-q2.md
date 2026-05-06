@@ -1,6 +1,6 @@
 # TODO 52: Refactor Sprint 2026-Q2 (post-PHA2 cleanup, pre-7/24 experiment)
 
-**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 着手可**
+**Status:** 🚧 **Phase 1 完了 (2026-05-06)、Phase 2 進行中 (R-D6 完了 2026-05-06)**
 **Created:** 2026-05-05 (revised 2026-05-05 evening: 一枚岩撤回 → component system 維持)
 **Window:** 2026-05-12 〜 2026-07-03 (8 週間 active refactor) + 2026-07-03 〜 2026-07-24 (3 週間 stabilize)
 **Source of truth:** [clean_architecture_evaluation.md](../clean_architecture_evaluation.md)
@@ -11,7 +11,7 @@
 | Phase | 状態 | 主な成果 |
 |---|---|---|
 | **Phase 1 — Mechanical Cleanup** | ✅ **完了 (2026-05-06、 1 セッション)** | R-D4/D8/D9/D10/C3/C4/C5/C6/X2/X3/P1/P2/P7 の 13 項目すべて landed。 568 → 598 unit tests (+30)、 ng test 57 → 68 (+11)、 clippy clean。 R-X3 baseline benchmark を Mac M4 Pro + gant Xeon W-3223 両方で取得済 (`docs/plans/zmq_boundary_cost_2026-Q2.md`) |
-| **Phase 2 — Structural Refactor** | 📋 **着手可 (R-D6 PSD1/PHA1 generic Decoder から)** | R-D6/D7/D1/D2/C1/C2/P3/P4/P5/X1。 5/12 着手予定だが Phase 1 の 1 セッション完了で前倒し可能 |
+| **Phase 2 — Structural Refactor** | 🚧 **進行中。 R-D6 完了 (2026-05-06)** | **R-D6 (PSD1/PHA1 generic Decoder)** = 3 PR landed (`649980f` `a5b5398` `37d252a`)、 psd1.rs 1886→405 (-78%)、 pha1.rs 1824→455 (-75%)、 +psd1_pha1_common 1319 行、 family net -1531 行、 561 tests pass。 残: R-D7/D1/D2/C1/C2/P3/P4/P5/X1 |
 | **Phase 3 — Component Hardening** | 📋 後回し | R-D3/D5/D11/D12/P6/P8/X3-post |
 
 ## 方針 (revised 2026-05-05 evening)
@@ -96,10 +96,11 @@ R-X3 baseline 取得後、 「monolithic 化を将来検討するか」を再議
 
 中リスク。各 PR で test を厚く張ってから着手。Week 8 末で baseline freeze。**変更なし**。
 
-- [ ] **R-D6**: PSD1/PHA1 `Decoder<C: DecoderConfig>` generic 化 (D2、 3-4 PR)
-  - `decoder/psd1_pha1_common.rs` 新設
-  - `trait FineTimeCalculator` で `calculate_sw_fine_fraction_psd` ⟷ `_pha` を分岐
-  - `trait DecoderConfig` で field naming (`charge_long` ⟷ `energy` 等) を抽象化
+- [x] **R-D6**: PSD1/PHA1 `Dig1Decoder<V: Dig1Variant>` generic 化 — 3 PR で完了 (2026-05-06、 1 セッション)
+  - **PR1** (`649980f`): `decoder/psd1_pha1_common.rs` 新設 (additive)。 `Dig1Variant` trait (5 アイテム: `FW_NAME` / `DUAL_CHANNEL_SIZE_MASK` / `calculate_sw_fine_fraction` / `decode_physics_word` / `decode_waveform`)、 `Dig1Decoder<V>` generic (zero-cost monomorphization)、 `Dig1ChannelHeader` で PSD1 EE/EQ vs PHA1 E2/EE 命名統合 (bit 27-31 は同位置)、 共通 framing 関数 + 31 unit tests via MockVariant
+  - **PR2** (`a5b5398`): `Psd1Decoder = Dig1Decoder<Psd1Variant>` 型エイリアス化。 psd1.rs 1886 → 405 行 (-78%)。 PSD1 固有 = waveform layout (unsigned 14-bit + DP1@14 / DP2@15) + `decode_charge_word` + `calculate_sw_fine_fraction_psd` (8192 baseline)
+  - **PR3** (`37d252a`): `Pha1Decoder = Dig1Decoder<Pha1Variant>` 型エイリアス化。 pha1.rs 1824 → 455 行 (-75%)。 PHA1 固有 = waveform layout (sign-extended 14-bit + DP@14 / Tn@15、 Tn→D0 / DP→D1) + `decode_energy_word` + `calculate_sw_fine_fraction_pha` (signed 補間)
+  - **Total**: family net -1531 行 (3710 → 2179 incl. common)、 公開 API 不変 (Psd1Config/Pha1Config の struct リテラル + ::new + .decode 等)、 561 tests pass、 clippy clean、 R-D9 で予告した命名統一 (`decode_physics_word`) 実装
 - [ ] **R-D7**: PSD2/PHA2 共用 aggregate parser (`decoder/dualchannel_common.rs`)
 - [ ] **R-D1**: `read_loop_raw` (1369–1812) → `src/reader/read_loop_dig1.rs`
 - [ ] **R-D2**: `read_loop_opendpp` (1812–2261) → `src/reader/read_loop_dig2.rs`
