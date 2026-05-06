@@ -27,14 +27,14 @@ use axum::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tmq::{subscribe, AsZmqSocket, Context};
+use tmq::{subscribe, Context};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 
 use crate::common::{
-    handle_command, run_command_task, ChannelRegistration, Command, CommandHandlerExt,
+    handle_command, run_command_task, sub_no_hwm, ChannelRegistration, Command, CommandHandlerExt,
     CommandResponse, ComponentSharedState, ComponentState, EventData, EventDataBatch, Message,
     MessageHeader, Waveform,
 };
@@ -1129,10 +1129,7 @@ impl Monitor {
             .connect(&self.config.subscribe_address)?
             .subscribe(b"")?;
         // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        socket
-            .get_socket()
-            .set_rcvhwm(0)
-            .map_err(tmq::TmqError::from)?;
+        sub_no_hwm(&socket).map_err(tmq::TmqError::from)?;
 
         info!(
             address = %self.config.subscribe_address,

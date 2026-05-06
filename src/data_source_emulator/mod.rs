@@ -14,7 +14,7 @@ use futures::SinkExt;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use thiserror::Error;
-use tmq::{publish, AsZmqSocket, Context};
+use tmq::{publish, Context};
 use tokio::sync::{watch, Mutex};
 use tokio::time::interval;
 use tracing::{debug, info};
@@ -22,7 +22,7 @@ use tracing::{debug, info};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::common::{
-    flags, handle_command, run_command_task, CommandHandlerExt, ComponentSharedState,
+    flags, handle_command, pub_no_hwm, run_command_task, CommandHandlerExt, ComponentSharedState,
     ComponentState, EmulatorRuntimeConfig, EventData, EventDataBatch, Message, Waveform,
     UNKNOWN_PROBE_TYPE,
 };
@@ -318,10 +318,7 @@ impl Emulator {
         let context = Context::new();
         let data_socket = publish(&context).bind(&config.address)?;
         // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        data_socket
-            .get_socket()
-            .set_sndhwm(0)
-            .map_err(|e| EmulatorError::Zmq(e.into()))?;
+        pub_no_hwm(&data_socket).map_err(|e| EmulatorError::Zmq(e.into()))?;
 
         info!(
             data_address = %config.address,

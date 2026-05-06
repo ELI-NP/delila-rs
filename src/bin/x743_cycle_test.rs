@@ -26,7 +26,7 @@ use clap::Parser;
 use delila_rs::config::DigitizerConfig;
 use delila_rs::reader::caen_legacy::*;
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(
@@ -344,12 +344,15 @@ fn spawn_zmq_noise() -> Result<tokio::runtime::Runtime, Box<dyn std::error::Erro
 
     // PUB socket: publish ~1 MB buffers @ 50 Hz, mirrors production data PUB
     rt.spawn(async {
+        use delila_rs::common::pub_no_hwm;
         use futures::SinkExt;
-        use tmq::{publish, AsZmqSocket, Context};
+        use tmq::{publish, Context};
         let ctx = Context::new();
         let mut socket = match publish(&ctx).bind("tcp://*:54330") {
             Ok(s) => {
-                let _ = s.get_socket().set_sndhwm(0);
+                // Best-effort: this is a noise-traffic emitter inside a hardware
+                // reproducer; if HWM cannot be set we keep going.
+                let _ = pub_no_hwm(&s);
                 s
             }
             Err(e) => {
@@ -546,7 +549,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     drop(buf);
                     buf = h.malloc_readout_buffer()?;
                     if event_buf.is_some() {
-                        event_buf = None; // drop old EventBuffer first
+                        // Drop the old EventBuffer first, then reallocate.
+                        // `take()` makes the order explicit so clippy doesn't
+                        // flag the intermediate `None` write as dead.
+                        let _ = event_buf.take();
                         event_buf = Some(h.allocate_event()?);
                     }
                     log.record(cycle, "after_realloc_buf", Some(read_status(&h)), "");

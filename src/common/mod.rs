@@ -39,6 +39,10 @@ pub use error::{PipelineError, PipelineResult};
 pub mod shutdown;
 pub use shutdown::{setup_shutdown, setup_shutdown_with_message, ShutdownReceiver, ShutdownSender};
 
+// ZMQ socket initialization helpers (HWM=0 policy)
+pub mod zmq_helper;
+pub use zmq_helper::{pub_no_hwm, sub_no_hwm};
+
 /// Heartbeat message for liveness detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Heartbeat {

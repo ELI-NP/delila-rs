@@ -32,7 +32,7 @@ use super::chunk_builder::{
 use super::config::{load_channel_config, TimeCalibration};
 use super::hit::Hit;
 
-use crate::common::Message;
+use crate::common::{sub_no_hwm, Message};
 
 /// Online Event Builder configuration
 #[derive(Debug, Clone)]
@@ -331,7 +331,6 @@ async fn receiver_task(
     dropped_batches: Arc<AtomicU64>,
 ) {
     use futures::StreamExt;
-    use tmq::AsZmqSocket;
 
     let context = tmq::Context::new();
     let mut socket = match tmq::subscribe(&context)
@@ -339,8 +338,11 @@ async fn receiver_task(
         .and_then(|s| s.subscribe(b""))
     {
         Ok(s) => {
-            // Never drop messages — buffer in memory instead (DAQ: no data loss)
-            if let Err(e) = s.get_socket().set_rcvhwm(0) {
+            // Never drop messages — buffer in memory instead (DAQ: no data loss).
+            // Online EB stays alive even if HWM cannot be set (the receiver is
+            // background-spawned, no error channel to propagate up); warn so the
+            // operator notices the policy was not applied.
+            if let Err(e) = sub_no_hwm(&s) {
                 warn!(error = %e, "Failed to set ZMQ RCVHWM=0");
             }
             s

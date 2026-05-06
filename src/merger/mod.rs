@@ -20,8 +20,8 @@ use tokio::sync::{mpsc, watch};
 use tracing::{info, trace, warn};
 
 use crate::common::{
-    handle_command, run_command_task, CommandHandlerExt, ComponentSharedState, ComponentState,
-    MessageHeader,
+    handle_command, pub_no_hwm, run_command_task, sub_no_hwm, CommandHandlerExt,
+    ComponentSharedState, ComponentState, MessageHeader,
 };
 
 /// Merger configuration
@@ -314,7 +314,7 @@ impl Merger {
 
         let sub_socket = subscribe(&context).connect(first_addr)?.subscribe(b"")?;
         // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        sub_socket.get_socket().set_rcvhwm(0)?;
+        sub_no_hwm(&sub_socket)?;
 
         info!(address = %first_addr, "Merger subscribed to upstream (RCVHWM=0)");
 
@@ -325,7 +325,7 @@ impl Merger {
 
         let pub_socket = publish(&context).bind(&self.config.pub_address)?;
         // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        pub_socket.get_socket().set_sndhwm(0)?;
+        pub_no_hwm(&pub_socket)?;
         info!(address = %self.config.pub_address, "Merger publishing to downstream (SNDHWM=0)");
 
         info!(state = %self.state(), "Merger ready, waiting for commands");

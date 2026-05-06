@@ -4,6 +4,7 @@
 //! Includes Swagger UI for API documentation.
 
 mod client;
+pub mod command_ext;
 mod digitizer_repository;
 pub mod elog;
 mod event_builder_repository;
@@ -12,6 +13,7 @@ mod routes;
 mod run_repository;
 
 pub use client::ComponentClient;
+pub use command_ext::OperatorCommandExt;
 pub use digitizer_repository::{
     DigitizerConfigDocument, DigitizerConfigRepository, DigitizerRepoError, RunConfigSnapshot,
 };

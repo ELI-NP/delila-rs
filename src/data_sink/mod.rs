@@ -15,13 +15,13 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use thiserror::Error;
-use tmq::{subscribe, AsZmqSocket, Context};
+use tmq::{subscribe, Context};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
 use crate::common::{
-    handle_command, run_command_task, CommandHandlerExt, ComponentSharedState, ComponentState,
-    EventDataBatch, Message,
+    handle_command, run_command_task, sub_no_hwm, CommandHandlerExt, ComponentSharedState,
+    ComponentState, EventDataBatch, Message,
 };
 
 /// DataSink configuration
@@ -301,10 +301,7 @@ impl DataSink {
             .connect(&self.config.address)?
             .subscribe(b"")?;
         // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        socket
-            .get_socket()
-            .set_rcvhwm(0)
-            .map_err(tmq::TmqError::from)?;
+        sub_no_hwm(&socket).map_err(tmq::TmqError::from)?;
 
         info!(address = %self.config.address, "DataSink connected to upstream (RCVHWM=0)");
         info!(

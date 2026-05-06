@@ -5,9 +5,9 @@
 //!   cargo run --bin event_bridge -- -s tcp://localhost:5556 -p tcp://*:5600
 
 use clap::Parser;
-use delila_rs::common::{setup_shutdown_with_message, EventData, Message};
+use delila_rs::common::{pub_no_hwm, setup_shutdown_with_message, sub_no_hwm, EventData, Message};
 use futures::{SinkExt, StreamExt};
-use tmq::{publish, subscribe, AsZmqSocket, Context};
+use tmq::{publish, subscribe, Context};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -69,9 +69,9 @@ async fn main() -> anyhow::Result<()> {
         .connect(&args.sub_address)?
         .subscribe(b"")?;
     // Never drop messages — buffer in memory instead (DAQ: no data loss)
-    sub_socket.get_socket().set_rcvhwm(0)?;
+    sub_no_hwm(&sub_socket)?;
     let mut pub_socket = publish(&context).bind(&args.pub_address)?;
-    pub_socket.get_socket().set_sndhwm(0)?;
+    pub_no_hwm(&pub_socket)?;
 
     info!(sub = %args.sub_address, pub_ = %args.pub_address, "Event Bridge started (HWM=0)");
 

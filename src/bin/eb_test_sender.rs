@@ -12,11 +12,11 @@ use std::time::Duration;
 
 use clap::Parser;
 use futures::SinkExt;
-use tmq::{publish, AsZmqSocket, Context};
+use tmq::{publish, Context};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use delila_rs::common::{EventData, EventDataBatch, Message};
+use delila_rs::common::{pub_no_hwm, EventData, EventDataBatch, Message};
 
 #[cfg(feature = "root")]
 use delila_rs::event_builder::read_hits_from_root;
@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
     let context = Context::new();
     let mut socket = publish(&context).bind(&args.publish)?;
     // Never drop messages — buffer in memory instead (DAQ: no data loss)
-    socket.get_socket().set_sndhwm(0)?;
+    pub_no_hwm(&socket)?;
     info!(address = %args.publish, "ZMQ PUB socket bound (SNDHWM=0)");
 
     // Give subscribers time to connect
