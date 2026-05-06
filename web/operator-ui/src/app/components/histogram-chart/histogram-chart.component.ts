@@ -14,6 +14,7 @@ import type { ECharts } from 'echarts/core';
 import { AxisView, Histogram1D, XAxisLabel, ViewCellFitResult } from '../../models/histogram.types';
 import { rebin1d } from '../../utils/rebin';
 import { evaluatePiecewiseBg, BG_RANGE } from '../../services/fitting.service';
+import { siCountFormatter } from '../echarts-base/echarts-base.utils';
 
 export interface RangeChangeEvent {
   xRange: { min: number; max: number };
@@ -217,21 +218,7 @@ export class HistogramChartComponent implements OnChanges {
     const displayData = this.downsampleForDisplay(data, xMin, xMax);
 
     // Y axis label formatter - different for log vs linear
-    const yAxisFormatter = this.logScale
-      ? (value: number) => {
-          if (value === 0) return '0';
-          if (value >= 1e9) return (value / 1e9).toFixed(0) + 'G';
-          if (value >= 1e6) return (value / 1e6).toFixed(0) + 'M';
-          if (value >= 1e3) return (value / 1e3).toFixed(0) + 'k';
-          return value.toString();
-        }
-      : (value: number) => {
-          if (value === 0) return '0';
-          if (Math.abs(value) >= 1e9) return (value / 1e9).toFixed(1) + 'G';
-          if (Math.abs(value) >= 1e6) return (value / 1e6).toFixed(1) + 'M';
-          if (Math.abs(value) >= 1e3) return (value / 1e3).toFixed(0) + 'k';
-          return Math.floor(value).toString();
-        };
+    const yAxisFormatter = siCountFormatter(this.logScale ? 'log' : 'linear');
 
     // Generate fit curve data for all components
     const curves = this.generateFitCurves(xMin, xMax);
@@ -470,13 +457,7 @@ export class HistogramChartComponent implements OnChanges {
         name: 'Counts',
         min: 0,
         axisLabel: {
-          formatter: (value: number) => {
-            if (value === 0) return '0';
-            if (Math.abs(value) >= 1e9) return (value / 1e9).toFixed(1) + 'G';
-            if (Math.abs(value) >= 1e6) return (value / 1e6).toFixed(1) + 'M';
-            if (Math.abs(value) >= 1e3) return (value / 1e3).toFixed(0) + 'k';
-            return Math.floor(value).toString();
-          },
+          formatter: siCountFormatter('linear'),
         },
       },
       series: [
