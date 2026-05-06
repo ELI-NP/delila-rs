@@ -201,7 +201,7 @@ impl X743Handle {
     /// is actually ready and fail loudly when it isn't.
     pub fn wait_for_board_ready(&self, context: &str) -> Result<(), DigitizerError> {
         let start = Instant::now();
-        let mut last_status = 0u32;
+        let mut last_status: u32;
         loop {
             let d32 = self.read_register(0x8178)?;
             last_status = d32;

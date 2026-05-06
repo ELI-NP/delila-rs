@@ -17,6 +17,7 @@
 //! `docs/devtree_examples/vx2730_pha2_sn52622.json`.
 
 use super::common::{DataType, EventData, RawData, Waveform};
+use crate::extract_bits;
 use tracing::{debug, info, warn};
 
 /// PHA2 wire constants — 64-bit big-endian words, same Individual Trigger
@@ -335,16 +336,24 @@ impl Pha2Decoder {
         let first_word = self.read_u64(data, *word_index);
         *word_index += 1;
 
-        let is_last_word = ((first_word >> constants::LAST_WORD_SHIFT) & 0x1) != 0;
-        let channel = ((first_word >> constants::CHANNEL_SHIFT) & constants::CHANNEL_MASK) as u8;
+        let is_last_word = extract_bits!(first_word, constants::LAST_WORD_SHIFT, 0x1) != 0;
+        let channel = extract_bits!(
+            first_word,
+            constants::CHANNEL_SHIFT,
+            constants::CHANNEL_MASK,
+            u8
+        );
 
         if is_last_word {
             // Single-word compressed event (data-reduction mode).
             return self.decode_single_word_event(first_word, channel);
         }
 
-        let is_special_event =
-            ((first_word >> constants::SPECIAL_EVENT_SHIFT) & constants::SPECIAL_EVENT_MASK) != 0;
+        let is_special_event = extract_bits!(
+            first_word,
+            constants::SPECIAL_EVENT_SHIFT,
+            constants::SPECIAL_EVENT_MASK
+        ) != 0;
         let raw_timestamp = first_word & constants::TIMESTAMP_MASK;
 
         if *word_index >= total_words {
@@ -354,8 +363,8 @@ impl Pha2Decoder {
         let second_word = self.read_u64(data, *word_index);
         *word_index += 1;
 
-        let has_waveform = ((second_word >> constants::WAVEFORM_FLAG_SHIFT) & 0x1) != 0;
-        let is_last = ((second_word >> constants::LAST_WORD_SHIFT) & 0x1) != 0;
+        let has_waveform = extract_bits!(second_word, constants::WAVEFORM_FLAG_SHIFT, 0x1) != 0;
+        let is_last = extract_bits!(second_word, constants::LAST_WORD_SHIFT, 0x1) != 0;
 
         if is_special_event {
             // Per-event "stat" / time-counter words. Drain extra words to
@@ -373,10 +382,16 @@ impl Pha2Decoder {
             return None;
         }
 
-        let flags_low = (second_word >> constants::FLAGS_LOW_PRIORITY_SHIFT)
-            & constants::FLAGS_LOW_PRIORITY_MASK;
-        let flags_high = (second_word >> constants::FLAGS_HIGH_PRIORITY_SHIFT)
-            & constants::FLAGS_HIGH_PRIORITY_MASK;
+        let flags_low = extract_bits!(
+            second_word,
+            constants::FLAGS_LOW_PRIORITY_SHIFT,
+            constants::FLAGS_LOW_PRIORITY_MASK
+        );
+        let flags_high = extract_bits!(
+            second_word,
+            constants::FLAGS_HIGH_PRIORITY_SHIFT,
+            constants::FLAGS_HIGH_PRIORITY_MASK
+        );
         let flags = ((flags_high << 12) | flags_low) as u32;
 
         let energy = (second_word & constants::ENERGY_MASK) as u16;
@@ -384,8 +399,12 @@ impl Pha2Decoder {
         // Fine-TS defensive parsing: spec says 10 bits, [0, 1023]. The mask
         // already enforces this, but warn once if we ever observe it at the
         // boundary so Phase 3 throughput tests can flag firmware quirks.
-        let raw_fine_ts =
-            ((second_word >> constants::FINE_TIME_SHIFT) & constants::FINE_TIME_MASK) as u16;
+        let raw_fine_ts = extract_bits!(
+            second_word,
+            constants::FINE_TIME_SHIFT,
+            constants::FINE_TIME_MASK,
+            u16
+        );
         let fine_time = if raw_fine_ts >= 1024 {
             if !self.fine_ts_clamp_warned {
                 warn!(raw_fine_ts, "[PHA2] fine_ts >= 1024 — clamping (one-shot)");

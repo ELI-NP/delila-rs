@@ -9,6 +9,11 @@ pub mod caen;
 #[cfg(feature = "x743")]
 pub mod caen_legacy;
 pub mod decoder;
+mod state;
+
+use state::{
+    effective_state_for, next_reconnect_cooldown, state_rank, RECONNECT_INITIAL,
+};
 
 /// Per-event decode parameters cached by the V1743 ReadLoop so
 /// `x743_std_event_to_event_data` never touches `DigitizerConfig` on the hot path.
@@ -321,6 +326,8 @@ impl X743Scratch {
 
 // Re-exports
 pub use crate::config::FirmwareType;
+
+use crate::config::devtree_paths as devtree;
 pub use caen::{CaenError, CaenHandle, EndpointHandle, OpenDppEvent};
 pub use decoder::{
     AMaxConfig, AMaxDecoder, DataType, DecodeResult, EventData, Pha1Config, Pha1Decoder,
@@ -328,17 +335,17 @@ pub use decoder::{
 };
 
 use crate::common::{
-    handle_command, run_command_task, CommandHandlerExt, ComponentSharedState, ComponentState,
-    EventData as CommonEventData, EventDataBatch, Message, Waveform as CommonWaveform,
+    handle_command, pub_no_hwm, run_command_task, CommandHandlerExt, ComponentSharedState,
+    ComponentState, EventData as CommonEventData, EventDataBatch, Message,
+    Waveform as CommonWaveform,
 };
 use futures::SinkExt;
-use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tmq::publish;
 use tmq::Context;
-use tmq::{publish, AsZmqSocket};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
@@ -379,35 +386,70 @@ enum ReadLoopOutput {
     Stop,
 }
 
-/// Convert OpenDppEvent to decoder::EventData
-///
-/// AMax firmware uses OpenDPP endpoint which returns pre-decoded event data.
-/// This converts the OpenDPP event structure to our common EventData format.
-fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventData {
-    // AMax timestamp: 1 LSB = 8 ns
-    // Fine timestamp adds sub-clock resolution (10-bit, scale by 1024)
-    const TIME_STEP_NS: f64 = 8.0;
-    const FINE_TIME_SCALE: f64 = 1024.0;
+/// AMax timebase: 1 LSB of `OpenDppEvent.timestamp` = 8 ns.
+const AMAX_TIME_STEP_NS: f64 = 8.0;
+/// AMax fine-timestamp scale: 10-bit field, divide by 1024 to get fractional ns.
+const AMAX_FINE_TIME_SCALE: f64 = 1024.0;
+/// AMax wire format: `flags_a` is the 8-bit high half, `flags_b` is the 12-bit
+/// low half. The combined u32 sits in `EventData.flags` lower 20 bits.
+const AMAX_FLAGS_A_SHIFT: u32 = 12;
 
-    let coarse_time_ns = (event.timestamp as f64) * TIME_STEP_NS;
-    let fine_time_ns = (event.fine_timestamp as f64 / FINE_TIME_SCALE) * TIME_STEP_NS;
+/// Convert an `OpenDppEvent` from the FELib AMax endpoint into the unified
+/// `decoder::EventData` used by the rest of the pipeline.
+///
+/// AMax is the only firmware where the FELib gives us *pre-decoded* events
+/// (raw aggregate parsing happens inside `libCAEN_FELib`), so this function
+/// is just a field-by-field translation rather than the bit-twiddling decoder
+/// we use for PSD1/PSD2/PHA1/PHA2.
+///
+/// # Wire-format notes
+///
+/// * `flags = (flags_a << 12) | flags_b` — the 20-bit AMax flags field is
+///   split across two FFI fields. Width is firmware-defined (CAEN AMax
+///   `documentation_2026030952/`).
+/// * `user_info` — AMax FW emits `[peak, baseline, fw_specific0, fw_specific1]`
+///   as `Vec<u64>` over FFI. We copy the first 4 slots into a fixed-size
+///   array; if the FW ever emits more we log once at `info!` instead of
+///   silently truncating (per CLAUDE.md "Silent failure を作らない").
+/// * `(v & 0x3FFF) as i16` — AMax raw ADC samples are *unsigned* 14-bit
+///   ([0, 16383]). The cast to `i16` matches `Waveform::analog_probe1`'s
+///   storage type; `analog_probe1_is_signed = false` flags this for the
+///   frontend so it doesn't apply the +8191 centering offset that signed
+///   PHA1 trapezoid probes need.
+/// * `analog_probe_type` / `digital_probe_type` are `UNKNOWN_PROBE_TYPE`
+///   because OpenDPP doesn't carry probe-type metadata on the wire (added
+///   in Phase 4.5 for PHA2 only).
+fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventData {
+    let coarse_time_ns = (event.timestamp as f64) * AMAX_TIME_STEP_NS;
+    let fine_time_ns = (event.fine_timestamp as f64 / AMAX_FINE_TIME_SCALE) * AMAX_TIME_STEP_NS;
     let timestamp_ns = coarse_time_ns + fine_time_ns;
 
-    // Combine flags (flags_a is 8 bits, flags_b is 12 bits)
-    let flags = ((event.flags_a as u32) << 12) | (event.flags_b as u32);
+    let flags = ((event.flags_a as u32) << AMAX_FLAGS_A_SHIFT) | (event.flags_b as u32);
 
     // Copy first 4 user_info slots into the fixed-size array. AMax FW emits
-    // [0]=AMax peak, [1]=baseline, [2..=3]=FW-specific. Missing slots stay 0.
-    // Slots beyond 4 (rare) are dropped silently — they'd require a Vec on
-    // the hot path, defeating the zero-allocation guarantee.
+    // [0]=peak, [1]=baseline, [2..=3]=FW-specific. Missing slots stay 0.
     let mut user_info = [0u64; 4];
     for (i, slot) in event.user_info.iter().take(4).enumerate() {
         user_info[i] = *slot;
     }
+    if event.user_info.len() > 4 {
+        // Truncation is intentional (`EventData.user_info` is fixed-size to
+        // keep the hot path zero-alloc), but FW that emits >4 slots is a
+        // signal something has changed upstream. Log once-per-process so we
+        // notice without flooding at MHz rates.
+        static OVERFLOW_LOGGED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !OVERFLOW_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            info!(
+                slots = event.user_info.len(),
+                module = module_id,
+                "[AMax] OpenDPP user_info has >4 slots — truncating to 4 (one-shot)"
+            );
+        }
+    }
 
-    // AMax OpenDPP delivers a single u16 sample stream — the FW developer
-    // currently emits one signal (no probe interleaving). Forward the raw
-    // 14-bit values into analog_probe1 to stay 1:1 with amax_viewer.
+    // AMax OpenDPP delivers a single u16 sample stream. Forward raw 14-bit
+    // values into analog_probe1 to stay 1:1 with amax_viewer.
     let waveform = event.waveform.as_ref().map(|samples| {
         let analog_probe1 = samples.iter().map(|&v| (v & 0x3FFF) as i16).collect();
         decoder::common::Waveform {
@@ -419,8 +461,7 @@ fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventD
             digital_probe4: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
-            ns_per_sample: TIME_STEP_NS,
-            // AMax raw ADC stream — unsigned 14-bit.
+            ns_per_sample: AMAX_TIME_STEP_NS,
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
             analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
@@ -1088,87 +1129,22 @@ fn poll_dig2_counters(
     }
 }
 
-/// Map ComponentState to a rank for ordering comparisons.
-/// Transitional/Error states map to 0 (treated as Idle).
-fn state_rank(s: ComponentState) -> u8 {
-    match s {
-        ComponentState::Idle => 0,
-        ComponentState::Configured => 1,
-        ComponentState::Armed => 2,
-        ComponentState::Running => 3,
-        _ => 0,
-    }
-}
-
-/// Decide which state to report to the operator on `GetStatus`.
-///
-/// `software_state` is the operator-facing state, set immediately by
-/// `handle_command` when a command is accepted — i.e. before the
-/// hardware has actually moved. `hw_state` is the hardware-confirmed
-/// state, updated by the read_loop only after the underlying FELib
-/// transition (configure_endpoint / arm / start / disarm+drain+cleardata
-/// / reset) actually completes.
-///
-/// We always trust `hw_state`. Lying about progress in either direction
-/// lets the operator race in-flight transitions:
-///
-///   * **Up direction** (Configure / Arm / Start) — sw advances first,
-///     hw catches up. Reporting sw too early would let the operator
-///     fire the next command (e.g. Start before Arm finished) against
-///     a hardware that isn't ready yet.
-///   * **Down direction** (Stop / Reset) — sw drops first, hw lags by
-///     the disarm / drain / cleardata window (~hundreds of ms). The
-///     classic failure is rapid `Stop → Apply` in Tune Up: the previous
-///     `state_rank(hw) < state_rank(sw)` heuristic only handled the up
-///     direction, so during Stop it lied with `Configured` while the
-///     FELib was still mid-disarm. The next `set_value` then locked
-///     the handle at CAEN -15 (COMMUNICATION ERROR), recoverable only
-///     by dropping and re-Open-ing the handle. See memory
-///     `felib_stuck_after_rapid_stop_apply` for the 2026-05-04 PHA2
-///     incident.
-///
-/// Returning `hw_state` unconditionally collapses both cases into the
-/// same simple rule.
-fn effective_state_for(_software_state: ComponentState, hw_state: ComponentState) -> ComponentState {
-    hw_state
-}
-
-/// Reconnection backoff parameters.
-/// Exponential backoff (1s→2s→4s→8s→16s→max 30s) + random jitter (±500ms)
-/// prevents Thundering Herd when multiple readers reconnect simultaneously
-/// after an optical link failure.
-const RECONNECT_INITIAL: Duration = Duration::from_millis(1000);
-const RECONNECT_MAX: Duration = Duration::from_millis(30000);
-const RECONNECT_JITTER_MS: u64 = 500;
-
-/// Compute next reconnect cooldown with exponential backoff + jitter.
-/// Returns the jittered cooldown and the next (doubled) base for the caller to store.
-fn next_reconnect_cooldown(current_base: Duration) -> (Duration, Duration) {
-    let jitter_ms = rand::thread_rng().gen_range(0..=RECONNECT_JITTER_MS * 2);
-    let jittered = current_base
-        .checked_add(Duration::from_millis(jitter_ms))
-        .unwrap_or(RECONNECT_MAX)
-        .min(RECONNECT_MAX + Duration::from_millis(RECONNECT_JITTER_MS));
-    let next_base = (current_base * 2).min(RECONNECT_MAX);
-    (jittered, next_base)
-}
-
 /// Send firmware-specific arm command to the digitizer.
 ///
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, the actual arm is deferred to start phase.
 /// For DIG2 (PSD2), always sends armacquisition immediately.
 fn send_arm_command(handle: &CaenHandle, firmware: FirmwareType) -> Result<(), caen::CaenError> {
     if firmware.is_dig1() {
-        let startmode = handle.get_value("/par/startmode").unwrap_or_default();
+        let startmode = handle.get_value(devtree::par::START_MODE).unwrap_or_default();
         if startmode == "START_MODE_SW" {
             info!("START_MODE_SW detected - deferring arm to Start");
         } else {
             info!("Arming digitizer (DIG1, mode={})", startmode);
-            handle.send_command("/cmd/armacquisition")?;
+            handle.send_command(devtree::cmd::ARM_ACQUISITION)?;
         }
     } else {
         info!("Arming digitizer (PSD2)");
-        handle.send_command("/cmd/armacquisition")?;
+        handle.send_command(devtree::cmd::ARM_ACQUISITION)?;
     }
     Ok(())
 }
@@ -1179,16 +1155,16 @@ fn send_arm_command(handle: &CaenHandle, firmware: FirmwareType) -> Result<(), c
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, sends armacquisition (arm=start).
 fn send_start_command(handle: &CaenHandle, firmware: FirmwareType) -> Result<(), caen::CaenError> {
     if firmware.is_dig1() {
-        let startmode = handle.get_value("/par/startmode").unwrap_or_default();
+        let startmode = handle.get_value(devtree::par::START_MODE).unwrap_or_default();
         if startmode == "START_MODE_SW" {
             info!("Starting acquisition (DIG1, START_MODE_SW)");
-            handle.send_command("/cmd/armacquisition")?;
+            handle.send_command(devtree::cmd::ARM_ACQUISITION)?;
         } else {
             info!("DIG1 acquisition already started on Arm");
         }
     } else {
         info!("Starting digitizer acquisition (PSD2)");
-        handle.send_command("/cmd/swstartacquisition")?;
+        handle.send_command(devtree::cmd::SW_START_ACQUISITION)?;
     }
     Ok(())
 }
@@ -1214,10 +1190,7 @@ impl Reader {
         let context = Context::new();
         let data_socket = publish(&context).bind(&config.data_address)?;
         // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        data_socket
-            .get_socket()
-            .set_sndhwm(0)
-            .map_err(|e| ReaderError::Zmq(e.into()))?;
+        pub_no_hwm(&data_socket).map_err(|e| ReaderError::Zmq(e.into()))?;
 
         info!(
             data_address = %config.data_address,
@@ -1443,7 +1416,7 @@ impl Reader {
                 if target_rank >= state_rank(ComponentState::Configured) && !conn.hw_configured {
                     // Reset digitizer to factory defaults first — ensures clean slate
                     // regardless of prior state (e.g. CoMPASS register changes)
-                    match conn.handle.send_command("/cmd/reset") {
+                    match conn.handle.send_command(devtree::cmd::RESET) {
                         Ok(()) => info!("Digitizer reset to factory defaults"),
                         Err(e) => warn!(error = %e, "Digitizer reset failed (non-fatal)"),
                     }
@@ -1483,7 +1456,7 @@ impl Reader {
                     // ADC calibration (DIG1 only) — final Configure step, before
                     // marking hw_configured. Prevents Arm delay / S_IN race.
                     if config.firmware.is_dig1() {
-                        match conn.handle.send_command("/cmd/calibrateadc") {
+                        match conn.handle.send_command(devtree::cmd::CALIBRATE_ADC) {
                             Ok(()) => info!("ADC calibration completed"),
                             Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
                         }
@@ -1526,7 +1499,7 @@ impl Reader {
                 // Stop needed? (target dropped below Running)
                 if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
                     info!("Stopping digitizer acquisition");
-                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                    let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
 
                     // Drain remaining buffered data before clearing (with limits)
                     let mut drained = 0u64;
@@ -1570,7 +1543,7 @@ impl Reader {
                         }
                     }
 
-                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    let _ = conn.handle.send_command(devtree::cmd::CLEAR_DATA);
                     conn.hw_armed = false;
                     conn.hw_running = false;
                     read_error_since = None; // Clear stale error timer across runs
@@ -1580,8 +1553,8 @@ impl Reader {
                 // Reset needed? (target is Idle, but we have armed/configured state)
                 if target_state == ComponentState::Idle && (conn.hw_armed || conn.hw_configured) {
                     info!("Resetting digitizer");
-                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
-                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
+                    let _ = conn.handle.send_command(devtree::cmd::CLEAR_DATA);
                     conn.hw_armed = false;
                     conn.hw_running = false;
                     conn.hw_configured = false;
@@ -1794,7 +1767,7 @@ impl Reader {
         // Cleanup
         if let Some(conn) = connection {
             if conn.hw_armed || conn.hw_running {
-                let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
             }
         }
         info!("ReadLoop (RAW) stopped");
@@ -1877,7 +1850,7 @@ impl Reader {
                 if target_rank >= state_rank(ComponentState::Configured) && !conn.hw_configured {
                     // Reset digitizer to factory defaults first — ensures clean slate
                     // regardless of prior state (e.g. CoMPASS register changes)
-                    match conn.handle.send_command("/cmd/reset") {
+                    match conn.handle.send_command(devtree::cmd::RESET) {
                         Ok(()) => info!("Digitizer reset to factory defaults"),
                         Err(e) => warn!(error = %e, "Digitizer reset failed (non-fatal)"),
                     }
@@ -1945,7 +1918,7 @@ impl Reader {
                     // ADC calibration (DIG1 only) — final Configure step, before
                     // marking hw_configured. Prevents Arm delay / S_IN race.
                     if config.firmware.is_dig1() {
-                        match conn.handle.send_command("/cmd/calibrateadc") {
+                        match conn.handle.send_command(devtree::cmd::CALIBRATE_ADC) {
                             Ok(()) => info!("ADC calibration completed"),
                             Err(e) => warn!(error = %e, "ADC calibration failed (non-fatal)"),
                         }
@@ -1983,7 +1956,7 @@ impl Reader {
                 // Stop needed? (target dropped below Running)
                 if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
                     info!("Stopping digitizer acquisition");
-                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                    let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
                     // Drain remaining buffered events before clearing
                     let mut drained = 0u64;
                     loop {
@@ -2009,7 +1982,7 @@ impl Reader {
                         info!(drained, "Drained remaining events after stop");
                     }
                     let _ = tx.try_send(ReadLoopOutput::Stop);
-                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    let _ = conn.handle.send_command(devtree::cmd::CLEAR_DATA);
                     conn.hw_armed = false;
                     conn.hw_running = false;
                     read_error_since = None; // Clear stale error timer across runs
@@ -2019,8 +1992,8 @@ impl Reader {
                 // Reset needed? (target is Idle, but we have armed/configured state)
                 if target_state == ComponentState::Idle && (conn.hw_armed || conn.hw_configured) {
                     info!("Resetting digitizer");
-                    let _ = conn.handle.send_command("/cmd/disarmacquisition");
-                    let _ = conn.handle.send_command("/cmd/cleardata");
+                    let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
+                    let _ = conn.handle.send_command(devtree::cmd::CLEAR_DATA);
                     conn.hw_armed = false;
                     conn.hw_running = false;
                     conn.hw_configured = false;
@@ -2244,7 +2217,7 @@ impl Reader {
         // Cleanup
         if let Some(conn) = connection {
             if conn.hw_armed || conn.hw_running {
-                let _ = conn.handle.send_command("/cmd/disarmacquisition");
+                let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
             }
         }
         info!("ReadLoop (OpenDPP) stopped");
@@ -3472,79 +3445,6 @@ mod tests {
         assert_eq!(config.buffer_size, 64 * 1024 * 1024);
     }
 
-    /// Regression: GetStatus must report the *hardware*-confirmed state in
-    /// both transition directions, not just the upward (Idle → Running)
-    /// direction the original `state_rank(hw) < state_rank(sw)` heuristic
-    /// covered.
-    ///
-    /// The 2026-05-04 PHA2 incident (memory:
-    /// `felib_stuck_after_rapid_stop_apply`) was Stop → rapid Apply: sw
-    /// dropped to Configured immediately, hw was still Running mid-disarm,
-    /// and the old code reported Configured → operator's
-    /// `wait_for_state(Configured)` returned in 263 µs → Apply ran during
-    /// disarm/drain → FELib permanent CAEN -15.
-    #[test]
-    fn effective_state_for_stop_reports_running_until_hw_settles() {
-        assert_eq!(
-            effective_state_for(ComponentState::Configured, ComponentState::Running),
-            ComponentState::Running,
-        );
-    }
-
-    #[test]
-    fn effective_state_for_reset_reports_running_until_hw_settles() {
-        assert_eq!(
-            effective_state_for(ComponentState::Idle, ComponentState::Running),
-            ComponentState::Running,
-        );
-        assert_eq!(
-            effective_state_for(ComponentState::Idle, ComponentState::Armed),
-            ComponentState::Armed,
-        );
-    }
-
-    #[test]
-    fn effective_state_for_configure_reports_idle_until_hw_settles() {
-        assert_eq!(
-            effective_state_for(ComponentState::Configured, ComponentState::Idle),
-            ComponentState::Idle,
-        );
-    }
-
-    #[test]
-    fn effective_state_for_arm_and_start_report_lower_until_hw_settles() {
-        assert_eq!(
-            effective_state_for(ComponentState::Armed, ComponentState::Configured),
-            ComponentState::Configured,
-        );
-        assert_eq!(
-            effective_state_for(ComponentState::Running, ComponentState::Armed),
-            ComponentState::Armed,
-        );
-    }
-
-    #[test]
-    fn effective_state_for_settled_states_pass_through() {
-        for s in [
-            ComponentState::Idle,
-            ComponentState::Configured,
-            ComponentState::Armed,
-            ComponentState::Running,
-        ] {
-            assert_eq!(effective_state_for(s, s), s);
-        }
-    }
-
-    #[test]
-    fn effective_state_for_error_hw_is_reported_through() {
-        // If the read_loop ever flips hw_state to Error mid-flight, GetStatus
-        // must surface that — never mask it behind the operator-facing sw.
-        assert_eq!(
-            effective_state_for(ComponentState::Running, ComponentState::Error),
-            ComponentState::Error,
-        );
-    }
-
     #[test]
     fn test_convert_event() {
         let event = EventData {
@@ -3679,6 +3579,64 @@ mod tests {
         assert_eq!(cwf.time_resolution, 2);
         assert_eq!(cwf.trigger_threshold, 500);
         assert_eq!(cwf.ns_per_sample, 2.0);
+    }
+
+    fn make_opendpp_event(user_info: Vec<u64>) -> OpenDppEvent {
+        OpenDppEvent {
+            channel: 7,
+            timestamp: 1_000,
+            fine_timestamp: 256,
+            energy: 4096,
+            flags_b: 0x123,
+            flags_a: 0xAB,
+            psd: 222,
+            user_info,
+            waveform: None,
+            event_size: 0,
+        }
+    }
+
+    /// `opendpp_to_event_data` packs `flags_a` (8b) and `flags_b` (12b) into a
+    /// single u32 with `flags_a << 12 | flags_b`. Regression: keep the layout
+    /// stable so wire-format consumers (ROOT writer, Monitor) keep parsing.
+    #[test]
+    fn opendpp_to_event_data_combines_flags_a_and_b() {
+        let evt = make_opendpp_event(Vec::new());
+        let ed = opendpp_to_event_data(&evt, 1);
+        assert_eq!(ed.flags, (0xAB_u32 << 12) | 0x123_u32);
+        assert_eq!(ed.module, 1);
+        assert_eq!(ed.channel, 7);
+        assert_eq!(ed.energy, 4096);
+        assert_eq!(ed.energy_short, 222);
+    }
+
+    /// AMax timestamp = coarse * 8ns + fine * (8/1024)ns. Regression keeps the
+    /// scale constants from drifting; without it a renamed `AMAX_TIME_STEP_NS`
+    /// would silently misreport sub-ns timing.
+    #[test]
+    fn opendpp_to_event_data_timestamp_in_ns() {
+        let evt = make_opendpp_event(Vec::new());
+        let ed = opendpp_to_event_data(&evt, 0);
+        // 1000 * 8 + 256 * (8/1024) = 8000 + 2.0 = 8002.0
+        assert!((ed.timestamp_ns - 8002.0).abs() < 1e-9);
+    }
+
+    /// FW emitting >4 user_info slots must populate the first 4 and silently
+    /// drop the rest (with a one-shot `info!` log, not in the test). The hot
+    /// path stays zero-alloc.
+    #[test]
+    fn opendpp_to_event_data_truncates_user_info_to_four_slots() {
+        let evt = make_opendpp_event(vec![1, 2, 3, 4, 5, 6]);
+        let ed = opendpp_to_event_data(&evt, 0);
+        assert_eq!(ed.user_info, [1, 2, 3, 4]);
+    }
+
+    /// Fewer-than-4 slots are zero-padded.
+    #[test]
+    fn opendpp_to_event_data_pads_short_user_info_with_zeros() {
+        let evt = make_opendpp_event(vec![42, 99]);
+        let ed = opendpp_to_event_data(&evt, 0);
+        assert_eq!(ed.user_info, [42, 99, 0, 0]);
     }
 
     #[cfg(feature = "x743")]

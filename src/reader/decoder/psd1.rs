@@ -789,9 +789,17 @@ fn calculate_sw_fine_fraction_psd(before_zc: u16, after_zc: u16) -> f64 {
     }
 }
 
-/// Decode charge word
+/// Decode the per-event "physics" word: charge_long (high), charge_short (low),
+/// pileup flag.
 ///
-/// Returns (charge_long, charge_short, pileup)
+/// Returns `(charge_long, charge_short, pileup)`.
+///
+/// Semantically equivalent to `pha1::decode_energy_word` — the PSD1/PHA1
+/// firmwares share aggregate framing and only differ in how the second u16
+/// is interpreted (PSD1: short-gate charge; PHA1: extra_data field). R-D6
+/// (Phase 2 generic decoder) will collapse both into a single trait method
+/// `decode_physics_word`. Until then, the two stay distinct so the call
+/// sites read naturally with their respective field names.
 fn decode_charge_word(word: u32) -> (u16, u16, bool) {
     let charge_long =
         ((word >> constants::event::CHARGE_LONG_SHIFT) & constants::event::CHARGE_LONG_MASK) as u16;

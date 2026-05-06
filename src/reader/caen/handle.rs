@@ -5,6 +5,7 @@
 use super::error::CaenError;
 use super::ffi;
 use super::validation::{self, ApplyConfigResult, ParamApplyResult, ParamApplyStatus};
+use crate::config::devtree_paths as devtree;
 use std::collections::HashMap;
 use std::ffi::CString;
 
@@ -545,7 +546,7 @@ impl CaenHandle {
         let ep_folder_handle = self.get_parent_handle(ep_handle)?;
 
         // Set active endpoint to RAW
-        self.set_value_with_handle(ep_folder_handle, "/par/activeendpoint", "RAW")?;
+        self.set_value_with_handle(ep_folder_handle, devtree::par::ACTIVE_ENDPOINT, "RAW")?;
 
         // Get fresh handle for read operations
         let read_data_handle = self.get_handle("/endpoint/RAW")?;
@@ -599,7 +600,7 @@ impl CaenHandle {
         let ep_folder_handle = self.get_parent_handle(ep_handle)?;
 
         // Set active endpoint to OpenDPP
-        self.set_value_with_handle(ep_folder_handle, "/par/activeendpoint", "OpenDPP")?;
+        self.set_value_with_handle(ep_folder_handle, devtree::par::ACTIVE_ENDPOINT, "OpenDPP")?;
 
         // Get fresh handle for read operations
         let read_data_handle = self.get_handle("/endpoint/opendpp")?;

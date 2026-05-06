@@ -149,6 +149,27 @@ pub fn sign_extend_14bit(value: u32) -> i16 {
     ((value << 18) as i32 >> 18) as i16
 }
 
+/// Extract `mask`-wide bits at `shift` from `word`. Two-arm form returns the
+/// raw bits in the input integer type; three-arm form casts to `$ty`.
+///
+/// All decoder hot paths spell `(word >> SHIFT) & MASK` by hand — this macro
+/// is a drop-in replacement that monomorphizes to exactly the same shift+and
+/// (cargo --release inlines it as a single instruction sequence).
+///
+/// ```ignore
+/// let energy = extract_bits!(word, ENERGY_SHIFT, ENERGY_MASK);          // u32
+/// let chan   = extract_bits!(word, CHANNEL_SHIFT, CHANNEL_MASK, u8);    // cast
+/// ```
+#[macro_export]
+macro_rules! extract_bits {
+    ($word:expr, $shift:expr, $mask:expr) => {
+        ($word >> $shift) & $mask
+    };
+    ($word:expr, $shift:expr, $mask:expr, $ty:ty) => {
+        ((($word >> $shift) & $mask) as $ty)
+    };
+}
+
 /// Event data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventData {
@@ -228,6 +249,31 @@ impl std::fmt::Display for EventData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_bits_two_arg_returns_input_type() {
+        let word: u64 = 0xABCD_1234_5678_9ABC;
+        let nibble = extract_bits!(word, 4, 0xF);
+        assert_eq!(nibble, 0xB_u64);
+        // Type is preserved (u64 in, u64 out).
+        let _check: u64 = nibble;
+    }
+
+    #[test]
+    fn extract_bits_three_arg_casts() {
+        let word: u64 = 0x00FF_0000_0000_0000;
+        let byte = extract_bits!(word, 48, 0xFF, u8);
+        assert_eq!(byte, 0xFF_u8);
+
+        let signed = extract_bits!(word, 48, 0xFF, i32);
+        assert_eq!(signed, 0xFF_i32);
+    }
+
+    #[test]
+    fn extract_bits_zero_shift_is_low_bits() {
+        let word: u32 = 0xDEAD_BEEF;
+        assert_eq!(extract_bits!(word, 0, 0xFF, u8), 0xEF_u8);
+    }
 
     #[test]
     fn test_sign_extend_14bit() {
