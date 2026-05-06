@@ -1,5 +1,6 @@
 //! Digitizer configuration handlers and response types
 
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 
 use axum::{
@@ -13,8 +14,105 @@ use utoipa::ToSchema;
 use crate::common::Command;
 use crate::config::{BoardConfig, ChannelConfig, DigitizerConfig, FirmwareType};
 
-use super::super::{ApiResponse, DigitizerConfigDocument};
+use super::super::{ApiResponse, DigitizerConfigDocument, DigitizerConfigRepository};
 use super::AppState;
+
+// =============================================================================
+// Handler helpers (R-P5 — extracted from the parallel CRUD handlers below)
+// =============================================================================
+
+/// Build the canonical 503 response for MongoDB-backed routes when no
+/// repository is configured.
+fn mongodb_unavailable() -> (StatusCode, Json<ApiResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiResponse::error(
+            "MongoDB not configured for digitizer configs",
+        )),
+    )
+}
+
+/// Borrow the digitizer config repository or short-circuit with 503.
+///
+/// Used by the four MongoDB routes in this file (`get_digitizer_by_serial`,
+/// `save_digitizer_to_mongodb`, `get_digitizer_history`,
+/// `restore_digitizer_version`) plus `run.rs::get_run_config_snapshot`,
+/// all of which share the same precondition.
+pub(super) fn require_digitizer_repo(
+    state: &AppState,
+) -> Result<&DigitizerConfigRepository, (StatusCode, Json<ApiResponse>)> {
+    state
+        .digitizer_repo
+        .as_ref()
+        .ok_or_else(mongodb_unavailable)
+}
+
+/// Look up an in-memory digitizer config by id, cloning it. Returns the
+/// shared "Digitizer {id} not found" 404 on miss, dropping the read guard
+/// before returning so callers can take a write lock if they need to.
+async fn require_digitizer_config(
+    state: &AppState,
+    id: u32,
+) -> Result<DigitizerConfig, (StatusCode, Json<ApiResponse>)> {
+    state
+        .digitizer_configs
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::error(format!("Digitizer {} not found", id))),
+            )
+        })
+}
+
+/// Reject mutating requests where the URL path id and the request body's
+/// `digitizer_id` disagree (used by PUT and `apply`).
+fn reject_path_id_mismatch(
+    id: u32,
+    config: &DigitizerConfig,
+) -> Result<(), (StatusCode, Json<ApiResponse>)> {
+    if config.digitizer_id == id {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::error(format!(
+                "Path ID {} does not match config digitizer_id {}",
+                id, config.digitizer_id
+            ))),
+        ))
+    }
+}
+
+/// Resolve the on-disk path for a digitizer's saved JSON config. Prefers
+/// the TOML-specified `config_file` (so the Reader and the operator agree
+/// on which file Configure will read), falling back to
+/// `<config_dir>/digitizer_<id>.json` when no component owns that id.
+fn resolve_config_path(state: &AppState, id: u32) -> PathBuf {
+    state
+        .components
+        .iter()
+        .find(|c| c.is_digitizer && c.source_id == Some(id))
+        .and_then(|c| c.config_file.clone())
+        .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)))
+}
+
+/// Sanitize the config for its firmware, ensure the destination directory
+/// exists, and write the pretty-printed JSON. Returns the underlying
+/// I/O / serialization error verbatim so callers can decide between
+/// "fail the request" (POST `/save`, POST `/save-all`) and "log and
+/// continue" (POST `/apply` best-effort).
+fn write_digitizer_config(file_path: &StdPath, mut config: DigitizerConfig) -> std::io::Result<()> {
+    config.sanitize_for_firmware();
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&config).map_err(std::io::Error::other)?;
+    std::fs::write(file_path, json)
+}
 
 /// Result of detecting a single digitizer via hardware probe
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -424,14 +522,7 @@ pub(super) async fn get_digitizer_by_serial(
     State(state): State<Arc<AppState>>,
     Path(serial): Path<String>,
 ) -> Result<Json<DigitizerConfig>, (StatusCode, Json<ApiResponse>)> {
-    let repo = state.digitizer_repo.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiResponse::error(
-                "MongoDB not configured for digitizer configs",
-            )),
-        )
-    })?;
+    let repo = require_digitizer_repo(&state)?;
 
     let doc = repo.get_config_by_serial(&serial).await.map_err(|e| {
         (
@@ -471,14 +562,7 @@ pub(super) async fn get_digitizer(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u32>,
 ) -> Result<Json<DigitizerConfig>, (StatusCode, Json<ApiResponse>)> {
-    let configs = state.digitizer_configs.read().await;
-
-    configs.get(&id).cloned().map(Json).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ApiResponse::error(format!("Digitizer {} not found", id))),
-        )
-    })
+    require_digitizer_config(&state, id).await.map(Json)
 }
 
 /// Update a digitizer configuration (in memory)
@@ -502,19 +586,11 @@ pub(super) async fn update_digitizer(
     Path(id): Path<u32>,
     Json(config): Json<DigitizerConfig>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    // Validate that the path ID matches the config ID
-    if config.digitizer_id != id {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::error(format!(
-                "Path ID {} does not match config digitizer_id {}",
-                id, config.digitizer_id
-            ))),
-        );
+    if let Err(resp) = reject_path_id_mismatch(id, &config) {
+        return resp;
     }
 
-    let mut configs = state.digitizer_configs.write().await;
-    configs.insert(id, config);
+    state.digitizer_configs.write().await.insert(id, config);
 
     (
         StatusCode::OK,
@@ -550,24 +626,16 @@ pub(super) async fn apply_digitizer_config(
     Path(id): Path<u32>,
     Json(config): Json<DigitizerConfig>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    // Validate path ID matches config
-    if config.digitizer_id != id {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::error(format!(
-                "Path ID {} does not match config digitizer_id {}",
-                id, config.digitizer_id
-            ))),
-        );
+    if let Err(resp) = reject_path_id_mismatch(id, &config) {
+        return resp;
     }
 
     // 1. Find the Reader component for this digitizer (is_digitizer && source_id matches)
-    let reader_comp = state
+    let reader_comp = match state
         .components
         .iter()
-        .find(|c| c.is_digitizer && c.source_id == Some(id));
-
-    let reader_comp = match reader_comp {
+        .find(|c| c.is_digitizer && c.source_id == Some(id))
+    {
         Some(c) => c,
         None => {
             return (
@@ -581,34 +649,19 @@ pub(super) async fn apply_digitizer_config(
     };
 
     // 2. Update in-memory config
-    {
-        let mut configs = state.digitizer_configs.write().await;
-        configs.insert(id, config.clone());
-    }
+    state
+        .digitizer_configs
+        .write()
+        .await
+        .insert(id, config.clone());
 
-    // 3. Save to disk (best-effort, sanitized)
-    // Use config_file path from TOML if available (same file Reader loads on Configure),
-    // otherwise fall back to digitizer_{id}.json in config_dir.
-    let file_path = reader_comp
-        .config_file
-        .clone()
-        .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)));
-    if let Some(parent) = file_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut config_for_disk = config.clone();
-    config_for_disk.sanitize_for_firmware();
-    match serde_json::to_string_pretty(&config_for_disk) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&file_path, json) {
-                tracing::warn!("Failed to save config to disk: {}", e);
-            } else {
-                tracing::info!("Config saved to {}", file_path.display());
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to serialize config for disk save: {}", e);
-        }
+    // 3. Save to disk (best-effort, sanitized).
+    // Same file Reader loads on Configure (resolve_config_path falls back
+    // to <config_dir>/digitizer_<id>.json when no TOML config_file).
+    let file_path = resolve_config_path(&state, id);
+    match write_digitizer_config(&file_path, config.clone()) {
+        Ok(()) => tracing::info!("Config saved to {}", file_path.display()),
+        Err(e) => tracing::warn!("Failed to save config to disk: {}", e),
     }
 
     // 4. Send ApplyDigitizerConfig command via ZMQ
@@ -670,57 +723,16 @@ pub(super) async fn save_digitizer(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u32>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let configs = state.digitizer_configs.read().await;
-
-    let mut config = match configs.get(&id) {
-        Some(c) => c.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(format!("Digitizer {} not found", id))),
-            );
-        }
+    let mut config = match require_digitizer_config(&state, id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
-    drop(configs); // Release read lock
-
-    // Ensure digitizer_id matches the TOML source_id (the HashMap key)
+    // Ensure digitizer_id matches the TOML source_id (the HashMap key);
+    // sanitize_for_firmware() runs inside write_digitizer_config().
     config.digitizer_id = id;
 
-    // Sanitize config to remove firmware-incompatible fields before saving
-    config.sanitize_for_firmware();
-
-    // Determine save path: use config_file from component if available
-    let file_path = state
-        .components
-        .iter()
-        .find(|c| c.is_digitizer && c.source_id == Some(id))
-        .and_then(|c| c.config_file.clone())
-        .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)));
-    if let Some(parent) = file_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::error(format!(
-                    "Failed to create config directory: {}",
-                    e
-                ))),
-            );
-        }
-    }
-    let json = match serde_json::to_string_pretty(&config) {
-        Ok(j) => j,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::error(format!(
-                    "Failed to serialize config: {}",
-                    e
-                ))),
-            );
-        }
-    };
-
-    if let Err(e) = std::fs::write(&file_path, json) {
+    let file_path = resolve_config_path(&state, id);
+    if let Err(e) = write_digitizer_config(&file_path, config) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::error(format!(
@@ -772,28 +784,14 @@ pub(super) async fn save_all_digitizers(
     let mut errors = Vec::new();
 
     for (id, config) in configs.iter() {
-        // Use TOML-specified config_file path if available, otherwise fall back
-        let file_path = state
-            .components
-            .iter()
-            .find(|c| c.is_digitizer && c.source_id == Some(*id))
-            .and_then(|c| c.config_file.clone())
-            .unwrap_or_else(|| state.config_dir.join(format!("digitizer_{}.json", id)));
-        // Clone, enforce ID consistency, and sanitize before saving
-        let mut sanitized_config = config.clone();
-        sanitized_config.digitizer_id = *id;
-        sanitized_config.sanitize_for_firmware();
-        match serde_json::to_string_pretty(&sanitized_config) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&file_path, json) {
-                    errors.push(format!("digitizer_{}: {}", id, e));
-                } else {
-                    saved += 1;
-                }
-            }
-            Err(e) => {
-                errors.push(format!("digitizer_{}: {}", id, e));
-            }
+        let file_path = resolve_config_path(&state, *id);
+        let mut config_for_disk = config.clone();
+        // Enforce ID consistency; sanitize_for_firmware() runs inside helper.
+        config_for_disk.digitizer_id = *id;
+        if let Err(e) = write_digitizer_config(&file_path, config_for_disk) {
+            errors.push(format!("digitizer_{}: {}", id, e));
+        } else {
+            saved += 1;
         }
     }
 
@@ -839,29 +837,15 @@ pub(super) async fn save_digitizer_to_mongodb(
     Path(id): Path<u32>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let repo = match &state.digitizer_repo {
-        Some(r) => r,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::error(
-                    "MongoDB not configured for digitizer configs",
-                )),
-            );
-        }
+    let repo = match require_digitizer_repo(&state) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
-    let configs = state.digitizer_configs.read().await;
-    let config = match configs.get(&id) {
-        Some(c) => c.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(format!("Digitizer {} not found", id))),
-            );
-        }
+    let config = match require_digitizer_config(&state, id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
-    drop(configs);
 
     let description = params.get("description").cloned();
 
@@ -902,14 +886,7 @@ pub(super) async fn get_digitizer_history(
     Path(id): Path<u32>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Vec<DigitizerConfigHistoryItem>>, (StatusCode, Json<ApiResponse>)> {
-    let repo = state.digitizer_repo.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiResponse::error(
-                "MongoDB not configured for digitizer configs",
-            )),
-        )
-    })?;
+    let repo = require_digitizer_repo(&state)?;
 
     let limit = params
         .get("limit")
@@ -946,16 +923,9 @@ pub(super) async fn restore_digitizer_version(
     Path(id): Path<u32>,
     Json(request): Json<RestoreVersionRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let repo = match &state.digitizer_repo {
-        Some(r) => r,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiResponse::error(
-                    "MongoDB not configured for digitizer configs",
-                )),
-            );
-        }
+    let repo = match require_digitizer_repo(&state) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     match repo.restore_version(id, request.version).await {

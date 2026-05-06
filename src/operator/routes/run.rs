@@ -76,14 +76,7 @@ pub(super) async fn get_run_config_snapshot(
     State(state): State<Arc<AppState>>,
     Path(run_number): Path<i32>,
 ) -> Result<Json<Vec<DigitizerConfig>>, (StatusCode, Json<ApiResponse>)> {
-    let repo = state.digitizer_repo.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiResponse::error(
-                "MongoDB not configured for digitizer configs",
-            )),
-        )
-    })?;
+    let repo = super::digitizer::require_digitizer_repo(&state)?;
 
     let snapshot = repo
         .get_run_snapshot(run_number, &state.config.experiment_name)
