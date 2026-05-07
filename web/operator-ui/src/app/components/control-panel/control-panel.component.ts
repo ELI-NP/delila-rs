@@ -12,6 +12,7 @@ import { MatDividerModule } from '@angular/material/divider';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatMenuModule } from '@angular/material/menu';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { OperatorService } from '../../services/operator.service';
 import { DigitizerService } from '../../services/digitizer.service';
@@ -35,13 +36,43 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
     MatTooltipModule,
     MatCheckboxModule,
     MatProgressBarModule,
+    MatMenuModule,
     MatDialogModule,
     DatePipe,
   ],
   template: `
     <mat-card [class.flashing]="alarmFlashing()">
-      <mat-card-header>
+      <mat-card-header class="card-header">
         <mat-card-title>Control Panel</mat-card-title>
+        <span class="header-spacer"></span>
+        <button
+          mat-icon-button
+          [matMenuTriggerFor]="recoveryMenu"
+          matTooltip="Recovery actions (Configure / Force Reset)"
+          aria-label="Recovery actions"
+        >
+          <mat-icon>more_vert</mat-icon>
+        </button>
+        <mat-menu #recoveryMenu="matMenu">
+          <button
+            mat-menu-item
+            (click)="onConfigure()"
+            [disabled]="!operator.buttonStates().configure"
+            matTooltip="Move state to Configured without starting a run — pre-flight check / hardware verification"
+          >
+            <mat-icon>tune</mat-icon>
+            <span>Configure (pre-flight)</span>
+          </button>
+          <button
+            mat-menu-item
+            (click)="onReset()"
+            [disabled]="!operator.buttonStates().reset"
+            matTooltip="Drop all components back to Idle — recovery from a stuck state"
+          >
+            <mat-icon>restart_alt</mat-icon>
+            <span>Force Reset</span>
+          </button>
+        </mat-menu>
       </mat-card-header>
       <mat-card-content>
         <div class="form-fields">
@@ -122,8 +153,8 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
               <span>
                 {{ failure.digitizerName }} rejected the last Apply.
                 Fix the config in <strong>Settings</strong> and press
-                <strong>Configure</strong> below to retry — Arm is blocked
-                until the apply succeeds.
+                <strong>Start</strong> below to retry — Start re-runs Configure
+                as its first phase, so a successful Start clears this failure.
               </span>
               <span class="apply-failure-detail">{{ failure.message }}</span>
             </div>
@@ -172,21 +203,10 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           </div>
         }
 
+        <!-- Main flow only: Start drives Reset → Configure → Apply → Arm → Start
+             via /api/run/start. Configure / Force Reset live in the kebab menu
+             above (recovery / pre-flight only). -->
         <div class="button-grid">
-          <button
-            mat-raised-button
-            color="primary"
-            [disabled]="!operator.buttonStates().configure"
-            (click)="onConfigure()"
-          >
-            Configure
-          </button>
-          <button
-            mat-raised-button
-            [disabled]="!operator.buttonStates().reset"
-            (click)="onReset()"
-            matTooltip="Drop all components back to Idle (recovery from a stuck state)"
-          >Force Reset</button>
           <button
             mat-raised-button
             color="accent"
@@ -254,6 +274,13 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
   styles: `
     mat-card {
       height: 100%;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+    }
+    .header-spacer {
+      flex: 1;
     }
     .form-fields {
       display: flex;
