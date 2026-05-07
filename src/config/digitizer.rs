@@ -552,6 +552,56 @@ impl FirmwareType {
         !self.is_legacy_api()
     }
 
+    /// Map a digitizer's hardware-reported (firmware_type, model) strings to
+    /// the corresponding `FirmwareType` variant.
+    ///
+    /// Used to detect firmware mismatch between configured-`type` and the
+    /// actual digitizer hardware before applying configuration. Returns
+    /// `None` if the firmware string is unrecognized AND the model name
+    /// doesn't match any known DIG1/DIG2 family — caller decides whether
+    /// to fail or fall back.
+    ///
+    /// X743 family is **never** returned: it uses the CAENDigitizer Library
+    /// (not FELib) via a separate read-loop and never reaches the FELib
+    /// `/par/FwType` path. Returning `None` for any X743-shaped input is
+    /// defense-in-depth.
+    ///
+    /// # Arguments
+    /// * `firmware_type` — hardware string from `/par/FwType`
+    ///   (e.g. `"DPP-PSD"`, `"DPP-PHA"`, `"DPP_PSD"`, `"DPP_PHA"`, `"DPP_OPEN"`)
+    /// * `model` — hardware string from `/par/ModelName`, used as a
+    ///   model-name fallback heuristic when `firmware_type` is unknown
+    pub fn from_caen_device(firmware_type: &str, model: &str) -> Option<Self> {
+        // DIG1 firmware strings use hyphens; DIG2 use underscores.
+        match firmware_type {
+            "DPP-PSD" => Some(FirmwareType::PSD1),
+            "DPP-PHA" => Some(FirmwareType::PHA1),
+            "DPP_PSD" => Some(FirmwareType::PSD2),
+            "DPP_PHA" => Some(FirmwareType::PHA2),
+            "DPP_OPEN" => Some(FirmwareType::AMax),
+            _ => {
+                // Fallback: use model name to guess generation when FW string
+                // is unrecognized. PHA1/PHA2/AMax always hit the explicit
+                // arms above, so the fallback only meaningfully reaches PSD1
+                // vs PSD2.
+                if model.contains("1730")
+                    || model.contains("1725")
+                    || model.contains("5730")
+                    || model.contains("5725")
+                {
+                    Some(FirmwareType::PSD1)
+                } else if model.contains("1740")
+                    || model.contains("2730")
+                    || model.contains("2740")
+                {
+                    Some(FirmwareType::PSD2)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     /// Aggregate capability descriptor for this firmware.
     ///
     /// Centralizes the per-FW capability flags that were previously scattered
@@ -1782,6 +1832,100 @@ fn json_value_to_string(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===========================================================================
+    // FirmwareType::from_caen_device — firmware mismatch detection helper
+    // ===========================================================================
+
+    #[test]
+    fn from_caen_device_maps_dig1_strings() {
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP-PSD", "VX1730"),
+            Some(FirmwareType::PSD1)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP-PHA", "VX1730"),
+            Some(FirmwareType::PHA1)
+        );
+    }
+
+    #[test]
+    fn from_caen_device_maps_dig2_strings() {
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP_PSD", "VX2730"),
+            Some(FirmwareType::PSD2)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP_PHA", "VX2730"),
+            Some(FirmwareType::PHA2)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP_OPEN", "VX2730"),
+            Some(FirmwareType::AMax)
+        );
+    }
+
+    #[test]
+    fn from_caen_device_falls_back_on_model() {
+        // FW string empty / unknown → fall back to model name
+        assert_eq!(
+            FirmwareType::from_caen_device("", "VX1730"),
+            Some(FirmwareType::PSD1)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("", "DT5725"),
+            Some(FirmwareType::PSD1)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("", "VX2730"),
+            Some(FirmwareType::PSD2)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("", "VX2740"),
+            Some(FirmwareType::PSD2)
+        );
+        assert_eq!(
+            FirmwareType::from_caen_device("UnknownFW", "DT5730"),
+            Some(FirmwareType::PSD1)
+        );
+    }
+
+    #[test]
+    fn from_caen_device_returns_none_when_unknown() {
+        // Pin: the pre-2026-05-07 helper defaulted unknowns to PSD2. The new
+        // helper returns None so callers can decide. The detect-path shim
+        // (operator/routes/digitizer.rs) preserves the PSD2 default with
+        // `unwrap_or(PSD2)` — but the read-loop callers must see None.
+        assert_eq!(FirmwareType::from_caen_device("", ""), None);
+        assert_eq!(FirmwareType::from_caen_device("", "BogusBoard"), None);
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP-COMPLETELY-NEW", "ZZ9999"),
+            None
+        );
+    }
+
+    #[test]
+    fn from_caen_device_never_returns_x743() {
+        // X743 family never reaches this code path (it uses CAENDigitizer
+        // Library, not FELib). Defense-in-depth: even if a weird FW string
+        // ever passes through, we must not silently classify it as DIG1/DIG2.
+        let result = FirmwareType::from_caen_device("V1743STD", "V1743");
+        assert_ne!(result, Some(FirmwareType::X743CI));
+        assert_ne!(result, Some(FirmwareType::X743Std));
+    }
+
+    /// Pinned regression for the 2026-05-07 case: starting DAQ with
+    /// `config_pha2_56_phys.toml` (declares PHA2) against a digitizer that
+    /// reports DPP_OPEN / VX2730 firmware (i.e. AMax). The mapping must
+    /// disagree with the declared firmware so the read loop can hard-fail
+    /// before applying any params.
+    #[test]
+    fn from_caen_device_pha2_config_rejects_amax_hardware() {
+        let declared = FirmwareType::PHA2;
+        let detected = FirmwareType::from_caen_device("DPP_OPEN", "VX2730");
+        assert_eq!(detected, Some(FirmwareType::AMax));
+        assert_ne!(detected, Some(declared));
+    }
 
     #[test]
     fn test_new_digitizer_config() {

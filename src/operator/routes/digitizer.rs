@@ -380,8 +380,15 @@ pub(super) async fn detect_digitizers(
 
 /// Map firmware_type + model from device_info to FirmwareType enum.
 ///
-/// DIG1 (VX1730/DT5730/VX1725/DT5725) uses hyphens: `DPP-PSD`, `DPP-PHA`
-/// DIG2 (VX2730/VX2740) uses underscores: `DPP_PSD`, `DPP_OPEN`
+/// Thin shim around `FirmwareType::from_caen_device` (`src/config/digitizer.rs`)
+/// that pulls the two strings out of a `serde_json::Value` payload (the
+/// shape `detect_digitizers` already produces). Falls back to `PSD2` when
+/// the helper returns `None` so the existing detect-path semantics
+/// (display *something* for unknown hardware) are preserved.
+///
+/// Read-loop callers (`read_loop_dig1` / `read_loop_dig2`) use the helper
+/// directly and **must not** fall back — see `check_firmware_match` in
+/// `src/reader/mod.rs`.
 fn firmware_from_device_info(device_info: &serde_json::Value) -> FirmwareType {
     let fw = device_info
         .get("firmware_type")
@@ -391,28 +398,7 @@ fn firmware_from_device_info(device_info: &serde_json::Value) -> FirmwareType {
         .get("model")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-
-    // DIG1 firmware strings use hyphens
-    match fw {
-        "DPP-PSD" => FirmwareType::PSD1,
-        "DPP-PHA" => FirmwareType::PHA1,
-        // DIG2 firmware strings use underscores
-        "DPP_PSD" => FirmwareType::PSD2,
-        "DPP_PHA" => FirmwareType::PHA2,
-        "DPP_OPEN" => FirmwareType::AMax,
-        // Fallback: use model name to guess generation
-        _ => {
-            if model.contains("1730")
-                || model.contains("1725")
-                || model.contains("5730")
-                || model.contains("5725")
-            {
-                FirmwareType::PSD1 // DIG1 device, assume PSD
-            } else {
-                FirmwareType::PSD2 // DIG2 device or unknown
-            }
-        }
-    }
+    FirmwareType::from_caen_device(fw, model).unwrap_or(FirmwareType::PSD2)
 }
 
 /// Create default board config for a firmware type

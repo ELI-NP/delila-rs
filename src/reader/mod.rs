@@ -895,6 +895,47 @@ pub(crate) struct DeviceConnection {
     pub(crate) include_waveform: bool,
 }
 
+/// Verify the digitizer's reported firmware matches the config-declared
+/// firmware. Returns `Ok(())` if they agree, `Err(detailed_message)` on
+/// mismatch or if `get_device_info()` itself fails.
+///
+/// Used by both DIG1 and DIG2 ApplyConfig handlers to hard-fail before
+/// `apply_config_validated` sends 30+ params that the wrong firmware
+/// would FELib-reject (silent miswire mode discovered 2026-05-07: PHA2
+/// config sent to AMax HW caused 31/43 params to be silently skipped
+/// while the operator UI reported "Configured" success).
+///
+/// X743 family is intentionally **not** routed through this check — it
+/// uses `read_loop_x743_std` with `CaenLegacyHandle` (CAENDigitizer
+/// Library), not FELib, so no `/par/FwType` round-trip exists.
+pub(crate) fn check_firmware_match(
+    conn: &DeviceConnection,
+    url: &str,
+    declared: crate::config::digitizer::FirmwareType,
+) -> Result<(), String> {
+    use crate::config::digitizer::FirmwareType;
+    let info = conn.handle.get_device_info().map_err(|e| {
+        format!(
+            "Failed to read device info from digitizer at {} (cannot verify firmware): {}",
+            url, e
+        )
+    })?;
+    let detected = FirmwareType::from_caen_device(&info.firmware_type, &info.model);
+    if detected == Some(declared) {
+        return Ok(());
+    }
+    let detected_label = match detected {
+        Some(fw) => format!("{:?}", fw),
+        None => "<unrecognized>".to_string(),
+    };
+    Err(format!(
+        "Firmware mismatch: digitizer at {} reports firmware \"{}\" model \"{}\" SN \"{}\" \
+         (mapped to {}), but config declares firmware {:?}. Refusing to Apply — reload the \
+         correct config or update the source's `type` field, then re-Configure.",
+        url, info.firmware_type, info.model, info.serial_number, detected_label, declared
+    ))
+}
+
 /// Try to connect to a digitizer and configure the RAW endpoint.
 /// Returns None on failure (non-fatal — ReadLoop stays alive).
 pub(crate) fn try_connect_raw(url: &str, include_n_events: bool) -> Option<DeviceConnection> {

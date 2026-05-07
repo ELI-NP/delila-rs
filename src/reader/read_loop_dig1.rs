@@ -17,9 +17,9 @@ use tracing::{error, info, warn};
 
 use super::state::{next_reconnect_cooldown, state_rank, RECONNECT_INITIAL};
 use super::{
-    caen, decoder, devtree, get_enabled_channels_from_config, poll_dig2_counters,
-    send_arm_command, send_start_command, try_connect_raw, Dig2PollState, ReadLoopOutput,
-    ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
+    caen, check_firmware_match, decoder, devtree, get_enabled_channels_from_config,
+    poll_dig2_counters, send_arm_command, send_start_command, try_connect_raw, Dig2PollState,
+    ReadLoopOutput, ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
 };
 use crate::common::ComponentState;
 
@@ -282,15 +282,27 @@ pub(crate) fn run(
                     }
                     let result = match connection.as_ref() {
                         Some(conn) => {
-                            if let Some(ref cache) = conn.param_cache {
-                                conn.handle
-                                    .apply_config_validated(&dig_config, cache)
-                                    .map(|r| r.ok + r.adjusted)
-                                    .map_err(|e| format!("Failed to apply config: {}", e))
-                            } else {
-                                conn.handle
-                                    .apply_config(&dig_config)
-                                    .map_err(|e| format!("Failed to apply config: {}", e))
+                            // Hard-fail Apply if the digitizer's reported firmware
+                            // doesn't match the config's declared firmware. Without
+                            // this, mismatches (e.g. PHA2 config sent to AMax HW)
+                            // surface only as ~70% per-param FELib rejects in WARN
+                            // logs while the operator UI reports "Configured"
+                            // success — exactly the silent-failure mode CLAUDE.md
+                            // forbids. Discovered live 2026-05-07.
+                            match check_firmware_match(conn, &config.url, dig_config.firmware) {
+                                Ok(()) => {
+                                    if let Some(ref cache) = conn.param_cache {
+                                        conn.handle
+                                            .apply_config_validated(&dig_config, cache)
+                                            .map(|r| r.ok + r.adjusted)
+                                            .map_err(|e| format!("Failed to apply config: {}", e))
+                                    } else {
+                                        conn.handle
+                                            .apply_config(&dig_config)
+                                            .map_err(|e| format!("Failed to apply config: {}", e))
+                                    }
+                                }
+                                Err(msg) => Err(msg),
                             }
                         }
                         None => Err("Not connected to digitizer".to_string()),

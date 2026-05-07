@@ -16,9 +16,9 @@ use tracing::{error, info, warn};
 
 use super::state::{next_reconnect_cooldown, state_rank, RECONNECT_INITIAL};
 use super::{
-    caen, devtree, get_enabled_channels_from_config, opendpp_to_event_data, send_arm_command,
-    send_start_command, try_connect_opendpp, FirmwareType, ReadLoopOutput, ReadLoopRequest,
-    ReaderConfig, ReaderError, ReaderMetrics,
+    caen, check_firmware_match, devtree, get_enabled_channels_from_config, opendpp_to_event_data,
+    send_arm_command, send_start_command, try_connect_opendpp, FirmwareType, ReadLoopOutput,
+    ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
 };
 use crate::common::ComponentState;
 
@@ -278,30 +278,44 @@ pub(crate) fn run(
                     }
                     let result = match connection.as_ref() {
                         Some(conn) => {
-                            let felib = if let Some(ref cache) = conn.param_cache {
-                                conn.handle
-                                    .apply_config_validated(&dig_config, cache)
-                                    .map(|r| r.ok + r.adjusted)
-                                    .map_err(|e| format!("Failed to apply config: {}", e))
-                            } else {
-                                conn.handle
-                                    .apply_config(&dig_config)
-                                    .map_err(|e| format!("Failed to apply config: {}", e))
-                            };
-                            // AMax: also program per-channel user registers after the
-                            // FELib step. Sums into the same params_applied count so
-                            // the operator UI reports both sources.
-                            if dig_config.firmware == FirmwareType::AMax {
-                                felib.and_then(|n| {
-                                    conn.handle
-                                        .apply_amax_channel_config(&dig_config)
-                                        .map(|m| n + m)
-                                        .map_err(|e| {
-                                            format!("Failed to apply AMax registers: {}", e)
+                            // Hard-fail Apply if the digitizer's reported firmware
+                            // doesn't match the config's declared firmware. See
+                            // `check_firmware_match` in reader/mod.rs for the
+                            // 2026-05-07 silent miswire context. AMax-specific
+                            // `apply_amax_channel_config` is naturally protected
+                            // because we short-circuit before reaching it.
+                            match check_firmware_match(conn, &config.url, dig_config.firmware) {
+                                Ok(()) => {
+                                    let felib = if let Some(ref cache) = conn.param_cache {
+                                        conn.handle
+                                            .apply_config_validated(&dig_config, cache)
+                                            .map(|r| r.ok + r.adjusted)
+                                            .map_err(|e| format!("Failed to apply config: {}", e))
+                                    } else {
+                                        conn.handle
+                                            .apply_config(&dig_config)
+                                            .map_err(|e| format!("Failed to apply config: {}", e))
+                                    };
+                                    // AMax: also program per-channel user registers after
+                                    // the FELib step. Sums into the same params_applied
+                                    // count so the operator UI reports both sources.
+                                    if dig_config.firmware == FirmwareType::AMax {
+                                        felib.and_then(|n| {
+                                            conn.handle
+                                                .apply_amax_channel_config(&dig_config)
+                                                .map(|m| n + m)
+                                                .map_err(|e| {
+                                                    format!(
+                                                        "Failed to apply AMax registers: {}",
+                                                        e
+                                                    )
+                                                })
                                         })
-                                })
-                            } else {
-                                felib
+                                    } else {
+                                        felib
+                                    }
+                                }
+                                Err(msg) => Err(msg),
                             }
                         }
                         None => Err("Not connected to digitizer".to_string()),
