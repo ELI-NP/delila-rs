@@ -112,6 +112,16 @@ import {
         </button>
       </div>
 
+      @if (isRunning()) {
+        <div class="runtime-apply-hint">
+          <mat-icon>info</mat-icon>
+          <span>
+            Running — only SetInRun-flagged parameters take effect immediately.
+            Other changes are saved but require <strong>Stop → Configure</strong> to apply.
+          </span>
+        </div>
+      }
+
       @if (selectedConfig(); as config) {
         <!-- 6-tab layout: Board / Input / Trigger / Energy / Coincidence / Waveform -->
         <mat-tab-group animationDuration="0ms" [selectedIndex]="selectedTabIndex()" (selectedIndexChange)="selectedTabIndex.set($event)">
@@ -748,6 +758,24 @@ import {
       gap: 12px;
       margin-bottom: 8px;
       flex-wrap: wrap;
+    }
+
+    .runtime-apply-hint {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 0 0 12px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      background: #fff3e0;
+      border-left: 3px solid #fb8c00;
+      color: #5d4037;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .runtime-apply-hint mat-icon {
+      flex-shrink: 0;
+      color: #fb8c00;
     }
 
     .digitizer-select {

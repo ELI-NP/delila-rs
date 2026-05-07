@@ -237,17 +237,31 @@ interface ChannelChart {
                 >Log</mat-checkbox>
               </div>
               @if (tuneUpDisplayMode() === 'energy') {
-                <app-histogram-chart
-                  [histogram]="tuneUpHistogram()"
-                  [logScale]="histLogScale()"
-                  [xRange]="histXRange()"
-                  (rangeChange)="onHistRangeChange($event)"
-                />
+                @if (tuneUpHistogram(); as hist) {
+                  <app-histogram-chart
+                    [histogram]="hist"
+                    [logScale]="histLogScale()"
+                    [xRange]="histXRange()"
+                    (rangeChange)="onHistRangeChange($event)"
+                  />
+                } @else {
+                  <div class="hist-empty-placeholder">
+                    <mat-icon>hourglass_empty</mat-icon>
+                    <span>Waiting for events…</span>
+                  </div>
+                }
               } @else {
-                <app-heatmap-chart
-                  [histogram]="tuneUpHistogram2d()"
-                  [logScale]="histLogScale()"
-                />
+                @if (tuneUpHistogram2d(); as hist2d) {
+                  <app-heatmap-chart
+                    [histogram]="hist2d"
+                    [logScale]="histLogScale()"
+                  />
+                } @else {
+                  <div class="hist-empty-placeholder">
+                    <mat-icon>hourglass_empty</mat-icon>
+                    <span>Waiting for events…</span>
+                  </div>
+                }
               }
             </div>
           </div>
@@ -567,19 +581,26 @@ interface ChannelChart {
       border-color: #1976d2;
     }
     .trigger-status {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 2px 6px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      padding: 4px 10px;
       border-radius: 4px;
       margin-left: 4px;
+      border: 1px solid currentColor;
+      animation: trigger-status-pulse 1.4s ease-in-out infinite;
     }
     .trigger-status.armed {
-      background-color: #fff3e0;
-      color: #e65100;
+      background-color: #ffe0b2;
+      color: #bf360c;
     }
     .trigger-status.held {
-      background-color: #e8f5e9;
-      color: #2e7d32;
+      background-color: #c8e6c9;
+      color: #1b5e20;
+    }
+    @keyframes trigger-status-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.65; }
     }
 
     .accumulate-controls {
@@ -722,6 +743,23 @@ interface ChannelChart {
     .tuneup-chart-fill {
       flex: 1;
       min-height: 0;
+    }
+
+    .hist-empty-placeholder {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: rgba(0, 0, 0, 0.45);
+      font-size: 13px;
+    }
+    .hist-empty-placeholder mat-icon {
+      font-size: 36px;
+      width: 36px;
+      height: 36px;
+      opacity: 0.5;
     }
 
     .panel-header {

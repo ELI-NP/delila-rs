@@ -159,13 +159,13 @@ interface RunHistoryItem {
                       <p class="no-data">No configuration snapshot available for this run.</p>
                     } @else {
                       <nav mat-tab-nav-bar [tabPanel]="configPanel">
-                        @for (cfg of configSnapshot()!; track cfg.digitizer_id) {
+                        @for (cfg of sortedConfigSnapshot(); track cfg.digitizer_id; let i = $index) {
                           <a mat-tab-link
-                             [active]="selectedConfigIdx() === $index"
-                             (click)="selectedConfigIdx.set($index)"
-                             (keydown.enter)="selectedConfigIdx.set($index)"
+                             [active]="selectedConfigIdx() === i"
+                             (click)="selectedConfigIdx.set(i)"
+                             (keydown.enter)="selectedConfigIdx.set(i)"
                              tabindex="0">
-                            {{ cfg.name }}
+                            #{{ cfg.digitizer_id }} {{ cfg.name }}
                           </a>
                         }
                       </nav>
@@ -173,11 +173,11 @@ interface RunHistoryItem {
                         @if (selectedConfig(); as cfg) {
                           <div class="config-detail">
                             <div class="config-header">
+                              <span><strong>ID:</strong> {{ cfg.digitizer_id }}</span>
                               <span><strong>Model:</strong> {{ cfg.model || '—' }}</span>
                               <span><strong>FW:</strong> {{ cfg.firmware }}</span>
                               <span><strong>Serial:</strong> {{ cfg.serial_number || '—' }}</span>
                               <span><strong>Channels:</strong> {{ cfg.num_channels }}</span>
-                              @if (cfg.is_master) { <span class="master-badge">Master</span> }
                             </div>
 
                             <h4>Board Settings</h4>
@@ -333,14 +333,6 @@ interface RunHistoryItem {
       background: rgba(0,0,0,0.04);
       border-radius: 4px;
     }
-    .master-badge {
-      background: #ff9800;
-      color: #fff;
-      padding: 0 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: bold;
-    }
     h4 {
       margin: 12px 0 4px;
       font-size: 13px;
@@ -387,10 +379,16 @@ export class RunsPageComponent implements OnInit {
 
   displayedColumns = ['run_number', 'comment', 'start_time', 'end_time', 'duration'];
 
-  selectedConfig = () => {
+  sortedConfigSnapshot = (): DigitizerConfig[] => {
     const snapshot = this.configSnapshot();
-    if (!snapshot || snapshot.length === 0) return null;
-    return snapshot[this.selectedConfigIdx()] ?? null;
+    if (!snapshot) return [];
+    return [...snapshot].sort((a, b) => a.digitizer_id - b.digitizer_id);
+  };
+
+  selectedConfig = () => {
+    const sorted = this.sortedConfigSnapshot();
+    if (sorted.length === 0) return null;
+    return sorted[this.selectedConfigIdx()] ?? null;
   };
 
   sortedRuns = () => {

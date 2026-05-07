@@ -67,10 +67,9 @@ import { ComponentState } from '../../models/types';
           }
         }
 
-        <!-- Pipeline group (always visible) -->
+        <!-- Pipeline group (always visible — small fixed set, not collapsible) -->
         @if (operator.pipelineComponents().length > 0) {
           <div class="group-header pipeline-header">
-            <mat-icon class="expand-icon">expand_more</mat-icon>
             <span class="group-title">Pipeline</span>
           </div>
           <mat-list dense>
@@ -125,6 +124,7 @@ import { ComponentState } from '../../models/types';
     }
     .pipeline-header {
       cursor: default;
+      padding-left: 16px;
     }
     .pipeline-header:hover {
       background: transparent;
