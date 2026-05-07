@@ -8,7 +8,6 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatDividerModule } from '@angular/material/divider';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatTableModule } from '@angular/material/table';
@@ -18,6 +17,7 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatDialogModule, MatDialog } from '@angular/material/dialog';
 import { EventBuilderService } from '../../services/event-builder.service';
+import { NotificationService } from '../../services/notification.service';
 import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
 
 @Component({
@@ -33,7 +33,6 @@ import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
     MatButtonModule,
     MatIconModule,
     MatDividerModule,
-    MatSnackBarModule,
     MatTooltipModule,
     MatTabsModule,
     MatTableModule,
@@ -44,7 +43,7 @@ import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
     MatDialogModule,
   ],
   template: `
-    <div class="event-builder-settings">
+    <div class="event-builder-settings settings-panel">
       @if (service.loading()) {
         <div class="loading-overlay">
           <mat-spinner diameter="40"></mat-spinner>
@@ -319,7 +318,6 @@ import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
   `,
   styles: `
     .event-builder-settings {
-      padding: 16px;
       position: relative;
     }
 
@@ -360,10 +358,6 @@ import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
       padding: 8px;
       background: #ffebee;
       border-radius: 4px;
-    }
-
-    .info-card {
-      margin-bottom: 16px;
     }
 
     .config-info {
@@ -414,12 +408,6 @@ import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
       background-color: #e3f2fd;
     }
 
-    .action-buttons {
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-    }
-
     .offsets-card {
       margin-top: 16px;
     }
@@ -460,7 +448,7 @@ import { EventBuilderConfig, ChSettings, L2Setting } from '../../models/types';
 })
 export class EventBuilderSettingsComponent implements OnInit {
   readonly service = inject(EventBuilderService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly notify = inject(NotificationService);
   private readonly dialog = inject(MatDialog);
 
   selectedExp = '';
@@ -546,9 +534,9 @@ export class EventBuilderSettingsComponent implements OnInit {
 
     const result = await this.service.updateChSettings(config.exp_name, config.name, chSettings);
     if (result) {
-      this.snackBar.open('Channel settings saved', 'OK', { duration: 2000 });
+      this.notify.success('Channel settings saved');
     } else {
-      this.snackBar.open('Failed to save channel settings', 'OK', { duration: 3000 });
+      this.notify.error('Failed to save channel settings');
     }
   }
 
@@ -568,7 +556,7 @@ export class EventBuilderSettingsComponent implements OnInit {
     const result = await this.service.saveConfig(config);
     if (result) {
       this.selectedConfig = name;
-      this.snackBar.open('Configuration created', 'OK', { duration: 2000 });
+      this.notify.success('Configuration created');
     }
   }
 }

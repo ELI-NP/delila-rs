@@ -9,7 +9,6 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatIconModule } from '@angular/material/icon';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -17,6 +16,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { firstValueFrom } from 'rxjs';
 import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
+import { NotificationService } from '../../services/notification.service';
 import { FirmwareType, RegisterWrite, X743Config } from '../../models/types';
 import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
 import { AMAX_DEFAULTS } from '../../models/amax-generated';
@@ -40,7 +40,6 @@ import {
     MatSlideToggleModule,
     MatCheckboxModule,
     MatIconModule,
-    MatSnackBarModule,
     MatDividerModule,
     MatTabsModule,
     MatProgressSpinnerModule,
@@ -48,7 +47,7 @@ import {
     ChannelTableComponent,
   ],
   template: `
-    <div class="digitizer-settings" tabindex="0" (keydown.enter)="onEnterKey($event)">
+    <div class="digitizer-settings settings-panel" tabindex="0" (keydown.enter)="onEnterKey($event)">
       <!-- Header: Digitizer selector + firmware badge + action buttons -->
       <div class="header-row">
         <mat-form-field appearance="outline" class="digitizer-select">
@@ -743,10 +742,6 @@ import {
     </div>
   `,
   styles: `
-    .digitizer-settings {
-      padding: 16px;
-    }
-
     .header-row {
       display: flex;
       align-items: center;
@@ -847,25 +842,9 @@ import {
       font-family: monospace;
     }
 
+    /* Override global .settings-panel .form-grid padding for tab-content density */
     .form-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 16px;
       padding: 16px 0;
-    }
-
-    .section-title {
-      margin: 16px 0 0;
-      font-size: 14px;
-      font-weight: 500;
-      color: #666;
-    }
-
-    .hint-text {
-      font-size: 12px;
-      color: #888;
-      font-style: italic;
-      margin: 4px 0 8px;
     }
 
     .no-params-msg {
@@ -896,7 +875,7 @@ import {
 export class DigitizerSettingsComponent {
   private readonly digitizerService = inject(DigitizerService);
   private readonly operator = inject(OperatorService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly notify = inject(NotificationService);
 
   readonly digitizers = this.digitizerService.digitizers;
   readonly selectedId = this.digitizerService.selectedDigitizerId;
@@ -1053,7 +1032,7 @@ export class DigitizerSettingsComponent {
     try {
       const result = await this.digitizerService.detectDigitizers();
       if (result.success && result.digitizers.length > 0) {
-        this.snackBar.open(result.message, 'OK', { duration: 5000 });
+        this.notify.success(result.message);
         // Reload digitizers to pick up any newly created/updated configs
         await this.digitizerService.loadDigitizers();
         // Auto-select the first detected digitizer
@@ -1062,14 +1041,10 @@ export class DigitizerSettingsComponent {
           this.selectedId.set(firstDetected.source_id);
         }
       } else {
-        this.snackBar.open(result.message || 'No digitizers detected', 'OK', {
-          duration: 5000,
-        });
+        this.notify.warning(result.message || 'No digitizers detected');
       }
     } catch {
-      this.snackBar.open('Failed to detect hardware', 'Close', {
-        duration: 5000,
-      });
+      this.notify.error('Failed to detect hardware');
     } finally {
       this.detecting.set(false);
     }
@@ -1116,14 +1091,10 @@ export class DigitizerSettingsComponent {
         result = await this.digitizerService.applyToHardware(updatedConfig);
       }
 
-      this.snackBar.open(result.message || 'Configuration applied to hardware', 'OK', {
-        duration: 5000,
-      });
+      this.notify.success(result.message || 'Configuration applied to hardware');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to apply configuration';
-      this.snackBar.open(message, 'Close', {
-        duration: 5000,
-      });
+      this.notify.error(message);
     } finally {
       this.applying.set(false);
     }
@@ -1132,7 +1103,7 @@ export class DigitizerSettingsComponent {
   resetConfig(): void {
     if (this.selectedId() !== null) {
       this.digitizerService.loadDigitizers();
-      this.snackBar.open('Configuration reset', 'OK', { duration: 2000 });
+      this.notify.success('Configuration reset');
     }
   }
 
@@ -1155,9 +1126,7 @@ export class DigitizerSettingsComponent {
     }
     this.defaultValues.set(defaults);
     this.channelValues.set(channels);
-    this.snackBar.open('AMax parameters restored to FW defaults', 'OK', {
-      duration: 3000,
-    });
+    this.notify.success('AMax parameters restored to FW defaults');
   }
 
   // ===========================================================================

@@ -9,9 +9,9 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatDividerModule } from '@angular/material/divider';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { EmulatorService } from '../../services/emulator.service';
+import { NotificationService } from '../../services/notification.service';
 import { EmulatorConfig } from '../../models/types';
 
 @Component({
@@ -28,11 +28,10 @@ import { EmulatorConfig } from '../../models/types';
     MatButtonModule,
     MatIconModule,
     MatDividerModule,
-    MatSnackBarModule,
     MatTooltipModule,
   ],
   template: `
-    <div class="emulator-settings">
+    <div class="emulator-settings settings-panel">
       @if (emulatorService.config(); as config) {
         <mat-card class="info-card">
           <mat-card-content>
@@ -181,47 +180,8 @@ import { EmulatorConfig } from '../../models/types';
     </div>
   `,
   styles: `
-    .emulator-settings {
-      padding: 16px;
-    }
-
-    .info-card {
-      margin-bottom: 16px;
-    }
-
-    .info-banner {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: rgba(0, 0, 0, 0.6);
-    }
-
-    .info-banner mat-icon {
-      font-size: 20px;
-      width: 20px;
-      height: 20px;
-    }
-
     .settings-card {
       margin-bottom: 16px;
-    }
-
-    .form-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 16px;
-      padding-top: 8px;
-    }
-
-    .form-grid.disabled {
-      opacity: 0.5;
-    }
-
-    .form-row {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 8px 0;
     }
 
     .toggle-hint {
@@ -250,16 +210,6 @@ import { EmulatorConfig } from '../../models/types';
     .rate-value {
       font-size: 18px;
       font-weight: 500;
-    }
-
-    .action-buttons {
-      display: flex;
-      gap: 8px;
-      padding-top: 8px;
-    }
-
-    mat-form-field {
-      width: 100%;
     }
   `,
 })
@@ -310,7 +260,7 @@ export class EmulatorSettingsComponent implements OnInit {
   });
 
   readonly emulatorService = inject(EmulatorService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly notify = inject(NotificationService);
 
   async ngOnInit(): Promise<void> {
     await this.emulatorService.loadConfig();
@@ -330,18 +280,18 @@ export class EmulatorSettingsComponent implements OnInit {
     try {
       await this.emulatorService.updateConfig(this.editConfig);
       this.originalConfig = { ...this.editConfig };
-      this.snackBar.open('Configuration applied', 'OK', { duration: 2000 });
+      this.notify.success('Configuration applied');
     } catch {
-      this.snackBar.open('Failed to apply configuration', 'OK', { duration: 3000 });
+      this.notify.error('Failed to apply configuration');
     }
   }
 
   async saveToFile(): Promise<void> {
     try {
       await this.emulatorService.saveConfig();
-      this.snackBar.open('Configuration saved to file', 'OK', { duration: 2000 });
+      this.notify.success('Configuration saved to file');
     } catch {
-      this.snackBar.open('Failed to save configuration', 'OK', { duration: 3000 });
+      this.notify.error('Failed to save configuration');
     }
   }
 

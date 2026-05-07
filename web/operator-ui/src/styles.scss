@@ -67,3 +67,69 @@ html, body {
 .fit-content-panel {
   min-width: fit-content !important;
 }
+
+// Settings panels (digitizer / emulator / event-builder).
+// Components opt in by adding `class="settings-panel"` to their root element;
+// these layout primitives were duplicated inline in each component.
+.settings-panel {
+  padding: 16px;
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    padding: 8px 0;
+
+    &.disabled {
+      opacity: 0.5;
+    }
+  }
+
+  .form-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 0;
+  }
+
+  .action-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .info-card {
+    margin-bottom: 16px;
+  }
+
+  .info-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(0, 0, 0, 0.6);
+
+    mat-icon {
+      font-size: 20px;
+      width: 20px;
+      height: 20px;
+    }
+  }
+
+  .section-title {
+    margin: 16px 0 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: #666;
+  }
+
+  .hint-text {
+    font-size: 12px;
+    color: #888;
+    font-style: italic;
+    margin: 4px 0 8px;
+  }
+
+  mat-form-field {
+    width: 100%;
+  }
+}
