@@ -1,5 +1,5 @@
 {
-  "digitizer_id": 1,
+  "digitizer_id": 0,
   "name": "PHA2 Physical Input",
   "firmware": "PHA2",
   "serial_number": "52622",
@@ -12,13 +12,13 @@
     "global_trigger_source": "UserTrg",
     "waveforms_enabled": true,
     "extra": {
-      "boardvetopolarity": "ActiveHigh",
       "clocksource": "Internal",
-      "enclockoutfp": "True",
       "syncoutmode": "SyncIn",
       "iolevel": "NIM",
       "trgoutmode": "GPIO",
-      "boardvetosource": "Disabled"
+      "boardvetosource": "Disabled",
+      "boardvetopolarity": "ActiveHigh",
+      "enclockoutfp": "True"
     }
   },
   "channel_defaults": {
@@ -31,6 +31,8 @@
     "wave_downsampling": "1",
     "trigger_threshold": 100,
     "trigger_holdoff_ns": 480,
+    "event_trigger_source": "ChSelfTrigger",
+    "wave_trigger_source": "ChSelfTrigger",
     "time_filter_rise_time_ns": 296,
     "time_filter_retrigger_guard_ns": 0,
     "energy_filter_rise_time_ns": 5000,
@@ -43,16 +45,14 @@
     "energy_filter_pileup_guard_ns": 240,
     "energy_filter_fine_gain": 1.0,
     "energy_filter_lf_limitation": "Off",
-    "event_trigger_source": "ChSelfTrigger",
-    "wave_trigger_source": "ChSelfTrigger",
+    "event_selector": "All",
     "wave_saving": "Always",
     "analog_probe_0": "ADCInput",
     "analog_probe_1": "EnergyFilter",
     "digital_probe_0": "Trigger",
     "digital_probe_1": "EnergyFilterPeaking",
     "digital_probe_2": "EnergyFilterPeakReady",
-    "digital_probe_3": "EnergyFilterBaselineFreeze",
-    "event_selector": "All"
+    "digital_probe_3": "EnergyFilterBaselineFreeze"
   },
   "channel_overrides": {
     "0": {
