@@ -43,53 +43,52 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
             <input matInput [value]="expName()" disabled />
           </mat-form-field>
 
-          <!-- Run Number with edit mode -->
-          <div class="run-number-row">
-            <mat-form-field appearance="outline" class="run-number-field">
-              <mat-label>Run Number</mat-label>
-              <input
-                matInput
-                type="number"
-                [ngModel]="displayRunNumber()"
-                (ngModelChange)="onRunNumberInput($event)"
-                [disabled]="!isEditMode()"
-              />
-            </mat-form-field>
-
-            <!-- Edit/Confirm/Cancel buttons -->
-            @if (!isEditMode()) {
+          <!-- Run Number — collapsed by default; click "Override" to expand the editor.
+               Common case is auto-increment, so the operator never has to look at it. -->
+          @if (!isEditMode()) {
+            <div class="run-number-collapsed">
+              <span class="run-number-readonly">
+                Next run: <strong>#{{ displayRunNumber() }}</strong>
+              </span>
               <button
-                mat-icon-button
+                mat-button
+                class="override-link"
                 (click)="enterEditMode()"
                 [disabled]="!canEnterEditMode()"
-                matTooltip="Edit run number (one-time override)"
-                aria-label="Edit run number"
+                matTooltip="One-time override. Will return to auto after this run."
               >
-                <mat-icon>edit</mat-icon>
+                Override…
               </button>
-            } @else {
+            </div>
+          } @else {
+            <div class="run-number-row">
+              <mat-form-field appearance="outline" class="run-number-field">
+                <mat-label>Run Number (override)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [ngModel]="displayRunNumber()"
+                  (ngModelChange)="onRunNumberInput($event)"
+                />
+              </mat-form-field>
               <button
                 mat-icon-button
                 color="primary"
                 (click)="confirmEdit()"
-                matTooltip="Confirm"
+                matTooltip="Confirm — applied to the next run, then auto resumes"
                 aria-label="Confirm edit"
               >
                 <mat-icon>check</mat-icon>
               </button>
               <button
                 mat-icon-button
-                color="warn"
                 (click)="cancelEdit()"
                 matTooltip="Cancel"
                 aria-label="Cancel edit"
               >
                 <mat-icon>close</mat-icon>
               </button>
-            }
-          </div>
-
-          @if (isEditMode()) {
+            </div>
             <div class="edit-hint">
               <mat-icon>info</mat-icon>
               <span>One-time override. Will return to auto after this run.</span>
@@ -204,6 +203,23 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
     }
     .run-number-field {
       flex: 1;
+    }
+    .run-number-collapsed {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 4px 4px 8px;
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.7);
+    }
+    .run-number-readonly strong {
+      color: rgba(0, 0, 0, 0.87);
+      font-variant-numeric: tabular-nums;
+    }
+    .override-link {
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.55);
+      letter-spacing: 0.2px;
     }
     .edit-hint {
       display: flex;
