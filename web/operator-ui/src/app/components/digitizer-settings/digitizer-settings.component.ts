@@ -295,16 +295,16 @@ import {
                       <mat-label>Start Source</mat-label>
                       <mat-select panelClass="fit-content-panel" [(value)]="config.board.start_source">
                         @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
-                          <mat-option value="EncodedClkIn">EncodedClkIn</mat-option>
-                          <mat-option value="SINlevel">SINlevel</mat-option>
-                          <mat-option value="SINedge">SINedge</mat-option>
-                          <mat-option value="SWcmd">SWcmd</mat-option>
-                          <mat-option value="LVDS">LVDS</mat-option>
-                          <mat-option value="P0">P0</mat-option>
+                          <mat-option value="SWcmd" matTooltip="SWcmd — software command from operator">Software</mat-option>
+                          <mat-option value="SINedge" matTooltip="SINedge — leading edge of the S-IN front-panel input">S-IN (edge)</mat-option>
+                          <mat-option value="SINlevel" matTooltip="SINlevel — held while S-IN front-panel input is high">S-IN (level)</mat-option>
+                          <mat-option value="EncodedClkIn" matTooltip="EncodedClkIn — start command encoded on the front-panel clock input">Encoded Clock In</mat-option>
+                          <mat-option value="LVDS" matTooltip="LVDS — start signal received on an LVDS pin">LVDS</mat-option>
+                          <mat-option value="P0" matTooltip="P0 — start command from VME P0 backplane">P0 backplane</mat-option>
                         } @else {
-                          <mat-option value="START_MODE_SW">Software</mat-option>
-                          <mat-option value="START_MODE_S_IN">S-IN</mat-option>
-                          <mat-option value="START_MODE_FIRST_TRG">First Trigger</mat-option>
+                          <mat-option value="START_MODE_SW" matTooltip="START_MODE_SW — software command from operator">Software</mat-option>
+                          <mat-option value="START_MODE_S_IN" matTooltip="START_MODE_S_IN — front-panel S-IN line">S-IN</mat-option>
+                          <mat-option value="START_MODE_FIRST_TRG" matTooltip="START_MODE_FIRST_TRG — first trigger received after arming">First trigger</mat-option>
                         }
                       </mat-select>
                     </mat-form-field>
@@ -313,8 +313,8 @@ import {
                       <mat-form-field appearance="outline">
                         <mat-label>Clock Source</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['clocksource']">
-                          <mat-option value="Internal">Internal</mat-option>
-                          <mat-option value="FPClkIn">FPClkIn</mat-option>
+                          <mat-option value="Internal" matTooltip="Internal — on-board oscillator">Internal</mat-option>
+                          <mat-option value="FPClkIn" matTooltip="FPClkIn — front-panel clock input">Front-panel clock</mat-option>
                         </mat-select>
                       </mat-form-field>
 
@@ -365,18 +365,18 @@ import {
                       <mat-form-field appearance="outline">
                         <mat-label>Global Trigger Source</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.global_trigger_source">
-                          <mat-option value="TrgIn">TrgIn</mat-option>
-                          <mat-option value="P0">P0</mat-option>
-                          <mat-option value="TestPulse">TestPulse</mat-option>
-                          <mat-option value="UserTrg">UserTrg</mat-option>
-                          <mat-option value="SwTrg">SwTrg</mat-option>
-                          <mat-option value="LVDS">LVDS</mat-option>
-                          <mat-option value="ITLA">ITLA</mat-option>
-                          <mat-option value="ITLB">ITLB</mat-option>
-                          <mat-option value="ITLA_AND_ITLB">ITLA_AND_ITLB</mat-option>
-                          <mat-option value="ITLA_OR_ITLB">ITLA_OR_ITLB</mat-option>
-                          <mat-option value="EncodedClkIn">EncodedClkIn</mat-option>
-                          <mat-option value="GPIO">GPIO</mat-option>
+                          <mat-option value="SwTrg" matTooltip="SwTrg — software trigger from operator">Software</mat-option>
+                          <mat-option value="UserTrg" matTooltip="UserTrg — user-defined trigger source">User trigger</mat-option>
+                          <mat-option value="TrgIn" matTooltip="TrgIn — front-panel TRG-IN">TRG-IN (front-panel)</mat-option>
+                          <mat-option value="TestPulse" matTooltip="TestPulse — internal test pulse generator">Test pulse</mat-option>
+                          <mat-option value="LVDS" matTooltip="LVDS — trigger received on an LVDS pin">LVDS</mat-option>
+                          <mat-option value="ITLA" matTooltip="ITLA — internal trigger logic A">ITL-A</mat-option>
+                          <mat-option value="ITLB" matTooltip="ITLB — internal trigger logic B">ITL-B</mat-option>
+                          <mat-option value="ITLA_AND_ITLB" matTooltip="ITLA_AND_ITLB — both ITL-A and ITL-B fired (coincidence)">ITL-A AND ITL-B</mat-option>
+                          <mat-option value="ITLA_OR_ITLB" matTooltip="ITLA_OR_ITLB — either ITL-A or ITL-B fired">ITL-A OR ITL-B</mat-option>
+                          <mat-option value="EncodedClkIn" matTooltip="EncodedClkIn — trigger encoded on the front-panel clock input">Encoded Clock In</mat-option>
+                          <mat-option value="P0" matTooltip="P0 — VME P0 backplane">P0 backplane</mat-option>
+                          <mat-option value="GPIO" matTooltip="GPIO — general-purpose I/O pin">GPIO</mat-option>
                         </mat-select>
                       </mat-form-field>
                     }
@@ -388,8 +388,8 @@ import {
                           <mat-option value="NIM">NIM</mat-option>
                           <mat-option value="TTL">TTL</mat-option>
                         } @else {
-                          <mat-option value="FPIOTYPE_NIM">NIM</mat-option>
-                          <mat-option value="FPIOTYPE_TTL">TTL</mat-option>
+                          <mat-option value="FPIOTYPE_NIM" matTooltip="FPIOTYPE_NIM — front-panel NIM logic levels">NIM</mat-option>
+                          <mat-option value="FPIOTYPE_TTL" matTooltip="FPIOTYPE_TTL — front-panel TTL logic levels">TTL</mat-option>
                         }
                       </mat-select>
                     </mat-form-field>
@@ -448,19 +448,19 @@ import {
                         <mat-label>Veto Source</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['boardvetosource']">
                           <mat-option value="Disabled">Disabled</mat-option>
-                          <mat-option value="SIN">SIN</mat-option>
-                          <mat-option value="GPIO">GPIO</mat-option>
-                          <mat-option value="LVDS">LVDS</mat-option>
-                          <mat-option value="P0">P0</mat-option>
-                          <mat-option value="EncodedClkIn">EncodedClkIn</mat-option>
+                          <mat-option value="SIN" matTooltip="SIN — front-panel S-IN line">S-IN (front-panel)</mat-option>
+                          <mat-option value="GPIO" matTooltip="GPIO — general-purpose I/O pin">GPIO</mat-option>
+                          <mat-option value="LVDS" matTooltip="LVDS — veto signal received on an LVDS pin">LVDS</mat-option>
+                          <mat-option value="P0" matTooltip="P0 — VME P0 backplane">P0 backplane</mat-option>
+                          <mat-option value="EncodedClkIn" matTooltip="EncodedClkIn — veto encoded on the front-panel clock input">Encoded Clock In</mat-option>
                         </mat-select>
                       </mat-form-field>
 
                       <mat-form-field appearance="outline">
                         <mat-label>Veto Polarity</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['boardvetopolarity']">
-                          <mat-option value="ActiveHigh">ActiveHigh</mat-option>
-                          <mat-option value="ActiveLow">ActiveLow</mat-option>
+                          <mat-option value="ActiveHigh">Active High</mat-option>
+                          <mat-option value="ActiveLow">Active Low</mat-option>
                         </mat-select>
                       </mat-form-field>
 
