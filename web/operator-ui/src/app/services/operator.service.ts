@@ -24,6 +24,19 @@ export class OperatorService {
   readonly error = signal<string | null>(null);
   readonly isPolling = signal(false);
 
+  /**
+   * Last unresolved Apply failure. Set by digitizer-settings on apply error;
+   * cleared on a successful Configure. Surfaces an inline guidance alert near
+   * the Configure button so the operator knows the previous Apply did not stick
+   * and the next step is to fix the config and re-Configure.
+   *
+   * Audit item X-5 (docs/ui_audit_2026-05-07.md). Backend already hard-fails
+   * the Apply via `check_firmware_match` (commit c7d1fc8) and blocks Arm via
+   * `auto_config_failed`, but the UI only flashed a sticky red snackbar — no
+   * persistent guidance.
+   */
+  readonly lastApplyFailure = signal<{ digitizerName: string; message: string } | null>(null);
+
   // Computed values
   readonly systemState = computed(() => this.status()?.system_state ?? 'Offline');
   readonly components = computed(() => this.status()?.components ?? []);

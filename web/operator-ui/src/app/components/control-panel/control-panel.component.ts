@@ -107,6 +107,22 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           </mat-form-field>
         </div>
 
+        @if (operator.lastApplyFailure(); as failure) {
+          <div class="apply-failure-banner">
+            <mat-icon>report_problem</mat-icon>
+            <div class="apply-failure-text">
+              <strong>Apply did not stick</strong>
+              <span>
+                {{ failure.digitizerName }} rejected the last Apply.
+                Fix the config in <strong>Settings</strong> and press
+                <strong>Configure</strong> below to retry — Arm is blocked
+                until the apply succeeds.
+              </span>
+              <span class="apply-failure-detail">{{ failure.message }}</span>
+            </div>
+          </div>
+        }
+
         <div class="button-grid">
           <button
             mat-raised-button
@@ -236,6 +252,35 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
       font-size: 18px;
       width: 18px;
       height: 18px;
+    }
+    .apply-failure-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 0 0 12px;
+      padding: 10px 14px;
+      border-radius: 4px;
+      background: #ffebee;
+      border-left: 4px solid #c62828;
+      color: #4a1010;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .apply-failure-banner mat-icon {
+      flex-shrink: 0;
+      color: #c62828;
+    }
+    .apply-failure-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .apply-failure-detail {
+      margin-top: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.7);
+      word-break: break-word;
     }
     .button-grid {
       display: grid;
@@ -458,6 +503,8 @@ export class ControlPanelComponent {
       next: (res) => {
         if (res.success) {
           this.notify.success('Configured successfully');
+          // A clean Configure resolves any prior unresolved Apply failure (X-5).
+          this.operator.lastApplyFailure.set(null);
           // Don't clear override here - user may want to use the same number for Start
         } else {
           this.notify.error(`Configure failed: ${res.message}`);

@@ -1124,8 +1124,13 @@ export class DigitizerSettingsComponent {
 
       if (result.success) {
         this.notify.success(result.message || 'Configuration applied to hardware');
+        this.operator.lastApplyFailure.set(null);
       } else {
         this.notify.error(result.message || 'Failed to apply configuration');
+        this.operator.lastApplyFailure.set({
+          digitizerName: config.name,
+          message: result.message || 'Failed to apply configuration',
+        });
       }
     } catch (err: unknown) {
       // Backend returns HTTP 5xx with {success: false, message: "..."} on
@@ -1136,6 +1141,10 @@ export class DigitizerSettingsComponent {
       const message =
         e.error?.message ?? e.message ?? 'Failed to apply configuration';
       this.notify.error(message);
+      this.operator.lastApplyFailure.set({
+        digitizerName: config.name,
+        message,
+      });
     } finally {
       this.applying.set(false);
     }
