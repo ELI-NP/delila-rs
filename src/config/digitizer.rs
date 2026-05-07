@@ -171,6 +171,13 @@ pub struct DigitizerConfig {
     /// Only used when firmware is X743CI or X743Std.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x743: Option<X743Config>,
+
+    /// AMax board-level (global) writable registers — currently just the
+    /// debug-FW `ENABLE_ACQ` toggle. Optional + `serde(default)` so existing
+    /// `config_amax_*.toml` files keep working without edit (loads as
+    /// `AMaxBoardConfig::default()` = ENABLE_ACQ unset = legacy mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amax_board: Option<AMaxBoardConfig>,
 }
 
 /// V1743-specific configuration parameters
@@ -407,7 +414,7 @@ where
 // The struct itself is auto-generated from `RegisterFile.json` + `fw_params.json`
 // — see `cargo run --bin amax_codegen`. Re-exported here so existing imports
 // (`crate::config::digitizer::AMaxChannelConfig`) keep working.
-pub use super::amax_generated::AMaxChannelConfig;
+pub use super::amax_generated::{AMaxBoardConfig, AMaxChannelConfig};
 
 impl X743Config {
     fn default_link_type() -> String {
@@ -590,9 +597,7 @@ impl FirmwareType {
                     || model.contains("5725")
                 {
                     Some(FirmwareType::PSD1)
-                } else if model.contains("1740")
-                    || model.contains("2730")
-                    || model.contains("2740")
+                } else if model.contains("1740") || model.contains("2730") || model.contains("2740")
                 {
                     Some(FirmwareType::PSD2)
                 } else {
@@ -1412,6 +1417,7 @@ impl DigitizerConfig {
             channel_overrides: HashMap::new(),
             channel_names: None,
             x743: None,
+            amax_board: None,
         }
     }
 
@@ -1817,7 +1823,6 @@ impl DigitizerConfig {
         }
     }
 }
-
 
 /// Convert serde_json::Value to string for CAEN parameter
 fn json_value_to_string(value: &serde_json::Value) -> String {

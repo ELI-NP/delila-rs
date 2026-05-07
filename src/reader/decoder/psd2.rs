@@ -37,8 +37,8 @@ impl Dig2Variant for Psd2Variant {
     /// PSD2 packs `charge_short` (the short-gate integral) into the per-event
     /// 2nd word at bits[41:26]. PHA2 leaves this slot unused.
     fn decode_energy_short(second_word: u64) -> u16 {
-        ((second_word >> psd2_event_bits::ENERGY_SHORT_SHIFT)
-            & psd2_event_bits::ENERGY_SHORT_MASK) as u16
+        ((second_word >> psd2_event_bits::ENERGY_SHORT_SHIFT) & psd2_event_bits::ENERGY_SHORT_MASK)
+            as u16
     }
 
     /// PSD2 doesn't expose typed probe info on the wire — all probes are
@@ -58,9 +58,7 @@ impl Dig2Variant for Psd2Variant {
 mod tests {
     use super::*;
     use crate::reader::decoder::common::{DataType, RawData};
-    use crate::reader::decoder::dualchannel_common::{
-        START_SIGNAL_SIZE, STOP_SIGNAL_SIZE,
-    };
+    use crate::reader::decoder::dualchannel_common::{START_SIGNAL_SIZE, STOP_SIGNAL_SIZE};
 
     fn pack_be(words: &[u64]) -> Vec<u8> {
         let mut out = Vec::with_capacity(words.len() * 8);
@@ -163,7 +161,9 @@ mod tests {
             num_channels: 32,
         });
 
-        let bytes = build_psd2_event(/*ch*/ 5, /*ts*/ 1000, /*e*/ 4242, /*es*/ 567, /*fts*/ 100);
+        let bytes = build_psd2_event(
+            /*ch*/ 5, /*ts*/ 1000, /*e*/ 4242, /*es*/ 567, /*fts*/ 100,
+        );
         let raw = raw_data(bytes, 1);
         let events = dec.decode(&raw);
         assert_eq!(events.len(), 1);

@@ -13,6 +13,26 @@
 
 use super::common::{DataType, EventData, RawData, Waveform};
 
+/// AMax debug FW probe-type codes. Carved from a reserved namespace
+/// (PHA2 canonical codes occupy 0x00..0x0C, `UNKNOWN_PROBE_TYPE = 0xFF`).
+/// The frontend label maps live in `web/operator-ui/src/app/models/histogram.types.ts`.
+///
+/// Spec ref: `FW/debug/debug_config.pdf` (block diagram) +
+/// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` Wire Merge U75
+/// (`OutputOrder = IN_0 LEFT (MSBs)`, IN_0=Trigger_out, IN_1=BL_Hold,
+/// IN_2=Energy_Dv, IN_3=shaping_dv, IN_4=shaping_track, IN_5..15=const 0).
+pub mod amax_probe_types {
+    pub const ANA_RAW: u8 = 0x40;
+    pub const ANA_TRAP: u8 = 0x41;
+    pub const ANA_TRIANGLE: u8 = 0x42;
+
+    pub const DIG_TRIGGER_OUT: u8 = 0x40;
+    pub const DIG_BL_HOLD: u8 = 0x41;
+    pub const DIG_ENERGY_DV: u8 = 0x42;
+    pub const DIG_SHAPING_DV: u8 = 0x43;
+    pub const DIG_SHAPING_TRACK: u8 = 0x44;
+}
+
 /// AMax constants (64-bit words, Big Endian from digitizer)
 mod constants {
     pub const WORD_SIZE: usize = 8;
@@ -97,15 +117,34 @@ pub struct AMaxEventData {
 }
 
 /// AMax Decoder for DELILA custom firmware
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AMaxDecoder {
     config: AMaxConfig,
+    /// One-shot guard for the "first SE event seen" info log so we don't
+    /// flood the log when ENABLE_ACQ=1 is sustained. Reset by reconstructing
+    /// the decoder (Idle→Configure transition).
+    se_logged: std::sync::atomic::AtomicBool,
+}
+
+impl Clone for AMaxDecoder {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            // Cloned decoders re-arm the one-shot log so each parallel
+            // worker logs the first SE event it sees, matching the
+            // dispatcher → workers pattern in DecodeLoop.
+            se_logged: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
 }
 
 impl AMaxDecoder {
     /// Create a new AMax decoder with given configuration
     pub fn new(config: AMaxConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            se_logged: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 
     /// Create a decoder with default configuration
@@ -195,23 +234,23 @@ impl AMaxDecoder {
         let info = ((word0 >> constants::INFO_SHIFT) & constants::INFO_MASK) as u8;
         let raw_timestamp = word0 & constants::TIMESTAMP_MASK;
 
-        // Skip special events
-        if special_event {
-            if self.config.dump_enabled {
-                println!(
-                    "[AMax] Special event skipped (ch={}, info=0x{:X})",
-                    channel, info
-                );
-            }
-            // Consume remaining words until last_word
-            while *word_index < total_words {
-                let w = self.read_u64(data, *word_index);
-                *word_index += 1;
-                if (w >> constants::LAST_WORD_SHIFT) & 0x1 != 0 {
-                    break;
-                }
-            }
-            return None;
+        // SE (Special Event) bit drives the AMax debug FW path. When the
+        // FW's `ENABLE_ACQ` register is 1, ch0 events arrive with SE=true
+        // and a 4-lane debug WAVE payload (raw / trap / triangle / digital
+        // 16-bit). The legacy code path discarded SE events because pre-
+        // `ENABLE_ACQ` firmwares could never raise SE; we now route them
+        // into `decode_debug_waveform` instead. Spec ref:
+        // `FW/debug/debug_config.pdf` + email_from_Rebeca (2026-05-07).
+        if special_event
+            && !self
+                .se_logged
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::info!(
+                channel,
+                info = format!("0x{:X}", info),
+                "[AMax] first SE event seen — entering debug-wave decode path"
+            );
         }
 
         // Read Word 1 (Data)
@@ -273,9 +312,16 @@ impl AMaxDecoder {
         let amax_value = (user_info[0] != 0).then_some(user_info[0]);
         let baseline = (user_info[1] != 0 || amax_value.is_none()).then_some(user_info[1]);
 
-        // Handle waveform if present
+        // Handle waveform if present. SE=true → debug FW packs 4 lanes
+        // (raw / trap / triangle / 16-bit digital) into the same WAVE field
+        // (`decode_debug_waveform`); SE=false → legacy single-lane raw
+        // (`decode_waveform`).
         let waveform = if has_waveform {
-            self.decode_waveform(data, word_index)
+            if special_event {
+                self.decode_debug_waveform(data, word_index)
+            } else {
+                self.decode_waveform(data, word_index)
+            }
         } else {
             None
         };
@@ -354,20 +400,126 @@ impl AMaxDecoder {
         Some(Waveform {
             analog_probe1,
             analog_probe2: Vec::new(),
+            analog_probe3: Vec::new(),
             digital_probe1: Vec::new(),
             digital_probe2: Vec::new(),
             digital_probe3: Vec::new(),
             digital_probe4: Vec::new(),
+            digital_probe5: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: constants::TIME_STEP_NS,
             // AMax FW emits the raw 14-bit ADC stream — unsigned.
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
+            analog_probe3_is_signed: false,
             // AMax custom OpenDPP FW doesn't carry typed probe info on
             // the wire; emit UNKNOWN.
-            analog_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 2],
-            digital_probe_type: [super::common::UNKNOWN_PROBE_TYPE; 4],
+            analog_probe_type: [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 3],
+            digital_probe_type: [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 5],
+        })
+    }
+
+    /// Decode a 4-lane debug waveform produced by the AMax debug FW
+    /// (`ENABLE_ACQ = 1`, SE bit set on ch0 events).
+    ///
+    /// Each 64-bit word holds **one sample × 4 lanes × 16 bits**, packed by
+    /// the Sci-compiler "TM packer" + 2:1 MUX:
+    ///
+    /// | bits  | lane | content                       | DELILA slot       |
+    /// |-------|------|-------------------------------|-------------------|
+    /// | 0-15  | 0    | raw waveform (signed 16-bit)  | `analog_probe1`   |
+    /// | 16-31 | 1    | trapezoidal filter (signed)   | `analog_probe2`   |
+    /// | 32-47 | 2    | triangle filter (signed)      | `analog_probe3`   |
+    /// | 48-63 | 3    | digital lane (16 wires)       | `digital_probe1..5` |
+    ///
+    /// Digital lane bit map (Wire Merge U75, `IN_0 LEFT (MSBs)`):
+    ///   bit15=Trigger_out, bit14=BL_Hold, bit13=Energy_Dv,
+    ///   bit12=shaping_dv, bit11=shaping_track, bits10..0 = const 0 (padding).
+    ///
+    /// Spec ref: `FW/debug/debug_config.pdf` (block diagram) +
+    /// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U75 connections.
+    fn decode_debug_waveform(&self, data: &[u8], word_index: &mut usize) -> Option<Waveform> {
+        let total_words = data.len() / constants::WORD_SIZE;
+
+        if *word_index >= total_words {
+            return None;
+        }
+
+        // Same waveform header layout as the legacy path.
+        let header = self.read_u64(data, *word_index);
+        *word_index += 1;
+
+        let _truncated = (header >> constants::WAVEFORM_TRUNCATED_SHIFT) & 0x1;
+        let wave_word_count = (header & constants::WAVEFORM_WORDS_MASK) as usize;
+
+        if self.config.dump_enabled {
+            println!(
+                "[AMax/debug] Waveform: {} words = {} samples (4 lanes)",
+                wave_word_count, wave_word_count
+            );
+        }
+
+        let mut analog_probe1 = Vec::with_capacity(wave_word_count); // raw
+        let mut analog_probe2 = Vec::with_capacity(wave_word_count); // trap
+        let mut analog_probe3 = Vec::with_capacity(wave_word_count); // triangle
+        let mut digital_probe1 = Vec::with_capacity(wave_word_count); // Trigger_out
+        let mut digital_probe2 = Vec::with_capacity(wave_word_count); // BL_Hold
+        let mut digital_probe3 = Vec::with_capacity(wave_word_count); // Energy_Dv
+        let mut digital_probe4 = Vec::with_capacity(wave_word_count); // shaping_dv
+        let mut digital_probe5 = Vec::with_capacity(wave_word_count); // shaping_track
+
+        for _ in 0..wave_word_count {
+            if *word_index >= total_words {
+                break;
+            }
+
+            let word = self.read_u64(data, *word_index);
+            *word_index += 1;
+
+            // Lane unpack — 4 × 16 bits, lane 0 is the LSBs.
+            analog_probe1.push((word & 0xFFFF) as i16);
+            analog_probe2.push(((word >> 16) & 0xFFFF) as i16);
+            analog_probe3.push(((word >> 32) & 0xFFFF) as i16);
+
+            let dig = (word >> 48) & 0xFFFF;
+            digital_probe1.push(((dig >> 15) & 0x1) as u8);
+            digital_probe2.push(((dig >> 14) & 0x1) as u8);
+            digital_probe3.push(((dig >> 13) & 0x1) as u8);
+            digital_probe4.push(((dig >> 12) & 0x1) as u8);
+            digital_probe5.push(((dig >> 11) & 0x1) as u8);
+        }
+
+        Some(Waveform {
+            analog_probe1,
+            analog_probe2,
+            analog_probe3,
+            digital_probe1,
+            digital_probe2,
+            digital_probe3,
+            digital_probe4,
+            digital_probe5,
+            time_resolution: 0,
+            trigger_threshold: 0,
+            ns_per_sample: constants::TIME_STEP_NS,
+            // Debug-FW analog lanes are signed 16-bit per Rebeca's spec
+            // (raw is the signed ADC stream after the TM packer; trap and
+            // triangle are signed filter outputs that swing around 0).
+            analog_probe1_is_signed: true,
+            analog_probe2_is_signed: true,
+            analog_probe3_is_signed: true,
+            analog_probe_type: [
+                amax_probe_types::ANA_RAW,
+                amax_probe_types::ANA_TRAP,
+                amax_probe_types::ANA_TRIANGLE,
+            ],
+            digital_probe_type: [
+                amax_probe_types::DIG_TRIGGER_OUT,
+                amax_probe_types::DIG_BL_HOLD,
+                amax_probe_types::DIG_ENERGY_DV,
+                amax_probe_types::DIG_SHAPING_DV,
+                amax_probe_types::DIG_SHAPING_TRACK,
+            ],
         })
     }
 
@@ -538,5 +690,191 @@ mod tests {
         assert_eq!(constants::WORD_SIZE, 8);
         assert_eq!(constants::TIME_STEP_NS, 8.0);
         assert_eq!(constants::FINE_TIME_SCALE, 1024.0);
+    }
+
+    /// Pack u64 words into a big-endian byte vector (digitizer wire format).
+    fn pack_be(words: &[u64]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_be_bytes()).collect()
+    }
+
+    #[test]
+    fn decode_event_legacy_path_unchanged_when_se_false() {
+        // Regression guard: SE=0 events must keep going through the legacy
+        // single-lane waveform decoder (`decode_waveform`) — analog_probe1
+        // only, no probe-type tags, unsigned samples. This pins the
+        // `ENABLE_ACQ=0` mode behaviour after the SE branch was added.
+        let decoder = AMaxDecoder::with_defaults();
+
+        // Word 0: SE=0, channel=0, last_word=0, info=0, raw_timestamp=0x12345
+        let word0: u64 = 0x0000_0000_0001_2345;
+        // Word 1: last_word=0, has_waveform=1 (bit62), energy=42
+        let word1: u64 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | 42;
+        // Waveform header: 1 word count, truncated=0
+        let wave_hdr: u64 = 0x0000_0000_0000_0001;
+        // Wave word: samples [1, 2, 3, 4] (i16) packed as 4×16 bits, lane 0 LSBs.
+        // Wave words have NO last_word reservation — bit 63 is the high bit of
+        // the 4th lane's sample. The outer `decode_into` loop terminates on
+        // word_index == total_words instead.
+        let wave_word: u64 = ((4u64 & 0xFFFF) << 48)
+            | ((3u64 & 0xFFFF) << 32)
+            | ((2u64 & 0xFFFF) << 16)
+            | (1u64 & 0xFFFF);
+
+        let bytes = pack_be(&[word0, word1, wave_hdr, wave_word]);
+        let mut raw = RawData::new(bytes);
+        raw.n_events = 1;
+
+        let events = decoder.decode(&raw);
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.base.channel, 0);
+        assert_eq!(event.base.energy, 42);
+
+        let wf = event
+            .base
+            .waveform
+            .as_ref()
+            .expect("legacy SE=0 path must produce a waveform when has_waveform=1");
+        assert_eq!(wf.analog_probe1, vec![1i16, 2, 3, 4]);
+        assert!(wf.analog_probe2.is_empty());
+        assert!(wf.analog_probe3.is_empty());
+        assert!(wf.digital_probe1.is_empty());
+        assert!(wf.digital_probe2.is_empty());
+        assert!(wf.digital_probe3.is_empty());
+        assert!(wf.digital_probe4.is_empty());
+        assert!(wf.digital_probe5.is_empty());
+        assert!(!wf.analog_probe1_is_signed);
+        assert_eq!(
+            wf.analog_probe_type,
+            [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 3]
+        );
+        assert_eq!(
+            wf.digital_probe_type,
+            [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 5]
+        );
+    }
+
+    #[test]
+    fn decode_event_debug_path_when_se_true() {
+        // SE=1 → ENABLE_ACQ=1 debug FW path. Same envelope as the legacy
+        // test above, but the wave word now carries 4 lanes (raw / trap /
+        // triangle / 16-bit digital). All 5 digital probes lit (bits 15..11).
+        let decoder = AMaxDecoder::with_defaults();
+
+        // Word 0: SE=1 (bit 55), channel=0, raw_timestamp=0x12345
+        let word0: u64 = (1u64 << constants::SPECIAL_EVENT_SHIFT) | 0x0001_2345;
+        // Word 1: has_waveform=1, energy=42 (same as legacy test)
+        let word1: u64 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | 42;
+        // Waveform header: 1 word count
+        let wave_hdr: u64 = 0x0000_0000_0000_0001;
+        // Lane 0 = 0x0102, lane 1 = 0x0304, lane 2 = 0x0506,
+        // lane 3 = 0xF800 (bits 15,14,13,12,11 set, padding 0).
+        // No last_word bit on wave words (it would alias into lane 3 bit 15).
+        let wave_word: u64 =
+            ((0xF800u64) << 48) | ((0x0506u64) << 32) | ((0x0304u64) << 16) | 0x0102u64;
+
+        let bytes = pack_be(&[word0, word1, wave_hdr, wave_word]);
+        let mut raw = RawData::new(bytes);
+        raw.n_events = 1;
+
+        let events = decoder.decode(&raw);
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.base.channel, 0);
+        assert_eq!(event.base.energy, 42);
+
+        let wf = event
+            .base
+            .waveform
+            .as_ref()
+            .expect("SE=1 debug path must produce a waveform when has_waveform=1");
+        assert_eq!(wf.analog_probe1, vec![0x0102i16]);
+        assert_eq!(wf.analog_probe2, vec![0x0304i16]);
+        assert_eq!(wf.analog_probe3, vec![0x0506i16]);
+        assert_eq!(wf.digital_probe1, vec![1u8]);
+        assert_eq!(wf.digital_probe2, vec![1u8]);
+        assert_eq!(wf.digital_probe3, vec![1u8]);
+        assert_eq!(wf.digital_probe4, vec![1u8]);
+        assert_eq!(wf.digital_probe5, vec![1u8]);
+        assert!(wf.analog_probe1_is_signed);
+        assert!(wf.analog_probe2_is_signed);
+        assert!(wf.analog_probe3_is_signed);
+        assert_eq!(
+            wf.analog_probe_type,
+            [
+                amax_probe_types::ANA_RAW,
+                amax_probe_types::ANA_TRAP,
+                amax_probe_types::ANA_TRIANGLE,
+            ]
+        );
+        assert_eq!(
+            wf.digital_probe_type,
+            [
+                amax_probe_types::DIG_TRIGGER_OUT,
+                amax_probe_types::DIG_BL_HOLD,
+                amax_probe_types::DIG_ENERGY_DV,
+                amax_probe_types::DIG_SHAPING_DV,
+                amax_probe_types::DIG_SHAPING_TRACK,
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_debug_waveform_bit_unpack_per_signal() {
+        // Pin the digital lane bit-position mapping so future edits can't
+        // silently swap probe slots: each sample lights exactly one bit in
+        // the 16-bit digital lane (bits 15..11), and we expect that bit to
+        // land in the matching probe vec at the matching sample index.
+        let decoder = AMaxDecoder::with_defaults();
+
+        // Same header/data envelope as test 2.
+        let word0: u64 = (1u64 << constants::SPECIAL_EVENT_SHIFT) | 0x0001_2345;
+        let word1: u64 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | 42;
+        // 5 wave words (samples 0..4)
+        let wave_hdr: u64 = 0x0000_0000_0000_0005;
+
+        // Build per-sample digital lanes. Lanes 0/1/2 = 0 (analog probes
+        // checked elsewhere); lane 3 lights one bit per sample.
+        let lane3_per_sample: [u64; 5] = [
+            0x8000, // sample 0: bit 15 → digital_probe1 (Trigger_out)
+            0x4000, // sample 1: bit 14 → digital_probe2 (BL_Hold)
+            0x2000, // sample 2: bit 13 → digital_probe3 (Energy_Dv)
+            0x1000, // sample 3: bit 12 → digital_probe4 (shaping_dv)
+            0x0800, // sample 4: bit 11 → digital_probe5 (shaping_track)
+        ];
+        let mut wave_words = Vec::with_capacity(5);
+        for dig in lane3_per_sample.iter() {
+            // No last_word bit on wave words (would alias into the same
+            // bit-15 slot as Trigger_out and corrupt digital_probe1).
+            wave_words.push((dig & 0xFFFF) << 48);
+        }
+
+        let mut all_words = vec![word0, word1, wave_hdr];
+        all_words.extend(wave_words);
+        let bytes = pack_be(&all_words);
+        let mut raw = RawData::new(bytes);
+        raw.n_events = 1;
+
+        let events = decoder.decode(&raw);
+        assert_eq!(events.len(), 1);
+
+        let wf = events[0]
+            .base
+            .waveform
+            .as_ref()
+            .expect("SE=1 debug waveform expected");
+
+        assert_eq!(wf.digital_probe1, vec![1u8, 0, 0, 0, 0]); // Trigger_out @ s0
+        assert_eq!(wf.digital_probe2, vec![0u8, 1, 0, 0, 0]); // BL_Hold @ s1
+        assert_eq!(wf.digital_probe3, vec![0u8, 0, 1, 0, 0]); // Energy_Dv @ s2
+        assert_eq!(wf.digital_probe4, vec![0u8, 0, 0, 1, 0]); // shaping_dv @ s3
+        assert_eq!(wf.digital_probe5, vec![0u8, 0, 0, 0, 1]); // shaping_track @ s4
+
+        // Sanity: analog lanes were all zero in this test.
+        assert_eq!(wf.analog_probe1, vec![0i16; 5]);
+        assert_eq!(wf.analog_probe2, vec![0i16; 5]);
+        assert_eq!(wf.analog_probe3, vec![0i16; 5]);
     }
 }

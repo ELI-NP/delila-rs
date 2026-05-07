@@ -410,10 +410,17 @@ export function createDefaultMonitorState(): MonitorState {
 export interface Waveform {
   analog_probe1: number[];
   analog_probe2: number[];
+  /** AMax debug FW: triangle filter wave (signed 16-bit). Empty `[]` on
+   *  legacy AMax / PSD2 / PHA2 / PHA1 / PSD1 paths. Optional for BC with
+   *  old `.delila` payloads. */
+  analog_probe3?: number[];
   digital_probe1: number[]; // Packed bits
   digital_probe2: number[];
   digital_probe3: number[];
   digital_probe4: number[];
+  /** AMax debug FW: shaping_track (1-bit per sample). Empty `[]` on
+   *  legacy paths. Optional for BC with old `.delila` payloads. */
+  digital_probe5?: number[];
   time_resolution: number;
   trigger_threshold: number;
   ns_per_sample?: number;
@@ -425,19 +432,26 @@ export interface Waveform {
   analog_probe1_is_signed?: boolean;
   /** Same as `analog_probe1_is_signed` for the second analog probe. */
   analog_probe2_is_signed?: boolean;
+  /** Same as `analog_probe1_is_signed` for the third analog probe (AMax
+   *  debug FW). */
+  analog_probe3_is_signed?: boolean;
   /** Probe-type identifier per analog probe — PHA2 canonical encoding:
    *  0=ADCInput / 1=TimeFilter / 2=EnergyFilter / 3=EnergyFilterBaseline
    *  / 4=EnergyFilterMinusBaseline / 0xFF=Unknown (FW that doesn't carry
-   *  typed probe info on the wire). The waveform UI maps these to display
-   *  labels like "A0: TimeFilter". Optional for BC with old `.delila`. */
-  analog_probe_type?: [number, number];
+   *  typed probe info on the wire). AMax debug FW uses 0x40+ codes
+   *  (0x40=Raw / 0x41=Trapezoidal / 0x42=Triangle). The waveform UI maps
+   *  these to display labels like "A0: TimeFilter". Optional for BC with
+   *  old `.delila`. */
+  analog_probe_type?: [number, number, number];
   /** Probe-type identifier per digital probe — PHA2 canonical encoding:
    *  0=Trigger / 1=TimeFilterArmed / 2=ReTriggerGuard /
    *  3=EnergyFilterBaselineFreeze / 4=EnergyFilterPeaking /
    *  5=EnergyFilterPeakReady / 6=EnergyFilterPileUpGuard / 7=EventPileUp
    *  / 8=ADCSaturation / 9=ADCSaturationProtection / A=PostSaturationEvent
-   *  / B=EnergyFilterSaturation / C=SignalInhibit / 0xFF=Unknown. */
-  digital_probe_type?: [number, number, number, number];
+   *  / B=EnergyFilterSaturation / C=SignalInhibit / 0xFF=Unknown. AMax
+   *  debug FW uses 0x40+ codes (0x40=Trigger Out / 0x41=BL Hold /
+   *  0x42=Energy Ready / 0x43=Shaping Ready / 0x44=Shaping Tracking). */
+  digital_probe_type?: [number, number, number, number, number];
 }
 
 /** Sentinel matching `UNKNOWN_PROBE_TYPE` in src/common/mod.rs.
@@ -446,16 +460,21 @@ export interface Waveform {
 export const UNKNOWN_PROBE_TYPE = 0xff;
 
 /** PHA2 canonical analog-probe-type → label, per CAEN doxygen
- *  `legacy/PHA2_Parameters/a00108.html`. */
+ *  `legacy/PHA2_Parameters/a00108.html`. AMax debug FW codes start at
+ *  0x40 (disjoint from the 0x00..0x0C PHA2 range). */
 export const ANALOG_PROBE_TYPE_LABELS: Record<number, string> = {
   0x00: 'ADCInput',
   0x01: 'TimeFilter',
   0x02: 'EnergyFilter',
   0x03: 'EnergyFilterBaseline',
   0x04: 'EnergyFilterMinusBaseline',
+  0x40: 'Raw',
+  0x41: 'Trapezoidal',
+  0x42: 'Triangle',
 };
 
-/** PHA2 canonical digital-probe-type → label. */
+/** PHA2 canonical digital-probe-type → label. AMax debug FW codes start
+ *  at 0x40 (disjoint from the 0x00..0x0C PHA2 range). */
 export const DIGITAL_PROBE_TYPE_LABELS: Record<number, string> = {
   0x00: 'Trigger',
   0x01: 'TimeFilterArmed',
@@ -470,6 +489,11 @@ export const DIGITAL_PROBE_TYPE_LABELS: Record<number, string> = {
   0x0a: 'PostSaturationEvent',
   0x0b: 'EnergyFilterSaturation',
   0x0c: 'SignalInhibit',
+  0x40: 'Trigger Out',
+  0x41: 'BL Hold',
+  0x42: 'Energy Ready',
+  0x43: 'Shaping Ready',
+  0x44: 'Shaping Tracking',
 };
 
 // Latest waveform response

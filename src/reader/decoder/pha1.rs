@@ -104,8 +104,8 @@ pub fn calculate_sw_fine_fraction_pha(before_zc: u16, after_zc: u16) -> f64 {
 pub fn decode_energy_word(word: u32) -> (u16, u16, bool) {
     let energy = (word & physics_bits::ENERGY_MASK) as u16;
     let pileup = ((word >> physics_bits::PILEUP_SHIFT) & 1) != 0;
-    let extra_data = ((word >> physics_bits::EXTRA_DATA_SHIFT)
-        & physics_bits::EXTRA_DATA_MASK) as u16;
+    let extra_data =
+        ((word >> physics_bits::EXTRA_DATA_SHIFT) & physics_bits::EXTRA_DATA_MASK) as u16;
     (energy, extra_data, pileup)
 }
 
@@ -171,10 +171,12 @@ fn decode_pha1_waveform(
     Waveform {
         analog_probe1,
         analog_probe2,
+        analog_probe3: vec![],
         digital_probe1,
         digital_probe2,
         digital_probe3: vec![],
         digital_probe4: vec![],
+        digital_probe5: vec![],
         time_resolution: 0,
         trigger_threshold: 0,
         ns_per_sample,
@@ -183,11 +185,12 @@ fn decode_pha1_waveform(
         // around baseline.
         analog_probe1_is_signed: true,
         analog_probe2_is_signed: true,
+        analog_probe3_is_signed: false,
         // PHA1 (DIG1) doesn't carry typed probe info on the wire — probe
         // identity comes from the host-side `vtrace_probe` setting. Emit
         // UNKNOWN.
-        analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
-        digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
+        analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
+        digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
     }
 }
 
@@ -300,7 +303,10 @@ mod tests {
         assert_eq!(offset, 16);
         assert_eq!(wf.analog_probe1.len(), 8);
         assert!(wf.analog_probe2.is_empty());
-        assert_eq!(wf.analog_probe1, vec![100, 200, 300, 400, 500, 600, 700, 800]);
+        assert_eq!(
+            wf.analog_probe1,
+            vec![100, 200, 300, 400, 500, 600, 700, 800]
+        );
         // Negative-sample sign extension regression
         assert!(wf.analog_probe1_is_signed);
         assert_eq!(wf.ns_per_sample, 2.0);
@@ -336,8 +342,14 @@ mod tests {
         let mut offset = 0;
         let wf = decode_pha1_waveform(&buf, &mut offset, &h, 2.0);
 
-        assert_eq!(wf.analog_probe1, vec![200, 200, 400, 400, 600, 600, 800, 800]);
-        assert_eq!(wf.analog_probe2, vec![100, 100, 300, 300, 500, 500, 700, 700]);
+        assert_eq!(
+            wf.analog_probe1,
+            vec![200, 200, 400, 400, 600, 600, 800, 800]
+        );
+        assert_eq!(
+            wf.analog_probe2,
+            vec![100, 100, 300, 300, 500, 500, 700, 700]
+        );
     }
 
     #[test]
@@ -408,7 +420,7 @@ mod tests {
         data.extend(make_dual_channel_header(ch_size as u32));
         push_u32(&mut data, 1000); // time word
         push_u32(&mut data, (50_u32 << 16) | 256); // extras: ext=50, fine=256
-        // energy: extra_data=300 (high 10), pileup=false, energy=4500 (low 15)
+                                                   // energy: extra_data=300 (high 10), pileup=false, energy=4500 (low 15)
         let ew = ((300_u32) << 16) | 4500;
         push_u32(&mut data, ew);
 

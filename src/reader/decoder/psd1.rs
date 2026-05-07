@@ -105,8 +105,8 @@ pub fn calculate_sw_fine_fraction_psd(before_zc: u16, after_zc: u16) -> f64 {
 pub fn decode_charge_word(word: u32) -> (u16, u16, bool) {
     let charge_short = (word & physics_bits::CHARGE_SHORT_MASK) as u16;
     let pileup = ((word >> physics_bits::PILEUP_SHIFT) & 1) != 0;
-    let charge_long = ((word >> physics_bits::CHARGE_LONG_SHIFT)
-        & physics_bits::CHARGE_LONG_MASK) as u16;
+    let charge_long =
+        ((word >> physics_bits::CHARGE_LONG_SHIFT) & physics_bits::CHARGE_LONG_MASK) as u16;
     (charge_long, charge_short, pileup)
 }
 
@@ -169,20 +169,23 @@ fn decode_psd1_waveform(
     Waveform {
         analog_probe1,
         analog_probe2,
+        analog_probe3: vec![],
         digital_probe1,
         digital_probe2,
         digital_probe3: vec![],
         digital_probe4: vec![],
+        digital_probe5: vec![],
         time_resolution: 0,
         trigger_threshold: 0,
         ns_per_sample,
         // PSD1 masks with `0x3FFF` so values land in `[0, 16383]` — unsigned.
         analog_probe1_is_signed: false,
         analog_probe2_is_signed: false,
+        analog_probe3_is_signed: false,
         // PSD1 wf-extras header doesn't carry probe-type info; emit
         // UNKNOWN so the UI falls back to "A0/A1/D0..D3" generic labels.
-        analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
-        digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
+        analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
+        digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
     }
 }
 
@@ -288,7 +291,10 @@ mod tests {
         assert_eq!(offset, 16);
         assert_eq!(wf.analog_probe1.len(), 8);
         assert!(wf.analog_probe2.is_empty());
-        assert_eq!(wf.analog_probe1, vec![100, 200, 300, 400, 500, 600, 700, 800]);
+        assert_eq!(
+            wf.analog_probe1,
+            vec![100, 200, 300, 400, 500, 600, 700, 800]
+        );
         assert!(!wf.analog_probe1_is_signed);
         assert_eq!(wf.ns_per_sample, 2.0);
     }
@@ -306,8 +312,14 @@ mod tests {
         let mut offset = 0;
         let wf = decode_psd1_waveform(&buf, &mut offset, &h, 2.0);
 
-        assert_eq!(wf.analog_probe1, vec![200, 200, 400, 400, 600, 600, 800, 800]);
-        assert_eq!(wf.analog_probe2, vec![100, 100, 300, 300, 500, 500, 700, 700]);
+        assert_eq!(
+            wf.analog_probe1,
+            vec![200, 200, 400, 400, 600, 600, 800, 800]
+        );
+        assert_eq!(
+            wf.analog_probe2,
+            vec![100, 100, 300, 300, 500, 500, 700, 700]
+        );
     }
 
     #[test]
@@ -402,4 +414,3 @@ mod tests {
         assert_eq!(Psd1Variant::FW_NAME, "PSD1");
     }
 }
-

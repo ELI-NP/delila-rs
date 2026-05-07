@@ -102,10 +102,12 @@ fn main() {
     let mut has_waveform: Vec<u8> = Vec::new();
     let mut analog_probe_type0: Vec<u8> = Vec::new();
     let mut analog_probe_type1: Vec<u8> = Vec::new();
+    let mut analog_probe_type2: Vec<u8> = Vec::new();
     let mut digital_probe_type0: Vec<u8> = Vec::new();
     let mut digital_probe_type1: Vec<u8> = Vec::new();
     let mut digital_probe_type2: Vec<u8> = Vec::new();
     let mut digital_probe_type3: Vec<u8> = Vec::new();
+    let mut digital_probe_type4: Vec<u8> = Vec::new();
 
     let start = Instant::now();
     let mut total_events = 0usize;
@@ -163,14 +165,16 @@ fn main() {
                         // event without a waveform also gets 0xFF.
                         let (apt, dpt) = match ev.waveform.as_ref() {
                             Some(wf) => (wf.analog_probe_type, wf.digital_probe_type),
-                            None => ([UNKNOWN_PROBE_TYPE; 2], [UNKNOWN_PROBE_TYPE; 4]),
+                            None => ([UNKNOWN_PROBE_TYPE; 3], [UNKNOWN_PROBE_TYPE; 5]),
                         };
                         analog_probe_type0.push(apt[0]);
                         analog_probe_type1.push(apt[1]);
+                        analog_probe_type2.push(apt[2]);
                         digital_probe_type0.push(dpt[0]);
                         digital_probe_type1.push(dpt[1]);
                         digital_probe_type2.push(dpt[2]);
                         digital_probe_type3.push(dpt[3]);
+                        digital_probe_type4.push(dpt[4]);
                         file_events += 1;
                     }
                 }
@@ -221,10 +225,12 @@ fn main() {
     tree.new_branch("HasWaveform", has_waveform.into_iter());
     tree.new_branch("AnalogProbeType0", analog_probe_type0.into_iter());
     tree.new_branch("AnalogProbeType1", analog_probe_type1.into_iter());
+    tree.new_branch("AnalogProbeType2", analog_probe_type2.into_iter());
     tree.new_branch("DigitalProbeType0", digital_probe_type0.into_iter());
     tree.new_branch("DigitalProbeType1", digital_probe_type1.into_iter());
     tree.new_branch("DigitalProbeType2", digital_probe_type2.into_iter());
     tree.new_branch("DigitalProbeType3", digital_probe_type3.into_iter());
+    tree.new_branch("DigitalProbeType4", digital_probe_type4.into_iter());
 
     tree.write(&mut file)
         .unwrap_or_else(|e| panic!("tree.write failed: {:?}", e));
@@ -241,8 +247,5 @@ fn main() {
         out_size as f64 / 1_048_576.0,
         out_size as f64 / write_elapsed.as_secs_f64() / 1_048_576.0,
     );
-    println!(
-        "Input  size: {:.1} MB",
-        total_bytes_in as f64 / 1_048_576.0
-    );
+    println!("Input  size: {:.1} MB", total_bytes_in as f64 / 1_048_576.0);
 }

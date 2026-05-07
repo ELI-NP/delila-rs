@@ -18,7 +18,9 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type};
+use syn::{
+    parse_macro_input, Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type,
+};
 
 /// Field classification for the merge codegen.
 enum FieldKind {

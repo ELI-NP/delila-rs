@@ -359,12 +359,7 @@ impl MonitorState {
     /// Look up (or create) the 2D plot for `(key, x, y)` and return an
     /// immutable reference to the histogram. Updates `last_accessed` so the
     /// plot survives the TTL evictor on the next sweep.
-    pub fn ensure_plot(
-        &mut self,
-        key: ChannelKey,
-        x: AxisSource,
-        y: AxisSource,
-    ) -> &Histogram2D {
+    pub fn ensure_plot(&mut self, key: ChannelKey, x: AxisSource, y: AxisSource) -> &Histogram2D {
         let plot_key = (key, x, y);
         if !self.histograms2d.contains_key(&plot_key) {
             let x_cfg = self.axis_config(x);
@@ -378,10 +373,7 @@ impl MonitorState {
                 },
             );
         }
-        let entry = self
-            .histograms2d
-            .get_mut(&plot_key)
-            .expect("just inserted");
+        let entry = self.histograms2d.get_mut(&plot_key).expect("just inserted");
         entry.last_accessed = Instant::now();
         &entry.hist
     }
@@ -1761,8 +1753,14 @@ mod tests {
         };
         state.process_event(event);
 
-        let h0 = state.userinfo_histograms.get(&(key, AxisSource::UserInfo0)).unwrap();
-        let h1 = state.userinfo_histograms.get(&(key, AxisSource::UserInfo1)).unwrap();
+        let h0 = state
+            .userinfo_histograms
+            .get(&(key, AxisSource::UserInfo0))
+            .unwrap();
+        let h1 = state
+            .userinfo_histograms
+            .get(&(key, AxisSource::UserInfo1))
+            .unwrap();
         assert_eq!(h0.total_counts, 1);
         assert_eq!(h1.total_counts, 1);
         // 1D UserInfo defaults to native (1 bin per ADC count, 16384 bins on

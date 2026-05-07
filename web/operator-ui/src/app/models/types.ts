@@ -337,8 +337,8 @@ export interface RegisterWrite {
 // The interface is auto-generated from RegisterFile.json + fw_params.json
 // — see `cargo run --bin amax_codegen`. Re-exported here so existing
 // imports (`./types`) keep working.
-import type { AMaxChannelConfig } from './amax-generated';
-export type { AMaxChannelConfig };
+import type { AMaxBoardConfig, AMaxChannelConfig } from './amax-generated';
+export type { AMaxBoardConfig, AMaxChannelConfig };
 
 // Digitizer configuration
 export interface DigitizerConfig {
@@ -356,6 +356,9 @@ export interface DigitizerConfig {
   channel_names?: Record<number, string>;
   // V1743 Standard mode only (firmware === 'X743Std')
   x743?: X743Config;
+  // AMax board-level (global) registers — currently the debug-FW
+  // `ENABLE_ACQ` toggle. Optional so legacy AMax configs keep working.
+  amax_board?: AMaxBoardConfig;
 }
 
 // Detected digitizer from hardware probe

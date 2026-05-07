@@ -142,14 +142,20 @@ fn run() -> anyhow::Result<()> {
         );
     }
 
-    let url = args.url.clone().unwrap_or_else(|| default_url(args.firmware).to_string());
+    let url = args
+        .url
+        .clone()
+        .unwrap_or_else(|| default_url(args.firmware).to_string());
     let target_rate_khz = 1_000_000_000.0 / args.test_pulse_period_ns as f64 / 1000.0;
 
     println!("=== CAEN Simple Test ===");
     println!("firmware:          {:?}", args.firmware);
     println!("URL:               {}", url);
     println!("record_length_ns:  {}", args.record_length_ns);
-    println!("test_pulse_period: {} ns ({:.1} kHz)", args.test_pulse_period_ns, target_rate_khz);
+    println!(
+        "test_pulse_period: {} ns ({:.1} kHz)",
+        args.test_pulse_period_ns, target_rate_khz
+    );
     println!("duration:          {} s", args.duration_s);
     println!("no_waveform:       {}", args.no_waveform);
     if let Some(ref dp) = args.digital_probes {
@@ -170,7 +176,10 @@ fn run() -> anyhow::Result<()> {
     // (handled below for the analog probes).
     println!("[3] Configure");
     handle.set_value("/par/globaltriggersource", "TestPulse")?;
-    handle.set_value("/par/testpulseperiod", &args.test_pulse_period_ns.to_string())?;
+    handle.set_value(
+        "/par/testpulseperiod",
+        &args.test_pulse_period_ns.to_string(),
+    )?;
     handle.set_value("/par/testpulsewidth", "104")?; // step=8 (CAEN snaps 100→104)
     handle.set_value("/par/testpulselowlevel", "0")?;
     handle.set_value("/par/testpulsehighlevel", "6000")?;
@@ -183,7 +192,10 @@ fn run() -> anyhow::Result<()> {
     handle.set_value("/ch/0/par/dcoffset", "50.0")?;
     handle.set_value("/ch/0/par/triggerthr", "100")?;
     handle.set_value("/ch/0/par/eventtriggersource", "GlobalTriggerSource")?;
-    handle.set_value("/ch/0/par/chrecordlengtht", &args.record_length_ns.to_string())?;
+    handle.set_value(
+        "/ch/0/par/chrecordlengtht",
+        &args.record_length_ns.to_string(),
+    )?;
     handle.set_value("/ch/0/par/chpretriggert", "1024")?;
 
     if args.no_waveform {
@@ -210,7 +222,10 @@ fn run() -> anyhow::Result<()> {
             ]
         });
         if probes.len() != 4 {
-            anyhow::bail!("--digital-probes needs exactly 4 names, got {}", probes.len());
+            anyhow::bail!(
+                "--digital-probes needs exactly 4 names, got {}",
+                probes.len()
+            );
         }
         for (i, p) in probes.iter().enumerate() {
             handle.set_value(&format!("/ch/0/par/wavedigitalprobe{i}"), p)?;

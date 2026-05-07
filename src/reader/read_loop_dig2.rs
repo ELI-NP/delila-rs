@@ -232,7 +232,7 @@ pub(crate) fn run(
                         Ok(Some(evt)) => {
                             drained += 1;
                             let event_data = opendpp_to_event_data(&evt, config.module_id);
-                            let _ = tx.try_send(ReadLoopOutput::Decoded(event_data));
+                            let _ = tx.try_send(ReadLoopOutput::Decoded(Box::new(event_data)));
                         }
                         _ => break,
                     }
@@ -318,10 +318,7 @@ pub(crate) fn run(
                                                 .apply_amax_channel_config(&dig_config)
                                                 .map(|m| n + m)
                                                 .map_err(|e| {
-                                                    format!(
-                                                        "Failed to apply AMax registers: {}",
-                                                        e
-                                                    )
+                                                    format!("Failed to apply AMax registers: {}", e)
                                                 })
                                         })
                                     } else {
@@ -351,13 +348,11 @@ pub(crate) fn run(
                                 conn.handle
                                     .apply_config_running_validated(&dig_config, cache)
                                     .map(|r| r.ok + r.adjusted)
-                                    .map_err(|e| {
-                                        format!("Failed to apply SetInRun config: {}", e)
-                                    })
+                                    .map_err(|e| format!("Failed to apply SetInRun config: {}", e))
                             } else {
-                                conn.handle.apply_config_running(&dig_config).map_err(|e| {
-                                    format!("Failed to apply SetInRun config: {}", e)
-                                })
+                                conn.handle
+                                    .apply_config_running(&dig_config)
+                                    .map_err(|e| format!("Failed to apply SetInRun config: {}", e))
                             }
                         }
                         None => Err("Not connected to digitizer".to_string()),
@@ -403,7 +398,7 @@ pub(crate) fn run(
 
                     // Convert OpenDPP event to EventData
                     let event_data = opendpp_to_event_data(&event, config.module_id);
-                    let output = ReadLoopOutput::Decoded(event_data);
+                    let output = ReadLoopOutput::Decoded(Box::new(event_data));
 
                     // Update queue length metric
                     metrics.queue_length.fetch_add(1, Ordering::Relaxed);

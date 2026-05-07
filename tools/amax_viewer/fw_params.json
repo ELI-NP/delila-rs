@@ -16,21 +16,26 @@
     "TRAP_GAIN":        { "bits": 24, "default": 2500,    "label": "Trap Gain",      "category": "energy",   "type": "number" },
     "BL_LEN":           { "bits": 4,  "default": 6,       "label": "BL Length (MCA)","category": "energy",   "type": "number" },
     "BL_INIB":          { "bits": 16, "default": 1200,    "label": "BL Inhibit",     "category": "energy",   "type": "number", "unit": "samp" },
-    "SAMPLE_POS":       { "bits": 16, "default": 1800,    "label": "Sample Pos",     "category": "energy",   "type": "number", "unit": "samp" },
+    "SAMPLE_POS":       { "bits": 16, "default": 510,     "label": "Sample Pos",     "category": "energy",   "type": "number", "unit": "samp" },
     "RUN_CFG":          { "bits": 1,  "default": 1,       "label": "Run Enable",     "category": "input",    "type": "enum",   "options": ["0", "1"] },
     "WINDOW_MAXIM":     { "bits": 32, "default": 500,     "label": "Max Window",     "category": "energy",   "type": "number", "unit": "samp", "ui_max": 1000000 },
     "baseline_delay":   { "bits": 32, "default": 200,     "label": "BL Delay (AMax)","category": "energy",   "type": "number", "unit": "samp", "ui_max": 1000000 },
     "baseline_len":     { "bits": 16, "default": 6,       "label": "BL Length (AMax)","category": "energy",  "type": "number" },
     "baseline_offset":  { "bits": 16, "default": 1000,    "label": "BL Offset (AMax)","category": "energy",  "type": "number" },
     "AMAX_window":      { "bits": 32, "default": 1000,    "label": "AMax Window",    "category": "energy",   "type": "number", "unit": "samp", "ui_max": 1000000 },
+    "AMAX_delay":       { "bits": 32, "default": 32,      "label": "AMax Delay",     "category": "energy",   "type": "number", "unit": "samp", "ui_max": 1000000 },
     "AMAX_len":         { "bits": 16, "default": 5,       "label": "AMax Length",    "category": "energy",   "type": "number", "unit": "samp" },
     "DELAY_SHAPING":    { "bits": 32, "default": 32,      "label": "Delay Shaping",  "category": "energy",   "type": "number", "unit": "samp", "ui_max": 1000000 },
-    "SHAP_TRIGG":       { "bits": 16, "default": 0,       "label": "Shaping Trigger","category": "trigger",  "type": "number", "unit": "samp" },
-    "SHAP_BL_HOLD":     { "bits": 16, "default": 0,       "label": "Shaping BL Hold","category": "energy",   "type": "number", "unit": "samp" },
-    "PRETRIGGER_INPUT": { "bits": 32, "default": 600,     "label": "Pretrig Input",  "category": "waveform", "type": "number", "unit": "samp", "ui_max": 1000000 },
+    "SHAP_TRIGG":       { "bits": 32, "default": 700,     "label": "Shaping Trigger","category": "trigger",  "type": "number", "unit": "samp", "ui_max": 1000000 },
+    "SHAP_BL_HOLD":     { "bits": 32, "default": 700,     "label": "Shaping BL Hold","category": "energy",   "type": "number", "unit": "samp", "ui_max": 1000000 },
+    "PRETRIGGER_INPUT": { "bits": 32, "default": 1800,    "label": "Pretrig Input",  "category": "waveform", "type": "number", "unit": "samp", "ui_max": 1000000 },
     "PRETRIGGER_TRAP":  { "bits": 32, "default": 600,     "label": "Pretrig Trap",   "category": "waveform", "type": "number", "unit": "samp", "ui_max": 1000000 },
     "PRETRIGGER_AMAX":  { "bits": 32, "default": 600,     "label": "Pretrig AMax",   "category": "waveform", "type": "number", "unit": "samp", "ui_max": 1000000 },
     "selector_wave":    { "bits": 1,  "default": 0,       "label": "Wave Selector",  "category": "waveform", "type": "enum",   "options": ["0", "1"] }
+  },
+  "_board_params_doc": "Global (non-per-channel) writable registers. Surfaces as AMaxBoardConfig + AMAX_BOARD_DEFAULTS in generated code; rendered above the channel table in the Settings UI.",
+  "board_params": {
+    "ENABLE_ACQ": { "bits": 1, "default": 0, "label": "Enable Debug Acquisition", "category": "debug", "type": "enum", "options": ["0", "1"] }
   },
   "readonly_patterns": [
     "ENERGY_MAIN",
@@ -38,7 +43,6 @@
     "ENERGY_MAIN_LATCH",
     "debug_amax_out",
     "READ_ENERGY",
-    "maxim_outt",
-    "Delayed_READ"
+    "maxim_outt"
   ]
 }

@@ -340,13 +340,11 @@ pub(crate) fn run(
                                 conn.handle
                                     .apply_config_running_validated(&dig_config, cache)
                                     .map(|r| r.ok + r.adjusted)
-                                    .map_err(|e| {
-                                        format!("Failed to apply SetInRun config: {}", e)
-                                    })
+                                    .map_err(|e| format!("Failed to apply SetInRun config: {}", e))
                             } else {
-                                conn.handle.apply_config_running(&dig_config).map_err(|e| {
-                                    format!("Failed to apply SetInRun config: {}", e)
-                                })
+                                conn.handle
+                                    .apply_config_running(&dig_config)
+                                    .map_err(|e| format!("Failed to apply SetInRun config: {}", e))
                             }
                         }
                         None => Err("Not connected to digitizer".to_string()),

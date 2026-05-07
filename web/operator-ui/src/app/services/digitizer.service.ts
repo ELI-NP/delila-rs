@@ -6,7 +6,12 @@ import {
   ApiResponse,
   DetectResponse,
 } from '../models/types';
-import { AMAX_DOTTED_KEYS } from '../models/amax-generated';
+import {
+  AMAX_BOARD_DEFAULTS,
+  AMAX_BOARD_DOTTED_KEYS,
+  AMAX_DOTTED_KEYS,
+  AMaxBoardConfig,
+} from '../models/amax-generated';
 import { firstValueFrom } from 'rxjs';
 
 /**
@@ -155,6 +160,12 @@ function writeDottedToChannel(cfg: ChannelConfig, dotted: string, value: unknown
     obj = obj[p] as Record<string, unknown>;
   }
   obj[parts[parts.length - 1]] = value;
+}
+
+/** Strip the `amax.board.` prefix from a dotted key — board params live in
+ *  `DigitizerConfig.amax_board.<field>`, not nested under `amax.board`. */
+function boardField(dotted: string): string {
+  return dotted.replace(/^amax\.board\./, '');
 }
 
 @Injectable({
@@ -418,6 +429,44 @@ export class DigitizerService {
     }
 
     return { channel_defaults, channel_overrides };
+  }
+
+  /**
+   * Read board-level (global) AMax values from a DigitizerConfig as a flat
+   * Record keyed by `amax.board.<field>`. Falls back to `AMAX_BOARD_DEFAULTS`
+   * for any field the config doesn't explicitly set, so the Settings UI
+   * always renders a value.
+   */
+  extractBoardValues(config: DigitizerConfig): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    const board = config.amax_board ?? {};
+    for (const dotted of AMAX_BOARD_DOTTED_KEYS) {
+      const field = boardField(dotted);
+      const v = (board as Record<string, unknown>)[field];
+      result[dotted] = v !== undefined ? v : AMAX_BOARD_DEFAULTS[field];
+    }
+    return result;
+  }
+
+  /**
+   * Compress flat board-level values (keyed by `amax.board.<field>`) back
+   * into an `AMaxBoardConfig`. Returns `undefined` when every value matches
+   * the FW defaults so the wire format stays minimal (and legacy configs
+   * without an `amax_board` block round-trip cleanly).
+   */
+  compressBoardValues(values: Record<string, unknown>): AMaxBoardConfig | undefined {
+    const out: Record<string, unknown> = {};
+    let hasNonDefault = false;
+    for (const dotted of AMAX_BOARD_DOTTED_KEYS) {
+      const field = boardField(dotted);
+      const v = values[dotted];
+      if (v === undefined || v === null) continue;
+      out[field] = v;
+      if (v !== AMAX_BOARD_DEFAULTS[field]) {
+        hasNonDefault = true;
+      }
+    }
+    return hasNonDefault ? (out as AMaxBoardConfig) : undefined;
   }
 
   // ===========================================================================

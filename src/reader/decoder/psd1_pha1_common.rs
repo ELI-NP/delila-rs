@@ -280,8 +280,7 @@ impl<V: Dig1Variant> Dig1Decoder<V> {
             return DataType::Unknown;
         }
         let word0 = read_u32(&raw.data, 0);
-        let header_type =
-            (word0 >> board_header_bits::TYPE_SHIFT) & board_header_bits::TYPE_MASK;
+        let header_type = (word0 >> board_header_bits::TYPE_SHIFT) & board_header_bits::TYPE_MASK;
         if header_type == board_header_bits::TYPE_DATA {
             DataType::Event
         } else {
@@ -611,8 +610,8 @@ pub fn decode_board_header(data: &[u8], offset: usize) -> Result<Dig1BoardHeader
 
     Ok(Dig1BoardHeader {
         aggregate_size: w0 & board_header_bits::AGGREGATE_SIZE_MASK,
-        board_id: ((w1 >> board_header_bits::BOARD_ID_SHIFT)
-            & board_header_bits::BOARD_ID_MASK) as u8,
+        board_id: ((w1 >> board_header_bits::BOARD_ID_SHIFT) & board_header_bits::BOARD_ID_MASK)
+            as u8,
         board_fail: ((w1 >> board_header_bits::BOARD_FAIL_SHIFT) & 1) != 0,
         dual_channel_mask: (w1 & board_header_bits::DUAL_CHANNEL_MASK) as u8,
         aggregate_counter: w2 & board_header_bits::COUNTER_MASK,
@@ -656,8 +655,8 @@ pub fn decode_extras_word(word: u32, extra_option: u8) -> ExtrasDecoded {
     match extra_option {
         // 0b010: Extended time + flags + fine time
         2 => {
-            let extended_time = ((word >> event_bits::EXTENDED_TIME_SHIFT)
-                & event_bits::EXTENDED_TIME_MASK) as u16;
+            let extended_time =
+                ((word >> event_bits::EXTENDED_TIME_SHIFT) & event_bits::EXTENDED_TIME_MASK) as u16;
             let flags = (word >> event_bits::FLAGS_SHIFT) & event_bits::FLAGS_MASK;
             let fine_time = (word & event_bits::FINE_TIME_MASK) as u16;
             ExtrasDecoded::HwFineTs {
@@ -679,8 +678,8 @@ pub fn decode_extras_word(word: u32, extra_option: u8) -> ExtrasDecoded {
         }
         // 0b001: Extended time + flags (16-bit)
         1 => {
-            let extended_time = ((word >> event_bits::EXTENDED_TIME_SHIFT)
-                & event_bits::EXTENDED_TIME_MASK) as u16;
+            let extended_time =
+                ((word >> event_bits::EXTENDED_TIME_SHIFT) & event_bits::EXTENDED_TIME_MASK) as u16;
             let flags = word & 0xFFFF;
             ExtrasDecoded::HwFineTs {
                 extended_time,
@@ -690,8 +689,8 @@ pub fn decode_extras_word(word: u32, extra_option: u8) -> ExtrasDecoded {
         }
         // 0b000 and others: Extended time + baseline×4 (PSD1) / baseline (PHA1)
         _ => {
-            let extended_time = ((word >> event_bits::EXTENDED_TIME_SHIFT)
-                & event_bits::EXTENDED_TIME_MASK) as u16;
+            let extended_time =
+                ((word >> event_bits::EXTENDED_TIME_SHIFT) & event_bits::EXTENDED_TIME_MASK) as u16;
             ExtrasDecoded::HwFineTs {
                 extended_time,
                 fine_time: 0,
@@ -1093,7 +1092,10 @@ mod tests {
         let total_size = 4 + ch_size;
 
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, false));
         push_u32(&mut data, make_extras_word(0, 0, 100));
         push_u32(&mut data, make_physics_word(5000, 500, false));
@@ -1114,7 +1116,10 @@ mod tests {
         let ch_size = 2 + 3;
         let total_size = 4 + ch_size;
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, true)); // odd channel flag
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(100, 50, false));
@@ -1131,7 +1136,10 @@ mod tests {
         let total_size = 4 + ch_size;
         // mask = 0x04 → pair index 2 → channel 4 (even flag)
         let mut data = make_board_header(total_size as u32, 0x04, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(100, 50, false));
@@ -1147,7 +1155,10 @@ mod tests {
         let ch_size = 2 + 3;
         let total_size = 4 + ch_size;
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(100, 50, true)); // pileup
@@ -1163,7 +1174,10 @@ mod tests {
         let ch_size = 2 + 3 * 2;
         let total_size = 4 + ch_size;
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         // Later event first
         push_u32(&mut data, make_time_word(5000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
@@ -1188,13 +1202,19 @@ mod tests {
         let mut data = Vec::new();
 
         data.extend(make_board_header(block_size as u32, 0x01, 0, 1));
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(100, 50, false));
 
         data.extend(make_board_header(block_size as u32, 0x01, 0, 2));
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(2000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(200, 100, false));
@@ -1271,7 +1291,10 @@ mod tests {
         let ch_size = 2 + 3;
         let total_size = 4 + ch_size;
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(100, 50, false));
@@ -1286,7 +1309,10 @@ mod tests {
         let ch_size = 2 + 3;
         let total_size = 4 + ch_size;
         let mut data = make_board_header(total_size as u32, 0x01, 0, 1);
-        data.extend(make_dual_channel_header(ch_size as u32, &ChFlags::default()));
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags::default(),
+        ));
         push_u32(&mut data, make_time_word(1000, false));
         push_u32(&mut data, make_extras_word(0, 0, 0));
         push_u32(&mut data, make_physics_word(100, 50, false));

@@ -354,6 +354,7 @@ mod tests {
             channel_overrides: std::collections::HashMap::new(),
             channel_names: None,
             x743: None,
+            amax_board: None,
         }
     }
 

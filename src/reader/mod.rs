@@ -377,11 +377,14 @@ pub enum ReaderError {
 /// Internal message type from ReadLoop to DecodeLoop
 ///
 /// Supports both RAW data (requiring decoding) and pre-decoded events (from OpenDPP).
+/// `Decoded` boxes its payload because `EventData` carries the (now 3-analog /
+/// 5-digital) `Waveform` inline; without the box clippy flags the variant size
+/// difference vs `Raw(decoder::RawData)`.
 pub(crate) enum ReadLoopOutput {
     /// Raw data that needs decoding (PSD1/PSD2/PHA1)
     Raw(decoder::RawData),
     /// Already decoded event from OpenDPP (AMax)
-    Decoded(decoder::EventData),
+    Decoded(Box<decoder::EventData>),
     /// Start signal — triggers decoder state reset (RolloverTracker etc.)
     Start,
     /// Stop signal — triggers EOS publication in DecodeLoop
@@ -421,6 +424,27 @@ const AMAX_FLAGS_A_SHIFT: u32 = 12;
 /// * `analog_probe_type` / `digital_probe_type` are `UNKNOWN_PROBE_TYPE`
 ///   because OpenDPP doesn't carry probe-type metadata on the wire (added
 ///   in Phase 4.5 for PHA2 only).
+///
+/// # AMax debug FW caveat (2026-05-07)
+///
+/// The new debug firmware (`AMAX_firmware32_channel_4input_caenlist`) raises
+/// a per-event `SE` (Special Event) bool on ch0 when its `ENABLE_ACQ`
+/// register = 1. The bit lives in the raw CAENList event header (Word 0
+/// bit 55) and changes the WAVE payload to a 4-lane debug bundle.
+///
+/// **The OpenDPP FFI used here does NOT currently surface SE.** The format
+/// JSON in `configure_opendpp_endpoint` (handle.rs:609) only requests
+/// CHANNEL/TIMESTAMP/.../WAVEFORM. To plumb SE through this path:
+/// 1. Add `{"name": "SPECIAL_EVENT", "type": "BOOL"}` to the format JSON
+///    (verify field name against CAEN FELib for the new FW).
+/// 2. Add `special_event: bool` to `OpenDppEvent` and the FFI read
+///    function (`handle.rs::read_opendpp_event*`).
+/// 3. In this fn, branch on `event.special_event` to call a new
+///    `opendpp_debug_to_event_data` that unpacks the 4-lane WAVE.
+///
+/// Until then, the offline raw-bytes decode path
+/// (`AMaxDecoder::decode_event`) handles SE correctly — debug-mode
+/// `.delila` files captured with `caen_simple_test` already work end-to-end.
 pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventData {
     let coarse_time_ns = (event.timestamp as f64) * AMAX_TIME_STEP_NS;
     let fine_time_ns = (event.fine_timestamp as f64 / AMAX_FINE_TIME_SCALE) * AMAX_TIME_STEP_NS;
@@ -457,17 +481,20 @@ pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> deco
         decoder::common::Waveform {
             analog_probe1,
             analog_probe2: Vec::new(),
+            analog_probe3: Vec::new(),
             digital_probe1: Vec::new(),
             digital_probe2: Vec::new(),
             digital_probe3: Vec::new(),
             digital_probe4: Vec::new(),
+            digital_probe5: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: AMAX_TIME_STEP_NS,
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
-            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
-            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 4],
+            analog_probe3_is_signed: false,
+            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
+            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 5],
         }
     });
 
@@ -1026,7 +1053,9 @@ pub(crate) fn try_connect_opendpp(url: &str, include_waveform: bool) -> Option<D
 }
 
 /// Extract enabled channel indices from a DigitizerConfig.
-pub(crate) fn get_enabled_channels_from_config(config: &crate::config::digitizer::DigitizerConfig) -> Vec<u8> {
+pub(crate) fn get_enabled_channels_from_config(
+    config: &crate::config::digitizer::DigitizerConfig,
+) -> Vec<u8> {
     let default_enabled = config
         .channel_defaults
         .enabled
@@ -1176,9 +1205,14 @@ pub(crate) fn poll_dig2_counters(
 ///
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, the actual arm is deferred to start phase.
 /// For DIG2 (PSD2), always sends armacquisition immediately.
-pub(crate) fn send_arm_command(handle: &CaenHandle, firmware: FirmwareType) -> Result<(), caen::CaenError> {
+pub(crate) fn send_arm_command(
+    handle: &CaenHandle,
+    firmware: FirmwareType,
+) -> Result<(), caen::CaenError> {
     if firmware.is_dig1() {
-        let startmode = handle.get_value(devtree::par::START_MODE).unwrap_or_default();
+        let startmode = handle
+            .get_value(devtree::par::START_MODE)
+            .unwrap_or_default();
         if startmode == "START_MODE_SW" {
             info!("START_MODE_SW detected - deferring arm to Start");
         } else {
@@ -1196,9 +1230,14 @@ pub(crate) fn send_arm_command(handle: &CaenHandle, firmware: FirmwareType) -> R
 ///
 /// For DIG2 (PSD2), sends swstartacquisition.
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, sends armacquisition (arm=start).
-pub(crate) fn send_start_command(handle: &CaenHandle, firmware: FirmwareType) -> Result<(), caen::CaenError> {
+pub(crate) fn send_start_command(
+    handle: &CaenHandle,
+    firmware: FirmwareType,
+) -> Result<(), caen::CaenError> {
     if firmware.is_dig1() {
-        let startmode = handle.get_value(devtree::par::START_MODE).unwrap_or_default();
+        let startmode = handle
+            .get_value(devtree::par::START_MODE)
+            .unwrap_or_default();
         if startmode == "START_MODE_SW" {
             info!("Starting acquisition (DIG1, START_MODE_SW)");
             handle.send_command(devtree::cmd::ARM_ACQUISITION)?;
@@ -1309,15 +1348,18 @@ impl Reader {
                 CommonWaveform {
                     analog_probe1: wf.analog_probe1,   // move, not clone
                     analog_probe2: wf.analog_probe2,   // move
+                    analog_probe3: wf.analog_probe3,   // move (AMax debug FW)
                     digital_probe1: wf.digital_probe1, // move
                     digital_probe2: wf.digital_probe2, // move
                     digital_probe3: wf.digital_probe3, // move
                     digital_probe4: wf.digital_probe4, // move
+                    digital_probe5: wf.digital_probe5, // move (AMax debug FW)
                     time_resolution: wf.time_resolution,
                     trigger_threshold: wf.trigger_threshold,
                     ns_per_sample: wf.ns_per_sample,
                     analog_probe1_is_signed: wf.analog_probe1_is_signed,
                     analog_probe2_is_signed: wf.analog_probe2_is_signed,
+                    analog_probe3_is_signed: wf.analog_probe3_is_signed,
                     analog_probe_type: wf.analog_probe_type,
                     digital_probe_type: wf.digital_probe_type,
                 },
@@ -1375,7 +1417,6 @@ impl Reader {
         let eos = Message::eos(self.config.source_id, 0);
         self.publish_message(&eos).await
     }
-
 
     /// ReadLoop for V1743 digitizers (CAENDigitizer Library).
     ///
@@ -1622,7 +1663,7 @@ impl Reader {
                                                 );
                                                 for event in events {
                                                     let _ = tx.blocking_send(
-                                                        ReadLoopOutput::Decoded(event),
+                                                        ReadLoopOutput::Decoded(Box::new(event)),
                                                     );
                                                 }
                                                 drained += 1;
@@ -1820,7 +1861,10 @@ impl Reader {
 
                             for event in events {
                                 metrics.queue_length.fetch_add(1, Ordering::Relaxed);
-                                if tx.blocking_send(ReadLoopOutput::Decoded(event)).is_err() {
+                                if tx
+                                    .blocking_send(ReadLoopOutput::Decoded(Box::new(event)))
+                                    .is_err()
+                                {
                                     warn!("ReadLoop channel closed");
                                     return Ok(());
                                 }
@@ -1997,10 +2041,12 @@ impl Reader {
                     Some(decoder::Waveform {
                         analog_probe1: samples_i16,
                         analog_probe2: Vec::new(),
+                        analog_probe3: Vec::new(),
                         digital_probe1: Vec::new(),
                         digital_probe2: Vec::new(),
                         digital_probe3: Vec::new(),
                         digital_probe4: Vec::new(),
+                        digital_probe5: Vec::new(),
                         time_resolution: 0,
                         trigger_threshold: 0,
                         ns_per_sample: params.ns_per_sample,
@@ -2009,8 +2055,9 @@ impl Reader {
                         // type info on the wire.
                         analog_probe1_is_signed: false,
                         analog_probe2_is_signed: false,
-                        analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
-                        digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 4],
+                        analog_probe3_is_signed: false,
+                        analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
+                        digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 5],
                     })
                 } else {
                     None
@@ -2330,7 +2377,7 @@ impl Reader {
                                 sequence_number,
                                 1,
                             );
-                            let common_event = Self::convert_event(event_data, config.firmware);
+                            let common_event = Self::convert_event(*event_data, config.firmware);
                             let ch = common_event.channel as usize;
                             if ch < MAX_CHANNELS {
                                 metrics.per_channel_counts[ch].fetch_add(1, Ordering::Relaxed);
@@ -2703,17 +2750,20 @@ mod tests {
         let wf = Waveform {
             analog_probe1: vec![100, 200, -300],
             analog_probe2: vec![10, 20, -30],
+            analog_probe3: vec![],
             digital_probe1: vec![1, 0, 1],
             digital_probe2: vec![0, 1, 0],
             digital_probe3: vec![1, 1, 0],
             digital_probe4: vec![0, 0, 1],
+            digital_probe5: vec![],
             time_resolution: 2,
             trigger_threshold: 500,
             ns_per_sample: 2.0,
             analog_probe1_is_signed: true,
             analog_probe2_is_signed: true,
-            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 2],
-            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 4],
+            analog_probe3_is_signed: false,
+            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
+            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 5],
         };
 
         let event = EventData {

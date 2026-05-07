@@ -49,8 +49,12 @@ pub const PSD2_AMAX_PARAMS: &[ChannelParamEntry] = &[
     ("DCOffset", |c| c.dc_offset.map(|v| v.to_string())),
     ("ChGain", |c| c.vga_gain.map(|v| v.to_string())),
     ("ADCInputBaselineAvg", |c| c.baseline_avg.clone()),
-    ("AbsoluteBaseline", |c| c.fixed_baseline.map(|v| v.to_string())),
-    ("ChRecordLengthT", |c| c.record_length_ns.map(|v| v.to_string())),
+    ("AbsoluteBaseline", |c| {
+        c.fixed_baseline.map(|v| v.to_string())
+    }),
+    ("ChRecordLengthT", |c| {
+        c.record_length_ns.map(|v| v.to_string())
+    }),
     ("ChPreTriggerT", |c| c.pre_trigger_ns.map(|v| v.to_string())),
     ("WaveDownSamplingFactor", |c| c.wave_downsampling.clone()),
     // ---- Trigger ----
@@ -58,7 +62,9 @@ pub const PSD2_AMAX_PARAMS: &[ChannelParamEntry] = &[
     ("TriggerThr", |c| c.trigger_threshold.map(|v| v.to_string())),
     ("CFDDelayT", |c| c.cfd_delay_ns.map(|v| v.to_string())),
     ("CFDFraction", |c| c.cfd_fraction.clone()),
-    ("TimeFilterRetriggerGuardT", |c| c.trigger_holdoff_ns.map(|v| v.to_string())),
+    ("TimeFilterRetriggerGuardT", |c| {
+        c.trigger_holdoff_ns.map(|v| v.to_string())
+    }),
     ("SmoothingFactor", |c| c.smoothing_factor.clone()),
     ("TimeFilterSmoothing", |c| c.time_filter_smoothing.clone()),
     ("EventTriggerSource", |c| c.event_trigger_source.clone()),
@@ -66,18 +72,28 @@ pub const PSD2_AMAX_PARAMS: &[ChannelParamEntry] = &[
     // ---- Energy ----
     ("EnergyGain", |c| c.energy_coarse_gain.clone()),
     ("GateLongLengthT", |c| c.gate_long_ns.map(|v| v.to_string())),
-    ("GateShortLengthT", |c| c.gate_short_ns.map(|v| v.to_string())),
+    ("GateShortLengthT", |c| {
+        c.gate_short_ns.map(|v| v.to_string())
+    }),
     ("GateOffsetT", |c| c.gate_pre_ns.map(|v| v.to_string())),
-    ("LongChargeIntegratorPedestal", |c| c.charge_pedestal.map(|v| v.to_string())),
-    ("ShortChargeIntegratorPedestal", |c| c.short_charge_pedestal.map(|v| v.to_string())),
+    ("LongChargeIntegratorPedestal", |c| {
+        c.charge_pedestal.map(|v| v.to_string())
+    }),
+    ("ShortChargeIntegratorPedestal", |c| {
+        c.short_charge_pedestal.map(|v| v.to_string())
+    }),
     ("ChargeSmoothing", |c| c.charge_smoothing.clone()),
     // ---- Coincidence ----
     ("ChannelsTriggerMask", |c| c.ch_trigger_mask.clone()),
     ("CoincidenceMask", |c| c.coincidence_mask.clone()),
     ("AntiCoincidenceMask", |c| c.anti_coincidence_mask.clone()),
-    ("CoincidenceLengthT", |c| c.coincidence_window_ns.map(|v| v.to_string())),
+    ("CoincidenceLengthT", |c| {
+        c.coincidence_window_ns.map(|v| v.to_string())
+    }),
     ("ChannelVetoSource", |c| c.ch_veto_source.clone()),
-    ("ADCVetoWidth", |c| c.ch_veto_width_ns.map(|v| v.to_string())),
+    ("ADCVetoWidth", |c| {
+        c.ch_veto_width_ns.map(|v| v.to_string())
+    }),
     ("EventSelector", |c| c.event_selector.clone()),
     // ---- Waveform ----
     ("WaveSaving", |c| c.wave_saving.clone()),
@@ -99,7 +115,9 @@ pub const PHA2_PARAMS: &[ChannelParamEntry] = &[
     ("PulsePolarity", |c| c.polarity.clone()),
     ("DCOffset", |c| c.dc_offset.map(|v| v.to_string())),
     ("ChGain", |c| c.vga_gain.map(|v| v.to_string())),
-    ("ChRecordLengthT", |c| c.record_length_ns.map(|v| v.to_string())),
+    ("ChRecordLengthT", |c| {
+        c.record_length_ns.map(|v| v.to_string())
+    }),
     ("ChPreTriggerT", |c| c.pre_trigger_ns.map(|v| v.to_string())),
     ("WaveDownSamplingFactor", |c| c.wave_downsampling.clone()),
     // ---- Trigger (PHA2 subset) ----
@@ -107,19 +125,43 @@ pub const PHA2_PARAMS: &[ChannelParamEntry] = &[
     ("EventTriggerSource", |c| c.event_trigger_source.clone()),
     ("WaveTriggerSource", |c| c.wave_trigger_source.clone()),
     // ---- Time filter (PHA2 specific) ----
-    ("TimeFilterRiseTimeT", |c| c.time_filter_rise_time_ns.map(|v| v.to_string())),
-    ("TimeFilterRetriggerGuardT", |c| c.time_filter_retrigger_guard_ns.map(|v| v.to_string())),
+    ("TimeFilterRiseTimeT", |c| {
+        c.time_filter_rise_time_ns.map(|v| v.to_string())
+    }),
+    ("TimeFilterRetriggerGuardT", |c| {
+        c.time_filter_retrigger_guard_ns.map(|v| v.to_string())
+    }),
     // ---- Energy filter (PHA2 trapezoidal) ----
-    ("EnergyFilterRiseTimeT", |c| c.energy_filter_rise_time_ns.map(|v| v.to_string())),
-    ("EnergyFilterFlatTopT", |c| c.energy_filter_flat_top_ns.map(|v| v.to_string())),
-    ("EnergyFilterPoleZeroT", |c| c.energy_filter_pole_zero_ns.map(|v| v.to_string())),
-    ("EnergyFilterPeakingPosition", |c| c.energy_filter_peaking_position.map(|v| v.to_string())),
-    ("EnergyFilterPeakingAvg", |c| c.energy_filter_peaking_avg.clone()),
-    ("EnergyFilterBaselineAvg", |c| c.energy_filter_baseline_avg.clone()),
-    ("EnergyFilterBaselineGuardT", |c| c.energy_filter_baseline_guard_ns.map(|v| v.to_string())),
-    ("EnergyFilterPileupGuardT", |c| c.energy_filter_pileup_guard_ns.map(|v| v.to_string())),
-    ("EnergyFilterFineGain", |c| c.energy_filter_fine_gain.map(|v| v.to_string())),
-    ("EnergyFilterLFLimitation", |c| c.energy_filter_lf_limitation.clone()),
+    ("EnergyFilterRiseTimeT", |c| {
+        c.energy_filter_rise_time_ns.map(|v| v.to_string())
+    }),
+    ("EnergyFilterFlatTopT", |c| {
+        c.energy_filter_flat_top_ns.map(|v| v.to_string())
+    }),
+    ("EnergyFilterPoleZeroT", |c| {
+        c.energy_filter_pole_zero_ns.map(|v| v.to_string())
+    }),
+    ("EnergyFilterPeakingPosition", |c| {
+        c.energy_filter_peaking_position.map(|v| v.to_string())
+    }),
+    ("EnergyFilterPeakingAvg", |c| {
+        c.energy_filter_peaking_avg.clone()
+    }),
+    ("EnergyFilterBaselineAvg", |c| {
+        c.energy_filter_baseline_avg.clone()
+    }),
+    ("EnergyFilterBaselineGuardT", |c| {
+        c.energy_filter_baseline_guard_ns.map(|v| v.to_string())
+    }),
+    ("EnergyFilterPileupGuardT", |c| {
+        c.energy_filter_pileup_guard_ns.map(|v| v.to_string())
+    }),
+    ("EnergyFilterFineGain", |c| {
+        c.energy_filter_fine_gain.map(|v| v.to_string())
+    }),
+    ("EnergyFilterLFLimitation", |c| {
+        c.energy_filter_lf_limitation.clone()
+    }),
     // ---- Per-channel S_IN/GPI (PHA2 specific). Default None on most channels. ----
     ("SINFunction", |c| c.sin_function.clone()),
     ("GPIFunction", |c| c.gpi_function.clone()),
@@ -127,9 +169,13 @@ pub const PHA2_PARAMS: &[ChannelParamEntry] = &[
     ("ChannelsTriggerMask", |c| c.ch_trigger_mask.clone()),
     ("CoincidenceMask", |c| c.coincidence_mask.clone()),
     ("AntiCoincidenceMask", |c| c.anti_coincidence_mask.clone()),
-    ("CoincidenceLengthT", |c| c.coincidence_window_ns.map(|v| v.to_string())),
+    ("CoincidenceLengthT", |c| {
+        c.coincidence_window_ns.map(|v| v.to_string())
+    }),
     ("ChannelVetoSource", |c| c.ch_veto_source.clone()),
-    ("ADCVetoWidth", |c| c.ch_veto_width_ns.map(|v| v.to_string())),
+    ("ADCVetoWidth", |c| {
+        c.ch_veto_width_ns.map(|v| v.to_string())
+    }),
     ("EventSelector", |c| c.event_selector.clone()),
     // ---- Waveform (DevTree paths shared with PSD2) ----
     ("WaveSaving", |c| c.wave_saving.clone()),
@@ -148,20 +194,28 @@ pub const PHA2_PARAMS: &[ChannelParamEntry] = &[
 pub const PSD1_PARAMS: &[ChannelParamEntry] = &[
     // ---- Input ----
     ("ch_enabled", |c| c.enabled.clone()),
-    ("ch_polarity", |c| c.polarity.as_deref().map(map_dig1_polarity)),
+    ("ch_polarity", |c| {
+        c.polarity.as_deref().map(map_dig1_polarity)
+    }),
     ("ch_dcoffset", |c| c.dc_offset.map(|v| v.to_string())),
     ("ch_indyn", |c| c.input_dynamic.clone()),
     ("ch_bline_nsmean", |c| c.baseline_avg.clone()),
-    ("ch_bline_fixed", |c| c.fixed_baseline.map(|v| v.to_string())),
+    ("ch_bline_fixed", |c| {
+        c.fixed_baseline.map(|v| v.to_string())
+    }),
     // DevTree expects nanoseconds directly (expuom: -9) for *_ns fields
     ("ch_pretrg", |c| c.pre_trigger_ns.map(|v| v.to_string())),
     // ---- Trigger ----
     ("ch_discr_mode", |c| c.discriminator_mode.clone()),
-    ("ch_threshold", |c| c.trigger_threshold.map(|v| v.to_string())),
+    ("ch_threshold", |c| {
+        c.trigger_threshold.map(|v| v.to_string())
+    }),
     ("ch_cfd_delay", |c| c.cfd_delay_ns.map(|v| v.to_string())),
     ("ch_cfd_fraction", |c| c.cfd_fraction.clone()),
     ("ch_cfd_smoothexp", |c| c.input_smoothing.clone()),
-    ("ch_trg_holdoff", |c| c.trigger_holdoff_ns.map(|v| v.to_string())),
+    ("ch_trg_holdoff", |c| {
+        c.trigger_holdoff_ns.map(|v| v.to_string())
+    }),
     ("ch_self_trg_enable", |c| c.self_trigger.clone()),
     ("ch_trg_global_gen", |c| c.global_trigger_gen.clone()),
     ("ch_out_propagate", |c| c.trigger_out_propagate.clone()),
@@ -179,7 +233,9 @@ pub const PSD1_PARAMS: &[ChannelParamEntry] = &[
     ("ch_trg_latency", |c| c.trigger_latency.clone()),
     ("ch_coinc_mask", |c| c.coinc_mask.map(|v| v.to_string())),
     ("ch_coinc_operation", |c| c.coinc_operation.clone()),
-    ("ch_coinc_majlev", |c| c.coinc_majority_level.map(|v| v.to_string())),
+    ("ch_coinc_majlev", |c| {
+        c.coinc_majority_level.map(|v| v.to_string())
+    }),
     ("ch_coinc_trgext", |c| c.coinc_trgext.clone()),
     ("ch_coinc_trgsw", |c| c.coinc_trgsw.clone()),
     ("ch_purgap", |c| c.pileup_gap.map(|v| v.to_string())),
@@ -193,26 +249,40 @@ pub const PSD1_PARAMS: &[ChannelParamEntry] = &[
 pub const PHA1_PARAMS: &[ChannelParamEntry] = &[
     // ---- Input ----
     ("ch_enabled", |c| c.enabled.clone()),
-    ("ch_polarity", |c| c.polarity.as_deref().map(map_dig1_polarity)),
+    ("ch_polarity", |c| {
+        c.polarity.as_deref().map(map_dig1_polarity)
+    }),
     ("ch_dcoffset", |c| c.dc_offset.map(|v| v.to_string())),
     ("ch_cgain", |c| c.coarse_gain.clone()),
     ("ch_bline_nsmean", |c| c.baseline_avg.clone()),
     ("ch_pretrg", |c| c.pre_trigger_ns.map(|v| v.to_string())),
     // ---- Trigger ----
-    ("ch_threshold", |c| c.trigger_threshold.map(|v| v.to_string())),
-    ("ch_trg_holdoff", |c| c.trigger_holdoff_ns.map(|v| v.to_string())),
+    ("ch_threshold", |c| {
+        c.trigger_threshold.map(|v| v.to_string())
+    }),
+    ("ch_trg_holdoff", |c| {
+        c.trigger_holdoff_ns.map(|v| v.to_string())
+    }),
     ("ch_rccr2_smooth", |c| c.fast_discr_smoothing.clone()),
-    ("ch_rccr2_rise", |c| c.input_rise_time_ns.map(|v| v.to_string())),
+    ("ch_rccr2_rise", |c| {
+        c.input_rise_time_ns.map(|v| v.to_string())
+    }),
     ("ch_self_trg_enable", |c| c.self_trigger.clone()),
     ("ch_trg_global_gen", |c| c.global_trigger_gen.clone()),
     ("ch_out_propagate", |c| c.trigger_out_propagate.clone()),
     // ---- Energy ----
-    ("ch_trap_trise", |c| c.trap_rise_time_ns.map(|v| v.to_string())),
-    ("ch_trap_tflat", |c| c.trap_flat_top_ns.map(|v| v.to_string())),
+    ("ch_trap_trise", |c| {
+        c.trap_rise_time_ns.map(|v| v.to_string())
+    }),
+    ("ch_trap_tflat", |c| {
+        c.trap_flat_top_ns.map(|v| v.to_string())
+    }),
     ("ch_tdecay", |c| c.trap_pole_zero_ns.map(|v| v.to_string())),
     ("ch_trap_ftd", |c| c.peaking_time.map(|v| v.to_string())),
     ("ch_peak_nsmean", |c| c.peak_nsmean.clone()),
-    ("ch_peak_holdoff", |c| c.peak_holdoff_ns.map(|v| v.to_string())),
+    ("ch_peak_holdoff", |c| {
+        c.peak_holdoff_ns.map(|v| v.to_string())
+    }),
     ("ch_fgain", |c| c.energy_fine_gain.map(|v| v.to_string())),
     // ---- Coincidence ----
     ("ch_trg_mode", |c| c.coincidence_mode.clone()),
@@ -221,7 +291,9 @@ pub const PHA1_PARAMS: &[ChannelParamEntry] = &[
     ("ch_trg_latency", |c| c.trigger_latency.clone()),
     ("ch_coinc_mask", |c| c.coinc_mask.map(|v| v.to_string())),
     ("ch_coinc_operation", |c| c.coinc_operation.clone()),
-    ("ch_coinc_majlev", |c| c.coinc_majority_level.map(|v| v.to_string())),
+    ("ch_coinc_majlev", |c| {
+        c.coinc_majority_level.map(|v| v.to_string())
+    }),
     ("ch_coinc_trgext", |c| c.coinc_trgext.clone()),
     ("ch_coinc_trgsw", |c| c.coinc_trgsw.clone()),
     // ---- PHA1 Pileup ----
@@ -246,10 +318,7 @@ mod tests {
     #[test]
     fn map_dig1_polarity_passes_through_unknown() {
         // Already-mapped values stay identical (round-trip safety).
-        assert_eq!(
-            map_dig1_polarity("POLARITY_NEGATIVE"),
-            "POLARITY_NEGATIVE"
-        );
+        assert_eq!(map_dig1_polarity("POLARITY_NEGATIVE"), "POLARITY_NEGATIVE");
         // Random unrecognised string passes verbatim.
         assert_eq!(map_dig1_polarity("ZeroCross"), "ZeroCross");
     }

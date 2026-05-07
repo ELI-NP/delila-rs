@@ -20,7 +20,12 @@ import { OperatorService } from '../../services/operator.service';
 import { NotificationService } from '../../services/notification.service';
 import { FirmwareType, RegisterWrite, X743Config } from '../../models/types';
 import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
-import { AMAX_DEFAULTS } from '../../models/amax-generated';
+import {
+  AMAX_BOARD_DEFAULTS,
+  AMAX_BOARD_DOTTED_KEYS,
+  AMAX_BOARD_PARAMS,
+  AMAX_DEFAULTS,
+} from '../../models/amax-generated';
 import {
   ChannelTableComponent,
   DefaultValueChange,
@@ -675,6 +680,46 @@ import {
                       </div>
                     </mat-card-content>
                   </mat-card>
+
+                  @if (amaxBoardParams.length > 0) {
+                    <!-- AMax board-level (global) FW registers from RegisterFile.json
+                         + fw_params.json board_params section. Currently: ENABLE_ACQ. -->
+                    <mat-card class="config-card">
+                      <mat-card-content>
+                        <h3 class="section-title">Debug Acquisition</h3>
+                        <p class="hint-text">
+                          Firmware-wide toggle. When ENABLE_ACQ = 1, ch0 events carry a 4-lane
+                          debug payload (raw + trapezoidal + triangle + 16-bit digital signals)
+                          tagged with the SE flag. ENABLE_ACQ = 0 keeps the legacy single-lane
+                          raw waveform on every channel.
+                        </p>
+                        <div class="form-grid">
+                          @for (p of amaxBoardParams; track p.key) {
+                            @if (p.type === 'enum' && p.options?.length === 2 && p.options?.[0] === '0' && p.options?.[1] === '1') {
+                              <mat-slide-toggle
+                                [checked]="boardValueAsNumber(p.key) === 1"
+                                (change)="onBoardValueChange(p.key, $event.checked ? 1 : 0)"
+                                [matTooltip]="p.tooltip ?? ''"
+                              >
+                                {{ p.label }}
+                              </mat-slide-toggle>
+                            } @else {
+                              <mat-form-field appearance="outline">
+                                <mat-label>{{ p.label }}</mat-label>
+                                <input
+                                  matInput
+                                  type="number"
+                                  [value]="boardValueAsNumber(p.key)"
+                                  (change)="onBoardValueChange(p.key, +($any($event.target).value ?? 0))"
+                                  [matTooltip]="p.tooltip ?? ''"
+                                />
+                              </mat-form-field>
+                            }
+                          }
+                        </div>
+                      </mat-card-content>
+                    </mat-card>
+                  }
                 }
                 <!-- Channel-level waveform settings (PSD2 + AMax) -->
                 <app-channel-table
@@ -917,6 +962,13 @@ export class DigitizerSettingsComponent {
   // Expanded channel data (mutable working copy)
   readonly defaultValues = signal<Record<string, unknown>>({});
   readonly channelValues = signal<Record<string, unknown>[]>([]);
+  // Board-level (global) AMax values keyed by `amax.board.<field>` — only
+  // populated when the selected config is AMax FW. Empty {} otherwise so the
+  // template can read it unconditionally.
+  readonly boardValues = signal<Record<string, unknown>>({});
+
+  /** Codegen-driven list of AMax board params (currently just ENABLE_ACQ). */
+  readonly amaxBoardParams = AMAX_BOARD_PARAMS;
 
   readonly selectedConfig = computed(() => {
     const id = this.selectedId();
@@ -982,11 +1034,36 @@ export class DigitizerSettingsComponent {
         }
         this.defaultValues.set(this.digitizerService.extractDefaults(config));
         this.channelValues.set(this.digitizerService.expandConfig(config));
+        this.boardValues.set(
+          config.firmware === 'AMax'
+            ? this.digitizerService.extractBoardValues(config)
+            : {}
+        );
       } else {
         this.defaultValues.set({});
         this.channelValues.set([]);
+        this.boardValues.set({});
       }
     });
+  }
+
+  /**
+   * Update a single board-level value (e.g. `amax.board.enable_acq`). Used
+   * by the AMax board-level toggle/inputs.
+   */
+  onBoardValueChange(key: string, value: unknown): void {
+    const next = { ...this.boardValues() };
+    next[key] = value;
+    this.boardValues.set(next);
+  }
+
+  /** Coerce the raw value of a board param into a number — UI selects emit
+   *  string values for enums even when `numeric: true` is set on the param. */
+  boardValueAsNumber(key: string): number {
+    const v = this.boardValues()[key];
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string' && v !== '') return Number(v);
+    return Number(AMAX_BOARD_DEFAULTS[key.replace(/^amax\.board\./, '')] ?? 0);
   }
 
   onDigitizerChange(value: number): void {
@@ -1102,10 +1179,19 @@ export class DigitizerSettingsComponent {
         this.channelValues()
       );
 
+    // Compress board-level (AMax-only) values into amax_board. Returns
+    // undefined when every board value matches AMAX_BOARD_DEFAULTS, so
+    // legacy AMax configs without an amax_board section round-trip clean.
+    const amax_board =
+      config.firmware === 'AMax'
+        ? this.digitizerService.compressBoardValues(this.boardValues())
+        : undefined;
+
     const updatedConfig = {
       ...config,
       channel_defaults,
       channel_overrides,
+      amax_board,
     };
 
     try {
@@ -1186,6 +1272,18 @@ export class DigitizerSettingsComponent {
     }
     this.defaultValues.set(defaults);
     this.channelValues.set(channels);
+
+    // Board-level (global) registers — currently the debug-FW ENABLE_ACQ
+    // toggle. Reset to the codegen-emitted defaults so a click on
+    // "Restore FW defaults" returns the entire AMax config (per-channel +
+    // board) to the FW developer's recommended baseline.
+    const boardNext: Record<string, unknown> = {};
+    for (const dotted of AMAX_BOARD_DOTTED_KEYS) {
+      const field = dotted.replace(/^amax\.board\./, '');
+      boardNext[dotted] = AMAX_BOARD_DEFAULTS[field];
+    }
+    this.boardValues.set(boardNext);
+
     this.notify.success('AMax parameters restored to FW defaults');
   }
 

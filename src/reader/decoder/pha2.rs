@@ -238,12 +238,18 @@ mod tests {
             !wf.analog_probe2_is_signed,
             "ADCInput probe must be flagged unsigned"
         );
-        assert_eq!(wf.analog_probe1[0], -1, "signed AP0 sign-extends 0x3fff to -1");
-        assert_eq!(wf.analog_probe2[0], 16383, "unsigned AP1 reads 0x3fff as 16383");
+        assert_eq!(
+            wf.analog_probe1[0], -1,
+            "signed AP0 sign-extends 0x3fff to -1"
+        );
+        assert_eq!(
+            wf.analog_probe2[0], 16383,
+            "unsigned AP1 reads 0x3fff as 16383"
+        );
         assert_eq!(
             wf.analog_probe_type,
-            [1, 0],
-            "AP0 type=1 (TimeFilter), AP1 type=0 (ADCInput)"
+            [1, 0, super::super::common::UNKNOWN_PROBE_TYPE],
+            "AP0 type=1 (TimeFilter), AP1 type=0 (ADCInput), AP2=UNKNOWN (PHA2 ships ≤ 2 analog probes)"
         );
     }
 
@@ -274,7 +280,11 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         let wf = events[0].waveform.as_ref().expect("waveform missing");
-        assert_eq!(wf.digital_probe_type, [0, 1, 2, 3]);
+        assert_eq!(
+            wf.digital_probe_type,
+            [0, 1, 2, 3, super::super::common::UNKNOWN_PROBE_TYPE],
+            "DP4=UNKNOWN (PHA2 ships ≤ 4 digital probes)"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -327,7 +337,10 @@ mod tests {
             1,
             "decoder must NOT split on DP4-fluke samples"
         );
-        let wf = events[0].waveform.as_ref().expect("waveform must be present");
+        let wf = events[0]
+            .waveform
+            .as_ref()
+            .expect("waveform must be present");
         assert_eq!(
             wf.analog_probe1.len(),
             8,
@@ -372,7 +385,9 @@ mod tests {
             dump_enabled: false,
             num_channels: 32,
         });
-        let bytes = build_aggregate(/*ch*/ 5, /*ts*/ 1_000_000, /*e*/ 4242, /*fts*/ 200);
+        let bytes = build_aggregate(
+            /*ch*/ 5, /*ts*/ 1_000_000, /*e*/ 4242, /*fts*/ 200,
+        );
         let raw = raw_data(bytes, 1);
         let mut events = Vec::new();
         dec.decode_into(&raw, &mut events);

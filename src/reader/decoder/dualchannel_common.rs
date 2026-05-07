@@ -29,7 +29,9 @@
 
 use std::marker::PhantomData;
 
-use super::common::{sign_extend_14bit, DataType, EventData, RawData, Waveform, UNKNOWN_PROBE_TYPE};
+use super::common::{
+    sign_extend_14bit, DataType, EventData, RawData, Waveform, UNKNOWN_PROBE_TYPE,
+};
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -145,7 +147,9 @@ impl Default for Dig2Config {
 
 /// Per-probe metadata extracted from the waveform header. PSD2 returns
 /// "unsigned + UNKNOWN probe types" verbatim; PHA2 parses the wf-header low
-/// bits to fill in real values.
+/// bits to fill in real values. PSD2/PHA2 only ship 2 analog + 4 digital
+/// probes; the 3rd analog / 5th digital slots in the carrier `Waveform` are
+/// reserved for AMax debug FW and remain `UNKNOWN_PROBE_TYPE` here.
 #[derive(Debug, Clone, Copy)]
 pub struct WaveformMetadata {
     pub analog_probe1_is_signed: bool,
@@ -162,6 +166,29 @@ impl Default for WaveformMetadata {
             analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
             digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
         }
+    }
+}
+
+impl WaveformMetadata {
+    /// Promote the 2-analog / 4-digital metadata into the carrier `Waveform`
+    /// shape (3 analog / 5 digital). The 3rd analog / 5th digital slot is
+    /// padded with `UNKNOWN_PROBE_TYPE` since PSD2/PHA2 do not populate them.
+    fn analog_probe_type_padded(&self) -> [u8; 3] {
+        [
+            self.analog_probe_type[0],
+            self.analog_probe_type[1],
+            UNKNOWN_PROBE_TYPE,
+        ]
+    }
+
+    fn digital_probe_type_padded(&self) -> [u8; 5] {
+        [
+            self.digital_probe_type[0],
+            self.digital_probe_type[1],
+            self.digital_probe_type[2],
+            self.digital_probe_type[3],
+            UNKNOWN_PROBE_TYPE,
+        ]
     }
 }
 
@@ -264,19 +291,11 @@ impl<V: Dig2Variant> Dig2Decoder<V> {
 
         match self.classify(raw) {
             DataType::Start => {
-                info!(
-                    fw = V::FW_NAME,
-                    size = raw.size,
-                    "Start signal received"
-                );
+                info!(fw = V::FW_NAME, size = raw.size, "Start signal received");
                 return;
             }
             DataType::Stop => {
-                info!(
-                    fw = V::FW_NAME,
-                    size = raw.size,
-                    "Stop signal received"
-                );
+                info!(fw = V::FW_NAME, size = raw.size, "Stop signal received");
                 return;
             }
             DataType::Unknown => {
@@ -352,11 +371,7 @@ impl<V: Dig2Variant> Dig2Decoder<V> {
         });
 
         if self.config.dump_enabled {
-            debug!(
-                fw = V::FW_NAME,
-                events = events.len(),
-                "aggregate decoded"
-            );
+            debug!(fw = V::FW_NAME, events = events.len(), "aggregate decoded");
         }
     }
 
@@ -373,17 +388,15 @@ impl<V: Dig2Variant> Dig2Decoder<V> {
         *word_index += 1;
 
         let is_last_word = ((first_word >> event_word::LAST_WORD_SHIFT) & 0x1) != 0;
-        let channel =
-            ((first_word >> event_word::CHANNEL_SHIFT) & event_word::CHANNEL_MASK) as u8;
+        let channel = ((first_word >> event_word::CHANNEL_SHIFT) & event_word::CHANNEL_MASK) as u8;
 
         if is_last_word {
             // Single-word compressed event (data-reduction mode).
             return Some(self.decode_single_word_event(first_word, channel));
         }
 
-        let is_special_event = ((first_word >> event_word::SPECIAL_EVENT_SHIFT)
-            & event_word::SPECIAL_EVENT_MASK)
-            != 0;
+        let is_special_event =
+            ((first_word >> event_word::SPECIAL_EVENT_SHIFT) & event_word::SPECIAL_EVENT_MASK) != 0;
         let raw_timestamp = first_word & event_word::TIMESTAMP_MASK;
 
         if *word_index >= total_words {
@@ -431,8 +444,7 @@ impl<V: Dig2Variant> Dig2Decoder<V> {
             if !self.fine_ts_clamp_warned {
                 warn!(
                     fw = V::FW_NAME,
-                    raw_fine_ts,
-                    "fine_ts >= 1024 — clamping (one-shot)"
+                    raw_fine_ts, "fine_ts >= 1024 — clamping (one-shot)"
                 );
                 self.fine_ts_clamp_warned = true;
             }
@@ -768,17 +780,20 @@ fn decode_waveform<V: Dig2Variant>(
     Some(Waveform {
         analog_probe1,
         analog_probe2,
+        analog_probe3: Vec::new(),
         digital_probe1,
         digital_probe2,
         digital_probe3,
         digital_probe4,
+        digital_probe5: Vec::new(),
         time_resolution,
         trigger_threshold,
         ns_per_sample,
         analog_probe1_is_signed: metadata.analog_probe1_is_signed,
         analog_probe2_is_signed: metadata.analog_probe2_is_signed,
-        analog_probe_type: metadata.analog_probe_type,
-        digital_probe_type: metadata.digital_probe_type,
+        analog_probe3_is_signed: false,
+        analog_probe_type: metadata.analog_probe_type_padded(),
+        digital_probe_type: metadata.digital_probe_type_padded(),
     })
 }
 
@@ -891,7 +906,9 @@ mod tests {
     #[test]
     fn decode_single_event_basic() {
         let mut dec = MockDecoder::with_defaults();
-        let bytes = build_aggregate(/*ch*/ 5, /*ts*/ 1_000_000, /*energy*/ 4242, /*fts*/ 200);
+        let bytes = build_aggregate(
+            /*ch*/ 5, /*ts*/ 1_000_000, /*energy*/ 4242, /*fts*/ 200,
+        );
         let raw = raw_data(bytes, 1);
         let mut events = Vec::new();
         dec.decode_into(&raw, &mut events);

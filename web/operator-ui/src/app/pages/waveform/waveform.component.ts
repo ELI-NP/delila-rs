@@ -63,10 +63,12 @@ import { HeatmapChartComponent } from '../../components/heatmap-chart/heatmap-ch
 interface ProbeConfig {
   analog1: boolean;
   analog2: boolean;
+  analog3: boolean;
   digital1: boolean;
   digital2: boolean;
   digital3: boolean;
   digital4: boolean;
+  digital5: boolean;
 }
 
 interface ChannelChart {
@@ -132,6 +134,9 @@ interface ChannelChart {
             <mat-checkbox [checked]="probeConfig().analog2" (change)="toggleProbe('analog2')" color="primary">
               <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">{{ probeLabels().a1Short }}</span>
             </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().analog3" (change)="toggleProbe('analog3')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog3">{{ probeLabels().a2Short }}</span>
+            </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital1" (change)="toggleProbe('digital1')" color="primary">
               <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">{{ probeLabels().d0Short }}</span>
             </mat-checkbox>
@@ -143,6 +148,9 @@ interface ChannelChart {
             </mat-checkbox>
             <mat-checkbox [checked]="probeConfig().digital4" (change)="toggleProbe('digital4')" color="primary">
               <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">{{ probeLabels().d3Short }}</span>
+            </mat-checkbox>
+            <mat-checkbox [checked]="probeConfig().digital5" (change)="toggleProbe('digital5')" color="primary">
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital5">{{ probeLabels().d4Short }}</span>
             </mat-checkbox>
           </div>
 
@@ -412,6 +420,13 @@ interface ChannelChart {
               <span class="probe-label" [style.border-bottom-color]="probeColors.analog2">{{ probeLabels().a1Long }}</span>
             </mat-checkbox>
             <mat-checkbox
+              [checked]="probeConfig().analog3"
+              (change)="toggleProbe('analog3')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.analog3">{{ probeLabels().a2Long }}</span>
+            </mat-checkbox>
+            <mat-checkbox
               [checked]="probeConfig().digital1"
               (change)="toggleProbe('digital1')"
               color="primary"
@@ -438,6 +453,13 @@ interface ChannelChart {
               color="primary"
             >
               <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">{{ probeLabels().d3Long }}</span>
+            </mat-checkbox>
+            <mat-checkbox
+              [checked]="probeConfig().digital5"
+              (change)="toggleProbe('digital5')"
+              color="primary"
+            >
+              <span class="probe-label" [style.border-bottom-color]="probeColors.digital5">{{ probeLabels().d4Long }}</span>
             </mat-checkbox>
           </div>
 
@@ -891,20 +913,24 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly probeConfig = signal<ProbeConfig>({
     analog1: true,
     analog2: true,
+    analog3: true,
     digital1: false,
     digital2: false,
     digital3: false,
     digital4: false,
+    digital5: false,
   });
   readonly yAxisMode = signal<'auto' | 'fixed'>('auto');
 
   readonly probeColors = {
     analog1: '#1565c0',
     analog2: '#e65100',
+    analog3: '#fb8c00',
     digital1: '#00897b',
     digital2: '#c62828',
     digital3: '#6a1b9a',
     digital4: '#5c6bc0',
+    digital5: '#00838f',
   };
 
   readonly channelCharts = computed<ChannelChart[]>(() => this.buildChannelCharts());
@@ -1037,13 +1063,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       ?? this.waveformHistory()[this.waveformHistory().length - 1]?.waveform;
     const apt = wf?.analog_probe_type;
     const dpt = wf?.digital_probe_type;
-    const apLabel = (idx: 0 | 1, fallback: string) => {
+    const apLabel = (idx: 0 | 1 | 2, fallback: string) => {
       const code = apt?.[idx];
       if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
       const name = ANALOG_PROBE_TYPE_LABELS[code];
       return name ? `${fallback}: ${name}` : fallback;
     };
-    const dpLabel = (idx: 0 | 1 | 2 | 3, fallback: string) => {
+    const dpLabel = (idx: 0 | 1 | 2 | 3 | 4, fallback: string) => {
       const code = dpt?.[idx];
       if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
       const name = DIGITAL_PROBE_TYPE_LABELS[code];
@@ -1052,16 +1078,20 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     return {
       a0Short: apLabel(0, 'A0'),
       a1Short: apLabel(1, 'A1'),
+      a2Short: apLabel(2, 'A2'),
       d0Short: dpLabel(0, 'D0'),
       d1Short: dpLabel(1, 'D1'),
       d2Short: dpLabel(2, 'D2'),
       d3Short: dpLabel(3, 'D3'),
+      d4Short: dpLabel(4, 'D4'),
       a0Long: apLabel(0, 'Analog 0'),
       a1Long: apLabel(1, 'Analog 1'),
+      a2Long: apLabel(2, 'Analog 2'),
       d0Long: dpLabel(0, 'Digital 0'),
       d1Long: dpLabel(1, 'Digital 1'),
       d2Long: dpLabel(2, 'Digital 2'),
       d3Long: dpLabel(3, 'Digital 3'),
+      d4Long: dpLabel(4, 'Digital 4'),
     };
   });
 
@@ -1534,6 +1564,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
 
       const latestOff1 = offsetFor(wf.waveform.analog_probe1_is_signed);
       const latestOff2 = offsetFor(wf.waveform.analog_probe2_is_signed);
+      const latestOff3 = offsetFor(wf.waveform.analog_probe3_is_signed);
 
       // Latest waveform (full opacity)
       if (config.analog1 && wf.waveform.analog_probe1.length > 0) {
@@ -1558,11 +1589,24 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         });
       }
 
+      const analog3 = wf.waveform.analog_probe3 ?? [];
+      if (config.analog3 && analog3.length > 0) {
+        series.push({
+          name: 'Analog 2',
+          type: 'line',
+          data: analog3.map((v, i) => [toX(i), v + latestOff3]),
+          symbol: 'none',
+          lineStyle: { width: 1.5, color: this.probeColors.analog3 },
+          itemStyle: { color: this.probeColors.analog3 },
+        });
+      }
+
       const digitalProbes: { key: keyof ProbeConfig; data: number[]; index: number }[] = [
         { key: 'digital1', data: wf.waveform.digital_probe1, index: 0 },
         { key: 'digital2', data: wf.waveform.digital_probe2, index: 1 },
         { key: 'digital3', data: wf.waveform.digital_probe3, index: 2 },
         { key: 'digital4', data: wf.waveform.digital_probe4, index: 3 },
+        { key: 'digital5', data: wf.waveform.digital_probe5 ?? [], index: 4 },
       ];
 
       for (const dp of digitalProbes) {
@@ -1589,9 +1633,15 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
             const width = end - start;
             areas.push([{ xAxis: start }, { xAxis: width < minWidth ? start + minWidth : end }]);
           }
+          const dptCode = wf.waveform.digital_probe_type?.[dp.index];
+          const dptName =
+            dptCode !== undefined && dptCode !== UNKNOWN_PROBE_TYPE
+              ? DIGITAL_PROBE_TYPE_LABELS[dptCode]
+              : undefined;
+          const seriesName = dptName ?? `D${dp.index}`;
           // Invisible line series with markArea for full-height transparent bands
           series.push({
-            name: `Digital ${dp.index}`,
+            name: seriesName,
             type: 'line',
             data: [],
             symbol: 'none',

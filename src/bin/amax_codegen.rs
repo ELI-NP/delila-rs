@@ -99,6 +99,23 @@ impl Register {
         let raw = self.path.as_deref().or(self.name.as_deref()).unwrap_or("");
         raw.starts_with("page_amax_energy_")
     }
+
+    /// True iff this register's name matches a key in `fw_params.board_params`
+    /// — i.e. a global / board-level register (e.g. `ENABLE_ACQ` for the AMax
+    /// debug FW). Per-channel registers always take priority over board-level
+    /// matches so we don't accidentally promote a channel reg to global.
+    fn is_board_level(&self, board_param_keys: &[String]) -> bool {
+        if self.is_per_channel() {
+            return false;
+        }
+        let raw = self.path.as_deref().or(self.name.as_deref()).unwrap_or("");
+        // Strip leading slash so JSON `"Path": "/ENABLE_ACQ"` matches
+        // `"ENABLE_ACQ"`.
+        let trimmed = raw.trim_start_matches('/');
+        board_param_keys
+            .iter()
+            .any(|k| trimmed == k || trimmed.contains(k))
+    }
 }
 
 // ---- fw_params.json schema (extended with UI metadata) ----
@@ -106,6 +123,11 @@ impl Register {
 #[derive(Deserialize)]
 struct FwParams {
     params: HashMap<String, FwParam>,
+    /// Board-level (global, non-per-channel) registers — e.g. `ENABLE_ACQ`
+    /// for the AMax debug FW. Same `FwParam` shape as `params` but routed to
+    /// a separate `AMaxBoardConfig` struct in the generated code.
+    #[serde(default)]
+    board_params: HashMap<String, FwParam>,
     #[serde(default)]
     readonly_patterns: Vec<String>,
 }
@@ -154,6 +176,7 @@ fn category_label(cat: &str) -> &'static str {
         "trigger" => "Trigger",
         "energy" => "Energy",
         "waveform" => "Waveform",
+        "debug" => "Debug",
         _ => "Other",
     }
 }
@@ -239,9 +262,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Second pass: pick up board-level (global) registers declared in
+    // `fw_params.board_params`. Currently this is just `ENABLE_ACQ` for the
+    // AMax debug FW, but the same path supports any future global toggle.
+    let board_param_keys: Vec<String> = fw_params.board_params.keys().cloned().collect();
+    let board_resolved: Vec<ResolvedReg> = if board_param_keys.is_empty() {
+        Vec::new()
+    } else {
+        let mut br: Vec<&Register> = register_file
+            .registers
+            .iter()
+            .filter(|r| r.is_board_level(&board_param_keys))
+            .collect();
+        br.sort_by_key(|r| r.address);
+
+        let mut out = Vec::new();
+        for r in &br {
+            // Use the raw name (no `page_amax_energy_` prefix to strip).
+            let raw = r.path.as_deref().or(r.name.as_deref()).unwrap_or("");
+            let trimmed = raw.trim_start_matches('/');
+            let name = board_param_keys
+                .iter()
+                .find(|k| trimmed == k.as_str() || trimmed.contains(k.as_str()))
+                .cloned()
+                .unwrap_or_else(|| trimmed.to_string());
+            let Some(meta) = fw_params.board_params.get(&name) else {
+                continue;
+            };
+            let bits = meta.bits;
+            let ui_max = meta.ui_max.unwrap_or_else(|| {
+                if bits >= 32 {
+                    (1u64 << 32) - 1
+                } else {
+                    (1u64 << bits) - 1
+                }
+            });
+            let ty = meta.ty.clone().unwrap_or_else(|| "number".to_string());
+            // Board registers carry the *raw* address from the FW because
+            // there's no per-channel page offset to factor out.
+            out.push(ResolvedReg {
+                field: snake_case(&name),
+                word_offset: r.address,
+                bits,
+                default: meta.default,
+                label: meta.label.clone().unwrap_or_else(|| name.clone()),
+                category: meta.category.clone().unwrap_or_else(|| "debug".to_string()),
+                ty,
+                options: meta.options.clone().unwrap_or_default(),
+                ui_max,
+                unit: meta.unit.clone(),
+                fw_name: name,
+            });
+        }
+        out
+    };
+
     eprintln!(
-        "amax_codegen: {} writable registers, {} read-only skipped",
+        "amax_codegen: {} per-channel writable, {} board-level, {} read-only skipped",
         resolved.len(),
+        board_resolved.len(),
         skipped_readonly.len()
     );
 
@@ -250,12 +329,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::write(
         &rust_struct_path,
-        emit_rust_struct(&resolved, &cli.register_file, &cli.params_file),
+        emit_rust_struct(
+            &resolved,
+            &board_resolved,
+            &cli.register_file,
+            &cli.params_file,
+        ),
     )?;
     fs::write(
         &rust_reg_path,
         emit_rust_registers(
             &resolved,
+            &board_resolved,
             cli.page_base,
             cli.page_stride,
             &cli.register_file,
@@ -263,7 +348,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     fs::write(
         &cli.ts_out,
-        emit_typescript(&resolved, &cli.register_file, &cli.params_file),
+        emit_typescript(
+            &resolved,
+            &board_resolved,
+            &cli.register_file,
+            &cli.params_file,
+        ),
     )?;
 
     eprintln!("wrote {}", rust_struct_path.display());
@@ -288,6 +378,7 @@ fn header_rust(register_file: &std::path::Path, params_file: &std::path::Path) -
 
 fn emit_rust_struct(
     resolved: &[ResolvedReg],
+    board_resolved: &[ResolvedReg],
     register_file: &std::path::Path,
     params_file: &std::path::Path,
 ) -> String {
@@ -320,6 +411,30 @@ fn emit_rust_struct(
         out.push_str(&format!("    pub {}: Option<u32>,\n", r.field));
     }
     out.push_str("}\n");
+
+    // Board-level (global) writable register set. Each field maps to one
+    // single-address user-register write (no channel stride). Currently
+    // populated for the AMax debug FW's `ENABLE_ACQ` toggle.
+    out.push_str(
+        "\n/// AMax board-level (global) writable register set. Used for\n\
+         /// firmware-wide toggles like the debug-FW `ENABLE_ACQ` switch.\n\
+         #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]\n\
+         pub struct AMaxBoardConfig {\n",
+    );
+    for r in board_resolved {
+        let unit = r
+            .unit
+            .as_deref()
+            .map(|u| format!(", unit: {}", u))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "    /// {}-bit {}{} (FW reg `{}`)\n",
+            r.bits, r.label, unit, r.fw_name
+        ));
+        out.push_str("    #[serde(skip_serializing_if = \"Option::is_none\")]\n");
+        out.push_str(&format!("    pub {}: Option<u32>,\n", r.field));
+    }
+    out.push_str("}\n");
     out
 }
 
@@ -327,6 +442,7 @@ fn emit_rust_struct(
 
 fn emit_rust_registers(
     resolved: &[ResolvedReg],
+    board_resolved: &[ResolvedReg],
     page_base: u32,
     page_stride: u32,
     register_file: &std::path::Path,
@@ -393,6 +509,46 @@ fn emit_rust_registers(
     out.push_str("    writes\n");
     out.push_str("}\n");
 
+    // ---- Board-level (global) register addresses + apply helper ----
+    if !board_resolved.is_empty() {
+        out.push_str("\n// ---- Board-level (global) register byte addresses ----\n//\n");
+        out.push_str(
+            "// These registers live outside the per-channel `page_amax_energy_*`\n\
+             // family — they're firmware-wide toggles. Byte addresses are taken\n\
+             // verbatim from RegisterFile.json (no PAGE_BASE math).\n\n",
+        );
+        for r in board_resolved {
+            out.push_str(&format!(
+                "/// {}-bit {} (FW reg `{}`)\n",
+                r.bits, r.label, r.fw_name
+            ));
+            out.push_str(&format!(
+                "pub const BOARD_REG_{}: u32 = 0x{:X};\n",
+                r.field.to_uppercase(),
+                r.word_offset
+            ));
+        }
+
+        out.push_str(
+            "\n/// All writable board-level register fields, in stable order.\n\
+             /// Mirror of `channel_writes` for `AMaxBoardConfig`. Each tuple is\n\
+             /// (BOARD_REG byte address, value, field_name).\n\
+             #[allow(dead_code)]\n\
+             pub fn board_writes(\n\
+             \x20\x20\x20\x20config: &crate::config::digitizer::AMaxBoardConfig,\n\
+             ) -> Vec<(u32, u32, &'static str)> {\n\
+             \x20\x20\x20\x20let mut writes = Vec::new();\n",
+        );
+        for r in board_resolved {
+            out.push_str(&format!(
+                "    if let Some(v) = config.{f} {{ writes.push((BOARD_REG_{u}, v, \"{f}\")); }}\n",
+                f = r.field,
+                u = r.field.to_uppercase(),
+            ));
+        }
+        out.push_str("    writes\n}\n");
+    }
+
     // Lightweight test: every offset distinct, byte-addr math stays consistent.
     out.push_str(
         "\n\
@@ -437,6 +593,7 @@ fn emit_rust_registers(
 
 fn emit_typescript(
     resolved: &[ResolvedReg],
+    board_resolved: &[ResolvedReg],
     register_file: &std::path::Path,
     params_file: &std::path::Path,
 ) -> String {
@@ -523,5 +680,59 @@ fn emit_typescript(
         }
         out.push_str("];\n\n");
     }
+
+    // ---- Board-level (global) interface, defaults, and params ----
+    out.push_str("/** AMax board-level (global) writable register set —\n");
+    out.push_str(" *  firmware-wide toggles like the debug-FW `ENABLE_ACQ`. */\n");
+    out.push_str("export interface AMaxBoardConfig {\n");
+    for r in board_resolved {
+        out.push_str(&format!("  /** {}-bit {} */\n", r.bits, r.label));
+        out.push_str(&format!("  {}?: number;\n", r.field));
+    }
+    out.push_str("}\n\n");
+
+    out.push_str("/** Per-key default values for board-level registers. */\n");
+    out.push_str("export const AMAX_BOARD_DEFAULTS: Record<string, number> = {\n");
+    for r in board_resolved {
+        out.push_str(&format!("  '{}': {},\n", r.field, r.default));
+    }
+    out.push_str("};\n\n");
+
+    out.push_str("/** Board-level dotted-path keys (`amax.board.<field>`). */\n");
+    out.push_str("export const AMAX_BOARD_DOTTED_KEYS: readonly string[] = [\n");
+    for r in board_resolved {
+        out.push_str(&format!("  'amax.board.{}',\n", r.field));
+    }
+    out.push_str("];\n\n");
+
+    out.push_str("/** Board-level parameter UI definitions. */\n");
+    out.push_str("export const AMAX_BOARD_PARAMS: ChannelParamDef[] = [\n");
+    for r in board_resolved {
+        let tooltip = format!("FW reg {} • addr 0x{:X}", r.fw_name, r.word_offset);
+        let mut line = format!("  {{ key: 'amax.board.{}', label: {:?}", r.field, r.label);
+        if r.ty == "enum" {
+            let opts = r
+                .options
+                .iter()
+                .map(|o| format!("{:?}", o))
+                .collect::<Vec<_>>()
+                .join(", ");
+            line.push_str(&format!(
+                ", type: 'enum', options: [{}], numeric: true",
+                opts
+            ));
+        } else {
+            line.push_str(", type: 'number'");
+            if let Some(u) = &r.unit {
+                line.push_str(&format!(", unit: {:?}", u));
+            }
+            line.push_str(&format!(", min: 0, max: {}, step: 1", r.ui_max));
+        }
+        line.push_str(&format!(", tooltip: {:?}", tooltip));
+        line.push_str(" },\n");
+        out.push_str(&line);
+    }
+    out.push_str("];\n");
+
     out
 }

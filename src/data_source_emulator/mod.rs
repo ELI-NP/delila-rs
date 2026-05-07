@@ -451,17 +451,20 @@ impl Emulator {
         Waveform {
             analog_probe1,
             analog_probe2,
+            analog_probe3: Vec::new(),
             digital_probe1,
             digital_probe2,
             digital_probe3,
             digital_probe4,
+            digital_probe5: Vec::new(),
             time_resolution: 0, // 1x resolution
             trigger_threshold: 100,
             ns_per_sample: 2.0,
             analog_probe1_is_signed: false,
             analog_probe2_is_signed: false,
-            analog_probe_type: [UNKNOWN_PROBE_TYPE; 2],
-            digital_probe_type: [UNKNOWN_PROBE_TYPE; 4],
+            analog_probe3_is_signed: false,
+            analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
         }
     }
 

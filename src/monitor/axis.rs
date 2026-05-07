@@ -64,10 +64,7 @@ impl AxisSource {
                 if event.energy == 0 {
                     None
                 } else {
-                    Some(
-                        (event.energy as f64 - event.energy_short as f64)
-                            / event.energy as f64,
-                    )
+                    Some((event.energy as f64 - event.energy_short as f64) / event.energy as f64)
                 }
             }
         }
@@ -175,8 +172,14 @@ mod tests {
             assert_eq!(src, back);
         }
         // Spot-check the wire format.
-        assert_eq!(serde_json::to_string(&AxisSource::UserInfo0).unwrap(), "\"user_info0\"");
-        assert_eq!(serde_json::to_string(&AxisSource::EnergyShort).unwrap(), "\"energy_short\"");
+        assert_eq!(
+            serde_json::to_string(&AxisSource::UserInfo0).unwrap(),
+            "\"user_info0\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AxisSource::EnergyShort).unwrap(),
+            "\"energy_short\""
+        );
         assert_eq!(serde_json::to_string(&AxisSource::Psd).unwrap(), "\"psd\"");
     }
 }

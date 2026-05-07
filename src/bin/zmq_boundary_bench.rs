@@ -286,8 +286,7 @@ async fn main() -> anyhow::Result<()> {
         }
         next_send += Duration::from_nanos(nanos_per_batch);
 
-        let mut batch =
-            EventDataBatch::with_capacity(0, batch_idx, args.batch_size);
+        let mut batch = EventDataBatch::with_capacity(0, batch_idx, args.batch_size);
         for j in 0..args.batch_size as u64 {
             batch.push(make_event(events_sent + j, args.waveform_samples));
         }

@@ -845,32 +845,84 @@ impl CaenHandle {
                 .get(&ch)
                 .and_then(|c| c.amax.as_ref());
             let merged = AMaxChannelConfig {
-                selector_wave: override_amax.and_then(|c| c.selector_wave).or_else(|| defaults_amax.and_then(|c| c.selector_wave)),
-                pretrigger_input: override_amax.and_then(|c| c.pretrigger_input).or_else(|| defaults_amax.and_then(|c| c.pretrigger_input)),
-                polarity: override_amax.and_then(|c| c.polarity).or_else(|| defaults_amax.and_then(|c| c.polarity)),
-                offset: override_amax.and_then(|c| c.offset).or_else(|| defaults_amax.and_then(|c| c.offset)),
-                thrs: override_amax.and_then(|c| c.thrs).or_else(|| defaults_amax.and_then(|c| c.thrs)),
-                trig_k: override_amax.and_then(|c| c.trig_k).or_else(|| defaults_amax.and_then(|c| c.trig_k)),
-                trig_m: override_amax.and_then(|c| c.trig_m).or_else(|| defaults_amax.and_then(|c| c.trig_m)),
-                trap_k: override_amax.and_then(|c| c.trap_k).or_else(|| defaults_amax.and_then(|c| c.trap_k)),
-                trap_m: override_amax.and_then(|c| c.trap_m).or_else(|| defaults_amax.and_then(|c| c.trap_m)),
-                deconv_m: override_amax.and_then(|c| c.deconv_m).or_else(|| defaults_amax.and_then(|c| c.deconv_m)),
-                trap_gain: override_amax.and_then(|c| c.trap_gain).or_else(|| defaults_amax.and_then(|c| c.trap_gain)),
-                bl_len: override_amax.and_then(|c| c.bl_len).or_else(|| defaults_amax.and_then(|c| c.bl_len)),
-                bl_inib: override_amax.and_then(|c| c.bl_inib).or_else(|| defaults_amax.and_then(|c| c.bl_inib)),
-                sample_pos: override_amax.and_then(|c| c.sample_pos).or_else(|| defaults_amax.and_then(|c| c.sample_pos)),
-                run_cfg: override_amax.and_then(|c| c.run_cfg).or_else(|| defaults_amax.and_then(|c| c.run_cfg)),
-                amax_window: override_amax.and_then(|c| c.amax_window).or_else(|| defaults_amax.and_then(|c| c.amax_window)),
-                window_maxim: override_amax.and_then(|c| c.window_maxim).or_else(|| defaults_amax.and_then(|c| c.window_maxim)),
-                amax_len: override_amax.and_then(|c| c.amax_len).or_else(|| defaults_amax.and_then(|c| c.amax_len)),
-                baseline_delay: override_amax.and_then(|c| c.baseline_delay).or_else(|| defaults_amax.and_then(|c| c.baseline_delay)),
-                baseline_len: override_amax.and_then(|c| c.baseline_len).or_else(|| defaults_amax.and_then(|c| c.baseline_len)),
-                baseline_offset: override_amax.and_then(|c| c.baseline_offset).or_else(|| defaults_amax.and_then(|c| c.baseline_offset)),
-                pretrigger_trap: override_amax.and_then(|c| c.pretrigger_trap).or_else(|| defaults_amax.and_then(|c| c.pretrigger_trap)),
-                pretrigger_amax: override_amax.and_then(|c| c.pretrigger_amax).or_else(|| defaults_amax.and_then(|c| c.pretrigger_amax)),
-                delay_shaping: override_amax.and_then(|c| c.delay_shaping).or_else(|| defaults_amax.and_then(|c| c.delay_shaping)),
-                shap_trigg: override_amax.and_then(|c| c.shap_trigg).or_else(|| defaults_amax.and_then(|c| c.shap_trigg)),
-                shap_bl_hold: override_amax.and_then(|c| c.shap_bl_hold).or_else(|| defaults_amax.and_then(|c| c.shap_bl_hold)),
+                selector_wave: override_amax
+                    .and_then(|c| c.selector_wave)
+                    .or_else(|| defaults_amax.and_then(|c| c.selector_wave)),
+                pretrigger_input: override_amax
+                    .and_then(|c| c.pretrigger_input)
+                    .or_else(|| defaults_amax.and_then(|c| c.pretrigger_input)),
+                polarity: override_amax
+                    .and_then(|c| c.polarity)
+                    .or_else(|| defaults_amax.and_then(|c| c.polarity)),
+                offset: override_amax
+                    .and_then(|c| c.offset)
+                    .or_else(|| defaults_amax.and_then(|c| c.offset)),
+                thrs: override_amax
+                    .and_then(|c| c.thrs)
+                    .or_else(|| defaults_amax.and_then(|c| c.thrs)),
+                trig_k: override_amax
+                    .and_then(|c| c.trig_k)
+                    .or_else(|| defaults_amax.and_then(|c| c.trig_k)),
+                trig_m: override_amax
+                    .and_then(|c| c.trig_m)
+                    .or_else(|| defaults_amax.and_then(|c| c.trig_m)),
+                trap_k: override_amax
+                    .and_then(|c| c.trap_k)
+                    .or_else(|| defaults_amax.and_then(|c| c.trap_k)),
+                trap_m: override_amax
+                    .and_then(|c| c.trap_m)
+                    .or_else(|| defaults_amax.and_then(|c| c.trap_m)),
+                deconv_m: override_amax
+                    .and_then(|c| c.deconv_m)
+                    .or_else(|| defaults_amax.and_then(|c| c.deconv_m)),
+                trap_gain: override_amax
+                    .and_then(|c| c.trap_gain)
+                    .or_else(|| defaults_amax.and_then(|c| c.trap_gain)),
+                bl_len: override_amax
+                    .and_then(|c| c.bl_len)
+                    .or_else(|| defaults_amax.and_then(|c| c.bl_len)),
+                bl_inib: override_amax
+                    .and_then(|c| c.bl_inib)
+                    .or_else(|| defaults_amax.and_then(|c| c.bl_inib)),
+                sample_pos: override_amax
+                    .and_then(|c| c.sample_pos)
+                    .or_else(|| defaults_amax.and_then(|c| c.sample_pos)),
+                run_cfg: override_amax
+                    .and_then(|c| c.run_cfg)
+                    .or_else(|| defaults_amax.and_then(|c| c.run_cfg)),
+                amax_window: override_amax
+                    .and_then(|c| c.amax_window)
+                    .or_else(|| defaults_amax.and_then(|c| c.amax_window)),
+                window_maxim: override_amax
+                    .and_then(|c| c.window_maxim)
+                    .or_else(|| defaults_amax.and_then(|c| c.window_maxim)),
+                amax_len: override_amax
+                    .and_then(|c| c.amax_len)
+                    .or_else(|| defaults_amax.and_then(|c| c.amax_len)),
+                baseline_delay: override_amax
+                    .and_then(|c| c.baseline_delay)
+                    .or_else(|| defaults_amax.and_then(|c| c.baseline_delay)),
+                baseline_len: override_amax
+                    .and_then(|c| c.baseline_len)
+                    .or_else(|| defaults_amax.and_then(|c| c.baseline_len)),
+                baseline_offset: override_amax
+                    .and_then(|c| c.baseline_offset)
+                    .or_else(|| defaults_amax.and_then(|c| c.baseline_offset)),
+                pretrigger_trap: override_amax
+                    .and_then(|c| c.pretrigger_trap)
+                    .or_else(|| defaults_amax.and_then(|c| c.pretrigger_trap)),
+                pretrigger_amax: override_amax
+                    .and_then(|c| c.pretrigger_amax)
+                    .or_else(|| defaults_amax.and_then(|c| c.pretrigger_amax)),
+                delay_shaping: override_amax
+                    .and_then(|c| c.delay_shaping)
+                    .or_else(|| defaults_amax.and_then(|c| c.delay_shaping)),
+                shap_trigg: override_amax
+                    .and_then(|c| c.shap_trigg)
+                    .or_else(|| defaults_amax.and_then(|c| c.shap_trigg)),
+                shap_bl_hold: override_amax
+                    .and_then(|c| c.shap_bl_hold)
+                    .or_else(|| defaults_amax.and_then(|c| c.shap_bl_hold)),
             };
 
             for (offset, value, name) in r::channel_writes(&merged) {
@@ -881,6 +933,23 @@ impl CaenHandle {
                     addr = format_args!("0x{:08X}", byte_addr),
                     value,
                     "[AMax] WriteUserRegister"
+                );
+                self.set_user_register(byte_addr, value)?;
+                count += 1;
+            }
+        }
+
+        // Board-level (global) writes — applied once after the per-channel
+        // sweep. ENABLE_ACQ toggles the debug FW's MUX selector + SE flag,
+        // so it must be set after channel pages are stable so the first
+        // SE event the digitizer emits has consistent shaping params.
+        if let Some(board_cfg) = config.amax_board.as_ref() {
+            for (byte_addr, value, name) in r::board_writes(board_cfg) {
+                debug!(
+                    register = name,
+                    addr = format_args!("0x{:08X}", byte_addr),
+                    value,
+                    "[AMax] WriteUserRegister (board)"
                 );
                 self.set_user_register(byte_addr, value)?;
                 count += 1;
