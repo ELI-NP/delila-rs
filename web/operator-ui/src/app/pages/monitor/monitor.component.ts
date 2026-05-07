@@ -127,13 +127,13 @@ const STORAGE_KEY = 'delila-monitor-state';
       min-width: 0;
       overflow-x: auto;
     }
-    /* Highlight the active chip — Material doesn't track this for click-only chips */
+    /* Highlight the active chip — Material doesn't track this for click-only chips.
+       Light-blue background so the default dark chip text stays readable; left
+       border + weight carry the "selected" signal. */
     .view-chips mat-chip.active {
-      background-color: #1976d2;
-      color: white;
-    }
-    .view-chips mat-chip.active mat-icon {
-      color: white;
+      background-color: #bbdefb;
+      box-shadow: inset 3px 0 0 #1976d2;
+      font-weight: 500;
     }
 
     .setup-chip {
