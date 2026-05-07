@@ -341,9 +341,17 @@ export class RunDetailPageComponent implements OnInit {
     return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  /** ISO 8601 with seconds in local time: `2026-05-07 14:30:42`. */
   formatTimeFull(ms: number): string {
     if (!ms) return '—';
-    return new Date(ms).toLocaleString();
+    const d = new Date(ms);
+    const yyyy = d.getFullYear();
+    const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+    const dd = d.getDate().toString().padStart(2, '0');
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    const s = d.getSeconds().toString().padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${h}:${m}:${s}`;
   }
 
   formatDuration(secs: number | null): string {

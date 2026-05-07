@@ -216,14 +216,17 @@ export class RunsPageComponent implements OnInit {
 
   // --- Formatting helpers ---
 
+  /** ISO 8601 in local time: `2026-05-07 14:30`. Locale-independent, sortable as text,
+   *  copy-pastes as a single token, accepted by Excel / Python / shell tools. */
   formatTime(ms: number): string {
     if (!ms) return '—';
     const d = new Date(ms);
-    const month = d.toLocaleString('en', { month: 'short' });
-    const day = d.getDate();
+    const yyyy = d.getFullYear();
+    const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+    const dd = d.getDate().toString().padStart(2, '0');
     const h = d.getHours().toString().padStart(2, '0');
     const m = d.getMinutes().toString().padStart(2, '0');
-    return `${month} ${day} ${h}:${m}`;
+    return `${yyyy}-${mm}-${dd} ${h}:${m}`;
   }
 
   formatDuration(secs: number | null): string {

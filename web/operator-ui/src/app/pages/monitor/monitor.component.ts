@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSnackBarModule } from '@angular/material/snack-bar';
-import { MatTabsModule } from '@angular/material/tabs';
+import { MatChipsModule } from '@angular/material/chips';
 import { MatDialog } from '@angular/material/dialog';
 import { NotificationService } from '../../services/notification.service';
 import { SetupTabComponent } from '../../components/setup-tab/setup-tab.component';
@@ -33,47 +33,45 @@ const STORAGE_KEY = 'delila-monitor-state';
     MatButtonModule,
     MatIconModule,
     MatSnackBarModule,
-    MatTabsModule,
+    MatChipsModule,
     SetupTabComponent,
     ViewTabComponent,
   ],
   template: `
     <div class="monitor-page">
-      <!-- Tab bar (Material mat-tab-nav-bar — Setup tab is decorated with `+` to hint create) -->
+      <!-- View chips: distinct primitive from the App-shell mat-tabs above so the
+           visual hierarchy reads "page → views" instead of two equally weighted tabs. -->
       <div class="tab-bar">
-        <nav mat-tab-nav-bar [tabPanel]="tabPanel" class="tab-nav">
-          <a
-            mat-tab-link
-            class="setup-link"
-            [active]="activeTabId() === null"
+        <mat-chip-set class="view-chips" aria-label="Monitor views">
+          <mat-chip
+            class="setup-chip"
+            [class.active]="activeTabId() === null"
             (click)="selectSetupTab()"
             (keydown.enter)="selectSetupTab()"
             tabindex="0"
           >
-            <mat-icon class="setup-icon">add</mat-icon>
+            <mat-icon matChipAvatar>add</mat-icon>
             Setup
-          </a>
+          </mat-chip>
           @for (tab of viewTabs(); track tab.id) {
-            <a
-              mat-tab-link
-              [active]="activeTabId() === tab.id"
+            <mat-chip
+              [class.active]="activeTabId() === tab.id"
               (click)="selectViewTab(tab.id)"
               (keydown.enter)="selectViewTab(tab.id)"
               (dblclick)="renameViewTab(tab.id)"
               tabindex="0"
             >
               {{ tab.name }}
-              <span
-                class="tab-close"
-                role="button"
-                tabindex="0"
-                (click)="removeViewTab(tab.id, $event)"
-                (keydown.enter)="removeViewTab(tab.id, $event)"
-                title="Close"
-              >×</span>
-            </a>
+              <button
+                matChipRemove
+                aria-label="Close view"
+                (click)="removeViewTab(tab.id, $event); $event.stopPropagation()"
+              >
+                <mat-icon>cancel</mat-icon>
+              </button>
+            </mat-chip>
           }
-        </nav>
+        </mat-chip-set>
         <button
           mat-stroked-button
           class="clear-button"
@@ -84,8 +82,6 @@ const STORAGE_KEY = 'delila-monitor-state';
           Clear
         </button>
       </div>
-
-      <mat-tab-nav-panel #tabPanel></mat-tab-nav-panel>
 
       <!-- Tab content -->
       <div class="tab-content">
@@ -121,48 +117,33 @@ const STORAGE_KEY = 'delila-monitor-state';
 
     .tab-bar {
       display: flex;
-      align-items: stretch;
+      align-items: center;
       gap: 8px;
-      border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+      padding: 4px 0;
     }
 
-    .tab-nav {
+    .view-chips {
       flex: 1;
       min-width: 0;
+      overflow-x: auto;
+    }
+    /* Highlight the active chip — Material doesn't track this for click-only chips */
+    .view-chips mat-chip.active {
+      background-color: #1976d2;
+      color: white;
+    }
+    .view-chips mat-chip.active mat-icon {
+      color: white;
     }
 
-    .setup-link {
-      color: #1976d2 !important;
+    .setup-chip {
       font-weight: 500;
     }
-    .setup-icon {
-      vertical-align: middle;
-      font-size: 18px;
-      width: 18px;
-      height: 18px;
-      margin-right: 2px;
-    }
-
-    .tab-close {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      font-size: 14px;
-      line-height: 1;
-      margin-left: 6px;
-      opacity: 0.55;
-      cursor: pointer;
-    }
-    .tab-close:hover {
-      opacity: 1;
-      background-color: rgba(0, 0, 0, 0.1);
+    .setup-chip:not(.active) {
+      color: #1976d2;
     }
 
     .clear-button {
-      align-self: center;
       flex-shrink: 0;
     }
 
