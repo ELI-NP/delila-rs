@@ -475,7 +475,7 @@ export class ControlPanelComponent {
   readonly timer = inject(TimerService);
 
   /** When checked, doStart() also kicks the countdown after operator.start succeeds. */
-  readonly useTimer = signal(true);
+  readonly useTimer = signal(false);
   /** Pulses the card background red while the timer-expired alarm dialog is open. */
   readonly alarmFlashing = signal(false);
 
