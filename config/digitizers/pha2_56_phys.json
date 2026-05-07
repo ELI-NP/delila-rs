@@ -12,13 +12,13 @@
     "global_trigger_source": "UserTrg",
     "waveforms_enabled": true,
     "extra": {
-      "clocksource": "Internal",
-      "syncoutmode": "SyncIn",
-      "iolevel": "NIM",
       "trgoutmode": "GPIO",
+      "clocksource": "Internal",
+      "iolevel": "NIM",
       "boardvetosource": "Disabled",
+      "enclockoutfp": "True",
       "boardvetopolarity": "ActiveHigh",
-      "enclockoutfp": "True"
+      "syncoutmode": "SyncIn"
     }
   },
   "channel_defaults": {
