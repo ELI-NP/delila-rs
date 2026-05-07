@@ -2,7 +2,7 @@
 
 **Status:** ✅ **COMPLETED (2026-05-07)**
 **Created:** 2026-05-07 (live discovery during R-P4 verification session)
-**Commit:** `c7d1fc8`
+**Commits:** `c7d1fc8` (initial: explicit Apply arm) → `91e3505` (live-smoke follow-up: Configure auto-load arm) → `6911651` (UI: surface backend message + Material 3 snackbar token)
 
 ## 背景
 
@@ -31,7 +31,7 @@ backend log では `info!` 以上で出ていたが、 (a) Apply summary の `sk
 
 `CaenHandle::get_device_info()` は `/par/FwType` から "DPP_OPEN" / "DPP_PHA" 等の文字列を返せていたが、 これを使うのは `Detect` REST endpoint のみで、 `Configure` 系では完全に未使用だった。
 
-## 修正内容 (commit `c7d1fc8`)
+## 修正内容 (3 commits, 1 セッション)
 
 ### 1. `FirmwareType::from_caen_device` 新設 (`src/config/digitizer.rs`)
 
@@ -65,15 +65,42 @@ declares firmware PHA2. Refusing to Apply — reload the correct config
 or update the source's `type` field, then re-Configure.
 ```
 
-### 3. dig1/dig2 ApplyConfig arm に check 挿入
+### 3. dig1/dig2 ApplyConfig arm に check 挿入 (`c7d1fc8`)
 
 `try_connect_*` 直後、 `apply_config_validated` の前。 mismatch なら `Err(...)` で短絡し `state.rs:369 → CommandResponse::error → operator REST 5xx → UI 赤 snackbar` に伝搬。
 
 `ApplyConfigRunning` arm は post-Running 専用 (= ApplyConfig 成功後しか到達しない) ので check は重複、 instrument せず。
 
-### 4. 既存 helper を 2 行 shim に refactor
+### 4. 既存 helper を 2 行 shim に refactor (`c7d1fc8`)
 
 `src/operator/routes/digitizer.rs::firmware_from_device_info` は新 helper を呼ぶ薄い wrapper に。 detect path の `unwrap_or(FirmwareType::PSD2)` 既存セマンティクスは shim 側で維持、 唯一の caller (`detect_digitizers` line 288) は call site 不変。
+
+### 5. Configure auto-load path も同 check で gate (`91e3505`、 live-smoke driven)
+
+ライブ確認で発覚: `c7d1fc8` は **explicit Apply** arm (UI "Apply" ボタン → `/api/digitizers/<id>/apply`) しか守っていなかった。 一方 `read_loop_dig1.rs:123-143` / `read_loop_dig2.rs:129-159` の **Configure 状態遷移ハンドラ** は独自に `config.config_file` を読み込んで `conn.handle.apply_config(&dig_config)` を直接呼ぶ auto-load path を持っており、 ここが完全に無防備だった。 `start_daq → /api/configure` がこの auto-load path を発火させるので、 ApplyDigitizerConfig が explicit Apply arm に到達する前に silent miswire が再現する。
+
+修正: dig1/dig2 両方の Configure arm で `conn.handle.apply_config(...)` を `match check_firmware_match(...)` で包む。 mismatch なら ① 詳細 ERROR を 1 行 log、 ② `conn.auto_config_failed = true` を立てて Arm command を blocking (既存の apply_config-failed branch と同じ semantics)、 ③ 早期 return。
+
+ライブ検証 (PHA2 config → AMax HW、 同一 binary):
+
+| | `c7d1fc8` のみ | `91e3505` 適用後 |
+|---|---|---|
+| WARN 行 | 62 | 0 |
+| "Failed to set parameter" | 31 | 0 |
+| ERROR | 0 | 1 (full mismatch detail) |
+| INFO "Configuration applied" | applied=12 errors=31 | 出ない (短絡) |
+
+これで **explicit Apply** と **Configure auto-load** の両 path が gate された。
+
+### 6. UI: backend の rich diagnostic を surface + Material 3 snackbar token (`6911651`、 live-smoke 派生)
+
+ライブで `91e3505` を確認した際、 詳細 mismatch メッセージが UI に届かず "Failed to apply configuration" の汎用文だけが灰色 snackbar で出る 2 件のバグが発覚:
+
+1. **HttpErrorResponse handling**: backend は `HTTP 500 + {success:false, message:"Reader rejected config: Firmware mismatch: ..."}` を返すが、 Angular の `HttpClient` は `HttpErrorResponse` を投げ、 これは `instanceof Error` ではない → `digitizer-settings.component.ts::applyConfig()` の catch が fallback branch に落ちて生メッセージが捨てられていた。 Pre-R-P4 から潜在 (`MatSnackBar.open(...)` 旧コードも同形) だが、 これまで意味のあるエラー body を返す backend が無かったため masked。 修正: `err.error?.message ?? err.message` で body を取り出す (既に `pages/waveform.component.ts:1188` と `pages/monitor.component.ts:321` が使っている同パターン)。 加えて success path 側で `result.success` を分岐し、 `HTTP 200 + {success:false}` も `notify.error()` 経路に流す。
+
+2. **Material 3 snackbar token**: `NotificationService` の `panelClass` (`.snackbar-{success,error,warning,info}`) は `--mdc-snackbar-container-color` (Material 2 legacy token) を設定していたが、 Material 3 の snackbar surface は `--mat-snack-bar-container-color` を読む → class は当たっているのに塗られず、 重大度に関わらず default gray (`#2f3033`)。 修正: 両 token を同時に設定 (M3 主、 MDC は埋め込みウィジェット / 将来 BC 用)、 supporting-text-color も同様。
+
+ライブ確認 (localhost, PHA2 config → AMax HW): Apply ボタン押下で **赤 snackbar** が bottom-center に出て、 完全な "Reader rejected config: Firmware mismatch: digitizer at dig2://172.18.4.56 reports firmware 'DPP_OPEN' model 'VX2730' SN '52622' (mapped to AMax), but config declares firmware PHA2. Refusing to Apply — reload the correct config or update the source's `type` field, then re-Configure." + Dismiss action 表示。 `ng test --watch=false` 68/68 pass、 `ng build` clean、 `dist/` 再ビルド済 (CLAUDE.md "Frontend Deployment Policy" 遵守)。
 
 ## 影響範囲
 
@@ -107,15 +134,14 @@ cargo build --release                                        # default clean
 cargo build --release --features dev-tools,root             # all features clean
 ```
 
-### Live smoke (実機検証 — 別途実施予定)
+### Live smoke (実機検証 — 完了 2026-05-07 localhost)
 
-1. `/stop-daq` で実行中の DAQ 停止
-2. 新 binary を実機 (172.18.4.56) で稼働させて `config_pha2_56_phys.toml` で `/start-daq`
-3. UI で **Configure** 押下:
-   - **期待**: 赤 snackbar に詳細 mismatch message 表示
-   - **期待**: backend log の WARN 62 連発が **出ない** (hard-fail で短絡)、 ERROR 1 行のみ
-   - **期待**: `system_state` は `Idle` のまま
-4. 正しい AMax config で Configure → 通常通り成功
+`91e3505` + `6911651` を入れた binary を localhost で `config_pha2_56_phys.toml` (PHA2 宣言) を AMax-FW デジタイザ (172.18.4.56, DPP_OPEN, VX2730 SN:52622) に対して `/start-daq` → UI で Apply 確認:
+
+- ✅ 赤 snackbar が bottom-center に full diagnostic ("Reader rejected config: Firmware mismatch: ... mapped to AMax ... declares firmware PHA2 ...") + Dismiss action 付きで表示
+- ✅ backend log の WARN 62 行 → 0 行、 "Failed to set parameter" 31 行 → 0 行、 ERROR 1 行 (full mismatch detail) のみ
+- ✅ `system_state` は遷移せず (`auto_config_failed` で Arm が blocking)
+- ✅ 正しい AMax config に差し替えて再 Configure → 通常通り成功 (regression なし)
 
 ## 関連
 
