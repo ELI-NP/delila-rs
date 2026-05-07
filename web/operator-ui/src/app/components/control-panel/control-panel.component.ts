@@ -5,7 +5,8 @@ import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
+import { NotificationService } from '../../services/notification.service';
 import { MatIconModule } from '@angular/material/icon';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -286,7 +287,7 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
 })
 export class ControlPanelComponent {
   readonly operator = inject(OperatorService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly notify = inject(NotificationService);
   private readonly dialog = inject(MatDialog);
   private readonly digitizerService = inject(DigitizerService);
 
@@ -440,13 +441,13 @@ export class ControlPanelComponent {
     this.operator.configure({ run_number: runNumber, exp_name: expName }).subscribe({
       next: (res) => {
         if (res.success) {
-          this.showMessage('Configured successfully');
+          this.notify.success('Configured successfully');
           // Don't clear override here - user may want to use the same number for Start
         } else {
-          this.showMessage(`Configure failed: ${res.message}`);
+          this.notify.error(`Configure failed: ${res.message}`);
         }
       },
-      error: (err: unknown) => this.showMessage(`Configure failed: ${this.extractError(err)}`),
+      error: (err: unknown) => this.notify.error(`Configure failed: ${this.extractError(err)}`),
     });
   }
 
@@ -476,15 +477,15 @@ export class ControlPanelComponent {
     this.operator.start(runNumber, comment).subscribe({
       next: (res) => {
         if (res.success) {
-          this.showMessage('Started successfully');
+          this.notify.success('Started successfully');
           this.runStarted.emit({ runNumber, expName });
           // Clear override after successful start - next stop will show server's next_run_number
           this.clearOverride();
         } else {
-          this.showMessage(`Start failed: ${res.message}`);
+          this.notify.error(`Start failed: ${res.message}`);
         }
       },
-      error: (err: unknown) => this.showMessage(`Start failed: ${this.extractError(err)}`),
+      error: (err: unknown) => this.notify.error(`Start failed: ${this.extractError(err)}`),
     });
   }
 
@@ -492,15 +493,15 @@ export class ControlPanelComponent {
     this.operator.stop().subscribe({
       next: (res) => {
         if (res.success) {
-          this.showMessage('Stopped successfully');
+          this.notify.success('Stopped successfully');
           this.runStopped.emit();
           // Override should already be cleared, but ensure it's cleared
           this.clearOverride();
         } else {
-          this.showMessage(`Stop failed: ${res.message}`);
+          this.notify.error(`Stop failed: ${res.message}`);
         }
       },
-      error: (err: unknown) => this.showMessage(`Stop failed: ${this.extractError(err)}`),
+      error: (err: unknown) => this.notify.error(`Stop failed: ${this.extractError(err)}`),
     });
   }
 
@@ -508,14 +509,14 @@ export class ControlPanelComponent {
     this.operator.reset().subscribe({
       next: (res) => {
         if (res.success) {
-          this.showMessage('Reset successfully');
+          this.notify.success('Reset successfully');
           // Clear override on reset as well
           this.clearOverride();
         } else {
-          this.showMessage(`Reset failed: ${res.message}`);
+          this.notify.error(`Reset failed: ${res.message}`);
         }
       },
-      error: (err: unknown) => this.showMessage(`Reset failed: ${this.extractError(err)}`),
+      error: (err: unknown) => this.notify.error(`Reset failed: ${this.extractError(err)}`),
     });
   }
 
@@ -526,18 +527,14 @@ export class ControlPanelComponent {
     this.operator.addNote(text).subscribe({
       next: () => {
         this.newNote = '';
-        this.showMessage('Note added');
+        this.notify.success('Note added');
       },
-      error: () => this.showMessage('Failed to add note'),
+      error: () => this.notify.error('Failed to add note'),
     });
   }
 
   private extractError(err: unknown): string {
     const e = err as { error?: { message?: string }; message?: string };
     return e?.error?.message || e?.message || 'Network error';
-  }
-
-  private showMessage(message: string): void {
-    this.snackBar.open(message, 'Close', { duration: 3000 });
   }
 }

@@ -18,7 +18,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatInputModule } from '@angular/material/input';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDividerModule } from '@angular/material/divider';
@@ -40,6 +40,7 @@ import {
 import { HistogramService } from '../../services/histogram.service';
 import { OperatorService } from '../../services/operator.service';
 import { DigitizerService } from '../../services/digitizer.service';
+import { NotificationService } from '../../services/notification.service';
 import {
   WaveformChannelInfo,
   LatestWaveform,
@@ -874,7 +875,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   private readonly histogramService = inject(HistogramService);
   private readonly operatorService = inject(OperatorService);
   private readonly digitizerService = inject(DigitizerService);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly notify = inject(NotificationService);
 
   private readonly destroy$ = new Subject<void>();
   private readonly refreshInterval = 500;
@@ -1218,14 +1219,12 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       next: (resp) => {
         this.tuneUpLoading.set(false);
         if (!resp.success) {
-          this.snackBar.open('Start failed: ' + resp.message, 'OK', { duration: 5000 });
+          this.notify.error('Start failed: ' + resp.message);
         }
       },
       error: (err) => {
         this.tuneUpLoading.set(false);
-        this.snackBar.open('Start error: ' + (err.error?.message ?? err.message), 'OK', {
-          duration: 5000,
-        });
+        this.notify.error('Start error: ' + (err.error?.message ?? err.message));
       },
     });
   }
@@ -1235,13 +1234,11 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.operatorService.tuneupStop().subscribe({
       next: () => {
         this.tuneUpLoading.set(false);
-        this.snackBar.open('Tune Up stopped', 'OK', { duration: 3000 });
+        this.notify.success('Tune Up stopped');
       },
       error: (err) => {
         this.tuneUpLoading.set(false);
-        this.snackBar.open('Stop error: ' + (err.error?.message ?? err.message), 'OK', {
-          duration: 5000,
-        });
+        this.notify.error('Stop error: ' + (err.error?.message ?? err.message));
       },
     });
   }
@@ -1297,15 +1294,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       .subscribe({
         next: (resp) => {
           if (resp.success) {
-            this.snackBar.open('Configuration applied', 'OK', { duration: 3000 });
+            this.notify.success('Configuration applied');
           } else {
-            this.snackBar.open('Apply failed: ' + resp.message, 'OK', { duration: 5000 });
+            this.notify.error('Apply failed: ' + resp.message);
           }
         },
         error: (err) => {
-          this.snackBar.open('Apply error: ' + (err.error?.message ?? err.message), 'OK', {
-            duration: 5000,
-          });
+          this.notify.error('Apply error: ' + (err.error?.message ?? err.message));
         },
       });
   }

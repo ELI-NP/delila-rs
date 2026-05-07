@@ -2,9 +2,10 @@ import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular
 import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatDialog } from '@angular/material/dialog';
+import { NotificationService } from '../../services/notification.service';
 import { SetupTabComponent } from '../../components/setup-tab/setup-tab.component';
 import { ViewTabComponent } from '../../components/view-tab/view-tab.component';
 import {
@@ -174,7 +175,7 @@ const STORAGE_KEY = 'delila-monitor-state';
 })
 export class MonitorPageComponent implements OnInit, OnDestroy {
   private readonly dialog = inject(MatDialog);
-  private readonly snackBar = inject(MatSnackBar);
+  private readonly notify = inject(NotificationService);
   readonly histogramService = inject(HistogramService);
   private readonly digitizerService = inject(DigitizerService);
   private readonly http = inject(HttpClient);
@@ -296,11 +297,9 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
 
   onClearHistograms(): void {
     this.histogramService.clearHistograms().subscribe({
-      next: () => this.snackBar.open('Histograms cleared', 'OK', { duration: 3000 }),
+      next: () => this.notify.success('Histograms cleared'),
       error: (err) =>
-        this.snackBar.open('Clear failed: ' + (err.error?.message ?? err.message), 'OK', {
-          duration: 5000,
-        }),
+        this.notify.error('Clear failed: ' + (err.error?.message ?? err.message)),
     });
   }
 
