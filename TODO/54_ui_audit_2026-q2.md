@@ -1,7 +1,7 @@
 # TODO 54: UI Audit 2026-Q2 (Operator UI cleanup)
 
 **Created:** 2026-05-07
-**Status:** 🚧 **Round 1〜8 + 2 follow-ups 完了 (11 commits)、 残 1 項目 deferred + 3 項目 議論待ち**
+**Status:** 🚧 **Round 1〜9 + 2 follow-ups + height-chain fix 完了 (14 commits)、 議論待ち 3 項目のみ**
 **Audit doc:** [docs/ui_audit_2026-05-07.md](../docs/ui_audit_2026-05-07.md) (32 項目、 ユーザ判定 inline 記入済)
 
 ## 経緯
@@ -23,8 +23,10 @@ PHA2 firmware mismatch hard-fail 実装中 (TODO 53、 commit `6911651`) に Mat
 | **8** | `a4ab59f` | Apply 失敗の inline alert を Configure ボタン上に persist (snackbar が消えても誘導が残る) | X-5 |
 | **F1 (follow-up)** | `5442a9d` | Monitor tabs を **Material chips** に置換 (App-shell tabs と視覚階層を分離) + Runs 一覧の日時を **ISO 8601** 化 (2026-05-07 14:30、 locale 非依存・コピペ可) | MN-1 (再調整) / RN-2 派生 |
 | **F2 (follow-up)** | `baa2631` | active chip の background が saturated blue + dark text で視認性悪かった件を light-blue 100 + 左端 inset shadow に修正 | MN-1 polish |
+| **height-fix** | `3c575bf` | routed page の `:host { height: 100% }` 抜けを Monitor + Control に追加、 内側を `flex: 1; min-height: 0` 化、 4×4 histogram grid が viewport を突き抜けてスクロールバー出ていた件を解消 (CSS 罠調査の派生) | (audit 範囲外、 派生 fix) |
+| **9** | `e70fe3a` | TimerComponent を削除して ControlPanel に Timer 機能を内包 (Run with timer + Duration + Auto-stop の inline form、 countdown + progress display、 alarm dialog + flashing card 全部移植)、 ControlPage は layout だけに簡素化 | CT-6 |
 
-**累計**: 11 commits、 src/app 配下 9 ファイル + docs 1 + 新 page 1 (run-detail.component.ts)、 dist/ 全コミットで再ビルド済。 ng test 68/68 pass、 ng build clean。 backend 変更なし。
+**累計**: 14 commits、 src/app 配下 10 ファイル + docs 1 + 新 page 1 (run-detail.component.ts)、 1 ファイル削除 (timer.component.ts)、 dist/ 全コミットで再ビルド済。 ng test 68/68 pass、 ng build clean。 backend 変更なし。
 
 ## ユーザ判定で skip した項目 (audit 14 件)
 
@@ -46,23 +48,7 @@ PHA2 firmware mismatch hard-fail 実装中 (TODO 53、 commit `6911651`) に Mat
 | WF-1 | Tune Up toolbar の 15+ コントロール 1 行 | 「問題ないので後回し」 |
 | WF-2 | probe checkbox 6 個常時表示 | 「触るのは知ってる人だけなので OK」 |
 
-## 残: deferred 1 + 議論待ち 3
-
-### CT-6: Timer 統合 (deferred、 規模 M)
-
-ユーザ判定「試しにやってください」。 Timer ↔ ControlPanel に **2 つの Start path** が存在 (ControlPanel.onStart vs Timer.onStartTimer + startWithTimer checked):
-
-```
-Current:
-  ControlPanel "Start" button       → operator.start
-  Timer        "Start Timer" button → emits → ControlPage.onTimerStarted → operator.start + Timer.confirmStarted
-```
-
-audit 推奨: 1-Start path に再配線。 Timer の Start/Stop button 撤去 + "Start with Timer" checkbox 撤去、 ControlPanel の Start button 横に inline `[ ] with timer  Duration: [N] min  [ ] auto-stop` を埋め込み、 Timer は countdown / progress / flashing display 専用に。
-
-**検討ポイント**: Timer.confirmStarted / confirmFailed の co-routine、 control.component.ts の (timerStarted)/(timerExpired) emitter wiring、 TimerService の lifecycle が絡む。 1 PR で慎重に。
-
-### 議論待ち 3 件
+## 残: 議論待ち 3 件
 
 | ID | 議題 |
 |---|---|
@@ -72,7 +58,6 @@ audit 推奨: 1-Start path に再配線。 Timer の Start/Stop button 撤去 + 
 
 ## 次のアクション
 
-- 残 CT-6 は 7/24 実験準備までに着手 (急がない)
 - EM / WF-4 / WF-5 は session 中に対面議論。 結論次第で別 TODO
 
 ## 関連
