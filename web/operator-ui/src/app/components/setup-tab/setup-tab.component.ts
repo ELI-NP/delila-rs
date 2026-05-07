@@ -6,6 +6,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatCardModule } from '@angular/material/card';
 import { MatDividerModule } from '@angular/material/divider';
+import { MatExpansionModule } from '@angular/material/expansion';
 import { FormsModule } from '@angular/forms';
 import { HistogramService } from '../../services/histogram.service';
 import { DigitizerService } from '../../services/digitizer.service';
@@ -34,6 +35,7 @@ import {
     MatIconModule,
     MatCardModule,
     MatDividerModule,
+    MatExpansionModule,
     FormsModule,
   ],
   template: `
@@ -65,9 +67,15 @@ import {
         </button>
       </div>
 
-      <mat-divider></mat-divider>
+      <!-- Manual setup (collapsed by default — Quick Create handles 90% of cases) -->
+      <mat-expansion-panel class="manual-setup-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Manual setup</mat-panel-title>
+          <mat-panel-description>
+            Custom grid + per-cell channel mapping
+          </mat-panel-description>
+        </mat-expansion-panel-header>
 
-      <!-- Manual setup -->
       <div class="setup-header">
         <mat-form-field appearance="outline" class="name-input">
           <mat-label>View Name</mat-label>
@@ -172,40 +180,48 @@ import {
       <!-- Binning controls (per-tab range + bin count). The chart components
            rebin client-side; the View tab gets a live slider on top of these
            initial values. -->
-      <div class="binning-row">
-        <span class="binning-section">{{ is2d() ? 'X (' + axisLabel(xAxisFor1dOr2d()) + '):' : 'Range:' }}</span>
-        <mat-form-field appearance="outline" class="binning-input">
-          <mat-label>Min</mat-label>
-          <input matInput type="number" [value]="xMin()" (change)="onXMinChange($any($event.target).value)" />
-        </mat-form-field>
-        <mat-form-field appearance="outline" class="binning-input">
-          <mat-label>Max</mat-label>
-          <input matInput type="number" [value]="xMax()" (change)="onXMaxChange($any($event.target).value)" />
-        </mat-form-field>
-        <mat-form-field appearance="outline" class="binning-input">
-          <mat-label>Bins</mat-label>
-          <input matInput type="number" [value]="xBins()" (change)="onXBinsChange($any($event.target).value)" />
-        </mat-form-field>
-
-        @if (is2d()) {
-          <span class="binning-section">Y ({{ axisLabel(yAxisOrDefault()) }}):</span>
+      <div class="binning-rows">
+        <div class="binning-row">
+          <span class="binning-section">{{ is2d() ? 'X (' + axisLabel(xAxisFor1dOr2d()) + '):' : 'Range:' }}</span>
           <mat-form-field appearance="outline" class="binning-input">
             <mat-label>Min</mat-label>
-            <input matInput type="number" [value]="yMin()" (change)="onYMinChange($any($event.target).value)" />
+            <input matInput type="number" [value]="xMin()" (change)="onXMinChange($any($event.target).value)" />
           </mat-form-field>
           <mat-form-field appearance="outline" class="binning-input">
             <mat-label>Max</mat-label>
-            <input matInput type="number" [value]="yMax()" (change)="onYMaxChange($any($event.target).value)" />
+            <input matInput type="number" [value]="xMax()" (change)="onXMaxChange($any($event.target).value)" />
           </mat-form-field>
           <mat-form-field appearance="outline" class="binning-input">
             <mat-label>Bins</mat-label>
-            <input matInput type="number" [value]="yBins()" (change)="onYBinsChange($any($event.target).value)" />
+            <input matInput type="number" [value]="xBins()" (change)="onXBinsChange($any($event.target).value)" />
           </mat-form-field>
-        }
+          @if (!is2d()) {
+            <button mat-button (click)="onResetBinning()" title="Reset to axis defaults">
+              <mat-icon>restart_alt</mat-icon> Defaults
+            </button>
+          }
+        </div>
 
-        <button mat-button (click)="onResetBinning()" title="Reset to axis defaults">
-          <mat-icon>restart_alt</mat-icon> Defaults
-        </button>
+        @if (is2d()) {
+          <div class="binning-row">
+            <span class="binning-section">Y ({{ axisLabel(yAxisOrDefault()) }}):</span>
+            <mat-form-field appearance="outline" class="binning-input">
+              <mat-label>Min</mat-label>
+              <input matInput type="number" [value]="yMin()" (change)="onYMinChange($any($event.target).value)" />
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="binning-input">
+              <mat-label>Max</mat-label>
+              <input matInput type="number" [value]="yMax()" (change)="onYMaxChange($any($event.target).value)" />
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="binning-input">
+              <mat-label>Bins</mat-label>
+              <input matInput type="number" [value]="yBins()" (change)="onYBinsChange($any($event.target).value)" />
+            </mat-form-field>
+            <button mat-button (click)="onResetBinning()" title="Reset to axis defaults">
+              <mat-icon>restart_alt</mat-icon> Defaults
+            </button>
+          </div>
+        }
       </div>
 
       <div
@@ -240,6 +256,7 @@ import {
           Select channels for each cell, then click "Create View" to generate a histogram view.
         </span>
       </div>
+      </mat-expansion-panel>
     </div>
   `,
   styles: `
@@ -254,6 +271,26 @@ import {
       display: flex;
       align-items: center;
       gap: 12px;
+      padding: 8px 12px;
+      background: #fff8e1;
+      border-radius: 4px;
+      border-left: 3px solid #ffb300;
+    }
+    .quick-create-label {
+      font-weight: 600;
+      color: #5d4037;
+    }
+
+    .manual-setup-panel {
+      box-shadow: none !important;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 4px;
+    }
+
+    .binning-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
     }
 
     .binning-row {

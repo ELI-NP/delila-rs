@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatTabsModule } from '@angular/material/tabs';
 import { MatDialog } from '@angular/material/dialog';
 import { SetupTabComponent } from '../../components/setup-tab/setup-tab.component';
 import { ViewTabComponent } from '../../components/view-tab/view-tab.component';
@@ -31,31 +32,34 @@ const STORAGE_KEY = 'delila-monitor-state';
     MatButtonModule,
     MatIconModule,
     MatSnackBarModule,
+    MatTabsModule,
     SetupTabComponent,
     ViewTabComponent,
   ],
   template: `
     <div class="monitor-page">
-      <!-- Tab bar -->
+      <!-- Tab bar (Material mat-tab-nav-bar — Setup tab is decorated with `+` to hint create) -->
       <div class="tab-bar">
-        <div class="tabs-container">
-          <!-- Setup tab (always first) -->
-          <button
-            class="tab-button setup-tab"
-            [class.active]="activeTabId() === null"
+        <nav mat-tab-nav-bar [tabPanel]="tabPanel" class="tab-nav">
+          <a
+            mat-tab-link
+            class="setup-link"
+            [active]="activeTabId() === null"
             (click)="selectSetupTab()"
+            (keydown.enter)="selectSetupTab()"
+            tabindex="0"
           >
-            <span class="tab-icon">+</span>
+            <mat-icon class="setup-icon">add</mat-icon>
             Setup
-          </button>
-
-          <!-- View tabs -->
+          </a>
           @for (tab of viewTabs(); track tab.id) {
-            <button
-              class="tab-button"
-              [class.active]="activeTabId() === tab.id"
+            <a
+              mat-tab-link
+              [active]="activeTabId() === tab.id"
               (click)="selectViewTab(tab.id)"
+              (keydown.enter)="selectViewTab(tab.id)"
               (dblclick)="renameViewTab(tab.id)"
+              tabindex="0"
             >
               {{ tab.name }}
               <span
@@ -66,9 +70,9 @@ const STORAGE_KEY = 'delila-monitor-state';
                 (keydown.enter)="removeViewTab(tab.id, $event)"
                 title="Close"
               >×</span>
-            </button>
+            </a>
           }
-        </div>
+        </nav>
         <button
           mat-stroked-button
           class="clear-button"
@@ -79,6 +83,8 @@ const STORAGE_KEY = 'delila-monitor-state';
           Clear
         </button>
       </div>
+
+      <mat-tab-nav-panel #tabPanel></mat-tab-nav-panel>
 
       <!-- Tab content -->
       <div class="tab-content">
@@ -114,74 +120,48 @@ const STORAGE_KEY = 'delila-monitor-state';
 
     .tab-bar {
       display: flex;
-      align-items: center;
-      background-color: #f5f5f5;
-      border-radius: 4px;
-      padding: 4px;
+      align-items: stretch;
+      gap: 8px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.12);
     }
 
-    .tabs-container {
-      display: flex;
-      align-items: center;
-      gap: 4px;
+    .tab-nav {
       flex: 1;
-      overflow-x: auto;
+      min-width: 0;
     }
 
-    .tab-button {
-      position: relative;
-      padding: 8px 28px 8px 12px;
-      border: none;
-      background: transparent;
-      cursor: pointer;
-      border-radius: 4px;
-      font-size: 14px;
-      white-space: nowrap;
-      transition: background-color 0.2s;
-    }
-
-    .tab-button:hover {
-      background-color: #e0e0e0;
-    }
-
-    .tab-button.active {
-      background-color: white;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    }
-
-    .tab-button.setup-tab {
-      padding: 8px 16px;
+    .setup-link {
+      color: #1976d2 !important;
       font-weight: 500;
-      color: #1976d2;
     }
-
-    .tab-icon {
-      margin-right: 4px;
+    .setup-icon {
+      vertical-align: middle;
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+      margin-right: 2px;
     }
 
     .tab-close {
-      position: absolute;
-      right: 6px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 16px;
-      height: 16px;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
+      width: 18px;
+      height: 18px;
       border-radius: 50%;
       font-size: 14px;
       line-height: 1;
-      opacity: 0.5;
+      margin-left: 6px;
+      opacity: 0.55;
+      cursor: pointer;
     }
-
     .tab-close:hover {
       opacity: 1;
       background-color: rgba(0, 0, 0, 0.1);
     }
 
     .clear-button {
-      margin-left: 8px;
+      align-self: center;
       flex-shrink: 0;
     }
 
