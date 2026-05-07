@@ -1,4 +1,4 @@
-import { Component, inject, signal, output, computed, effect } from '@angular/core';
+import { Component, inject, signal, computed, effect } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatCardModule } from '@angular/material/card';
@@ -10,9 +10,13 @@ import { NotificationService } from '../../services/notification.service';
 import { MatIconModule } from '@angular/material/icon';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatDialog } from '@angular/material/dialog';
+import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { OperatorService } from '../../services/operator.service';
 import { DigitizerService } from '../../services/digitizer.service';
+import { TimerService } from '../../services/timer.service';
+import { TimerAlarmDialogComponent } from '../timer/timer-alarm-dialog.component';
 import { WaveformWarningDialogComponent } from './waveform-warning-dialog.component';
 
 @Component({
@@ -29,10 +33,13 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
     MatIconModule,
     MatDividerModule,
     MatTooltipModule,
+    MatCheckboxModule,
+    MatProgressBarModule,
+    MatDialogModule,
     DatePipe,
   ],
   template: `
-    <mat-card>
+    <mat-card [class.flashing]="alarmFlashing()">
       <mat-card-header>
         <mat-card-title>Control Panel</mat-card-title>
       </mat-card-header>
@@ -120,6 +127,48 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
               </span>
               <span class="apply-failure-detail">{{ failure.message }}</span>
             </div>
+          </div>
+        }
+
+        <!-- Timer controls (folded in from the old standalone Timer panel — CT-6).
+             When not running: inline "Run with timer" form sits above Start/Stop.
+             When running: countdown + progress bar replaces the form. -->
+        @if (timer.isRunning()) {
+          <div class="timer-display">
+            <div class="timer-remaining">{{ timer.remainingDisplay() }}</div>
+            <mat-progress-bar mode="determinate" [value]="timer.progress()"></mat-progress-bar>
+          </div>
+        } @else {
+          <div class="timer-row">
+            <mat-checkbox
+              [ngModel]="useTimer()"
+              (ngModelChange)="useTimer.set($event)"
+              [disabled]="isRunning()"
+              matTooltip="When checked, Start also begins a countdown and (optionally) auto-stops the run when it expires."
+            >
+              Run with timer
+            </mat-checkbox>
+            @if (useTimer()) {
+              <mat-form-field appearance="outline" class="duration-field">
+                <mat-label>Duration (min)</mat-label>
+                <input
+                  matInput
+                  type="number"
+                  [ngModel]="timer.durationMinutes()"
+                  (ngModelChange)="timer.durationMinutes.set($event)"
+                  min="1"
+                  max="180"
+                  [disabled]="isRunning()"
+                />
+              </mat-form-field>
+              <mat-checkbox
+                [ngModel]="timer.autoStop()"
+                (ngModelChange)="timer.autoStop.set($event)"
+                [disabled]="isRunning()"
+              >
+                Auto-stop on expire
+              </mat-checkbox>
+            }
           </div>
         }
 
@@ -282,6 +331,46 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
       color: rgba(0, 0, 0, 0.7);
       word-break: break-word;
     }
+
+    /* Timer (CT-6): inline form when idle, full-width countdown when running. */
+    .timer-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 0 0 12px;
+      padding: 8px 12px;
+      background: #f5f5f5;
+      border-radius: 4px;
+    }
+    .duration-field {
+      width: 110px;
+    }
+    .duration-field ::ng-deep .mat-mdc-form-field-subscript-wrapper {
+      display: none;
+    }
+    .timer-display {
+      text-align: center;
+      margin: 0 0 12px;
+      padding: 12px;
+      background: #f5f5f5;
+      border-radius: 4px;
+    }
+    .timer-remaining {
+      font-size: 28px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 8px;
+    }
+    /* Pulse the whole card while the timer-expired alarm dialog is open. */
+    mat-card.flashing {
+      animation: card-flash 0.5s infinite;
+    }
+    @keyframes card-flash {
+      0%, 100% { background-color: white; }
+      50%      { background-color: #ffcdd2; }
+    }
+
     .button-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -351,6 +440,14 @@ export class ControlPanelComponent {
   private readonly notify = inject(NotificationService);
   private readonly dialog = inject(MatDialog);
   private readonly digitizerService = inject(DigitizerService);
+  /** Owns countdown / autoStop / durationMinutes signals — Timer is now folded
+   *  into ControlPanel (CT-6) and the standalone TimerComponent is gone. */
+  readonly timer = inject(TimerService);
+
+  /** When checked, doStart() also kicks the countdown after operator.start succeeds. */
+  readonly useTimer = signal(true);
+  /** Pulses the card background red while the timer-expired alarm dialog is open. */
+  readonly alarmFlashing = signal(false);
 
   // Edit mode state
   private editMode = signal(false);
@@ -393,6 +490,26 @@ export class ControlPanelComponent {
   constructor() {
     // Ensure digitizer configs are loaded for waveform warning check
     this.digitizerService.loadDigitizers();
+
+    // Timer-expired callback: open the alarm dialog (with disableClose so the
+    // operator must dismiss), and if autoStop is set, stop the run too. Logic
+    // formerly lived in TimerComponent; folded here when the standalone Timer
+    // panel was removed (CT-6).
+    this.timer.onTimerComplete = () => {
+      this.alarmFlashing.set(true);
+      const dialogRef = this.dialog.open(TimerAlarmDialogComponent, {
+        disableClose: true,
+        width: '400px',
+      });
+      dialogRef.afterClosed().subscribe(() => {
+        this.alarmFlashing.set(false);
+        this.timer.stopAlarm();
+      });
+      if (this.timer.autoStop()) {
+        // Best-effort stop; if it fails the user still has a manual Stop button.
+        this.operator.stop().subscribe();
+      }
+    };
 
     // Sync comment with server state
     effect(() => {
@@ -453,10 +570,6 @@ export class ControlPanelComponent {
   readonly canEnterEditMode = computed(() => {
     return !this.isRunning() && this.operator.buttonStates().configure;
   });
-
-  // Events for parent component
-  readonly runStarted = output<{ runNumber: number; expName: string }>();
-  readonly runStopped = output<void>();
 
   // Edit mode methods
   enterEditMode(): void {
@@ -535,13 +648,15 @@ export class ControlPanelComponent {
 
   private doStart(): void {
     const runNumber = this.displayRunNumber();
-    const expName = this.expName();
     const comment = this.comment;
     this.operator.start(runNumber, comment).subscribe({
       next: (res) => {
         if (res.success) {
           this.notify.success('Started successfully');
-          this.runStarted.emit({ runNumber, expName });
+          // CT-6: Start the countdown alongside the run when the operator opted in.
+          if (this.useTimer() && !this.timer.isRunning()) {
+            this.timer.startTimer();
+          }
           // Clear override after successful start - next stop will show server's next_run_number
           this.clearOverride();
         } else {
@@ -557,7 +672,11 @@ export class ControlPanelComponent {
       next: (res) => {
         if (res.success) {
           this.notify.success('Stopped successfully');
-          this.runStopped.emit();
+          // Stop the countdown when the run stops manually — keeps timer state
+          // in sync regardless of whether the run ended via the timer or the button.
+          if (this.timer.isRunning()) {
+            this.timer.stopTimer();
+          }
           // Override should already be cleared, but ensure it's cleared
           this.clearOverride();
         } else {
