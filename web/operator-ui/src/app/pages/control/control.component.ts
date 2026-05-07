@@ -34,12 +34,20 @@ import { NotificationService } from '../../services/notification.service';
     </div>
   `,
   styles: `
+    :host {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+
     .control-content {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 16px;
       padding: 16px;
-      height: 100%;
+      flex: 1;
+      min-height: 0;
     }
 
     .left-column,

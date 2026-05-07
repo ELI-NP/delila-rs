@@ -107,10 +107,23 @@ const STORAGE_KEY = 'delila-monitor-state';
     </div>
   `,
   styles: `
-    .monitor-page {
+    /* Propagate the height contract from the App-shell .tab-content (flex: 1)
+       into our internal flex chain. Without :host { height: 100% } the inner
+       .monitor-page height: 100% resolves to auto (parent is unsized), the
+       histogram grid then falls back to content-height, and the page overflows
+       the viewport — same fix waveform.component.ts already has. */
+    :host {
       display: flex;
       flex-direction: column;
       height: 100%;
+      min-height: 0;
+    }
+
+    .monitor-page {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
       padding: 16px;
       gap: 8px;
     }
