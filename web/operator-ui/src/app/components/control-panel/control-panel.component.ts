@@ -54,11 +54,15 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           <mat-icon>more_vert</mat-icon>
         </button>
         <mat-menu #recoveryMenu="matMenu">
+          <!-- No matTooltip on the menu items: tooltips fired in the panel area
+               and intercepted hover-targeting on the next item below (live-test
+               regression — moving the cursor from above to Force Reset got stuck
+               on the Configure tooltip). Labels + icons are descriptive enough,
+               and the kebab button's own tooltip already explains the section. -->
           <button
             mat-menu-item
             (click)="onConfigure()"
             [disabled]="!operator.buttonStates().configure"
-            matTooltip="Move state to Configured without starting a run — pre-flight check / hardware verification"
           >
             <mat-icon>tune</mat-icon>
             <span>Configure (pre-flight)</span>
@@ -67,10 +71,9 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
             mat-menu-item
             (click)="onReset()"
             [disabled]="!operator.buttonStates().reset"
-            matTooltip="Drop all components back to Idle — recovery from a stuck state"
           >
             <mat-icon>restart_alt</mat-icon>
-            <span>Force Reset</span>
+            <span>Force Reset (recovery)</span>
           </button>
         </mat-menu>
       </mat-card-header>
