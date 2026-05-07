@@ -116,7 +116,12 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           >
             Configure
           </button>
-          <button mat-raised-button [disabled]="!operator.buttonStates().reset" (click)="onReset()">Reset</button>
+          <button
+            mat-raised-button
+            [disabled]="!operator.buttonStates().reset"
+            (click)="onReset()"
+            matTooltip="Drop all components back to Idle (recovery from a stuck state)"
+          >Force Reset</button>
           <button
             mat-raised-button
             color="accent"

@@ -13,6 +13,7 @@ import { MatDividerModule } from '@angular/material/divider';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatMenuModule } from '@angular/material/menu';
 import { firstValueFrom } from 'rxjs';
 import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
@@ -44,11 +45,12 @@ import {
     MatTabsModule,
     MatProgressSpinnerModule,
     MatTooltipModule,
+    MatMenuModule,
     ChannelTableComponent,
   ],
   template: `
     <div class="digitizer-settings settings-panel" tabindex="0" (keydown.enter)="onEnterKey($event)">
-      <!-- Header: Digitizer selector + firmware badge + action buttons -->
+      <!-- Header: focus on Apply. Edit / Detect / Discard / Restore live in the kebab. -->
       <div class="header-row">
         <mat-form-field appearance="outline" class="digitizer-select">
           <mat-label>Select Digitizer</mat-label>
@@ -62,11 +64,6 @@ import {
         </mat-form-field>
 
         @if (selectedConfig(); as config) {
-          <mat-form-field appearance="outline" class="name-input">
-            <mat-label>Name</mat-label>
-            <input matInput [(ngModel)]="config.name" />
-          </mat-form-field>
-
           <span class="firmware-badge" [class]="config.firmware.toLowerCase()">
             {{ config.firmware }}
           </span>
@@ -77,29 +74,41 @@ import {
 
         <span class="spacer"></span>
 
-        <button mat-button (click)="onDetect()" [disabled]="detecting()">
-          @if (detecting()) {
-            <mat-spinner diameter="18" class="inline-spinner"></mat-spinner>
-          } @else {
-            <mat-icon>search</mat-icon>
-          }
-          Detect
+        <button
+          mat-icon-button
+          [matMenuTriggerFor]="moreMenu"
+          [disabled]="!selectedConfig()"
+          matTooltip="More actions (rename, detect, discard, restore)"
+          aria-label="More actions"
+        >
+          <mat-icon>more_vert</mat-icon>
         </button>
-        <button mat-button (click)="resetConfig()" [disabled]="!selectedConfig()">
-          <mat-icon>refresh</mat-icon>
-          Reset
-        </button>
-        @if (selectedConfig()?.firmware === 'AMax') {
-          <button
-            mat-button
-            (click)="resetAmaxDefaults()"
-            [disabled]="!selectedConfig()"
-            matTooltip="Restore all AMax channel parameters to FW developer defaults (fw_params.json)"
-          >
-            <mat-icon>settings_backup_restore</mat-icon>
-            Reset AMax
+        <mat-menu #moreMenu="matMenu">
+          <button mat-menu-item (click)="onRenameDigitizer()" [disabled]="!selectedConfig()">
+            <mat-icon>edit</mat-icon>
+            <span>Rename digitizer…</span>
           </button>
-        }
+          <button mat-menu-item (click)="onDetect()" [disabled]="detecting()">
+            <mat-icon>search</mat-icon>
+            <span>{{ detecting() ? 'Detecting hardware…' : 'Detect connected hardware' }}</span>
+          </button>
+          <button mat-menu-item (click)="resetConfig()" [disabled]="!selectedConfig()">
+            <mat-icon>refresh</mat-icon>
+            <span>Discard changes</span>
+          </button>
+          @if (selectedConfig()?.firmware === 'AMax') {
+            <button
+              mat-menu-item
+              (click)="resetAmaxDefaults()"
+              [disabled]="!selectedConfig()"
+              matTooltip="Restore all AMax channel parameters to FW developer defaults (fw_params.json)"
+            >
+              <mat-icon>settings_backup_restore</mat-icon>
+              <span>Restore FW defaults</span>
+            </button>
+          }
+        </mat-menu>
+
         <button
           mat-raised-button
           color="primary"
@@ -107,7 +116,11 @@ import {
           [disabled]="!selectedConfig() || applying()"
           [matTooltip]="isRunning() ? 'Only SetInRun parameters will be applied' : ''"
         >
-          <mat-icon>check</mat-icon>
+          @if (applying()) {
+            <mat-spinner diameter="18" class="inline-spinner"></mat-spinner>
+          } @else {
+            <mat-icon>check</mat-icon>
+          }
           {{ isRunning() ? 'Apply (Runtime)' : 'Apply' }}
         </button>
       </div>
@@ -585,16 +598,10 @@ import {
             </div>
           </mat-tab>
 
-          <!-- Tab 5: Coincidence -->
-          <mat-tab label="Coincidence">
-            <div class="tab-content">
-              @if (config.firmware === 'X743Std') {
-                <mat-card class="config-card">
-                  <mat-card-content>
-                    <p class="na-message">Coincidence settings are not applicable for V1743 Standard mode.</p>
-                  </mat-card-content>
-                </mat-card>
-              } @else {
+          <!-- Tab 5: Coincidence (hidden for X743 — N/A in Standard mode) -->
+          @if (config.firmware !== 'X743Std') {
+            <mat-tab label="Coincidence">
+              <div class="tab-content">
                 <app-channel-table
                   [params]="coincidenceParams()"
                   [numChannels]="config.num_channels"
@@ -604,9 +611,9 @@ import {
                   (defaultChange)="onDefaultChange($event)"
                   (channelChange)="onChannelChange($event)"
                 />
-              }
-            </div>
-          </mat-tab>
+              </div>
+            </mat-tab>
+          }
 
           <!-- Tab 6: Waveform -->
           <mat-tab label="Waveform">
@@ -780,10 +787,6 @@ import {
 
     .digitizer-select {
       width: 280px;
-    }
-
-    .name-input {
-      width: 200px;
     }
 
     .firmware-badge {
@@ -1143,6 +1146,16 @@ export class DigitizerSettingsComponent {
       this.digitizerService.loadDigitizers();
       this.notify.success('Configuration reset');
     }
+  }
+
+  onRenameDigitizer(): void {
+    const config = this.selectedConfig();
+    if (!config) return;
+    const next = window.prompt('Rename digitizer:', config.name);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === config.name) return;
+    config.name = trimmed;
   }
 
   /**
