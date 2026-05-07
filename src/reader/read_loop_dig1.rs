@@ -123,16 +123,31 @@ pub(crate) fn run(
                 if let Some(ref config_path) = config.config_file {
                     info!(path = %config_path, "Loading digitizer configuration");
                     match crate::config::digitizer::DigitizerConfig::load(config_path) {
-                        Ok(dig_config) => match conn.handle.apply_config(&dig_config) {
-                            Ok(count) => {
-                                info!(count, "Digitizer configuration applied");
+                        Ok(dig_config) => {
+                            // Same firmware mismatch check as the explicit
+                            // ApplyConfig path (see check_firmware_match in
+                            // reader/mod.rs). The Configure auto-load path
+                            // calls apply_config directly, so without this
+                            // gate the silent-miswire bug from 2026-05-07
+                            // would still leak through here even if the
+                            // operator-driven ApplyConfig path is protected.
+                            match check_firmware_match(conn, &config.url, dig_config.firmware) {
+                                Ok(()) => match conn.handle.apply_config(&dig_config) {
+                                    Ok(count) => {
+                                        info!(count, "Digitizer configuration applied");
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "Auto-configure from JSON failed — \
+                                            awaiting Operator ApplyDigitizerConfig");
+                                        conn.auto_config_failed = true;
+                                    }
+                                },
+                                Err(msg) => {
+                                    error!("{}", msg);
+                                    conn.auto_config_failed = true;
+                                }
                             }
-                            Err(e) => {
-                                warn!(error = %e, "Auto-configure from JSON failed — \
-                                    awaiting Operator ApplyDigitizerConfig");
-                                conn.auto_config_failed = true;
-                            }
-                        },
+                        }
                         Err(e) => {
                             error!(error = %e, path = %config_path, "Failed to load config file");
                             // Mark as configured anyway — digitizer keeps its current settings

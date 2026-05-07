@@ -130,24 +130,37 @@ pub(crate) fn run(
                     info!(path = %config_path, "Loading digitizer configuration");
                     match crate::config::digitizer::DigitizerConfig::load(config_path) {
                         Ok(dig_config) => {
-                            let apply_result =
-                                conn.handle.apply_config(&dig_config).and_then(|n| {
-                                    // AMax: also program per-channel user registers
-                                    if dig_config.firmware == FirmwareType::AMax {
-                                        conn.handle
-                                            .apply_amax_channel_config(&dig_config)
-                                            .map(|m| n + m)
-                                    } else {
-                                        Ok(n)
+                            // Same firmware mismatch check as the explicit
+                            // ApplyConfig path (see check_firmware_match in
+                            // reader/mod.rs). The Configure auto-load path
+                            // bypasses ApplyConfig and was the actual route
+                            // that leaked the 2026-05-07 silent miswire.
+                            match check_firmware_match(conn, &config.url, dig_config.firmware) {
+                                Ok(()) => {
+                                    let apply_result =
+                                        conn.handle.apply_config(&dig_config).and_then(|n| {
+                                            // AMax: also program per-channel user registers
+                                            if dig_config.firmware == FirmwareType::AMax {
+                                                conn.handle
+                                                    .apply_amax_channel_config(&dig_config)
+                                                    .map(|m| n + m)
+                                            } else {
+                                                Ok(n)
+                                            }
+                                        });
+                                    match apply_result {
+                                        Ok(count) => {
+                                            info!(count, "Digitizer configuration applied");
+                                        }
+                                        Err(e) => {
+                                            warn!(error = %e, "Auto-configure from JSON failed — \
+                                                awaiting Operator ApplyDigitizerConfig");
+                                            conn.auto_config_failed = true;
+                                        }
                                     }
-                                });
-                            match apply_result {
-                                Ok(count) => {
-                                    info!(count, "Digitizer configuration applied");
                                 }
-                                Err(e) => {
-                                    warn!(error = %e, "Auto-configure from JSON failed — \
-                                        awaiting Operator ApplyDigitizerConfig");
+                                Err(msg) => {
+                                    error!("{}", msg);
                                     conn.auto_config_failed = true;
                                 }
                             }
