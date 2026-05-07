@@ -1,7 +1,7 @@
 # TODO 54: UI Audit 2026-Q2 (Operator UI cleanup)
 
 **Created:** 2026-05-07
-**Status:** 🚧 **Round 1〜9 + 2 follow-ups + height-chain fix 完了 (14 commits)、 議論待ち 3 項目のみ**
+**Status:** ✅ **COMPLETED (2026-05-07、 全 audit 項目 + 議論項目 close)**
 **Audit doc:** [docs/ui_audit_2026-05-07.md](../docs/ui_audit_2026-05-07.md) (32 項目、 ユーザ判定 inline 記入済)
 
 ## 経緯
@@ -25,8 +25,10 @@ PHA2 firmware mismatch hard-fail 実装中 (TODO 53、 commit `6911651`) に Mat
 | **F2 (follow-up)** | `baa2631` | active chip の background が saturated blue + dark text で視認性悪かった件を light-blue 100 + 左端 inset shadow に修正 | MN-1 polish |
 | **height-fix** | `3c575bf` | routed page の `:host { height: 100% }` 抜けを Monitor + Control に追加、 内側を `flex: 1; min-height: 0` 化、 4×4 histogram grid が viewport を突き抜けてスクロールバー出ていた件を解消 (CSS 罠調査の派生) | (audit 範囲外、 派生 fix) |
 | **9** | `e70fe3a` | TimerComponent を削除して ControlPanel に Timer 機能を内包 (Run with timer + Duration + Auto-stop の inline form、 countdown + progress display、 alarm dialog + flashing card 全部移植)、 ControlPage は layout だけに簡素化 | CT-6 |
+| **10** | `db87fed` `da50508` | Configure / Force Reset を kebab メニュー (mat-card-header 右端) に格下げ、 button-grid を Start / Stop の 2 ボタンに圧縮、 X-5 banner の retry 誘導を 「press Configure」 → 「press Start」 に書き換え。 派生 fix (`da50508`) で menu item の matTooltip を撤去 (上から下へのホバー時に Configure tooltip が Force Reset を intercept する不具合)、 label 内に "(pre-flight)" / "(recovery)" suffix で説明を吸収 | (audit 範囲外、 派生 UX 改善) |
+| **11** | (本 commit) | Settings の Emulator タブ + EmulatorSettingsComponent + EmulatorService を完全削除、 emulator バイナリ自体は残し config.toml で設定する運用に統一 | EM |
 
-**累計**: 14 commits、 src/app 配下 10 ファイル + docs 1 + 新 page 1 (run-detail.component.ts)、 1 ファイル削除 (timer.component.ts)、 dist/ 全コミットで再ビルド済。 ng test 68/68 pass、 ng build clean。 backend 変更なし。
+**累計**: 16 commits、 src/app 配下 11 ファイル + docs 1 + 新 page 1 (run-detail.component.ts)、 3 ファイル削除 (timer.component.ts + emulator-settings.component.ts + emulator.service.ts)、 dist/ 全コミットで再ビルド済。 ng test 68/68 pass、 ng build clean。 backend 変更なし (`/api/emulator/*` REST routes は harmless leftovers として残置)。
 
 ## ユーザ判定で skip した項目 (audit 14 件)
 
@@ -48,17 +50,21 @@ PHA2 firmware mismatch hard-fail 実装中 (TODO 53、 commit `6911651`) に Mat
 | WF-1 | Tune Up toolbar の 15+ コントロール 1 行 | 「問題ないので後回し」 |
 | WF-2 | probe checkbox 6 個常時表示 | 「触るのは知ってる人だけなので OK」 |
 
-## 残: 議論待ち 3 件
+## 議論項目 3 件の決着 (2026-05-07 セッション内議論)
 
-| ID | 議題 |
-|---|---|
-| **EM** | Emulator 自体の存在意義 — そもそも UI から触る必要があるか、 残すなら Settings から外して開発者向け hidden flag に隔離するか。 ユーザ「そもそも Emulator っているのか？そこを後で議論しましょう。」 |
-| **WF-4** | Tune Up bottom row "All" モードの param table grid (5 カテゴリ並列、 数千セル相当) — 「Settings と Tune Up Mode を行き来するのがダルい」 ので一覧性は欲しい、 が default を狭めるか議論余地あり |
-| **WF-5** | Normal モード vs Tune Up モードを同じ `/waveform` URL で `@if (isTuneUp())` 分岐している件。 「ほぼ Tune Up 目的なので問題ないが議論しましょう」 |
+| ID | 結論 | 理由 |
+|---|---|---|
+| **WF-5** (Normal/Tune Up 同 URL) | **won't fix** | 「ほぼ Tune Up 目的」 という運用実態に合致しており、 1700 行の保守コストはあるが操作主体感に影響なし。 URL クエリ書き換え案も労力に見合わずスキップ |
+| **WF-4** (Tune Up "All" モードの dense grid) | **won't fix** (現レイアウト維持) | ユーザの当初コメントは "All" を「全チャンネルにパラメータを設定する」 機能と誤認していたためで、 実際の動作 (5 カテゴリ並列表示) は意図通り。 default を狭めると Tune Up 開いた直後に画面がスカスカ、 全画面前提なので現 dense レイアウトが正解 |
+| **EM** (Emulator 存在意義) | **完全削除** | TOML で events_per_batch / batch_interval_ms / num_modules / waveform 等を書ければ十分という判断。 UI から Emulator タブ + EmulatorSettingsComponent + EmulatorService を削除、 backend `/api/emulator/*` routes は harmless leftover として残置 (将来 backend cleanup で削れる) |
+
+## 副産物的に発覚した知見 (audit 外)
+
+- **channel-table の "Default" 列** = 全チャンネル一括設定機能。 ユーザは "All" カテゴリと誤認していたが、 実は Default 列が broadcast 役。 命名 / discoverability の改善余地あり (将来検討)。
 
 ## 次のアクション
 
-- EM / WF-4 / WF-5 は session 中に対面議論。 結論次第で別 TODO
+なし — UI Audit 2026-Q2 は本日で完了。
 
 ## 関連
 
