@@ -1091,9 +1091,19 @@ export class DigitizerSettingsComponent {
         result = await this.digitizerService.applyToHardware(updatedConfig);
       }
 
-      this.notify.success(result.message || 'Configuration applied to hardware');
+      if (result.success) {
+        this.notify.success(result.message || 'Configuration applied to hardware');
+      } else {
+        this.notify.error(result.message || 'Failed to apply configuration');
+      }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to apply configuration';
+      // Backend returns HTTP 5xx with {success: false, message: "..."} on
+      // hard-fail (e.g. firmware mismatch). Angular HttpClient throws
+      // HttpErrorResponse — which is NOT `instanceof Error` — so we extract
+      // the message from `err.error.message` (the JSON body).
+      const e = err as { error?: { message?: string }; message?: string };
+      const message =
+        e.error?.message ?? e.message ?? 'Failed to apply configuration';
       this.notify.error(message);
     } finally {
       this.applying.set(false);

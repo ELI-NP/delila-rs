@@ -32,28 +32,41 @@ html, body {
 }
 
 // Snackbar notification styles
+//
+// Material 3 reads color from `--mat-snack-bar-container-color`; the legacy
+// `--mdc-snackbar-container-color` is preserved for backward compat with
+// older Material versions and any third-party CDK overlay that still binds
+// to the MDC variable.
 .snackbar-success {
+  --mat-snack-bar-container-color: #4caf50;
+  --mat-snack-bar-supporting-text-color: white;
+  --mat-snack-bar-button-color: white;
   --mdc-snackbar-container-color: #4caf50;
   --mdc-snackbar-supporting-text-color: white;
-  --mat-snack-bar-button-color: white;
 }
 
 .snackbar-error {
+  --mat-snack-bar-container-color: #f44336;
+  --mat-snack-bar-supporting-text-color: white;
+  --mat-snack-bar-button-color: white;
   --mdc-snackbar-container-color: #f44336;
   --mdc-snackbar-supporting-text-color: white;
-  --mat-snack-bar-button-color: white;
 }
 
 .snackbar-warning {
+  --mat-snack-bar-container-color: #ff9800;
+  --mat-snack-bar-supporting-text-color: white;
+  --mat-snack-bar-button-color: white;
   --mdc-snackbar-container-color: #ff9800;
   --mdc-snackbar-supporting-text-color: white;
-  --mat-snack-bar-button-color: white;
 }
 
 .snackbar-info {
+  --mat-snack-bar-container-color: #2196f3;
+  --mat-snack-bar-supporting-text-color: white;
+  --mat-snack-bar-button-color: white;
   --mdc-snackbar-container-color: #2196f3;
   --mdc-snackbar-supporting-text-color: white;
-  --mat-snack-bar-button-color: white;
 }
 
 // Histogram expand dialog
