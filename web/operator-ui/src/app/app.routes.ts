@@ -27,4 +27,9 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./pages/runs/runs.component').then((m) => m.RunsPageComponent),
   },
+  {
+    path: 'runs/:runNumber',
+    loadComponent: () =>
+      import('./pages/runs/run-detail.component').then((m) => m.RunDetailPageComponent),
+  },
 ];
