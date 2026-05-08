@@ -487,6 +487,17 @@ pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> deco
             digital_probe3: Vec::new(),
             digital_probe4: Vec::new(),
             digital_probe5: Vec::new(),
+            digital_probe6: Vec::new(),
+            digital_probe7: Vec::new(),
+            digital_probe8: Vec::new(),
+            digital_probe9: Vec::new(),
+            digital_probe10: Vec::new(),
+            digital_probe11: Vec::new(),
+            digital_probe12: Vec::new(),
+            digital_probe13: Vec::new(),
+            digital_probe14: Vec::new(),
+            digital_probe15: Vec::new(),
+            digital_probe16: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: AMAX_TIME_STEP_NS,
@@ -494,7 +505,7 @@ pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> deco
             analog_probe2_is_signed: false,
             analog_probe3_is_signed: false,
             analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 16],
         }
     });
 
@@ -1354,6 +1365,17 @@ impl Reader {
                     digital_probe3: wf.digital_probe3, // move
                     digital_probe4: wf.digital_probe4, // move
                     digital_probe5: wf.digital_probe5, // move (AMax debug FW)
+                    digital_probe6: wf.digital_probe6,
+                    digital_probe7: wf.digital_probe7,
+                    digital_probe8: wf.digital_probe8,
+                    digital_probe9: wf.digital_probe9,
+                    digital_probe10: wf.digital_probe10,
+                    digital_probe11: wf.digital_probe11,
+                    digital_probe12: wf.digital_probe12,
+                    digital_probe13: wf.digital_probe13,
+                    digital_probe14: wf.digital_probe14,
+                    digital_probe15: wf.digital_probe15,
+                    digital_probe16: wf.digital_probe16,
                     time_resolution: wf.time_resolution,
                     trigger_threshold: wf.trigger_threshold,
                     ns_per_sample: wf.ns_per_sample,
@@ -2047,6 +2069,17 @@ impl Reader {
                         digital_probe3: Vec::new(),
                         digital_probe4: Vec::new(),
                         digital_probe5: Vec::new(),
+                        digital_probe6: Vec::new(),
+                        digital_probe7: Vec::new(),
+                        digital_probe8: Vec::new(),
+                        digital_probe9: Vec::new(),
+                        digital_probe10: Vec::new(),
+                        digital_probe11: Vec::new(),
+                        digital_probe12: Vec::new(),
+                        digital_probe13: Vec::new(),
+                        digital_probe14: Vec::new(),
+                        digital_probe15: Vec::new(),
+                        digital_probe16: Vec::new(),
                         time_resolution: 0,
                         trigger_threshold: 0,
                         ns_per_sample: params.ns_per_sample,
@@ -2057,7 +2090,7 @@ impl Reader {
                         analog_probe2_is_signed: false,
                         analog_probe3_is_signed: false,
                         analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
-                        digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 5],
+                        digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 16],
                     })
                 } else {
                     None
@@ -2756,6 +2789,17 @@ mod tests {
             digital_probe3: vec![1, 1, 0],
             digital_probe4: vec![0, 0, 1],
             digital_probe5: vec![],
+            digital_probe6: vec![],
+            digital_probe7: vec![],
+            digital_probe8: vec![],
+            digital_probe9: vec![],
+            digital_probe10: vec![],
+            digital_probe11: vec![],
+            digital_probe12: vec![],
+            digital_probe13: vec![],
+            digital_probe14: vec![],
+            digital_probe15: vec![],
+            digital_probe16: vec![],
             time_resolution: 2,
             trigger_threshold: 500,
             ns_per_sample: 2.0,
@@ -2763,7 +2807,7 @@ mod tests {
             analog_probe2_is_signed: true,
             analog_probe3_is_signed: false,
             analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 16],
         };
 
         let event = EventData {

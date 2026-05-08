@@ -280,11 +280,14 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         let wf = events[0].waveform.as_ref().expect("waveform missing");
-        assert_eq!(
-            wf.digital_probe_type,
-            [0, 1, 2, 3, super::super::common::UNKNOWN_PROBE_TYPE],
-            "DP4=UNKNOWN (PHA2 ships ≤ 4 digital probes)"
-        );
+        // Slots 4..15 are reserved for future digital-lane bit assignments;
+        // PHA2 only ever populates 0..3 from the wf-extras header.
+        let mut expected = [super::super::common::UNKNOWN_PROBE_TYPE; 16];
+        expected[0] = 0;
+        expected[1] = 1;
+        expected[2] = 2;
+        expected[3] = 3;
+        assert_eq!(wf.digital_probe_type, expected);
     }
 
     // -----------------------------------------------------------------------

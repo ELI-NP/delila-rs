@@ -177,6 +177,17 @@ fn decode_pha1_waveform(
         digital_probe3: vec![],
         digital_probe4: vec![],
         digital_probe5: vec![],
+        digital_probe6: vec![],
+        digital_probe7: vec![],
+        digital_probe8: vec![],
+        digital_probe9: vec![],
+        digital_probe10: vec![],
+        digital_probe11: vec![],
+        digital_probe12: vec![],
+        digital_probe13: vec![],
+        digital_probe14: vec![],
+        digital_probe15: vec![],
+        digital_probe16: vec![],
         time_resolution: 0,
         trigger_threshold: 0,
         ns_per_sample,
@@ -190,7 +201,7 @@ fn decode_pha1_waveform(
         // identity comes from the host-side `vtrace_probe` setting. Emit
         // UNKNOWN.
         analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
-        digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
+        digital_probe_type: [UNKNOWN_PROBE_TYPE; 16],
     }
 }
 

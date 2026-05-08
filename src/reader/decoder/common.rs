@@ -64,8 +64,8 @@ pub const UNKNOWN_PROBE_TYPE: u8 = 0xFF;
 fn default_unknown_analog_probe_types() -> [u8; 3] {
     [UNKNOWN_PROBE_TYPE; 3]
 }
-fn default_unknown_digital_probe_types() -> [u8; 5] {
-    [UNKNOWN_PROBE_TYPE; 5]
+fn default_unknown_digital_probe_types() -> [u8; 16] {
+    [UNKNOWN_PROBE_TYPE; 16]
 }
 
 /// Waveform data from digitizer
@@ -91,6 +91,32 @@ pub struct Waveform {
     /// Empty Vec when the FW emits ≤ 4 digital probes.
     #[serde(default)]
     pub digital_probe5: Vec<u8>,
+    /// Digital probes 6..16 — reserved for future AMax debug FW digital
+    /// lane bits 10..0 (currently constant 0 in hardware). All empty for
+    /// every FW today; populated only when Rebeca wires up additional
+    /// signals — see `decoder/amax.rs amax_probe_types`.
+    #[serde(default)]
+    pub digital_probe6: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe7: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe8: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe9: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe10: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe11: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe12: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe13: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe14: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe15: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe16: Vec<u8>,
 
     /// Time resolution (0=1x, 1=2x, 2=4x, 3=8x)
     pub time_resolution: u8,
@@ -124,15 +150,17 @@ pub struct Waveform {
     /// to display labels like "A0: TimeFilter".
     #[serde(default = "default_unknown_analog_probe_types")]
     pub analog_probe_type: [u8; 3],
-    /// Probe-type identifier for digital probes 0..4 — PHA2 canonical
+    /// Probe-type identifier for digital probes 0..15 — PHA2 canonical
     /// encoding: 0=Trigger, 1=TimeFilterArmed, 2=ReTriggerGuard,
     /// 3=EnergyFilterBaselineFreeze, 4=EnergyFilterPeaking,
     /// 5=EnergyFilterPeakReady, 6=EnergyFilterPileUpGuard, 7=EventPileUp,
     /// 8=ADCSaturation, 9=ADCSaturationProtection, A=PostSaturationEvent,
     /// B=EnergyFilterSaturation, C=SignalInhibit, 0xFF=`UNKNOWN_PROBE_TYPE`.
-    /// AMax debug FW uses the 0x40+ range (see `decoder/amax.rs`).
+    /// AMax debug FW uses the 0x40+ range (see `decoder/amax.rs`). Slots
+    /// 5..15 are reserved for future digital lane bit assignments — empty
+    /// `Vec` + `UNKNOWN_PROBE_TYPE` until populated.
     #[serde(default = "default_unknown_digital_probe_types")]
-    pub digital_probe_type: [u8; 5],
+    pub digital_probe_type: [u8; 16],
 }
 
 impl Default for Waveform {
@@ -146,6 +174,17 @@ impl Default for Waveform {
             digital_probe3: Vec::new(),
             digital_probe4: Vec::new(),
             digital_probe5: Vec::new(),
+            digital_probe6: Vec::new(),
+            digital_probe7: Vec::new(),
+            digital_probe8: Vec::new(),
+            digital_probe9: Vec::new(),
+            digital_probe10: Vec::new(),
+            digital_probe11: Vec::new(),
+            digital_probe12: Vec::new(),
+            digital_probe13: Vec::new(),
+            digital_probe14: Vec::new(),
+            digital_probe15: Vec::new(),
+            digital_probe16: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: 0.0,
@@ -153,7 +192,7 @@ impl Default for Waveform {
             analog_probe2_is_signed: false,
             analog_probe3_is_signed: false,
             analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 16],
         }
     }
 }

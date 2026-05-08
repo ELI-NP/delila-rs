@@ -457,6 +457,17 @@ impl Emulator {
             digital_probe3,
             digital_probe4,
             digital_probe5: Vec::new(),
+            digital_probe6: Vec::new(),
+            digital_probe7: Vec::new(),
+            digital_probe8: Vec::new(),
+            digital_probe9: Vec::new(),
+            digital_probe10: Vec::new(),
+            digital_probe11: Vec::new(),
+            digital_probe12: Vec::new(),
+            digital_probe13: Vec::new(),
+            digital_probe14: Vec::new(),
+            digital_probe15: Vec::new(),
+            digital_probe16: Vec::new(),
             time_resolution: 0, // 1x resolution
             trigger_threshold: 100,
             ns_per_sample: 2.0,
@@ -464,7 +475,7 @@ impl Emulator {
             analog_probe2_is_signed: false,
             analog_probe3_is_signed: false,
             analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 16],
         }
     }
 

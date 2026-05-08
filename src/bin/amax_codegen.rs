@@ -80,17 +80,29 @@ impl Register {
     /// Identifier used for matching against `fw_params.json`. Strips the
     /// channel infix so old per-channel paths and new single-channel names
     /// land on the same key (e.g. `THRS`).
+    ///
+    /// Three FW eras coexist in this strip chain:
+    ///   - 2026-03 era: `page_amax_energy_0/THRS` → `THRS` (slash separator)
+    ///   - 2026-04 32-ch era: `page_amax_energy_THRS` → `THRS` (no index)
+    ///   - 2026-05 16-ch era: `page_amax_energy_15_THRS` → `THRS`
+    ///     (underscore-separated index, broadcast page also has bare form)
     fn fw_key(&self) -> Option<String> {
         let raw = self.path.as_deref().or(self.name.as_deref())?;
-        // Drop the leading `page_amax_energy_<infix>` chunk to get just the
-        // register name. Old: "page_amax_energy_0/POLARITY" → "POLARITY".
-        // New: "page_amax_energy_POLARITY" → "POLARITY".
         let stripped = raw
             .strip_prefix("page_amax_energy_0/")
             .or_else(|| raw.strip_prefix("page_amax_energy_1/"))
             .or_else(|| raw.strip_prefix("page_amax_energy_"))
             .unwrap_or(raw);
-        Some(stripped.to_string())
+        // For the 2026-05 era we may still have a leading `<digits>_` from
+        // the per-channel page (e.g. "5_THRS"). Strip it so the key matches
+        // the bare register name in fw_params.json.
+        let trimmed = match stripped.find('_') {
+            Some(idx) if stripped[..idx].chars().all(|c| c.is_ascii_digit()) => {
+                &stripped[idx + 1..]
+            }
+            _ => stripped,
+        };
+        Some(trimmed.to_string())
     }
 
     /// True iff this register belongs to the per-channel `page_amax_energy_*`
@@ -98,6 +110,34 @@ impl Register {
     fn is_per_channel(&self) -> bool {
         let raw = self.path.as_deref().or(self.name.as_deref()).unwrap_or("");
         raw.starts_with("page_amax_energy_")
+    }
+
+    /// Returns the channel index when this register is one of the per-channel
+    /// pages (`page_amax_energy_<N>_<NAME>` underscore-form or
+    /// `page_amax_energy_<N>/<NAME>` slash-form). Returns `None` for the
+    /// broadcast page (`page_amax_energy_<NAME>` with no index — write fans
+    /// out to all channels) and for any non-`page_amax_energy_*` register.
+    ///
+    /// The codegen filter uses this to keep only the broadcast (canonical)
+    /// register set; per-channel pages would otherwise emit duplicate
+    /// `REG_*` constants. Live AMax operation goes through the broadcast
+    /// page anyway (single write hits every channel — see
+    /// `apply_amax_channel_config` in `src/reader/caen/handle.rs`).
+    fn channel_index(&self) -> Option<u32> {
+        let raw = self.path.as_deref().or(self.name.as_deref())?;
+        let body = raw.strip_prefix("page_amax_energy_")?;
+        // 2026-03 slash form: "<N>/<NAME>"
+        if let Some(slash) = body.find('/') {
+            return body[..slash].parse().ok();
+        }
+        // 2026-05 underscore form: "<N>_<NAME>" — only when prefix is all digits.
+        if let Some(uscore) = body.find('_') {
+            let prefix = &body[..uscore];
+            if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                return prefix.parse().ok();
+            }
+        }
+        None // bare "<NAME>" = broadcast page
     }
 
     /// True iff this register's name matches a key in `fw_params.board_params`
@@ -190,20 +230,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params_text = fs::read_to_string(&cli.params_file)?;
     let fw_params: FwParams = serde_json::from_str(&params_text)?;
 
-    // Pull every per-channel register, regardless of FW era. The new
-    // 32-channel firmware lists each register once (no `_0/` infix); the
-    // legacy per-channel-paths firmware lists ch0 first, ch1 next — we
-    // de-duplicate on the FW key so ch1's copy doesn't double-register.
+    // Keep only the canonical (broadcast) per-channel register set. Across
+    // FW eras the canonical entry is the one without a channel index:
+    //   - 2026-03 era: `page_amax_energy_0/<NAME>` (we picked ch0 by skipping
+    //     `_1/`); the index here is part of `channel_index()`.
+    //   - 2026-04 32-ch era: `page_amax_energy_<NAME>` (no index — `channel_index() == None`).
+    //   - 2026-05 16-ch era: broadcast `page_amax_energy_<NAME>` (no index)
+    //     plus 16 per-channel pages `page_amax_energy_<N>_<NAME>`. We keep
+    //     the broadcast one (single write fans out to all 16 channels via
+    //     hardware — see `apply_amax_channel_config`).
+    //
+    // For the 2026-03 era which only exposes per-channel pages, fall back
+    // to keeping ch0 (lowest channel index) so the page exposes a register
+    // at all.
+    let has_broadcast = register_file
+        .registers
+        .iter()
+        .any(|r| r.is_per_channel() && r.channel_index().is_none());
     let mut ch0: Vec<&Register> = register_file
         .registers
         .iter()
         .filter(|r| {
-            r.is_per_channel()
-                && !r
-                    .path
-                    .as_deref()
-                    .unwrap_or("")
-                    .contains("page_amax_energy_1/")
+            if !r.is_per_channel() {
+                return false;
+            }
+            match r.channel_index() {
+                None => true,              // broadcast — preferred
+                Some(0) => !has_broadcast, // 2026-03 fallback
+                Some(_) => false,          // skip ch1+ duplicates
+            }
         })
         .collect();
     ch0.sort_by_key(|r| r.address);
@@ -735,4 +790,104 @@ fn emit_typescript(
     out.push_str("];\n");
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reg(name_or_path: &str) -> Register {
+        // Two of the same string lets the test cover both `Path` and `Name`
+        // alternates without two helpers.
+        Register {
+            address: 0,
+            path: Some(name_or_path.to_string()),
+            name: Some(name_or_path.to_string()),
+        }
+    }
+
+    #[test]
+    fn fw_key_handles_three_eras() {
+        // 2026-03 era — slash separator after channel index
+        assert_eq!(
+            reg("page_amax_energy_0/THRS").fw_key().as_deref(),
+            Some("THRS")
+        );
+        assert_eq!(
+            reg("page_amax_energy_1/POLARITY").fw_key().as_deref(),
+            Some("POLARITY")
+        );
+
+        // 2026-04 32-ch era — no channel index, just bare name
+        assert_eq!(
+            reg("page_amax_energy_THRS").fw_key().as_deref(),
+            Some("THRS")
+        );
+        assert_eq!(
+            reg("page_amax_energy_baseline_delay").fw_key().as_deref(),
+            Some("baseline_delay")
+        );
+
+        // 2026-05 16-ch era — underscore-separated channel index
+        assert_eq!(
+            reg("page_amax_energy_15_THRS").fw_key().as_deref(),
+            Some("THRS")
+        );
+        assert_eq!(
+            reg("page_amax_energy_0_POLARITY").fw_key().as_deref(),
+            Some("POLARITY")
+        );
+        assert_eq!(
+            reg("page_amax_energy_7_baseline_delay").fw_key().as_deref(),
+            Some("baseline_delay")
+        );
+    }
+
+    #[test]
+    fn fw_key_preserves_unprefixed_names() {
+        // Global registers (no `page_amax_energy_` prefix) come through as-is.
+        assert_eq!(reg("ENABLE_ACQ").fw_key().as_deref(), Some("ENABLE_ACQ"));
+        assert_eq!(reg("AMAX_gol").fw_key().as_deref(), Some("AMAX_gol"));
+    }
+
+    #[test]
+    fn fw_key_does_not_misclassify_underscore_names() {
+        // Names starting with a non-digit followed by underscore (e.g.
+        // `baseline_delay`) must NOT have their leading word stripped —
+        // only digit prefixes get treated as channel indices.
+        assert_eq!(
+            reg("page_amax_energy_baseline_delay").fw_key().as_deref(),
+            Some("baseline_delay")
+        );
+    }
+
+    #[test]
+    fn channel_index_distinguishes_broadcast_from_per_channel() {
+        // 2026-03 slash form
+        assert_eq!(reg("page_amax_energy_0/THRS").channel_index(), Some(0));
+        assert_eq!(reg("page_amax_energy_15/THRS").channel_index(), Some(15));
+
+        // 2026-05 underscore form
+        assert_eq!(reg("page_amax_energy_0_THRS").channel_index(), Some(0));
+        assert_eq!(reg("page_amax_energy_15_THRS").channel_index(), Some(15));
+
+        // Broadcast page (no index) — None means "this is the canonical entry"
+        assert_eq!(reg("page_amax_energy_THRS").channel_index(), None);
+        assert_eq!(reg("page_amax_energy_baseline_delay").channel_index(), None);
+
+        // Non-page_amax_energy_ registers — None
+        assert_eq!(reg("ENABLE_ACQ").channel_index(), None);
+        assert_eq!(reg("AMAX_gol").channel_index(), None);
+    }
+
+    #[test]
+    fn is_per_channel_matches_page_amax_energy_prefix() {
+        assert!(reg("page_amax_energy_THRS").is_per_channel());
+        assert!(reg("page_amax_energy_0_THRS").is_per_channel());
+        assert!(reg("page_amax_energy_15_baseline_delay").is_per_channel());
+        assert!(reg("page_amax_energy_0/THRS").is_per_channel()); // legacy slash form
+        assert!(!reg("ENABLE_ACQ").is_per_channel());
+        assert!(!reg("AMAX_gol").is_per_channel());
+        assert!(!reg("/ENABLE_ACQ").is_per_channel());
+    }
 }

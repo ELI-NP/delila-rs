@@ -60,16 +60,25 @@ import { getCategoryParams, getAllChannelParams, getProbeOptions, ChannelCategor
 import { HistogramChartComponent, RangeChangeEvent } from '../../components/histogram-chart/histogram-chart.component';
 import { HeatmapChartComponent } from '../../components/heatmap-chart/heatmap-chart.component';
 
+/** Probe visibility flags. Analog 1..3 stay flat because the carrier
+ *  `Waveform` struct fixes the count at 3. Digital probes are
+ *  index-keyed (0..15) so we can data-drive the toolbar from
+ *  `digital_probe_type[]` instead of one hard-coded checkbox per slot. */
 interface ProbeConfig {
   analog1: boolean;
   analog2: boolean;
   analog3: boolean;
-  digital1: boolean;
-  digital2: boolean;
-  digital3: boolean;
-  digital4: boolean;
-  digital5: boolean;
+  /** Per-slot digital probe visibility, keyed by slot index 0..15.
+   *  Missing key = default visibility (computed in
+   *  `digitalProbeVisible()` — D0..D1 default-on for PSD1/PHA1
+   *  back-compat; AMax-typed slots default-on; others default-off). */
+  digital: Record<number, boolean>;
 }
+
+/** Cap on digital probe slots — must match the carrier `Waveform`
+ *  struct (`digital_probe1..16` / `digital_probe_type: [u8; 16]`) in
+ *  `src/reader/decoder/common.rs`. */
+const DIGITAL_PROBE_SLOTS = 16;
 
 interface ChannelChart {
   label: string;
@@ -113,6 +122,38 @@ interface ChannelChart {
           <span class="tuneup-badge">TUNE UP</span>
           <span class="tuneup-digitizer">{{ tuneUpConfig()?.name ?? ('Digitizer ' + tuneUpDigitizerId()) }}</span>
 
+          @if (tuneUpConfig()?.firmware === 'AMax') {
+            <!-- AMax-only sub-mode toggle. "Standard" keeps the regular
+                 Tune Up layout; "Debug View" surfaces ch0 register
+                 inspector + ENABLE_ACQ quick toggle so the operator can
+                 flip debug acquisition without leaving Tune Up. -->
+            <mat-button-toggle-group
+              class="amax-view-toggle"
+              [value]="tuneupView()"
+              (change)="tuneupView.set($event.value)"
+              hideSingleSelectionIndicator
+            >
+              <mat-button-toggle value="standard" matTooltip="Standard probe view">
+                Standard
+              </mat-button-toggle>
+              <mat-button-toggle value="amax-debug" matTooltip="Debug-FW probe view: ch0 + register inspector">
+                <mat-icon class="inline-icon">bug_report</mat-icon>
+                Debug
+              </mat-button-toggle>
+            </mat-button-toggle-group>
+            @if (tuneupView() === 'amax-debug') {
+              <mat-slide-toggle
+                class="amax-enable-acq"
+                [checked]="amaxEnableAcq()"
+                (change)="onAmaxEnableAcqToggle($event.checked)"
+                color="primary"
+                matTooltip="Toggle the AMax debug FW's ENABLE_ACQ register. ON = ch0 events carry the 4-lane debug payload (raw / trap / triangle / 16-bit digital). Sends a partial config update via tuneupApply."
+              >
+                ENABLE_ACQ
+              </mat-slide-toggle>
+            }
+          }
+
           <mat-form-field appearance="outline" class="channel-select">
             <mat-label>Channel</mat-label>
             <mat-select
@@ -137,21 +178,17 @@ interface ChannelChart {
             <mat-checkbox [checked]="probeConfig().analog3" (change)="toggleProbe('analog3')" color="primary">
               <span class="probe-label" [style.border-bottom-color]="probeColors.analog3">{{ probeLabels().a2Short }}</span>
             </mat-checkbox>
-            <mat-checkbox [checked]="probeConfig().digital1" (change)="toggleProbe('digital1')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">{{ probeLabels().d0Short }}</span>
-            </mat-checkbox>
-            <mat-checkbox [checked]="probeConfig().digital2" (change)="toggleProbe('digital2')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">{{ probeLabels().d1Short }}</span>
-            </mat-checkbox>
-            <mat-checkbox [checked]="probeConfig().digital3" (change)="toggleProbe('digital3')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">{{ probeLabels().d2Short }}</span>
-            </mat-checkbox>
-            <mat-checkbox [checked]="probeConfig().digital4" (change)="toggleProbe('digital4')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">{{ probeLabels().d3Short }}</span>
-            </mat-checkbox>
-            <mat-checkbox [checked]="probeConfig().digital5" (change)="toggleProbe('digital5')" color="primary">
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital5">{{ probeLabels().d4Short }}</span>
-            </mat-checkbox>
+            @for (slot of activeDigitalProbeSlots(); track slot) {
+              <mat-checkbox
+                [checked]="digitalProbeVisible(slot)"
+                (change)="toggleDigitalProbe(slot)"
+                color="primary"
+              >
+                <span class="probe-label" [style.border-bottom-color]="digitalProbeColor(slot)">
+                  {{ digitalProbeLabel(slot, 'short') }}
+                </span>
+              </mat-checkbox>
+            }
           </div>
 
           <div class="trigger-controls">
@@ -426,41 +463,17 @@ interface ChannelChart {
             >
               <span class="probe-label" [style.border-bottom-color]="probeColors.analog3">{{ probeLabels().a2Long }}</span>
             </mat-checkbox>
-            <mat-checkbox
-              [checked]="probeConfig().digital1"
-              (change)="toggleProbe('digital1')"
-              color="primary"
-            >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital1">{{ probeLabels().d0Long }}</span>
-            </mat-checkbox>
-            <mat-checkbox
-              [checked]="probeConfig().digital2"
-              (change)="toggleProbe('digital2')"
-              color="primary"
-            >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital2">{{ probeLabels().d1Long }}</span>
-            </mat-checkbox>
-            <mat-checkbox
-              [checked]="probeConfig().digital3"
-              (change)="toggleProbe('digital3')"
-              color="primary"
-            >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital3">{{ probeLabels().d2Long }}</span>
-            </mat-checkbox>
-            <mat-checkbox
-              [checked]="probeConfig().digital4"
-              (change)="toggleProbe('digital4')"
-              color="primary"
-            >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital4">{{ probeLabels().d3Long }}</span>
-            </mat-checkbox>
-            <mat-checkbox
-              [checked]="probeConfig().digital5"
-              (change)="toggleProbe('digital5')"
-              color="primary"
-            >
-              <span class="probe-label" [style.border-bottom-color]="probeColors.digital5">{{ probeLabels().d4Long }}</span>
-            </mat-checkbox>
+            @for (slot of activeDigitalProbeSlots(); track slot) {
+              <mat-checkbox
+                [checked]="digitalProbeVisible(slot)"
+                (change)="toggleDigitalProbe(slot)"
+                color="primary"
+              >
+                <span class="probe-label" [style.border-bottom-color]="digitalProbeColor(slot)">
+                  {{ digitalProbeLabel(slot, 'long') }}
+                </span>
+              </mat-checkbox>
+            }
           </div>
 
           <mat-button-toggle-group
@@ -914,11 +927,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     analog1: true,
     analog2: true,
     analog3: true,
-    digital1: false,
-    digital2: false,
-    digital3: false,
-    digital4: false,
-    digital5: false,
+    digital: {},
   });
   readonly yAxisMode = signal<'auto' | 'fixed'>('auto');
 
@@ -926,12 +935,27 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     analog1: '#1565c0',
     analog2: '#e65100',
     analog3: '#fb8c00',
-    digital1: '#00897b',
-    digital2: '#c62828',
-    digital3: '#6a1b9a',
-    digital4: '#5c6bc0',
-    digital5: '#00838f',
   };
+
+  /** Pre-computed digital probe colors for slots 0..15. The first 5 match
+   *  the original PHA1/AMax-debug palette so existing operators see the
+   *  same colors. Slots 5..15 fan out via HSL hue rotation so any future
+   *  bit assignment gets a visually distinct band without UI churn. */
+  private readonly DIGITAL_PROBE_COLORS: readonly string[] = [
+    '#00897b', '#c62828', '#6a1b9a', '#5c6bc0', '#00838f', // legacy 0..4
+    ...Array.from({ length: DIGITAL_PROBE_SLOTS - 5 }, (_, i) => {
+      // 11 distinct hues at 70%/45% saturation/lightness. Hue starts at
+      // ~190 (close to existing teal) and steps ~30° to fill the wheel.
+      const hue = (190 + (i + 5) * 33) % 360;
+      return `hsl(${hue} 60% 42%)`;
+    }),
+  ];
+
+  /** Lookup digital probe color by slot index. Falls back to neutral gray
+   *  for out-of-range indices. */
+  digitalProbeColor(slot: number): string {
+    return this.DIGITAL_PROBE_COLORS[slot] ?? '#9e9e9e';
+  }
 
   readonly channelCharts = computed<ChannelChart[]>(() => this.buildChannelCharts());
 
@@ -982,6 +1006,20 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
   readonly tuneUpLoading = signal(false);
   readonly applyLoading = signal(false);
   readonly tuneUpConfig = signal<DigitizerConfig | null>(null);
+
+  /** Sub-mode within the shared Tune Up. `'standard'` keeps the normal
+   *  toolbar / probe panel layout; `'amax-debug'` surfaces an
+   *  ENABLE_ACQ quick toggle so the operator can flip the AMax debug
+   *  FW's acquisition mode without leaving Tune Up. Only meaningful
+   *  when `tuneUpConfig()?.firmware === 'AMax'`; the toggle is hidden
+   *  for other firmwares (Round 2 plan I.1). */
+  readonly tuneupView = signal<'standard' | 'amax-debug'>('standard');
+
+  /** Local mirror of `amax_board.enable_acq` — kept as a signal so the
+   *  Tune Up debug toolbar's slide toggle can flip it optimistically.
+   *  Synced from `tuneUpConfig()` via an effect; flipping here writes
+   *  through `tuneupApply` (see `onAmaxEnableAcqToggle`). */
+  readonly amaxEnableAcq = signal(false);
   readonly defaultValues = signal<Record<string, unknown>>({});
   readonly channelValues = signal<Record<string, unknown>[]>([]);
   readonly selectedCategory = signal<ChannelCategory | 'all'>('all');
@@ -1052,46 +1090,28 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     return fw ? [0, 1, 2, 3].map((i) => getProbeOptions(fw, i)) : [[], [], [], []];
   });
 
-  /** Probe labels for the toggle checkboxes — falls through "A0: TimeFilter"
-   *  when the FW carries typed probe info on the wire (PHA2 today; future
-   *  PSD2/PHA1 if/when their decoders parse it), otherwise "A0/A1/D0..D3"
-   *  generic. We pick the first available waveform from `waveforms()`,
-   *  falling back to the most recent in `waveformHistory()` so the
-   *  labels survive a "Hold" / "Single Shot" pause. */
+  /** Analog probe labels for the toolbar checkboxes — falls through to
+   *  "A0: TimeFilter" when the FW carries typed probe info on the wire
+   *  (PHA2 today, AMax debug FW for slots 0..2), otherwise "A0/A1/A2"
+   *  generic. Digital labels live in `digitalProbeLabel()` (data-driven
+   *  per slot, see Phase H.1). */
   readonly probeLabels = computed(() => {
     const wf = this.waveforms()[0]?.waveform
       ?? this.waveformHistory()[this.waveformHistory().length - 1]?.waveform;
     const apt = wf?.analog_probe_type;
-    const dpt = wf?.digital_probe_type;
     const apLabel = (idx: 0 | 1 | 2, fallback: string) => {
       const code = apt?.[idx];
       if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
       const name = ANALOG_PROBE_TYPE_LABELS[code];
       return name ? `${fallback}: ${name}` : fallback;
     };
-    const dpLabel = (idx: 0 | 1 | 2 | 3 | 4, fallback: string) => {
-      const code = dpt?.[idx];
-      if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
-      const name = DIGITAL_PROBE_TYPE_LABELS[code];
-      return name ? `${fallback}: ${name}` : fallback;
-    };
     return {
       a0Short: apLabel(0, 'A0'),
       a1Short: apLabel(1, 'A1'),
       a2Short: apLabel(2, 'A2'),
-      d0Short: dpLabel(0, 'D0'),
-      d1Short: dpLabel(1, 'D1'),
-      d2Short: dpLabel(2, 'D2'),
-      d3Short: dpLabel(3, 'D3'),
-      d4Short: dpLabel(4, 'D4'),
       a0Long: apLabel(0, 'Analog 0'),
       a1Long: apLabel(1, 'Analog 1'),
       a2Long: apLabel(2, 'Analog 2'),
-      d0Long: dpLabel(0, 'Digital 0'),
-      d1Long: dpLabel(1, 'Digital 1'),
-      d2Long: dpLabel(2, 'Digital 2'),
-      d3Long: dpLabel(3, 'Digital 3'),
-      d4Long: dpLabel(4, 'Digital 4'),
     };
   });
 
@@ -1219,12 +1239,82 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.tuneUpWfChart = chart;
   }
 
-  toggleProbe(probe: keyof ProbeConfig): void {
+  toggleProbe(probe: 'analog1' | 'analog2' | 'analog3'): void {
     const config = this.probeConfig();
     this.probeConfig.set({
       ...config,
       [probe]: !config[probe],
     });
+  }
+
+  /** True iff the digital probe at `slot` is currently visible. Defaults
+   *  apply for slots not yet toggled by the operator: D0/D1 are on (PSD1/
+   *  PHA1 back-compat), AMax-typed slots (probe-type 0x40+) are on, all
+   *  others default to off so non-AMax operators don't get a noisy plot. */
+  digitalProbeVisible(slot: number): boolean {
+    const explicit = this.probeConfig().digital[slot];
+    if (explicit !== undefined) return explicit;
+    // First-time default: depends on whether the wire reports a typed probe
+    // for this slot. AMax debug FW emits 0x40+ for slots 0..4; PSD1/PHA1
+    // emit UNKNOWN but populate digital_probe1/2 with real bits.
+    const wf = this.waveforms()[0]?.waveform
+      ?? this.waveformHistory()[this.waveformHistory().length - 1]?.waveform;
+    const code = wf?.digital_probe_type?.[slot];
+    if (code !== undefined && code !== UNKNOWN_PROBE_TYPE) return true;
+    // Slots 0/1 default-on for PSD1/PHA1 back-compat (those FWs populate
+    // digital_probe1/2 with real bits but emit UNKNOWN probe_type).
+    return slot < 2;
+  }
+
+  /** Flip the visibility of a digital probe at `slot`. */
+  toggleDigitalProbe(slot: number): void {
+    const config = this.probeConfig();
+    const current = this.digitalProbeVisible(slot);
+    this.probeConfig.set({
+      ...config,
+      digital: { ...config.digital, [slot]: !current },
+    });
+  }
+
+  /** Slot indices to surface as toolbar checkboxes. Filters by
+   *  `digital_probe_type[i] !== UNKNOWN_PROBE_TYPE` OR by non-empty
+   *  `digital_probe{i+1}` array, so:
+   *  - PSD1/PHA1 → slots 0..1 (the two real-data probes), UNKNOWN type
+   *  - PHA2 → slots 0..3 (typed by wf-extras header)
+   *  - AMax debug FW → slots 0..4 today, up to 0..15 when Rebeca wires
+   *    the remaining bits
+   *  - Non-debug AMax / other FW with no digital probes → empty list
+   */
+  readonly activeDigitalProbeSlots = computed<number[]>(() => {
+    const wf = this.waveforms()[0]?.waveform
+      ?? this.waveformHistory()[this.waveformHistory().length - 1]?.waveform;
+    if (!wf) return [];
+    const out: number[] = [];
+    const probes: (number[] | undefined)[] = [
+      wf.digital_probe1, wf.digital_probe2, wf.digital_probe3, wf.digital_probe4,
+      wf.digital_probe5, wf.digital_probe6, wf.digital_probe7, wf.digital_probe8,
+      wf.digital_probe9, wf.digital_probe10, wf.digital_probe11, wf.digital_probe12,
+      wf.digital_probe13, wf.digital_probe14, wf.digital_probe15, wf.digital_probe16,
+    ];
+    for (let i = 0; i < DIGITAL_PROBE_SLOTS; i++) {
+      const code = wf.digital_probe_type?.[i];
+      const typed = code !== undefined && code !== UNKNOWN_PROBE_TYPE;
+      const populated = (probes[i]?.length ?? 0) > 0;
+      if (typed || populated) out.push(i);
+    }
+    return out;
+  });
+
+  /** Display label for a digital probe slot. Uses the typed name from
+   *  `DIGITAL_PROBE_TYPE_LABELS` when available; falls back to "D{slot}". */
+  digitalProbeLabel(slot: number, style: 'short' | 'long' = 'short'): string {
+    const wf = this.waveforms()[0]?.waveform
+      ?? this.waveformHistory()[this.waveformHistory().length - 1]?.waveform;
+    const code = wf?.digital_probe_type?.[slot];
+    const fallback = style === 'short' ? `D${slot}` : `Digital ${slot}`;
+    if (code === undefined || code === UNKNOWN_PROBE_TYPE) return fallback;
+    const name = DIGITAL_PROBE_TYPE_LABELS[code];
+    return name ? `${fallback}: ${name}` : fallback;
   }
 
   onYAxisModeChange(mode: 'auto' | 'fixed'): void {
@@ -1393,6 +1483,50 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.tuneUpConfig.set(config);
     this.defaultValues.set(this.digitizerService.extractDefaults(config));
     this.channelValues.set(this.digitizerService.expandConfig(config));
+    // Sync the AMax debug-mode mirror from the just-loaded config so the
+    // sub-mode slide toggle reflects what the hardware actually has set.
+    this.amaxEnableAcq.set((config.amax_board?.enable_acq ?? 0) === 1);
+  }
+
+  /** Handle the ENABLE_ACQ slide toggle in the AMax debug Tune Up
+   *  toolbar. Sends a partial config update via `tuneupApply` so the
+   *  operator can flip the FW's debug acquisition mode without
+   *  navigating to the Settings page. The board-level write goes
+   *  through `apply_amax_channel_config` on the backend (Round 1
+   *  commit `d336203`); per-channel parameters stay untouched. */
+  onAmaxEnableAcqToggle(checked: boolean): void {
+    const config = this.tuneUpConfig();
+    if (!config || config.firmware !== 'AMax') return;
+    // Optimistic: update the local mirror immediately so the toggle
+    // doesn't snap back during the round-trip. If the apply fails we
+    // re-sync from the authoritative config below.
+    this.amaxEnableAcq.set(checked);
+
+    const updatedConfig: DigitizerConfig = {
+      ...config,
+      amax_board: { ...(config.amax_board ?? {}), enable_acq: checked ? 1 : 0 },
+    };
+
+    this.operatorService
+      .tuneupApply(config.digitizer_id, updatedConfig)
+      .subscribe({
+        next: (resp) => {
+          if (resp.success) {
+            this.tuneUpConfig.set(updatedConfig);
+            this.digitizerService.loadDigitizers();
+            this.notify.success(checked ? 'Debug acquisition ON' : 'Debug acquisition OFF');
+          } else {
+            // Roll back the optimistic toggle on backend rejection.
+            this.amaxEnableAcq.set(!checked);
+            this.notify.error('ENABLE_ACQ toggle failed: ' + (resp.message ?? 'unknown'));
+          }
+        },
+        error: (err: unknown) => {
+          this.amaxEnableAcq.set(!checked);
+          const e = err as { error?: { message?: string }; message?: string };
+          this.notify.error('ENABLE_ACQ toggle failed: ' + (e.error?.message ?? e.message ?? 'unknown'));
+        },
+      });
   }
 
   private startHistogramPolling(): void {
@@ -1601,27 +1735,35 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         });
       }
 
-      const digitalProbes: { key: keyof ProbeConfig; data: number[]; index: number }[] = [
-        { key: 'digital1', data: wf.waveform.digital_probe1, index: 0 },
-        { key: 'digital2', data: wf.waveform.digital_probe2, index: 1 },
-        { key: 'digital3', data: wf.waveform.digital_probe3, index: 2 },
-        { key: 'digital4', data: wf.waveform.digital_probe4, index: 3 },
-        { key: 'digital5', data: wf.waveform.digital_probe5 ?? [], index: 4 },
+      // Index-keyed digital probe data lookup. The carrier `Waveform`
+      // struct is fixed at 16 slots (`digital_probe1..16`), so this stays
+      // a flat lookup; the toolbar's `activeDigitalProbeSlots()` already
+      // filters out empty/UNKNOWN slots, but the visibility check
+      // (`digitalProbeVisible`) is the authoritative gate per slot.
+      const digitalSlotData: (number[] | undefined)[] = [
+        wf.waveform.digital_probe1, wf.waveform.digital_probe2,
+        wf.waveform.digital_probe3, wf.waveform.digital_probe4,
+        wf.waveform.digital_probe5, wf.waveform.digital_probe6,
+        wf.waveform.digital_probe7, wf.waveform.digital_probe8,
+        wf.waveform.digital_probe9, wf.waveform.digital_probe10,
+        wf.waveform.digital_probe11, wf.waveform.digital_probe12,
+        wf.waveform.digital_probe13, wf.waveform.digital_probe14,
+        wf.waveform.digital_probe15, wf.waveform.digital_probe16,
       ];
 
-      for (const dp of digitalProbes) {
-        if (config[dp.key] && dp.data.length > 0) {
-          const colorKey = dp.key as keyof typeof this.probeColors;
-          const baseColor = this.probeColors[colorKey];
+      for (let slot = 0; slot < DIGITAL_PROBE_SLOTS; slot++) {
+        const data = digitalSlotData[slot] ?? [];
+        if (this.digitalProbeVisible(slot) && data.length > 0) {
+          const baseColor = this.digitalProbeColor(slot);
           // Extract HIGH intervals from 0/1 array with minimum visible width
-          const totalX = toX(dp.data.length - 1);
+          const totalX = toX(data.length - 1);
           const minWidth = totalX * 0.005; // 0.5% of total range
           const areas: unknown[][] = [];
           let start: number | null = null;
-          for (let idx = 0; idx < dp.data.length; idx++) {
-            if (dp.data[idx] && start === null) {
+          for (let idx = 0; idx < data.length; idx++) {
+            if (data[idx] && start === null) {
               start = toX(idx);
-            } else if (!dp.data[idx] && start !== null) {
+            } else if (!data[idx] && start !== null) {
               const end = toX(idx);
               const width = end - start;
               areas.push([{ xAxis: start }, { xAxis: width < minWidth ? start + minWidth : end }]);
@@ -1629,16 +1771,11 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
             }
           }
           if (start !== null) {
-            const end = toX(dp.data.length - 1);
+            const end = toX(data.length - 1);
             const width = end - start;
             areas.push([{ xAxis: start }, { xAxis: width < minWidth ? start + minWidth : end }]);
           }
-          const dptCode = wf.waveform.digital_probe_type?.[dp.index];
-          const dptName =
-            dptCode !== undefined && dptCode !== UNKNOWN_PROBE_TYPE
-              ? DIGITAL_PROBE_TYPE_LABELS[dptCode]
-              : undefined;
-          const seriesName = dptName ?? `D${dp.index}`;
+          const seriesName = this.digitalProbeLabel(slot, 'short');
           // Invisible line series with markArea for full-height transparent bands
           series.push({
             name: seriesName,

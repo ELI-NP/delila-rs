@@ -421,6 +421,22 @@ export interface Waveform {
   /** AMax debug FW: shaping_track (1-bit per sample). Empty `[]` on
    *  legacy paths. Optional for BC with old `.delila` payloads. */
   digital_probe5?: number[];
+  /** Digital probes 6..16 — reserved slots for future AMax debug FW
+   *  digital lane bit assignments (currently bits 10..0 are constant 0
+   *  in hardware, so all empty today). Data-driven UI (`activeDigitalProbes()`)
+   *  filters them by `digital_probe_type[i] !== UNKNOWN_PROBE_TYPE`, so
+   *  empty slots never render. */
+  digital_probe6?: number[];
+  digital_probe7?: number[];
+  digital_probe8?: number[];
+  digital_probe9?: number[];
+  digital_probe10?: number[];
+  digital_probe11?: number[];
+  digital_probe12?: number[];
+  digital_probe13?: number[];
+  digital_probe14?: number[];
+  digital_probe15?: number[];
+  digital_probe16?: number[];
   time_resolution: number;
   trigger_threshold: number;
   ns_per_sample?: number;
@@ -451,7 +467,24 @@ export interface Waveform {
    *  / B=EnergyFilterSaturation / C=SignalInhibit / 0xFF=Unknown. AMax
    *  debug FW uses 0x40+ codes (0x40=Trigger Out / 0x41=BL Hold /
    *  0x42=Energy Ready / 0x43=Shaping Ready / 0x44=Shaping Tracking). */
-  digital_probe_type?: [number, number, number, number, number];
+  digital_probe_type?: [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
 }
 
 /** Sentinel matching `UNKNOWN_PROBE_TYPE` in src/common/mod.rs.

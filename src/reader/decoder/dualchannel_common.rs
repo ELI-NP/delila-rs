@@ -181,12 +181,23 @@ impl WaveformMetadata {
         ]
     }
 
-    fn digital_probe_type_padded(&self) -> [u8; 5] {
+    fn digital_probe_type_padded(&self) -> [u8; 16] {
         [
             self.digital_probe_type[0],
             self.digital_probe_type[1],
             self.digital_probe_type[2],
             self.digital_probe_type[3],
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
             UNKNOWN_PROBE_TYPE,
         ]
     }
@@ -786,6 +797,17 @@ fn decode_waveform<V: Dig2Variant>(
         digital_probe3,
         digital_probe4,
         digital_probe5: Vec::new(),
+        digital_probe6: Vec::new(),
+        digital_probe7: Vec::new(),
+        digital_probe8: Vec::new(),
+        digital_probe9: Vec::new(),
+        digital_probe10: Vec::new(),
+        digital_probe11: Vec::new(),
+        digital_probe12: Vec::new(),
+        digital_probe13: Vec::new(),
+        digital_probe14: Vec::new(),
+        digital_probe15: Vec::new(),
+        digital_probe16: Vec::new(),
         time_resolution,
         trigger_threshold,
         ns_per_sample,

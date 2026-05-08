@@ -175,6 +175,17 @@ fn decode_psd1_waveform(
         digital_probe3: vec![],
         digital_probe4: vec![],
         digital_probe5: vec![],
+        digital_probe6: vec![],
+        digital_probe7: vec![],
+        digital_probe8: vec![],
+        digital_probe9: vec![],
+        digital_probe10: vec![],
+        digital_probe11: vec![],
+        digital_probe12: vec![],
+        digital_probe13: vec![],
+        digital_probe14: vec![],
+        digital_probe15: vec![],
+        digital_probe16: vec![],
         time_resolution: 0,
         trigger_threshold: 0,
         ns_per_sample,
@@ -185,7 +196,7 @@ fn decode_psd1_waveform(
         // PSD1 wf-extras header doesn't carry probe-type info; emit
         // UNKNOWN so the UI falls back to "A0/A1/D0..D3" generic labels.
         analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
-        digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
+        digital_probe_type: [UNKNOWN_PROBE_TYPE; 16],
     }
 }
 

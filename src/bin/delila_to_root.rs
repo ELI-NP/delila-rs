@@ -108,6 +108,17 @@ fn main() {
     let mut digital_probe_type2: Vec<u8> = Vec::new();
     let mut digital_probe_type3: Vec<u8> = Vec::new();
     let mut digital_probe_type4: Vec<u8> = Vec::new();
+    let mut digital_probe_type5: Vec<u8> = Vec::new();
+    let mut digital_probe_type6: Vec<u8> = Vec::new();
+    let mut digital_probe_type7: Vec<u8> = Vec::new();
+    let mut digital_probe_type8: Vec<u8> = Vec::new();
+    let mut digital_probe_type9: Vec<u8> = Vec::new();
+    let mut digital_probe_type10: Vec<u8> = Vec::new();
+    let mut digital_probe_type11: Vec<u8> = Vec::new();
+    let mut digital_probe_type12: Vec<u8> = Vec::new();
+    let mut digital_probe_type13: Vec<u8> = Vec::new();
+    let mut digital_probe_type14: Vec<u8> = Vec::new();
+    let mut digital_probe_type15: Vec<u8> = Vec::new();
 
     let start = Instant::now();
     let mut total_events = 0usize;
@@ -165,7 +176,7 @@ fn main() {
                         // event without a waveform also gets 0xFF.
                         let (apt, dpt) = match ev.waveform.as_ref() {
                             Some(wf) => (wf.analog_probe_type, wf.digital_probe_type),
-                            None => ([UNKNOWN_PROBE_TYPE; 3], [UNKNOWN_PROBE_TYPE; 5]),
+                            None => ([UNKNOWN_PROBE_TYPE; 3], [UNKNOWN_PROBE_TYPE; 16]),
                         };
                         analog_probe_type0.push(apt[0]);
                         analog_probe_type1.push(apt[1]);
@@ -175,6 +186,17 @@ fn main() {
                         digital_probe_type2.push(dpt[2]);
                         digital_probe_type3.push(dpt[3]);
                         digital_probe_type4.push(dpt[4]);
+                        digital_probe_type5.push(dpt[5]);
+                        digital_probe_type6.push(dpt[6]);
+                        digital_probe_type7.push(dpt[7]);
+                        digital_probe_type8.push(dpt[8]);
+                        digital_probe_type9.push(dpt[9]);
+                        digital_probe_type10.push(dpt[10]);
+                        digital_probe_type11.push(dpt[11]);
+                        digital_probe_type12.push(dpt[12]);
+                        digital_probe_type13.push(dpt[13]);
+                        digital_probe_type14.push(dpt[14]);
+                        digital_probe_type15.push(dpt[15]);
                         file_events += 1;
                     }
                 }
@@ -231,6 +253,17 @@ fn main() {
     tree.new_branch("DigitalProbeType2", digital_probe_type2.into_iter());
     tree.new_branch("DigitalProbeType3", digital_probe_type3.into_iter());
     tree.new_branch("DigitalProbeType4", digital_probe_type4.into_iter());
+    tree.new_branch("DigitalProbeType5", digital_probe_type5.into_iter());
+    tree.new_branch("DigitalProbeType6", digital_probe_type6.into_iter());
+    tree.new_branch("DigitalProbeType7", digital_probe_type7.into_iter());
+    tree.new_branch("DigitalProbeType8", digital_probe_type8.into_iter());
+    tree.new_branch("DigitalProbeType9", digital_probe_type9.into_iter());
+    tree.new_branch("DigitalProbeType10", digital_probe_type10.into_iter());
+    tree.new_branch("DigitalProbeType11", digital_probe_type11.into_iter());
+    tree.new_branch("DigitalProbeType12", digital_probe_type12.into_iter());
+    tree.new_branch("DigitalProbeType13", digital_probe_type13.into_iter());
+    tree.new_branch("DigitalProbeType14", digital_probe_type14.into_iter());
+    tree.new_branch("DigitalProbeType15", digital_probe_type15.into_iter());
 
     tree.write(&mut file)
         .unwrap_or_else(|e| panic!("tree.write failed: {:?}", e));

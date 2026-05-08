@@ -118,8 +118,8 @@ pub const UNKNOWN_PROBE_TYPE: u8 = 0xFF;
 fn default_unknown_analog_probe_types() -> [u8; 3] {
     [UNKNOWN_PROBE_TYPE; 3]
 }
-fn default_unknown_digital_probe_types() -> [u8; 5] {
-    [UNKNOWN_PROBE_TYPE; 5]
+fn default_unknown_digital_probe_types() -> [u8; 16] {
+    [UNKNOWN_PROBE_TYPE; 16]
 }
 
 /// Waveform data from digitizer
@@ -146,6 +146,31 @@ pub struct Waveform {
     /// shaping_track. Empty Vec for FW that emits ≤ 4 digital probes.
     #[serde(default)]
     pub digital_probe5: Vec<u8>,
+    /// Digital probes 6..16 — reserved slots for future AMax debug FW
+    /// digital lane bits 10..0 (currently constant 0 in hardware). Empty
+    /// for every FW today.
+    #[serde(default)]
+    pub digital_probe6: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe7: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe8: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe9: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe10: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe11: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe12: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe13: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe14: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe15: Vec<u8>,
+    #[serde(default)]
+    pub digital_probe16: Vec<u8>,
     /// Time resolution (0=1x, 1=2x, 2=4x, 3=8x)
     pub time_resolution: u8,
     /// Trigger threshold
@@ -179,15 +204,16 @@ pub struct Waveform {
     /// default fn.
     #[serde(default = "default_unknown_analog_probe_types")]
     pub analog_probe_type: [u8; 3],
-    /// Probe-type identifier for digital probes 0..4 — PHA2 canonical
+    /// Probe-type identifier for digital probes 0..15 — PHA2 canonical
     /// encoding: 0=Trigger, 1=TimeFilterArmed, 2=ReTriggerGuard,
     /// 3=EnergyFilterBaselineFreeze, 4=EnergyFilterPeaking,
     /// 5=EnergyFilterPeakReady, 6=EnergyFilterPileUpGuard, 7=EventPileUp,
     /// 8=ADCSaturation, 9=ADCSaturationProtection, A=PostSaturationEvent,
     /// B=EnergyFilterSaturation, C=SignalInhibit, 0xFF=`UNKNOWN_PROBE_TYPE`.
-    /// AMax debug FW uses the 0x40+ range.
+    /// AMax debug FW uses the 0x40+ range. Slots 5..15 reserved for future
+    /// digital lane bit assignments.
     #[serde(default = "default_unknown_digital_probe_types")]
-    pub digital_probe_type: [u8; 5],
+    pub digital_probe_type: [u8; 16],
 }
 
 impl Default for Waveform {
@@ -201,6 +227,17 @@ impl Default for Waveform {
             digital_probe3: Vec::new(),
             digital_probe4: Vec::new(),
             digital_probe5: Vec::new(),
+            digital_probe6: Vec::new(),
+            digital_probe7: Vec::new(),
+            digital_probe8: Vec::new(),
+            digital_probe9: Vec::new(),
+            digital_probe10: Vec::new(),
+            digital_probe11: Vec::new(),
+            digital_probe12: Vec::new(),
+            digital_probe13: Vec::new(),
+            digital_probe14: Vec::new(),
+            digital_probe15: Vec::new(),
+            digital_probe16: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: 0.0,
@@ -208,7 +245,7 @@ impl Default for Waveform {
             analog_probe2_is_signed: false,
             analog_probe3_is_signed: false,
             analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 16],
         }
     }
 }
@@ -708,6 +745,17 @@ mod tests {
             digital_probe3: vec![],
             digital_probe4: vec![],
             digital_probe5: vec![],
+            digital_probe6: vec![],
+            digital_probe7: vec![],
+            digital_probe8: vec![],
+            digital_probe9: vec![],
+            digital_probe10: vec![],
+            digital_probe11: vec![],
+            digital_probe12: vec![],
+            digital_probe13: vec![],
+            digital_probe14: vec![],
+            digital_probe15: vec![],
+            digital_probe16: vec![],
             time_resolution: 1,
             trigger_threshold: 500,
             ns_per_sample: 2.0,
@@ -715,7 +763,7 @@ mod tests {
             analog_probe2_is_signed: false,
             analog_probe3_is_signed: false,
             analog_probe_type: [UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [UNKNOWN_PROBE_TYPE; 16],
         };
 
         let event = EventData::with_waveform(1, 2, 1000, 800, 123456789.0, 0, wf);

@@ -31,6 +31,15 @@ pub mod amax_probe_types {
     pub const DIG_ENERGY_DV: u8 = 0x42;
     pub const DIG_SHAPING_DV: u8 = 0x43;
     pub const DIG_SHAPING_TRACK: u8 = 0x44;
+    // Reserved namespace for future bits 10..0 of the digital lane:
+    // 0x45..0x4F. When Rebeca wires up additional digital signals
+    // (currently bits 10..0 are constant 0), assign them codes from
+    // this range and add the bit extraction in `decode_debug_waveform`.
+    // The carrier `Waveform` already has `digital_probe6..16` slots
+    // ready (struct expansion 2026-05-08 per Round 2 plan H.2); only
+    // the decoder + frontend label map (`DIGITAL_PROBE_TYPE_LABELS`
+    // in `web/operator-ui/src/app/models/histogram.types.ts`) need
+    // updating per new bit assignment.
 }
 
 /// AMax constants (64-bit words, Big Endian from digitizer)
@@ -406,6 +415,17 @@ impl AMaxDecoder {
             digital_probe3: Vec::new(),
             digital_probe4: Vec::new(),
             digital_probe5: Vec::new(),
+            digital_probe6: Vec::new(),
+            digital_probe7: Vec::new(),
+            digital_probe8: Vec::new(),
+            digital_probe9: Vec::new(),
+            digital_probe10: Vec::new(),
+            digital_probe11: Vec::new(),
+            digital_probe12: Vec::new(),
+            digital_probe13: Vec::new(),
+            digital_probe14: Vec::new(),
+            digital_probe15: Vec::new(),
+            digital_probe16: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: constants::TIME_STEP_NS,
@@ -416,7 +436,7 @@ impl AMaxDecoder {
             // AMax custom OpenDPP FW doesn't carry typed probe info on
             // the wire; emit UNKNOWN.
             analog_probe_type: [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 5],
+            digital_probe_type: [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 16],
         })
     }
 
@@ -499,6 +519,20 @@ impl AMaxDecoder {
             digital_probe3,
             digital_probe4,
             digital_probe5,
+            // Slots 6..16 reserved for future digital-lane bit assignments
+            // (currently bits 10..0 are constant 0 in hardware — see
+            // `amax_probe_types` mod and Round 2 plan H.2).
+            digital_probe6: Vec::new(),
+            digital_probe7: Vec::new(),
+            digital_probe8: Vec::new(),
+            digital_probe9: Vec::new(),
+            digital_probe10: Vec::new(),
+            digital_probe11: Vec::new(),
+            digital_probe12: Vec::new(),
+            digital_probe13: Vec::new(),
+            digital_probe14: Vec::new(),
+            digital_probe15: Vec::new(),
+            digital_probe16: Vec::new(),
             time_resolution: 0,
             trigger_threshold: 0,
             ns_per_sample: constants::TIME_STEP_NS,
@@ -519,6 +553,17 @@ impl AMaxDecoder {
                 amax_probe_types::DIG_ENERGY_DV,
                 amax_probe_types::DIG_SHAPING_DV,
                 amax_probe_types::DIG_SHAPING_TRACK,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
             ],
         })
     }
@@ -751,7 +796,7 @@ mod tests {
         );
         assert_eq!(
             wf.digital_probe_type,
-            [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 5]
+            [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 16]
         );
     }
 
@@ -809,16 +854,15 @@ mod tests {
                 amax_probe_types::ANA_TRIANGLE,
             ]
         );
-        assert_eq!(
-            wf.digital_probe_type,
-            [
-                amax_probe_types::DIG_TRIGGER_OUT,
-                amax_probe_types::DIG_BL_HOLD,
-                amax_probe_types::DIG_ENERGY_DV,
-                amax_probe_types::DIG_SHAPING_DV,
-                amax_probe_types::DIG_SHAPING_TRACK,
-            ]
-        );
+        // Slots 5..15 are reserved for future digital-lane bit assignments;
+        // padded with UNKNOWN_PROBE_TYPE today.
+        let mut expected = [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 16];
+        expected[0] = amax_probe_types::DIG_TRIGGER_OUT;
+        expected[1] = amax_probe_types::DIG_BL_HOLD;
+        expected[2] = amax_probe_types::DIG_ENERGY_DV;
+        expected[3] = amax_probe_types::DIG_SHAPING_DV;
+        expected[4] = amax_probe_types::DIG_SHAPING_TRACK;
+        assert_eq!(wf.digital_probe_type, expected);
     }
 
     #[test]
