@@ -1,6 +1,6 @@
 # TODO 50: macOS userspace USB CDC-EEM driver (libusb + utun)
 
-**Status:** PLANNED (post-MVP, low priority — fun project)
+**Status:** ARCHIVED (2026-05-08, abandoned — VX2730 firmware does not respond to host bulk OUT despite spec-correct CDC-EEM frames; reverse-engineering the device-side requirement was deemed too time-consuming)
 **Created:** 2026-04-30
 **Owner:** TBD (good weekend project for whoever wants it)
 
@@ -95,3 +95,16 @@ Bit 13-0:  Length   (data frame: payload length, command frame: opcode-specific)
 
 - 着手しないまま 1 年以上経過 → archive へ
 - 着手して PoC が通った → Status: COMPLETED に更新、CURRENT.md "Recently Completed" へ
+
+## 実装方針更新 (2026-05-08, IN PROGRESS)
+
+- **独立 repo として `external/usb-eem-rs/` に配置** (a3818 driver と同じ co-location パターン)。
+  - 独立 `.git/` を持つ汎用 CDC-EEM userspace driver。任意の CDC-EEM デバイスで動く設計、いずれ crates.io 公開視野。
+  - delila-rs 本体 (Cargo.toml, src/) は触らない。`external/` は rsync exclude 済 → 本体デプロイに影響なし。
+- crate 構成: 単一 crate に lib + 2 binary (`usb-eem-tunnel` 本体 / `eem-sniff` デバッグ用)。
+- USB: **`nusb`** を採用 (pure Rust + IOKit 直、libusb-darwin の runloop 衝突回避)。`rusb` は fallback 候補のみ。
+- L2/L3 bridge: utun + 自前 NDP fakeout (NS→NA 応答、digitizer MAC は最初の RA から学習)。
+- 実装ポリシー: **KISS > TDD > Clean Architecture** (delila-rs CLAUDE.md 準拠)。各モジュール失敗テスト先行で実装。先回り抽象化禁止。
+- Phase 1 PoC ゴール: `ping6 fe80::<digitizer>%utunN` が通ること。MTU は 1500 → 9000 → 15000 と段階的に引き上げ。
+
+詳細プラン: `~/.claude/plans/shiny-honking-wilkinson.md` (作業セッションの plan file)
