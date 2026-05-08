@@ -2,7 +2,9 @@
   "digitizer_id": 0,
   "name": "AMax VX2730 @ 172.18.4.56",
   "firmware": "AMax",
-  "num_channels": 2,
+  "serial_number": "52622",
+  "model": "VX2730",
+  "num_channels": 32,
   "is_master": true,
   "board": {
     "start_source": "SWcmd",
@@ -16,11 +18,11 @@
     "enabled": "True",
     "dc_offset": 50.0,
     "amax": {
-      "selector_wave": 0,
-      "pretrigger_input": 1125,
+      "selector_wave": 1,
+      "pretrigger_input": 600,
       "polarity": 1,
-      "offset": 50,
-      "thrs": 40,
+      "offset": 5,
+      "thrs": 20,
       "trig_k": 10,
       "trig_m": 12,
       "trap_k": 500,
@@ -29,7 +31,7 @@
       "trap_gain": 2500,
       "bl_len": 6,
       "bl_inib": 1200,
-      "sample_pos": 510,
+      "sample_pos": 1800,
       "run_cfg": 1,
       "amax_window": 1000,
       "window_maxim": 500,
@@ -38,7 +40,10 @@
       "baseline_len": 6,
       "baseline_offset": 1000,
       "pretrigger_trap": 600,
-      "pretrigger_amax": 600
+      "pretrigger_amax": 600,
+      "delay_shaping": 32,
+      "shap_trigg": 0,
+      "shap_bl_hold": 0
     }
   }
 }

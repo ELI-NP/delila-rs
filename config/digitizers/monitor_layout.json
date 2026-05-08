@@ -73,8 +73,8 @@
   },
   "viewTabs": [
     {
-      "id": "9e36d919-f210-4756-a535-a15e81f3e22b",
-      "name": "PHA2 Physical Input Ch0-15",
+      "id": "1ff9716d-b9f5-4c9e-82ff-2395647d6ded",
+      "name": "AMax VX2730 @ 172.18.4.56 Ch0-15",
       "gridRows": 4,
       "gridCols": 4,
       "xAxisLabel": "Channel",
@@ -90,9 +90,12 @@
         {
           "sourceId": 0,
           "channelId": 1,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 23.56329113924051
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false
         },
         {
@@ -207,11 +210,12 @@
           "isLocked": false,
           "isEmpty": false
         }
-      ]
+      ],
+      "lastModifiedCellIndex": 1
     },
     {
-      "id": "d7c53ad8-8187-4489-9003-57aa3a70986b",
-      "name": "PHA2 Physical Input Ch16-31",
+      "id": "91732a5f-abbb-41cd-84e8-5105e9fcc6ce",
+      "name": "AMax VX2730 @ 172.18.4.56 Ch16-31",
       "gridRows": 4,
       "gridCols": 4,
       "xAxisLabel": "Channel",
@@ -347,5 +351,5 @@
       ]
     }
   ],
-  "activeTabId": "d7c53ad8-8187-4489-9003-57aa3a70986b"
+  "activeTabId": "1ff9716d-b9f5-4c9e-82ff-2395647d6ded"
 }
