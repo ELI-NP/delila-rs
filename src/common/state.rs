@@ -128,6 +128,15 @@ pub trait CommandHandlerExt {
     ) -> Result<usize, String> {
         Err("ApplyDigitizerConfig (running) not supported by this component".to_string())
     }
+
+    /// Called when ReadAmaxBoardRegisters command is received (Reader-only).
+    /// Reads back board-level AMax registers from live hardware via
+    /// `CaenHandle::get_user_register`. Returns `(name, value)` pairs;
+    /// non-AMax / DIG1 / X743 firmwares return an empty vec (no error)
+    /// so the operator UI can render "no AMax registers" cleanly.
+    fn on_read_amax_board_registers(&mut self) -> Result<Vec<(String, u32)>, String> {
+        Err("ReadAmaxBoardRegisters not supported by this component".to_string())
+    }
 }
 
 /// Handle a command using the 5-state machine logic
@@ -414,6 +423,34 @@ pub fn handle_command<E: CommandHandlerExt>(
             // RegisterChannels is handled directly by Monitor's command loop,
             // not through the generic handler. Other components ignore it.
             CommandResponse::error(current, "RegisterChannels not supported by this component")
+        }
+
+        Command::ReadAmaxBoardRegisters => {
+            if let Some(ref mut e) = ext {
+                match e.on_read_amax_board_registers() {
+                    Ok(pairs) => {
+                        let map: serde_json::Map<String, serde_json::Value> = pairs
+                            .into_iter()
+                            .map(|(k, v)| (k, serde_json::Value::Number(v.into())))
+                            .collect();
+                        CommandResponse {
+                            success: true,
+                            state: current,
+                            message: "AMax board registers read".to_string(),
+                            run_number: None,
+                            error_code: None,
+                            metrics: None,
+                            data: Some(serde_json::Value::Object(map)),
+                        }
+                    }
+                    Err(msg) => CommandResponse::error(current, msg),
+                }
+            } else {
+                CommandResponse::error(
+                    current,
+                    "ReadAmaxBoardRegisters not supported by this component",
+                )
+            }
         }
     }
 }

@@ -351,6 +351,13 @@ pub(crate) fn run(
                     };
                     let _ = response_tx.send(result);
                 }
+                ReadLoopRequest::ReadAmaxBoardRegisters { response_tx } => {
+                    // DIG1 firmwares (PSD1/PHA1) don't expose AMax board
+                    // registers — return an empty list instead of erroring
+                    // so the operator UI can render "no AMax registers" for
+                    // mixed-FW setups without surfacing a fake error.
+                    let _ = response_tx.send(Ok(Vec::new()));
+                }
             }
         }
 

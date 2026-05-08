@@ -167,6 +167,13 @@ pub enum Command {
     /// Register channels with Monitor for pre-creating empty histograms.
     /// Sent by Operator after Configure or Tune Up start. Does not change state.
     RegisterChannels(Vec<ChannelRegistration>),
+    /// Read AMax board-level register values from live hardware.
+    /// Reader-only; valid from any state when a connection exists.
+    /// Returns `(name, value)` pairs in `CommandResponse.data` as a JSON
+    /// object. Used by the operator UI's Tune Up debug view to surface
+    /// what ENABLE_ACQ (and any future board register) is actually set
+    /// to on the digitizer vs what's stored in the config file.
+    ReadAmaxBoardRegisters,
 }
 
 impl std::fmt::Display for Command {
@@ -188,6 +195,7 @@ impl std::fmt::Display for Command {
             Command::RegisterChannels(ref channels) => {
                 write!(f, "RegisterChannels(count={})", channels.len())
             }
+            Command::ReadAmaxBoardRegisters => write!(f, "ReadAmaxBoardRegisters"),
         }
     }
 }

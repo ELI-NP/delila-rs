@@ -158,6 +158,36 @@ impl Register {
     }
 }
 
+/// Pick the canonical per-channel register entries from a `Register` list.
+/// Across FW eras the canonical entry is the one without a channel index:
+///   - 2026-03 era: only per-channel pages exist (`page_amax_energy_0/...`,
+///     `page_amax_energy_1/...`, ...) — we fall back to ch0 (lowest index)
+///     so the page is represented at all.
+///   - 2026-04 32-ch era: `page_amax_energy_<NAME>` only (no index, single
+///     broadcast page) — picked directly.
+///   - 2026-05 16-ch era: broadcast `page_amax_energy_<NAME>` (no index)
+///     plus 16 per-channel pages `page_amax_energy_<N>_<NAME>` — broadcast
+///     wins, per-channel duplicates dropped (single write fans out to all
+///     channels via hardware; see `apply_amax_channel_config`).
+fn select_canonical_per_channel(registers: &[Register]) -> Vec<&Register> {
+    let has_broadcast = registers
+        .iter()
+        .any(|r| r.is_per_channel() && r.channel_index().is_none());
+    registers
+        .iter()
+        .filter(|r| {
+            if !r.is_per_channel() {
+                return false;
+            }
+            match r.channel_index() {
+                None => true,              // broadcast — preferred
+                Some(0) => !has_broadcast, // 2026-03 fallback
+                Some(_) => false,          // skip ch1+ duplicates
+            }
+        })
+        .collect()
+}
+
 // ---- fw_params.json schema (extended with UI metadata) ----
 
 #[derive(Deserialize)]
@@ -230,37 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params_text = fs::read_to_string(&cli.params_file)?;
     let fw_params: FwParams = serde_json::from_str(&params_text)?;
 
-    // Keep only the canonical (broadcast) per-channel register set. Across
-    // FW eras the canonical entry is the one without a channel index:
-    //   - 2026-03 era: `page_amax_energy_0/<NAME>` (we picked ch0 by skipping
-    //     `_1/`); the index here is part of `channel_index()`.
-    //   - 2026-04 32-ch era: `page_amax_energy_<NAME>` (no index — `channel_index() == None`).
-    //   - 2026-05 16-ch era: broadcast `page_amax_energy_<NAME>` (no index)
-    //     plus 16 per-channel pages `page_amax_energy_<N>_<NAME>`. We keep
-    //     the broadcast one (single write fans out to all 16 channels via
-    //     hardware — see `apply_amax_channel_config`).
-    //
-    // For the 2026-03 era which only exposes per-channel pages, fall back
-    // to keeping ch0 (lowest channel index) so the page exposes a register
-    // at all.
-    let has_broadcast = register_file
-        .registers
-        .iter()
-        .any(|r| r.is_per_channel() && r.channel_index().is_none());
-    let mut ch0: Vec<&Register> = register_file
-        .registers
-        .iter()
-        .filter(|r| {
-            if !r.is_per_channel() {
-                return false;
-            }
-            match r.channel_index() {
-                None => true,              // broadcast — preferred
-                Some(0) => !has_broadcast, // 2026-03 fallback
-                Some(_) => false,          // skip ch1+ duplicates
-            }
-        })
-        .collect();
+    let mut ch0: Vec<&Register> = select_canonical_per_channel(&register_file.registers);
     ch0.sort_by_key(|r| r.address);
 
     // Resolve each writable register against fw_params.json.
@@ -602,6 +602,29 @@ fn emit_rust_registers(
             ));
         }
         out.push_str("    writes\n}\n");
+
+        // Symmetric read-back helper for the Tune Up debug panel: returns
+        // every board-level register's (address, name) pair regardless of
+        // whether the config Option is Some. Adding a new board param to
+        // fw_params.json auto-extends this list — no inspector code change
+        // required.
+        out.push_str(
+            "\n/// All board-level register (byte_addr, name) pairs, in stable order.\n\
+             /// Used by the operator UI's Tune Up debug view to read live\n\
+             /// values back from the digitizer (see\n\
+             /// `ReadLoopRequest::ReadAmaxBoardRegisters` in `reader/mod.rs`).\n\
+             #[allow(dead_code)]\n\
+             pub fn all_board_registers() -> Vec<(u32, &'static str)> {\n\
+             \x20\x20\x20\x20vec![\n",
+        );
+        for r in board_resolved {
+            out.push_str(&format!(
+                "        (BOARD_REG_{u}, \"{f}\"),\n",
+                f = r.field,
+                u = r.field.to_uppercase(),
+            ));
+        }
+        out.push_str("    ]\n}\n");
     }
 
     // Lightweight test: every offset distinct, byte-addr math stays consistent.
@@ -889,5 +912,163 @@ mod tests {
         assert!(!reg("ENABLE_ACQ").is_per_channel());
         assert!(!reg("AMAX_gol").is_per_channel());
         assert!(!reg("/ENABLE_ACQ").is_per_channel());
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: drive `select_canonical_per_channel` against
+    // synthetic register lists representative of each FW era. These pin the
+    // filter behaviour so future FW revisions that introduce a new naming
+    // scheme don't silently break codegen output.
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a Register with a specific address (so we can assert on
+    /// which entry "won" when broadcast and per-channel both exist).
+    fn reg_at(addr: u32, name_or_path: &str) -> Register {
+        Register {
+            address: addr,
+            path: Some(name_or_path.to_string()),
+            name: Some(name_or_path.to_string()),
+        }
+    }
+
+    /// Sort + project the result to (addr, name) tuples for stable assertions.
+    fn picked(regs: &[&Register]) -> Vec<(u32, String)> {
+        let mut out: Vec<(u32, String)> = regs
+            .iter()
+            .map(|r| {
+                (
+                    r.address,
+                    r.path.clone().or(r.name.clone()).unwrap_or_default(),
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn canonical_filter_2026_03_era_keeps_ch0_only() {
+        // 2026-03 era: per-channel pages with slash separator. NO broadcast
+        // page — the filter must fall back to ch0 (lowest index) so the
+        // generated AMaxChannelConfig has every register.
+        let regs = vec![
+            reg_at(0x800002, "page_amax_energy_0/POLARITY"),
+            reg_at(0x800004, "page_amax_energy_0/THRS"),
+            reg_at(0x840002, "page_amax_energy_1/POLARITY"),
+            reg_at(0x840004, "page_amax_energy_1/THRS"),
+            reg_at(0x880002, "page_amax_energy_2/POLARITY"),
+            reg_at(0x880004, "page_amax_energy_2/THRS"),
+            // Sibling globals (not per-channel) must be filtered out.
+            reg_at(0x80008, "ENABLE_ACQ"),
+            reg_at(0x80007, "AMAX_gol"),
+        ];
+        let picked = picked(&select_canonical_per_channel(&regs));
+        assert_eq!(
+            picked,
+            vec![
+                (0x800002, "page_amax_energy_0/POLARITY".to_string()),
+                (0x800004, "page_amax_energy_0/THRS".to_string()),
+            ],
+            "2026-03 era: ch0 wins, ch1+ + globals dropped"
+        );
+    }
+
+    #[test]
+    fn canonical_filter_2026_04_era_keeps_bare_names() {
+        // 2026-04 32-ch era: a single broadcast page with no channel index.
+        // No per-channel pages exist at all — the filter keeps everything
+        // that lives under `page_amax_energy_*` and isn't otherwise.
+        let regs = vec![
+            reg_at(0x100002, "page_amax_energy_POLARITY"),
+            reg_at(0x100004, "page_amax_energy_THRS"),
+            reg_at(0x100006, "page_amax_energy_baseline_delay"),
+            // Globals filtered out.
+            reg_at(0x80008, "ENABLE_ACQ"),
+        ];
+        let picked = picked(&select_canonical_per_channel(&regs));
+        assert_eq!(
+            picked,
+            vec![
+                (0x100002, "page_amax_energy_POLARITY".to_string()),
+                (0x100004, "page_amax_energy_THRS".to_string()),
+                (0x100006, "page_amax_energy_baseline_delay".to_string()),
+            ],
+            "2026-04 era: all bare-name broadcast entries kept"
+        );
+    }
+
+    #[test]
+    fn canonical_filter_2026_05_era_prefers_broadcast_drops_per_channel() {
+        // 2026-05 16-ch era: broadcast page (no index) + 16 per-channel
+        // pages (`_<N>_<NAME>`). Broadcast wins; per-channel duplicates
+        // are dropped to avoid emitting 16 duplicate `REG_*` constants.
+        let mut regs = vec![
+            // The broadcast (canonical) entries.
+            reg_at(0x100002, "page_amax_energy_POLARITY"),
+            reg_at(0x100004, "page_amax_energy_THRS"),
+            // Globals filtered out.
+            reg_at(0x80008, "ENABLE_ACQ"),
+        ];
+        // 16 per-channel duplicates that must NOT win over the broadcast.
+        for ch in 0..16u32 {
+            regs.push(reg_at(
+                0x200000 + ch * 0x40000,
+                &format!("page_amax_energy_{ch}_POLARITY"),
+            ));
+            regs.push(reg_at(
+                0x200004 + ch * 0x40000,
+                &format!("page_amax_energy_{ch}_THRS"),
+            ));
+        }
+
+        let picked = picked(&select_canonical_per_channel(&regs));
+        assert_eq!(
+            picked,
+            vec![
+                (0x100002, "page_amax_energy_POLARITY".to_string()),
+                (0x100004, "page_amax_energy_THRS".to_string()),
+            ],
+            "2026-05 era: only the 2 broadcast entries kept; 32 per-channel duplicates dropped"
+        );
+    }
+
+    #[test]
+    fn canonical_filter_does_not_double_count_register_names() {
+        // Cross-era invariant: after filtering, every distinct fw_key must
+        // appear exactly once. If this regresses, the codegen would emit
+        // duplicate `REG_*` constants and the channel-page filter would
+        // be silently wrong.
+        let regs = vec![
+            reg_at(0x100002, "page_amax_energy_POLARITY"),
+            reg_at(0x200002, "page_amax_energy_0_POLARITY"), // 2026-05 ch0 dup
+            reg_at(0x300002, "page_amax_energy_1_POLARITY"), // 2026-05 ch1 dup
+            reg_at(0x100004, "page_amax_energy_THRS"),
+            reg_at(0x200004, "page_amax_energy_0_THRS"),
+        ];
+        let canonical = select_canonical_per_channel(&regs);
+        let mut keys: Vec<String> = canonical.iter().filter_map(|r| r.fw_key()).collect();
+        keys.sort();
+        let unique = {
+            let mut v = keys.clone();
+            v.dedup();
+            v
+        };
+        assert_eq!(keys, unique, "every fw_key must appear exactly once");
+        assert_eq!(keys, vec!["POLARITY", "THRS"]);
+    }
+
+    #[test]
+    fn canonical_filter_handles_empty_input() {
+        let picked = picked(&select_canonical_per_channel(&[]));
+        assert!(picked.is_empty());
+    }
+
+    #[test]
+    fn canonical_filter_handles_globals_only() {
+        // Boards with no `page_amax_energy_*` registers (e.g. a stripped
+        // FW dump for ENABLE_ACQ probing) should yield zero per-channel
+        // entries — globals are picked up by the `is_board_level` path.
+        let regs = vec![reg_at(0x80008, "ENABLE_ACQ"), reg_at(0x80007, "AMAX_gol")];
+        assert!(select_canonical_per_channel(&regs).is_empty());
     }
 }

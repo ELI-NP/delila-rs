@@ -359,6 +359,34 @@ pub(crate) fn run(
                     };
                     let _ = response_tx.send(result);
                 }
+                ReadLoopRequest::ReadAmaxBoardRegisters { response_tx } => {
+                    use crate::reader::caen::amax_registers as r;
+                    let result = match connection.as_ref() {
+                        Some(conn) => {
+                            // Codegen-emitted (addr, name) list of every
+                            // AMax board-level register — auto-extends
+                            // when fw_params.json grows new `board_params`.
+                            let entries = r::all_board_registers();
+                            let mut out = Vec::with_capacity(entries.len());
+                            let mut err: Option<String> = None;
+                            for (addr, name) in entries {
+                                match conn.handle.get_user_register(addr) {
+                                    Ok(v) => out.push((name.to_string(), v)),
+                                    Err(e) => {
+                                        err = Some(format!(
+                                            "Failed to read {} (addr 0x{:08X}): {}",
+                                            name, addr, e
+                                        ));
+                                        break;
+                                    }
+                                }
+                            }
+                            err.map_or(Ok(out), Err)
+                        }
+                        None => Err("Not connected to digitizer".to_string()),
+                    };
+                    let _ = response_tx.send(result);
+                }
             }
         }
 

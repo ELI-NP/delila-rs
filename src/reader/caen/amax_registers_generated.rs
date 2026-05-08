@@ -187,6 +187,15 @@ pub fn board_writes(
     writes
 }
 
+/// All board-level register (byte_addr, name) pairs, in stable order.
+/// Used by the operator UI's Tune Up debug view to read live
+/// values back from the digitizer (see
+/// `ReadLoopRequest::ReadAmaxBoardRegisters` in `reader/mod.rs`).
+#[allow(dead_code)]
+pub fn all_board_registers() -> Vec<(u32, &'static str)> {
+    vec![(BOARD_REG_ENABLE_ACQ, "enable_acq")]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

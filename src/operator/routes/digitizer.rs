@@ -933,3 +933,69 @@ pub(super) async fn restore_digitizer_version(
         ),
     }
 }
+
+/// AMax board-level register live readback — returns `(name → value)`
+/// pairs as a JSON object. Used by the operator UI's Tune Up debug
+/// view to surface what ENABLE_ACQ (and any future board-level
+/// register added via `fw_params.json` `board_params`) is actually
+/// set to on the digitizer vs what's stored in the config file.
+///
+/// Non-AMax / DIG1 / X743 firmwares return an empty object instead of
+/// erroring, so the UI can render "no AMax registers" cleanly for
+/// mixed-FW setups.
+#[utoipa::path(
+    get,
+    path = "/api/digitizers/{id}/amax-board-registers",
+    tag = "Digitizer Config",
+    params(
+        ("id" = u32, Path, description = "Digitizer ID")
+    ),
+    responses(
+        (status = 200, description = "Live register values", body = serde_json::Value),
+        (status = 404, description = "Digitizer not found", body = ApiResponse),
+        (status = 503, description = "Reader did not respond", body = ApiResponse),
+    )
+)]
+pub(super) async fn read_amax_board_registers(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<u32>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiResponse>)> {
+    let comp = state
+        .components
+        .iter()
+        .find(|c| c.is_digitizer && c.source_id == Some(id))
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::error(format!(
+                    "No digitizer component for source_id={}",
+                    id
+                ))),
+            )
+        })?;
+
+    match state
+        .client
+        .send_command(&comp.address, &Command::ReadAmaxBoardRegisters)
+        .await
+    {
+        Ok(resp) if resp.success => Ok(Json(
+            resp.data
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
+        )),
+        Ok(resp) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::error(format!(
+                "Reader rejected ReadAmaxBoardRegisters: {}",
+                resp.message
+            ))),
+        )),
+        Err(e) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::error(format!(
+                "ReadAmaxBoardRegisters request failed: {}",
+                e
+            ))),
+        )),
+    }
+}

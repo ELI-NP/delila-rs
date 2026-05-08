@@ -1,7 +1,7 @@
 # AMax 10G FW Round 2 — 16 ch + 16-bit digital probes + Tune Up sub-mode
 
 **作成日:** 2026-05-07
-**ステータス:** 📋 Plan 承認済 (2026-05-07)、実装は **Fri 2026-05-08 / Mon 2026-05-11** 着手予定
+**ステータス:** ✅ **コード作業完了 (2026-05-08)** — Phase G/H/I 全項目 + UX polish + 統合テスト + register inspector + 状態更新まで landed (commits `8786008` + 本コミット)。残り: 月曜 (5/11) の **172.18.6.114 実機検証** (Phase J.2/J.3 hardware-only項目)。
 **プランファイル:** [/Users/aogaki/.claude/plans/lazy-herding-naur.md](../../.claude/plans/lazy-herding-naur.md) Round 2 セクション (Phase G–J)
 **前提:** Round 1 完了 (commits `d336203` + `b1e9aa3`、master push 済)
 **FW ソース:** `FW/20260507/RegisterFile.json` + `V2730-OpenDPP10GUDP-AMAXfirmware32channel4inputcaenlist-2026050752.cup`
@@ -29,6 +29,22 @@ DELILA 側の課題: 16 ch + 16 digital probes に対応しつつ、他 FW (PSD2
 
 - [`amax_10g_round2_queued`](`/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/amax_10g_round2_queued.md`) — 再開時のスタート地点
 - [`feedback_preallocate_over_incremental`](`/Users/aogaki/.claude/projects/-Users-aogaki-WorkSpace-delila-rs/memory/feedback_preallocate_over_incremental.md`) — 一括拡張 vs 段階拡張の判断則
+
+---
+
+## 完了サマリー (2026-05-08 セッション)
+
+**コード作業 (Fri):**
+- ✅ Phase G: codegen `_<N>_<NAME>` infix 対応 + `channel_index()` + broadcast canonical filter + 11 unit tests (5 era 別 + 6 integration)
+- ✅ Phase H.2: `Waveform` 5 → 16 digital probes 一括拡張 (25 sites + WaveformMetadata + delila_to_root + tests)
+- ✅ Phase H.1: データ駆動 `activeDigitalProbeSlots` + `digitalProbeColor/Label/Visible/Toggle` + ProbeConfig refactor + chart loop refactor
+- ✅ Phase I.1-I.3: `tuneupView` signal + AMax sub-mode toggle + ENABLE_ACQ Quick toggle + amax-debug ch0 lock
+- ✅ Phase I.2 stretch: **Register inspector side panel** — `Command::ReadAmaxBoardRegisters` + `ReadLoopRequest` variant + `CommandHandlerExt::on_read_amax_board_registers` + dig1/dig2/V1743 handlers + REST `GET /api/digitizers/:id/amax-board-registers` + DigitizerService method + 1Hz polling effect + drift detection + mat-card UI
+- ✅ Phase J: pre-commit gate (clippy + 578 tests + ng build) + commit `8786008` (master push)
+
+**残: 月曜 (5/11) 実機検証**
+- Phase J.2: 172.18.6.114 で `caen_simple_test --firmware amax --url <new-FW-URL>` smoke
+- Phase J.3: Tune Up UI walk-through (Standard/Debug toggle、ENABLE_ACQ Quick toggle、register drift indicator 確認)
 
 ---
 

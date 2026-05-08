@@ -774,6 +774,13 @@ pub(crate) enum ReadLoopRequest {
         config: Box<crate::config::digitizer::DigitizerConfig>,
         response_tx: std::sync::mpsc::SyncSender<Result<usize, String>>,
     },
+    /// Read back AMax board-level user registers from live hardware.
+    /// Used by the operator UI's Tune Up debug view to show what
+    /// ENABLE_ACQ (and any future board-level register) is actually
+    /// set to on the board, vs what's stored in the config file.
+    ReadAmaxBoardRegisters {
+        response_tx: std::sync::mpsc::SyncSender<Result<Vec<(String, u32)>, String>>,
+    },
 }
 
 /// Command handler extension for Reader
@@ -904,6 +911,20 @@ impl CommandHandlerExt for ReaderCommandExt {
             .recv_timeout(std::time::Duration::from_secs(10))
             .map_err(|_| {
                 "ApplyConfigRunning timeout: ReadLoop did not respond within 10s".to_string()
+            })?
+    }
+
+    fn on_read_amax_board_registers(&mut self) -> Result<Vec<(String, u32)>, String> {
+        let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel(1);
+        self.request_tx
+            .send(ReadLoopRequest::ReadAmaxBoardRegisters {
+                response_tx: resp_tx,
+            })
+            .map_err(|_| "ReadLoop not running".to_string())?;
+        resp_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .map_err(|_| {
+                "ReadAmaxBoardRegisters timeout: ReadLoop did not respond within 2s".to_string()
             })?
     }
 }
@@ -1755,6 +1776,12 @@ impl Reader {
                             }
                         }
                         let _ = response_tx.send(result);
+                    }
+                    ReadLoopRequest::ReadAmaxBoardRegisters { response_tx } => {
+                        // V1743 (X743 family) doesn't expose AMax board
+                        // registers — return empty so the UI can render
+                        // "no AMax registers" for X743 digitizers.
+                        let _ = response_tx.send(Ok(Vec::new()));
                     }
                     ReadLoopRequest::ApplyConfigRunning {
                         config: new_config,

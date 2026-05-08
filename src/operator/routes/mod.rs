@@ -48,8 +48,8 @@ pub use run::{AddNoteRequest, NextRunNumberResponse};
 // Import handler functions from sub-modules (used in router and ApiDoc)
 use digitizer::{
     apply_digitizer_config, detect_digitizers, get_digitizer, get_digitizer_by_serial,
-    get_digitizer_history, list_digitizers, restore_digitizer_version, save_all_digitizers,
-    save_digitizer, save_digitizer_to_mongodb, update_digitizer,
+    get_digitizer_history, list_digitizers, read_amax_board_registers, restore_digitizer_version,
+    save_all_digitizers, save_digitizer, save_digitizer_to_mongodb, update_digitizer,
 };
 use emulator::{get_emulator_settings, update_emulator_settings};
 use event_builder::{
@@ -537,6 +537,10 @@ impl RouterBuilder {
             .route("/api/digitizers/:id", get(get_digitizer))
             .route("/api/digitizers/:id", put(update_digitizer))
             .route("/api/digitizers/:id/apply", post(apply_digitizer_config))
+            .route(
+                "/api/digitizers/:id/amax-board-registers",
+                get(read_amax_board_registers),
+            )
             .route("/api/digitizers/:id/save", post(save_digitizer))
             .route(
                 "/api/digitizers/:id/save-to-db",

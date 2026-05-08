@@ -432,6 +432,23 @@ export class DigitizerService {
   }
 
   /**
+   * Live read-back of AMax board-level registers from the digitizer (via
+   * the operator's `/api/digitizers/:id/amax-board-registers` route).
+   * Returns `{ enable_acq: 0|1, ... }`. Empty object for non-AMax /
+   * disconnected digitizers — backend returns `{}` in those cases instead
+   * of erroring so the UI can render "no live registers" cleanly.
+   */
+  async readAmaxBoardRegisters(
+    digitizerId: number,
+  ): Promise<Record<string, number>> {
+    return await firstValueFrom(
+      this.http.get<Record<string, number>>(
+        `${this.apiUrl}/${digitizerId}/amax-board-registers`,
+      ),
+    );
+  }
+
+  /**
    * Read board-level (global) AMax values from a DigitizerConfig as a flat
    * Record keyed by `amax.board.<field>`. Falls back to `AMAX_BOARD_DEFAULTS`
    * for any field the config doesn't explicitly set, so the Settings UI

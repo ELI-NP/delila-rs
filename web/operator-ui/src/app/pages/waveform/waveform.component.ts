@@ -243,6 +243,41 @@ interface ChannelChart {
           </button>
         </div>
 
+        @if (tuneupView() === 'amax-debug' && tuneUpConfig()?.firmware === 'AMax') {
+          <!-- AMax debug FW register inspector. Shows live read-back of
+               the board-level registers (currently ENABLE_ACQ; auto-extends
+               via codegen-emitted all_board_registers() when fw_params.json
+               grows new entries) so the operator can spot config-vs-hardware
+               drift at a glance. Polled at 1 Hz only while this view is
+               active. -->
+          <mat-card class="amax-register-inspector">
+            <mat-card-content>
+              <div class="amax-register-header">
+                <span class="amax-register-title">
+                  <mat-icon class="inline-icon">memory</mat-icon>
+                  AMax board registers (live)
+                </span>
+                @if (amaxBoardRegistersDrifting()) {
+                  <span class="amax-register-drift" matTooltip="Live readback disagrees with config — someone may have written the register out-of-band">
+                    <mat-icon class="inline-icon">sync_problem</mat-icon>
+                    out of sync
+                  </span>
+                }
+              </div>
+              @if ((amaxBoardRegisters() | keyvalue).length === 0) {
+                <span class="amax-register-empty">— no registers yet (waiting for first poll) —</span>
+              } @else {
+                <div class="amax-register-grid">
+                  @for (entry of amaxBoardRegisters() | keyvalue; track entry.key) {
+                    <span class="amax-register-name">{{ entry.key }}:</span>
+                    <span class="amax-register-value">{{ formatAmaxRegister(entry.key, $any(entry.value)) }}</span>
+                  }
+                </div>
+              }
+            </mat-card-content>
+          </mat-card>
+        }
+
         <div class="tuneup-content">
           <!-- Top row: Waveform (left) + Histogram (right) -->
           <div class="tuneup-top-row">
@@ -581,6 +616,64 @@ interface ChannelChart {
       align-items: center;
       gap: 16px;
       flex-wrap: wrap;
+    }
+
+    .amax-view-toggle {
+      font-size: 13px;
+    }
+
+    .amax-enable-acq {
+      margin-left: 4px;
+    }
+
+    .inline-icon {
+      font-size: 18px;
+      vertical-align: middle;
+      width: 18px;
+      height: 18px;
+    }
+
+    .amax-register-inspector {
+      margin-bottom: 12px;
+      background: #fff8e1;
+      border-left: 4px solid #ffa000;
+    }
+    .amax-register-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .amax-register-title {
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .amax-register-drift {
+      color: #c62828;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .amax-register-grid {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 4px 16px;
+      font-family: 'Roboto Mono', monospace;
+      font-size: 13px;
+    }
+    .amax-register-name {
+      color: #5d4037;
+    }
+    .amax-register-value {
+      color: #1b5e20;
+    }
+    .amax-register-empty {
+      font-style: italic;
+      color: #757575;
+      font-size: 13px;
     }
 
     .channel-select {
@@ -1020,6 +1113,94 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
    *  Synced from `tuneUpConfig()` via an effect; flipping here writes
    *  through `tuneupApply` (see `onAmaxEnableAcqToggle`). */
   readonly amaxEnableAcq = signal(false);
+
+  /** Live AMax board-level register values polled from the digitizer
+   *  (via `GET /api/digitizers/:id/amax-board-registers`). Polled at
+   *  1 Hz only while the AMax Tune Up debug sub-mode is active. Empty
+   *  object means "no AMax board registers / not yet polled". The
+   *  Tune Up panel surfaces this so the operator can see what
+   *  ENABLE_ACQ (and any future board register) is *actually* set to
+   *  on hardware vs what's stored in the config. */
+  readonly amaxBoardRegisters = signal<Record<string, number>>({});
+
+  /** RxJS subscription handle for the AMax register poll loop —
+   *  unsubscribed automatically when the operator leaves amax-debug
+   *  view (see `amaxRegistersPollEffect` below). */
+  private amaxRegPolling$ = Subscription.EMPTY;
+
+  /** When the operator switches into amax-debug view, lock the channel
+   *  selector to ch0 — that's the only channel the AMax debug FW
+   *  instruments (the SE pin is hardwired to U57 only, see
+   *  `decoder/amax.rs` spec ref). Without this, the operator could be
+   *  staring at ch5 wondering why no debug-mode events show up. */
+  private readonly amaxDebugCh0LockEffect = effect(() => {
+    if (this.tuneupView() !== 'amax-debug') return;
+    const channels = this.tuneUpChannels();
+    if (channels.length === 0) return;
+    const ch0 = channels.find((c) => c.channel_id === 0);
+    if (!ch0) return;
+    const ch0Key = `${ch0.module_id}:${ch0.channel_id}`;
+    untracked(() => {
+      const current = this.selectedChannels();
+      if (current.length !== 1 || current[0] !== ch0Key) {
+        this.selectedChannels.set([ch0Key]);
+      }
+    });
+  });
+
+  /** Start/stop the AMax board-register poll loop based on
+   *  amax-debug sub-mode + active Tune Up. Reads at 1 Hz so the
+   *  inspector card stays roughly in sync without hammering the
+   *  reader's CaenHandle. */
+  private readonly amaxRegistersPollEffect = effect(() => {
+    const active =
+      this.isTuneUp() &&
+      this.tuneupView() === 'amax-debug' &&
+      this.tuneUpConfig()?.firmware === 'AMax';
+    const digitizerId = this.tuneUpDigitizerId();
+
+    untracked(() => {
+      this.amaxRegPolling$.unsubscribe();
+      this.amaxRegPolling$ = Subscription.EMPTY;
+      if (!active || digitizerId === null) {
+        this.amaxBoardRegisters.set({});
+        return;
+      }
+      // One immediate read + 1 Hz refresh.
+      this.refreshAmaxBoardRegisters(digitizerId);
+      this.amaxRegPolling$ = interval(1000).subscribe(() => {
+        this.refreshAmaxBoardRegisters(digitizerId);
+      });
+    });
+  });
+
+  private async refreshAmaxBoardRegisters(digitizerId: number): Promise<void> {
+    try {
+      const values = await this.digitizerService.readAmaxBoardRegisters(digitizerId);
+      this.amaxBoardRegisters.set(values ?? {});
+    } catch {
+      // Backend returns {} for non-AMax / disconnected paths; only network
+      // failures land here. Don't spam the operator — just clear the panel.
+      this.amaxBoardRegisters.set({});
+    }
+  }
+
+  /** Format a register value for the inspector card. Currently only
+   *  ENABLE_ACQ (1-bit) gets a friendly name; future fields fall back
+   *  to hex. Drives the inspector card template. */
+  formatAmaxRegister(name: string, value: number): string {
+    if (name === 'enable_acq') return value === 1 ? 'ON (debug)' : 'OFF (legacy)';
+    return `0x${value.toString(16).padStart(8, '0').toUpperCase()}`;
+  }
+
+  /** True when the live readback for ENABLE_ACQ disagrees with the
+   *  config-side mirror — surfaces a yellow "out of sync" badge so the
+   *  operator notices if someone wrote the register out-of-band. */
+  amaxBoardRegistersDrifting(): boolean {
+    const live = this.amaxBoardRegisters()['enable_acq'];
+    if (live === undefined) return false;
+    return (live === 1) !== this.amaxEnableAcq();
+  }
   readonly defaultValues = signal<Record<string, unknown>>({});
   readonly channelValues = signal<Record<string, unknown>[]>([]);
   readonly selectedCategory = signal<ChannelCategory | 'all'>('all');
