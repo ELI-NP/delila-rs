@@ -58,7 +58,7 @@ For the **Phase 3 physical pulser** test on ch0 (`config/config_pha2_56_phys.tom
 - Input: 1 kHz pulser, Positive polarity, ~1.5k ADC step amplitude
 - Trapezoid: rise 5000 ns, flat-top 1000 ns, pole-zero 50000 ns
 - Result via Monitor Gaussian fit: **FWHM / Center = 6.4 / 6327.6 = 0.101 %**
-- Cross-check via offline ROOT (`delila_to_root` → ROOT TTree, 5950 events):
+- Cross-check via offline ROOT (`delila2root` → ROOT TTree, 5950 events):
   Mean=6317.14, StdDev=2.61 → **FWHM = 2.355 × σ = 6.13** ≈ Monitor fit
 - This is the noise floor with a clean pulser; real detectors will
   add their own contribution.
@@ -70,9 +70,11 @@ For the **Phase 3 physical pulser** test on ch0 (`config/config_pha2_56_phys.tom
   config.
 - `scripts/pha2_transition_stress.py` — stress-tests rapid Configure
   cycles to surface the FW wedge state for diagnostics.
-- `target/release/delila_to_root` — flat-TTree exporter for offline
-  analysis. Handles the current `user_info[4]` schema that the legacy
-  C++ `tools/delila2root` does not.
+- `target/release/delila2root` — flat-TTree exporter for offline analysis
+  (waveforms included; build with `cargo build --release --features root
+  --bin delila2root`). Handles the current `user_info[4]` + Phase 4.5
+  probe-type + AMax-debug 16-digital-probe schema. The legacy C++
+  `tools/delila2root` was retired in TODO 56 (2026-05-15).
 
 ## Cross-references
 

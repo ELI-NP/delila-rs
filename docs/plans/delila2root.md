@@ -1,5 +1,7 @@
 # delila2root コンバーター設計書
 
+> **Status: superseded by Rust [src/bin/delila_to_root.rs](../../src/bin/delila_to_root.rs) (binary 名 `delila2root`)** — 本書は C++ 版の設計記録。 C++ 版は wire format 拡張 (`user_info[4]` + Phase 4.5 probe-type + AMax 16-digital-probe) に追従できず TODO 56 (2026-05-15) で `tools/delila2root/` ごと退役した。 Rust 版は schema を `#[serde(default)]` で前方互換、 全 49 branch (波形 vector 含む)、 hadd 後処理で LZ4 圧縮 (`hadd -f404 out.lz4.root out.root`)。 詳細は [TODO/56_delila2root_waveform_support.md](../../TODO/56_delila2root_waveform_support.md) 参照。
+
 **Created:** 2026-02-17
 **Updated:** 2026-02-18 (Phase 1 完了、ベンチマーク結果追記)
 **TODO:** [TODO/33_delila2root_converter.md](../../TODO/33_delila2root_converter.md)

@@ -80,7 +80,7 @@ root = ["oxyroot"]
 x743 = []  # CAENDigitizer Library for V1743 (Linux only)
 # Developer / hardware-in-the-loop tools (one-shot probes, register dumpers,
 # benchmarks). Excluded from `cargo build --release` so production builds
-# only ship the 15 service binaries (emulator/reader/merger/.../delila_to_root).
+# only ship the 15 service binaries (emulator/reader/merger/.../delila2root).
 # Enable with `--features dev-tools` to build the full set locally.
 dev-tools = []
 
@@ -228,7 +228,7 @@ path = "src/bin/oxyroot_bench.rs"
 required-features = ["root", "dev-tools"]
 
 [[bin]]
-name = "delila_to_root"
+name = "delila2root"
 path = "src/bin/delila_to_root.rs"
 required-features = ["root"]
 
