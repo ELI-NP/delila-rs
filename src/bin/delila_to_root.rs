@@ -304,9 +304,12 @@ impl Iterator for SortedFileStream {
 
 /// Backing state shared by all 49 branch iterators. `current_row` is
 /// rewound every time branch index 0 polls — branches 1..48 read from it.
+/// `events_yielded` counts how many rows have been produced (for the
+/// post-write summary line).
 struct SharedRowSource {
     source: SortedFileStream,
     current_row: Option<EventData>,
+    events_yielded: u64,
 }
 
 /// Lazy iterator wrapping a single field of `SharedRowSource::current_row`.
@@ -349,8 +352,26 @@ where
         let mut s = self.shared.borrow_mut();
         if self.branch_idx == 0 {
             s.current_row = s.source.next();
+            if s.current_row.is_some() {
+                s.events_yielded += 1;
+            }
         }
         s.current_row.as_ref().map(|ev| (self.extract)(ev))
+    }
+}
+
+/// Format an events/sec rate for human display, picking k/M scale.
+fn format_event_rate(events: u64, secs: f64) -> String {
+    if secs <= 0.0 {
+        return "n/a".to_string();
+    }
+    let r = events as f64 / secs;
+    if r >= 1.0e6 {
+        format!("{:.2}M ev/s", r / 1.0e6)
+    } else if r >= 1.0e3 {
+        format!("{:.1}k ev/s", r / 1.0e3)
+    } else {
+        format!("{:.0} ev/s", r)
     }
 }
 
@@ -599,6 +620,7 @@ fn main() {
     let shared = Rc::new(RefCell::new(SharedRowSource {
         source: stream,
         current_row: None,
+        events_yielded: 0,
     }));
 
     // Wire branches and write — this consumes the stream lazily.
@@ -615,22 +637,23 @@ fn main() {
         .unwrap_or_else(|e| panic!("file.close failed: {:?}", e));
     let write_elapsed = write_start.elapsed();
 
-    // Rough event count: deduce from how many times branch 0 advanced the
-    // source. We pull this out of the shared cell after writes complete.
-    // (oxyroot doesn't expose entries from `tree`, but we can count via
-    // a residual by checking SharedRowSource state — which is now drained.)
-    // For now we report what tree.write filled in. If we need an exact
-    // event count, oxyroot tracks `tree.entries` internally.
+    // Pull the event count out of the shared cell before dropping. oxyroot
+    // doesn't expose `tree.entries` post-write, so we count via branch 0
+    // advance ticks (see `BranchIter::next`).
+    let total_events = shared.borrow().events_yielded;
     drop(shared);
 
     let out_size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    let secs = write_elapsed.as_secs_f64();
 
     println!(
-        "Wrote {} → {:.1} MB in {:.2}s ({:.1} MB/s)",
+        "Wrote {} events → {} ({:.1} MB) in {:.2}s ({:.1} MB/s, {})",
+        total_events,
         out_path.display(),
         out_size as f64 / 1_048_576.0,
-        write_elapsed.as_secs_f64(),
-        out_size as f64 / write_elapsed.as_secs_f64() / 1_048_576.0,
+        secs,
+        out_size as f64 / secs / 1_048_576.0,
+        format_event_rate(total_events, secs),
     );
     println!("Input  size: {:.1} MB", total_bytes_in as f64 / 1_048_576.0);
     println!();
@@ -754,6 +777,7 @@ mod tests {
         let shared = Rc::new(RefCell::new(SharedRowSource {
             source: stream,
             current_row: None,
+            events_yielded: 0,
         }));
         // Simulate oxyroot's row-major poll: branch 0 first (advances),
         // branches 1, 2 read the cached row.
@@ -776,6 +800,8 @@ mod tests {
         assert_eq!(b0.next(), None);
         assert_eq!(b1.next(), None);
         assert_eq!(b2.next(), None);
+        // Counter only advanced on Some (2 successful rows)
+        assert_eq!(shared.borrow().events_yielded, 2);
     }
 
     #[test]
@@ -787,6 +813,7 @@ mod tests {
         let shared = Rc::new(RefCell::new(SharedRowSource {
             source: stream,
             current_row: None,
+            events_yielded: 0,
         }));
         let mut b0: BranchIter<u8, _> =
             BranchIter::new(shared.clone(), 0, |e| e.module);
