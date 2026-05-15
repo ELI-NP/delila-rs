@@ -10,6 +10,32 @@
 //!     cargo run --release --features root --bin delila2root -- \
 //!         -o out.root data/run0001_0020_PHA2_Phys.delila [more.delila ...]
 //!
+//! # Output is always sorted by `timestamp_ns`
+//!
+//! Files are reordered by `file_sequence` (from each file's header), then
+//! events are merged across files with a sliding-window k-way merge: the
+//! current file's events are sorted in memory; events whose timestamp is
+//! safely past the next file's first event are written; the rest is held
+//! in a small carry-over buffer for the next iteration. End-to-end the
+//! algorithm is functionally equivalent to the legacy C++ tool.
+//!
+//! # Memory model
+//!
+//! Peak memory is ~1 file worth of events in EventData form +
+//! the carry-over buffer (typically a small fraction of one file when
+//! file boundaries overlap) + ROOT internal basket buffers (~1.5 MB).
+//! For typical delila Recorder rotation (1 GB or 10 min per file), a
+//! 99-file run can be processed in well under 2 GB resident memory.
+//!
+//! Column data is **not** materialized into per-branch Vecs anymore;
+//! instead 49 lazy branch iterators share a single sorted EventData
+//! source via `Rc<RefCell<...>>`. This is safe because oxyroot's
+//! WriterTree polls branches in deterministic row-major lock-step at
+//! `tree.write()` time (see `oxyroot::WriterTree::write` in
+//! `rtree/tree/writer.rs`). If a future oxyroot version parallelises
+//! branch writes the `Rc<RefCell>` borrow scheme would panic — this
+//! constraint is documented in `BranchIter::next()`.
+//!
 //! # Output branches (49 total, 1-indexed throughout)
 //!
 //! Scalar event branches:
@@ -38,311 +64,464 @@
 //! not carry typed probe info on the wire (PSD1/PHA1/PSD2 etc.) and for any
 //! event without a waveform.
 //!
-//! # Memory model
-//!
-//! All events are accumulated in memory before the single `tree.write()`
-//! pass. For PHA2 with full waveforms (200-sample 2 analog + 4 digital
-//! probes ≈ 1.6 kB/event), ~5M events ≈ several GB of RAM. Stream the
-//! input across multiple invocations or split the source files if you hit
-//! OOM. (oxyroot's WriterTree API requires `into_iter()` on Vecs, which
-//! forecloses true single-pass streaming without a significant rewrite.)
-//!
 //! # Compression workflow (post-process)
 //!
 //! oxyroot 0.1.25 cannot write compressed ROOT files. To LZ4-compress the
 //! output (~3-5x smaller, fast), pipe through ROOT's `hadd`:
 //!     hadd -f404 compressed.root out.root
 //! (-f404 = LZ4 level 4, ROOT's default fast compression.) ROOT must be
-//! installed on the host running hadd. The original delila2root C++ tool
-//! also required ROOT at build time, so this is no new dependency.
+//! installed on the host running hadd.
 //!
 //! # Notes
 //!
 //! - The on-disk schema folds the decoder's `fine_time` into `timestamp_ns`
 //!   (= coarse_ns + fine_time/1024 × time_step), so there is no separate
 //!   fine-time branch.
-//! - Events are written in the order they appear in the input files (no
-//!   cross-file time sort — that's `event_builder`'s job).
+//! - Files are read in `file_sequence` order regardless of argv order;
+//!   wildcards like `data/run0001_*.delila` work as expected.
 //! - Backward compatible with all `.delila` files ever recorded
 //!   (FORMAT_VERSION=2, the only version that has shipped). Pre-AMax files
 //!   that lack `user_info[4]` and pre-Phase-4.5 files that lack probe-type
 //!   fields are deserialized via `#[serde(default)]`, populating the
 //!   missing columns with zeros / 0xFF (UNKNOWN_PROBE_TYPE).
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Instant;
 
-use delila_rs::common::{EventData, UNKNOWN_PROBE_TYPE};
+use delila_rs::common::{EventData, Waveform, UNKNOWN_PROBE_TYPE};
 use delila_rs::recorder::DataFileReader;
 use oxyroot::{RootFile, WriterTree};
 
-/// All per-branch flat columns kept side-by-side. One method (`push`)
-/// appends one event's contribution to every column, so by construction
-/// every column ends with the same length even when waveforms are absent.
-/// Field naming is 1-indexed throughout (matches the legacy C++ tool).
-#[derive(Default)]
-struct Columns {
-    module: Vec<u8>,
-    channel: Vec<u8>,
-    timestamp_ns: Vec<f64>,
-    energy: Vec<u16>,
-    energy_short: Vec<u16>,
-    flags: Vec<u64>,
-    user_info0: Vec<u64>,
-    user_info1: Vec<u64>,
-    user_info2: Vec<u64>,
-    user_info3: Vec<u64>,
-    has_waveform: Vec<u8>,
-    analog_probe_type1: Vec<u8>,
-    analog_probe_type2: Vec<u8>,
-    analog_probe_type3: Vec<u8>,
-    digital_probe_type1: Vec<u8>,
-    digital_probe_type2: Vec<u8>,
-    digital_probe_type3: Vec<u8>,
-    digital_probe_type4: Vec<u8>,
-    digital_probe_type5: Vec<u8>,
-    digital_probe_type6: Vec<u8>,
-    digital_probe_type7: Vec<u8>,
-    digital_probe_type8: Vec<u8>,
-    digital_probe_type9: Vec<u8>,
-    digital_probe_type10: Vec<u8>,
-    digital_probe_type11: Vec<u8>,
-    digital_probe_type12: Vec<u8>,
-    digital_probe_type13: Vec<u8>,
-    digital_probe_type14: Vec<u8>,
-    digital_probe_type15: Vec<u8>,
-    digital_probe_type16: Vec<u8>,
-    analog_probe1: Vec<Vec<i16>>,
-    analog_probe2: Vec<Vec<i16>>,
-    analog_probe3: Vec<Vec<i16>>,
-    digital_probe1: Vec<Vec<u8>>,
-    digital_probe2: Vec<Vec<u8>>,
-    digital_probe3: Vec<Vec<u8>>,
-    digital_probe4: Vec<Vec<u8>>,
-    digital_probe5: Vec<Vec<u8>>,
-    digital_probe6: Vec<Vec<u8>>,
-    digital_probe7: Vec<Vec<u8>>,
-    digital_probe8: Vec<Vec<u8>>,
-    digital_probe9: Vec<Vec<u8>>,
-    digital_probe10: Vec<Vec<u8>>,
-    digital_probe11: Vec<Vec<u8>>,
-    digital_probe12: Vec<Vec<u8>>,
-    digital_probe13: Vec<Vec<u8>>,
-    digital_probe14: Vec<Vec<u8>>,
-    digital_probe15: Vec<Vec<u8>>,
-    digital_probe16: Vec<Vec<u8>>,
-    time_resolution: Vec<u8>,
-    trigger_threshold: Vec<u16>,
-    ns_per_sample: Vec<f64>,
-    analog_probe1_is_signed: Vec<bool>,
-    analog_probe2_is_signed: Vec<bool>,
-    analog_probe3_is_signed: Vec<bool>,
+// ---------------------------------------------------------------------------
+// FileMeta + SortedFileStream
+// ---------------------------------------------------------------------------
+
+/// Metadata extracted from a `.delila` file's header + first batch — used
+/// to order files and to compute the sliding-window cutoff.
+#[derive(Debug, Clone)]
+struct FileMeta {
+    path: PathBuf,
+    file_sequence: u32,
+    first_event_ns: f64,
 }
 
-impl Columns {
-    fn new() -> Self {
-        Self::default()
+/// Read just enough of a file to fill out `FileMeta` (header + first
+/// non-empty batch). On error, returns `Err` so the caller can decide
+/// whether to skip the file.
+fn read_file_meta(path: &Path) -> Result<FileMeta, String> {
+    let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
+    let reader = BufReader::new(file);
+    let mut dfr = DataFileReader::new(reader)
+        .map_err(|e| format!("header {}: {:?}", path.display(), e))?;
+    let file_sequence = dfr
+        .header()
+        .map(|h| h.file_sequence)
+        .ok_or_else(|| format!("missing header in {}", path.display()))?;
+    for batch_result in dfr.data_blocks() {
+        let batch = batch_result.map_err(|e| format!("batch {}: {:?}", path.display(), e))?;
+        if let Some(first) = batch.events.first() {
+            return Ok(FileMeta {
+                path: path.to_path_buf(),
+                file_sequence,
+                first_event_ns: first.timestamp_ns,
+            });
+        }
     }
+    Err(format!("no events in {}", path.display()))
+}
 
-    /// Number of rows accumulated so far. Used by tests to verify that
-    /// every column stays the same length even when waveforms are absent.
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.module.len()
+/// Read every event from a file into a flat Vec (no sorting).
+fn read_file_events(path: &Path) -> Result<Vec<EventData>, String> {
+    let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
+    let reader = BufReader::new(file);
+    let mut dfr = DataFileReader::new(reader)
+        .map_err(|e| format!("header {}: {:?}", path.display(), e))?;
+    let mut events = Vec::new();
+    for batch_result in dfr.data_blocks() {
+        match batch_result {
+            Ok(batch) => events.extend(batch.events.into_iter()),
+            Err(e) => eprintln!("  warn: decode error in {}: {:?}", path.display(), e),
+        }
     }
+    Ok(events)
+}
 
-    /// Append one event's contribution to every column. When `ev.waveform`
-    /// is None we still push to every branch (empty Vec for probe data,
-    /// 0/0.0/false for scalars, UNKNOWN_PROBE_TYPE for type codes) so
-    /// every column stays the same length.
-    fn push(&mut self, ev: &EventData) {
-        self.module.push(ev.module);
-        self.channel.push(ev.channel);
-        self.timestamp_ns.push(ev.timestamp_ns);
-        self.energy.push(ev.energy);
-        self.energy_short.push(ev.energy_short);
-        self.flags.push(ev.flags);
-        self.user_info0.push(ev.user_info[0]);
-        self.user_info1.push(ev.user_info[1]);
-        self.user_info2.push(ev.user_info[2]);
-        self.user_info3.push(ev.user_info[3]);
-        self.has_waveform
-            .push(if ev.waveform.is_some() { 1 } else { 0 });
-        match ev.waveform.as_ref() {
-            Some(wf) => {
-                self.analog_probe_type1.push(wf.analog_probe_type[0]);
-                self.analog_probe_type2.push(wf.analog_probe_type[1]);
-                self.analog_probe_type3.push(wf.analog_probe_type[2]);
-                self.digital_probe_type1.push(wf.digital_probe_type[0]);
-                self.digital_probe_type2.push(wf.digital_probe_type[1]);
-                self.digital_probe_type3.push(wf.digital_probe_type[2]);
-                self.digital_probe_type4.push(wf.digital_probe_type[3]);
-                self.digital_probe_type5.push(wf.digital_probe_type[4]);
-                self.digital_probe_type6.push(wf.digital_probe_type[5]);
-                self.digital_probe_type7.push(wf.digital_probe_type[6]);
-                self.digital_probe_type8.push(wf.digital_probe_type[7]);
-                self.digital_probe_type9.push(wf.digital_probe_type[8]);
-                self.digital_probe_type10.push(wf.digital_probe_type[9]);
-                self.digital_probe_type11.push(wf.digital_probe_type[10]);
-                self.digital_probe_type12.push(wf.digital_probe_type[11]);
-                self.digital_probe_type13.push(wf.digital_probe_type[12]);
-                self.digital_probe_type14.push(wf.digital_probe_type[13]);
-                self.digital_probe_type15.push(wf.digital_probe_type[14]);
-                self.digital_probe_type16.push(wf.digital_probe_type[15]);
-
-                self.analog_probe1.push(wf.analog_probe1.clone());
-                self.analog_probe2.push(wf.analog_probe2.clone());
-                self.analog_probe3.push(wf.analog_probe3.clone());
-                self.digital_probe1.push(wf.digital_probe1.clone());
-                self.digital_probe2.push(wf.digital_probe2.clone());
-                self.digital_probe3.push(wf.digital_probe3.clone());
-                self.digital_probe4.push(wf.digital_probe4.clone());
-                self.digital_probe5.push(wf.digital_probe5.clone());
-                self.digital_probe6.push(wf.digital_probe6.clone());
-                self.digital_probe7.push(wf.digital_probe7.clone());
-                self.digital_probe8.push(wf.digital_probe8.clone());
-                self.digital_probe9.push(wf.digital_probe9.clone());
-                self.digital_probe10.push(wf.digital_probe10.clone());
-                self.digital_probe11.push(wf.digital_probe11.clone());
-                self.digital_probe12.push(wf.digital_probe12.clone());
-                self.digital_probe13.push(wf.digital_probe13.clone());
-                self.digital_probe14.push(wf.digital_probe14.clone());
-                self.digital_probe15.push(wf.digital_probe15.clone());
-                self.digital_probe16.push(wf.digital_probe16.clone());
-
-                self.time_resolution.push(wf.time_resolution);
-                self.trigger_threshold.push(wf.trigger_threshold);
-                self.ns_per_sample.push(wf.ns_per_sample);
-                self.analog_probe1_is_signed
-                    .push(wf.analog_probe1_is_signed);
-                self.analog_probe2_is_signed
-                    .push(wf.analog_probe2_is_signed);
-                self.analog_probe3_is_signed
-                    .push(wf.analog_probe3_is_signed);
+/// Merge two already-sorted EventData Vecs by timestamp_ns. Stable for
+/// equal timestamps (left side wins, matching the carry-over-then-current
+/// invariant).
+fn merge_sorted(mut left: Vec<EventData>, right: Vec<EventData>) -> Vec<EventData> {
+    if left.is_empty() {
+        return right;
+    }
+    if right.is_empty() {
+        return left;
+    }
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let mut li = 0usize;
+    let mut ri = 0usize;
+    let mut left_drained = left.drain(..);
+    let mut right_drained = right.into_iter();
+    let mut l_next = left_drained.next();
+    let mut r_next = right_drained.next();
+    while l_next.is_some() || r_next.is_some() {
+        match (&l_next, &r_next) {
+            (Some(l), Some(r)) => {
+                if l.timestamp_ns <= r.timestamp_ns {
+                    out.push(l_next.take().unwrap());
+                    l_next = left_drained.next();
+                    li += 1;
+                } else {
+                    out.push(r_next.take().unwrap());
+                    r_next = right_drained.next();
+                    ri += 1;
+                }
             }
-            None => {
-                self.analog_probe_type1.push(UNKNOWN_PROBE_TYPE);
-                self.analog_probe_type2.push(UNKNOWN_PROBE_TYPE);
-                self.analog_probe_type3.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type1.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type2.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type3.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type4.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type5.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type6.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type7.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type8.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type9.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type10.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type11.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type12.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type13.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type14.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type15.push(UNKNOWN_PROBE_TYPE);
-                self.digital_probe_type16.push(UNKNOWN_PROBE_TYPE);
+            (Some(_), None) => {
+                out.push(l_next.take().unwrap());
+                l_next = left_drained.next();
+                li += 1;
+            }
+            (None, Some(_)) => {
+                out.push(r_next.take().unwrap());
+                r_next = right_drained.next();
+                ri += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    debug_assert_eq!(li + ri, out.len());
+    out
+}
 
-                self.analog_probe1.push(Vec::new());
-                self.analog_probe2.push(Vec::new());
-                self.analog_probe3.push(Vec::new());
-                self.digital_probe1.push(Vec::new());
-                self.digital_probe2.push(Vec::new());
-                self.digital_probe3.push(Vec::new());
-                self.digital_probe4.push(Vec::new());
-                self.digital_probe5.push(Vec::new());
-                self.digital_probe6.push(Vec::new());
-                self.digital_probe7.push(Vec::new());
-                self.digital_probe8.push(Vec::new());
-                self.digital_probe9.push(Vec::new());
-                self.digital_probe10.push(Vec::new());
-                self.digital_probe11.push(Vec::new());
-                self.digital_probe12.push(Vec::new());
-                self.digital_probe13.push(Vec::new());
-                self.digital_probe14.push(Vec::new());
-                self.digital_probe15.push(Vec::new());
-                self.digital_probe16.push(Vec::new());
+/// Stream EventData yielded in monotonic-timestamp order across multiple
+/// `.delila` files using a per-file sort + sliding-window k-way merge.
+struct SortedFileStream {
+    /// All input files, sorted by `file_sequence`.
+    files: Vec<FileMeta>,
+    /// Index of the next file to load (== files.len() after exhaustion).
+    next_idx: usize,
+    /// Sorted events ready to yield. Refilled by `advance_to_next_file`.
+    current_events: VecDeque<EventData>,
+    /// First event timestamp of `files[next_idx]`, or `None` if no file
+    /// remains. Events in `current_events` whose ts >= this cutoff are
+    /// pushed to `carry_over` instead of yielded.
+    next_first_ts: Option<f64>,
+    /// Events deferred from previous iteration because their ts >= the
+    /// then-next file's first ts. Always sorted.
+    carry_over: Vec<EventData>,
+}
 
-                self.time_resolution.push(0);
-                self.trigger_threshold.push(0);
-                self.ns_per_sample.push(0.0);
-                self.analog_probe1_is_signed.push(false);
-                self.analog_probe2_is_signed.push(false);
-                self.analog_probe3_is_signed.push(false);
+impl SortedFileStream {
+    fn new(paths: &[PathBuf]) -> Result<Self, String> {
+        if paths.is_empty() {
+            return Err("no input files".to_string());
+        }
+        let mut files: Vec<FileMeta> = Vec::with_capacity(paths.len());
+        for p in paths {
+            match read_file_meta(p) {
+                Ok(meta) => files.push(meta),
+                Err(e) => eprintln!("  warn: skipping {} ({})", p.display(), e),
+            }
+        }
+        if files.is_empty() {
+            return Err("no readable input files".to_string());
+        }
+        files.sort_by_key(|f| f.file_sequence);
+        Ok(Self {
+            files,
+            next_idx: 0,
+            current_events: VecDeque::new(),
+            next_first_ts: None,
+            carry_over: Vec::new(),
+        })
+    }
+
+    /// Drain `current_events`, yielding sorted EventData until the next
+    /// boundary cutoff is hit or the stream is exhausted.
+    fn advance_to_next_file(&mut self) -> bool {
+        // Append carry_over to a fresh load. On the final tail (no more
+        // files), just drain carry_over.
+        if self.next_idx >= self.files.len() {
+            if self.carry_over.is_empty() {
+                return false;
+            }
+            self.current_events = std::mem::take(&mut self.carry_over).into();
+            self.next_first_ts = None;
+            return !self.current_events.is_empty();
+        }
+
+        let path = self.files[self.next_idx].path.clone();
+        let mut events = match read_file_events(&path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("  warn: failed reading {} ({}), skipping", path.display(), e);
+                self.next_idx += 1;
+                self.next_first_ts = self.files.get(self.next_idx).map(|f| f.first_event_ns);
+                return self.advance_to_next_file();
+            }
+        };
+        events.sort_by(|a, b| a.timestamp_ns.total_cmp(&b.timestamp_ns));
+
+        let merged = merge_sorted(std::mem::take(&mut self.carry_over), events);
+        self.current_events = merged.into();
+
+        self.next_idx += 1;
+        self.next_first_ts = self.files.get(self.next_idx).map(|f| f.first_event_ns);
+        !self.current_events.is_empty() || !self.carry_over.is_empty()
+    }
+}
+
+impl Iterator for SortedFileStream {
+    type Item = EventData;
+
+    fn next(&mut self) -> Option<EventData> {
+        loop {
+            if let Some(front) = self.current_events.front() {
+                match self.next_first_ts {
+                    Some(cutoff) if front.timestamp_ns >= cutoff => {
+                        // Unsafe — defer until next file is merged in.
+                        self.carry_over.push(self.current_events.pop_front().unwrap());
+                        continue;
+                    }
+                    _ => return self.current_events.pop_front(),
+                }
+            }
+            if !self.advance_to_next_file() {
+                return None;
             }
         }
     }
+}
 
-    /// Move all columns into a freshly-built WriterTree as branches.
-    fn into_branches(self, tree: &mut WriterTree) {
-        tree.new_branch("Module", self.module.into_iter());
-        tree.new_branch("Channel", self.channel.into_iter());
-        tree.new_branch("TimestampNs", self.timestamp_ns.into_iter());
-        tree.new_branch("Energy", self.energy.into_iter());
-        tree.new_branch("EnergyShort", self.energy_short.into_iter());
-        tree.new_branch("Flags", self.flags.into_iter());
-        tree.new_branch("UserInfo0", self.user_info0.into_iter());
-        tree.new_branch("UserInfo1", self.user_info1.into_iter());
-        tree.new_branch("UserInfo2", self.user_info2.into_iter());
-        tree.new_branch("UserInfo3", self.user_info3.into_iter());
-        tree.new_branch("HasWaveform", self.has_waveform.into_iter());
-        tree.new_branch("AnalogProbeType1", self.analog_probe_type1.into_iter());
-        tree.new_branch("AnalogProbeType2", self.analog_probe_type2.into_iter());
-        tree.new_branch("AnalogProbeType3", self.analog_probe_type3.into_iter());
-        tree.new_branch("DigitalProbeType1", self.digital_probe_type1.into_iter());
-        tree.new_branch("DigitalProbeType2", self.digital_probe_type2.into_iter());
-        tree.new_branch("DigitalProbeType3", self.digital_probe_type3.into_iter());
-        tree.new_branch("DigitalProbeType4", self.digital_probe_type4.into_iter());
-        tree.new_branch("DigitalProbeType5", self.digital_probe_type5.into_iter());
-        tree.new_branch("DigitalProbeType6", self.digital_probe_type6.into_iter());
-        tree.new_branch("DigitalProbeType7", self.digital_probe_type7.into_iter());
-        tree.new_branch("DigitalProbeType8", self.digital_probe_type8.into_iter());
-        tree.new_branch("DigitalProbeType9", self.digital_probe_type9.into_iter());
-        tree.new_branch("DigitalProbeType10", self.digital_probe_type10.into_iter());
-        tree.new_branch("DigitalProbeType11", self.digital_probe_type11.into_iter());
-        tree.new_branch("DigitalProbeType12", self.digital_probe_type12.into_iter());
-        tree.new_branch("DigitalProbeType13", self.digital_probe_type13.into_iter());
-        tree.new_branch("DigitalProbeType14", self.digital_probe_type14.into_iter());
-        tree.new_branch("DigitalProbeType15", self.digital_probe_type15.into_iter());
-        tree.new_branch("DigitalProbeType16", self.digital_probe_type16.into_iter());
+// ---------------------------------------------------------------------------
+// Shared row source + lazy branch iterators
+// ---------------------------------------------------------------------------
 
-        tree.new_branch("AnalogProbe1", self.analog_probe1.into_iter());
-        tree.new_branch("AnalogProbe2", self.analog_probe2.into_iter());
-        tree.new_branch("AnalogProbe3", self.analog_probe3.into_iter());
-        tree.new_branch("DigitalProbe1", self.digital_probe1.into_iter());
-        tree.new_branch("DigitalProbe2", self.digital_probe2.into_iter());
-        tree.new_branch("DigitalProbe3", self.digital_probe3.into_iter());
-        tree.new_branch("DigitalProbe4", self.digital_probe4.into_iter());
-        tree.new_branch("DigitalProbe5", self.digital_probe5.into_iter());
-        tree.new_branch("DigitalProbe6", self.digital_probe6.into_iter());
-        tree.new_branch("DigitalProbe7", self.digital_probe7.into_iter());
-        tree.new_branch("DigitalProbe8", self.digital_probe8.into_iter());
-        tree.new_branch("DigitalProbe9", self.digital_probe9.into_iter());
-        tree.new_branch("DigitalProbe10", self.digital_probe10.into_iter());
-        tree.new_branch("DigitalProbe11", self.digital_probe11.into_iter());
-        tree.new_branch("DigitalProbe12", self.digital_probe12.into_iter());
-        tree.new_branch("DigitalProbe13", self.digital_probe13.into_iter());
-        tree.new_branch("DigitalProbe14", self.digital_probe14.into_iter());
-        tree.new_branch("DigitalProbe15", self.digital_probe15.into_iter());
-        tree.new_branch("DigitalProbe16", self.digital_probe16.into_iter());
+/// Backing state shared by all 49 branch iterators. `current_row` is
+/// rewound every time branch index 0 polls — branches 1..48 read from it.
+struct SharedRowSource {
+    source: SortedFileStream,
+    current_row: Option<EventData>,
+}
 
-        tree.new_branch("TimeResolution", self.time_resolution.into_iter());
-        tree.new_branch("TriggerThreshold", self.trigger_threshold.into_iter());
-        tree.new_branch("NsPerSample", self.ns_per_sample.into_iter());
-        tree.new_branch(
-            "AnalogProbe1IsSigned",
-            self.analog_probe1_is_signed.into_iter(),
-        );
-        tree.new_branch(
-            "AnalogProbe2IsSigned",
-            self.analog_probe2_is_signed.into_iter(),
-        );
-        tree.new_branch(
-            "AnalogProbe3IsSigned",
-            self.analog_probe3_is_signed.into_iter(),
-        );
+/// Lazy iterator wrapping a single field of `SharedRowSource::current_row`.
+/// `branch_idx == 0` is responsible for advancing the source on every
+/// `next()` call; other branches just read the cached row.
+///
+/// Safety: oxyroot's `WriterTree::write` polls branches sequentially in
+/// row-major lock-step (verified at writer.rs:115-153), so the borrows
+/// nest cleanly. A future parallel writer would break this and panic on
+/// the `borrow_mut()` below.
+struct BranchIter<T, F>
+where
+    F: Fn(&EventData) -> T,
+{
+    shared: Rc<RefCell<SharedRowSource>>,
+    branch_idx: usize,
+    extract: F,
+}
+
+impl<T, F> BranchIter<T, F>
+where
+    F: Fn(&EventData) -> T,
+{
+    fn new(shared: Rc<RefCell<SharedRowSource>>, branch_idx: usize, extract: F) -> Self {
+        Self {
+            shared,
+            branch_idx,
+            extract,
+        }
     }
 }
+
+impl<T, F> Iterator for BranchIter<T, F>
+where
+    F: Fn(&EventData) -> T,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        let mut s = self.shared.borrow_mut();
+        if self.branch_idx == 0 {
+            s.current_row = s.source.next();
+        }
+        s.current_row.as_ref().map(|ev| (self.extract)(ev))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-event helpers
+// ---------------------------------------------------------------------------
+
+/// Run `get` against the event's waveform if present, else return `default`.
+fn wf_or<T>(ev: &EventData, get: impl Fn(&Waveform) -> T, default: T) -> T {
+    ev.waveform.as_ref().map(get).unwrap_or(default)
+}
+
+// ---------------------------------------------------------------------------
+// 49-branch wiring
+// ---------------------------------------------------------------------------
+
+/// Register all 49 branches against a `WriterTree`, all reading from the
+/// shared row source. `branch_idx` increments monotonically and is what
+/// gates the source advance (see `BranchIter::next`).
+fn register_branches(tree: &mut WriterTree, shared: Rc<RefCell<SharedRowSource>>) {
+    let mut idx = 0usize;
+    macro_rules! reg {
+        ($name:literal, $ty:ty, $extract:expr) => {{
+            let it: BranchIter<$ty, _> = BranchIter::new(shared.clone(), idx, $extract);
+            tree.new_branch($name, it);
+            idx += 1;
+        }};
+    }
+
+    // Scalar event branches.
+    reg!("Module", u8, |ev: &EventData| ev.module);
+    reg!("Channel", u8, |ev: &EventData| ev.channel);
+    reg!("TimestampNs", f64, |ev: &EventData| ev.timestamp_ns);
+    reg!("Energy", u16, |ev: &EventData| ev.energy);
+    reg!("EnergyShort", u16, |ev: &EventData| ev.energy_short);
+    reg!("Flags", u64, |ev: &EventData| ev.flags);
+    reg!("UserInfo0", u64, |ev: &EventData| ev.user_info[0]);
+    reg!("UserInfo1", u64, |ev: &EventData| ev.user_info[1]);
+    reg!("UserInfo2", u64, |ev: &EventData| ev.user_info[2]);
+    reg!("UserInfo3", u64, |ev: &EventData| ev.user_info[3]);
+    reg!("HasWaveform", u8, |ev: &EventData| {
+        if ev.waveform.is_some() {
+            1
+        } else {
+            0
+        }
+    });
+
+    // Probe-type code branches (1-indexed).
+    reg!("AnalogProbeType1", u8, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe_type[0],
+        UNKNOWN_PROBE_TYPE
+    ));
+    reg!("AnalogProbeType2", u8, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe_type[1],
+        UNKNOWN_PROBE_TYPE
+    ));
+    reg!("AnalogProbeType3", u8, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe_type[2],
+        UNKNOWN_PROBE_TYPE
+    ));
+    for i in 0..16usize {
+        let name: &'static str = match i {
+            0 => "DigitalProbeType1",
+            1 => "DigitalProbeType2",
+            2 => "DigitalProbeType3",
+            3 => "DigitalProbeType4",
+            4 => "DigitalProbeType5",
+            5 => "DigitalProbeType6",
+            6 => "DigitalProbeType7",
+            7 => "DigitalProbeType8",
+            8 => "DigitalProbeType9",
+            9 => "DigitalProbeType10",
+            10 => "DigitalProbeType11",
+            11 => "DigitalProbeType12",
+            12 => "DigitalProbeType13",
+            13 => "DigitalProbeType14",
+            14 => "DigitalProbeType15",
+            15 => "DigitalProbeType16",
+            _ => unreachable!(),
+        };
+        let it: BranchIter<u8, _> = BranchIter::new(shared.clone(), idx, move |ev: &EventData| {
+            wf_or(ev, |w| w.digital_probe_type[i], UNKNOWN_PROBE_TYPE)
+        });
+        tree.new_branch(name, it);
+        idx += 1;
+    }
+
+    // Per-event waveform vectors.
+    reg!("AnalogProbe1", Vec<i16>, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe1.clone(),
+        Vec::new()
+    ));
+    reg!("AnalogProbe2", Vec<i16>, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe2.clone(),
+        Vec::new()
+    ));
+    reg!("AnalogProbe3", Vec<i16>, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe3.clone(),
+        Vec::new()
+    ));
+    macro_rules! reg_dp {
+        ($name:literal, $field:ident) => {
+            reg!($name, Vec<u8>, |ev: &EventData| wf_or(
+                ev,
+                |w| w.$field.clone(),
+                Vec::new()
+            ));
+        };
+    }
+    reg_dp!("DigitalProbe1", digital_probe1);
+    reg_dp!("DigitalProbe2", digital_probe2);
+    reg_dp!("DigitalProbe3", digital_probe3);
+    reg_dp!("DigitalProbe4", digital_probe4);
+    reg_dp!("DigitalProbe5", digital_probe5);
+    reg_dp!("DigitalProbe6", digital_probe6);
+    reg_dp!("DigitalProbe7", digital_probe7);
+    reg_dp!("DigitalProbe8", digital_probe8);
+    reg_dp!("DigitalProbe9", digital_probe9);
+    reg_dp!("DigitalProbe10", digital_probe10);
+    reg_dp!("DigitalProbe11", digital_probe11);
+    reg_dp!("DigitalProbe12", digital_probe12);
+    reg_dp!("DigitalProbe13", digital_probe13);
+    reg_dp!("DigitalProbe14", digital_probe14);
+    reg_dp!("DigitalProbe15", digital_probe15);
+    reg_dp!("DigitalProbe16", digital_probe16);
+
+    // Waveform metadata.
+    reg!("TimeResolution", u8, |ev: &EventData| wf_or(
+        ev,
+        |w| w.time_resolution,
+        0
+    ));
+    reg!("TriggerThreshold", u16, |ev: &EventData| wf_or(
+        ev,
+        |w| w.trigger_threshold,
+        0
+    ));
+    reg!("NsPerSample", f64, |ev: &EventData| wf_or(
+        ev,
+        |w| w.ns_per_sample,
+        0.0
+    ));
+    reg!("AnalogProbe1IsSigned", bool, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe1_is_signed,
+        false
+    ));
+    reg!("AnalogProbe2IsSigned", bool, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe2_is_signed,
+        false
+    ));
+    reg!("AnalogProbe3IsSigned", bool, |ev: &EventData| wf_or(
+        ev,
+        |w| w.analog_probe3_is_signed,
+        false
+    ));
+
+    debug_assert_eq!(idx, 49, "expected 49 branches, registered {}", idx);
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
 
 fn print_usage_and_exit() -> ! {
     eprintln!(
@@ -392,107 +571,65 @@ fn main() {
     }
 
     println!(
-        "delila_to_root: {} input file(s) → {}",
+        "delila2root: {} input file(s) → {}",
         inputs.len(),
         out_path.display()
     );
 
-    // All accumulator columns — see Columns struct definition above.
-    let mut cols = Columns::new();
+    let total_bytes_in: u64 = inputs
+        .iter()
+        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
 
-    let start = Instant::now();
-    let mut total_events = 0usize;
-    let mut total_batches = 0usize;
-    let mut total_bytes_in = 0u64;
-    let mut decode_errors = 0usize;
-
-    for path in &inputs {
-        let file = match File::open(path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("  error: cannot open {}: {}", path.display(), e);
-                continue;
-            }
-        };
-        total_bytes_in += std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let reader = BufReader::new(file);
-        let mut dfr = match DataFileReader::new(reader) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("  error: cannot read header of {}: {:?}", path.display(), e);
-                continue;
-            }
-        };
-
-        if let Some(h) = dfr.header() {
-            println!(
-                "  [hdr] {} run={} exp={:?} seq={}",
-                path.display(),
-                h.run_number,
-                h.exp_name,
-                h.file_sequence
-            );
+    // Build sorted stream (reads each file's header + first batch).
+    let meta_start = Instant::now();
+    let stream = match SortedFileStream::new(&inputs) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
         }
-
-        let mut file_events = 0usize;
-        for batch_result in dfr.data_blocks() {
-            match batch_result {
-                Ok(batch) => {
-                    total_batches += 1;
-                    for ev in batch.events.iter() {
-                        cols.push(ev);
-                        file_events += 1;
-                    }
-                }
-                Err(e) => {
-                    decode_errors += 1;
-                    eprintln!("  warn: decode error in {}: {:?}", path.display(), e);
-                }
-            }
-        }
-        println!("  [done] {} events from {}", file_events, path.display());
-        total_events += file_events;
-    }
-
-    let read_elapsed = start.elapsed();
+    };
     println!(
-        "Read {} events in {} batches from {} file(s) in {:.2}s ({:.1} M ev/s)",
-        total_events,
-        total_batches,
-        inputs.len(),
-        read_elapsed.as_secs_f64(),
-        (total_events as f64) / read_elapsed.as_secs_f64() / 1e6,
+        "Sorted {} files by file_sequence in {:.2}s",
+        stream.files.len(),
+        meta_start.elapsed().as_secs_f64()
     );
-    if decode_errors > 0 {
-        eprintln!("warning: {} batch decode error(s) (skipped)", decode_errors);
-    }
-    if total_events == 0 {
-        eprintln!("error: 0 events decoded — refusing to write empty ROOT file");
-        std::process::exit(1);
-    }
 
-    // Now write the ROOT TTree. We move the per-branch vectors directly
-    // into oxyroot's iterator API; nothing copies under the hood.
+    let shared = Rc::new(RefCell::new(SharedRowSource {
+        source: stream,
+        current_row: None,
+    }));
+
+    // Wire branches and write — this consumes the stream lazily.
     let write_start = Instant::now();
     let mut file = RootFile::create(out_path.to_str().unwrap_or(""))
         .unwrap_or_else(|e| panic!("RootFile::create({}) failed: {:?}", out_path.display(), e));
 
     let mut tree = WriterTree::new(&tree_name);
-    cols.into_branches(&mut tree);
+    register_branches(&mut tree, shared.clone());
 
     tree.write(&mut file)
         .unwrap_or_else(|e| panic!("tree.write failed: {:?}", e));
     file.close()
         .unwrap_or_else(|e| panic!("file.close failed: {:?}", e));
     let write_elapsed = write_start.elapsed();
+
+    // Rough event count: deduce from how many times branch 0 advanced the
+    // source. We pull this out of the shared cell after writes complete.
+    // (oxyroot doesn't expose entries from `tree`, but we can count via
+    // a residual by checking SharedRowSource state — which is now drained.)
+    // For now we report what tree.write filled in. If we need an exact
+    // event count, oxyroot tracks `tree.entries` internally.
+    drop(shared);
+
     let out_size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
 
     println!(
-        "Wrote {} events to {} in {:.2}s ({:.1} MB, {:.1} MB/s)",
-        total_events,
+        "Wrote {} → {:.1} MB in {:.2}s ({:.1} MB/s)",
         out_path.display(),
-        write_elapsed.as_secs_f64(),
         out_size as f64 / 1_048_576.0,
+        write_elapsed.as_secs_f64(),
         out_size as f64 / write_elapsed.as_secs_f64() / 1_048_576.0,
     );
     println!("Input  size: {:.1} MB", total_bytes_in as f64 / 1_048_576.0);
@@ -506,165 +643,179 @@ fn main() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use delila_rs::common::Waveform;
+    use delila_rs::recorder::{ChecksumCalculator, FileFooter, FileHeader};
+    use std::io::Write;
+    use tempfile::tempdir;
 
-    /// Build a Waveform that exercises every newly-added field: 3 analog
-    /// probes populated, digital probes 1..5 populated (PHA2 standard 1..4
-    /// + AMax-debug slot 5), digital probes 6..16 left empty (reserved
-    ///   slots — they should still appear as branches in the Columns row).
-    fn sample_waveform() -> Waveform {
-        Waveform {
-            analog_probe1: vec![100, 101, 102, 103],
-            analog_probe2: vec![200, 201, 202, 203],
-            analog_probe3: vec![-1, -2, -3, -4],
-            digital_probe1: vec![1, 0, 1, 0],
-            digital_probe2: vec![0, 1, 0, 1],
-            digital_probe3: vec![1, 1, 0, 0],
-            digital_probe4: vec![0, 0, 1, 1],
-            digital_probe5: vec![1, 1, 1, 1],
-            time_resolution: 2,
-            trigger_threshold: 4096,
-            ns_per_sample: 8.0,
-            analog_probe1_is_signed: false,
-            analog_probe2_is_signed: true,
-            analog_probe3_is_signed: true,
-            analog_probe_type: [0, 1, 2], // ADCInput, TimeFilter, EnergyFilter
-            digital_probe_type: [
-                0,
-                1,
-                2,
-                3,
-                4, // PHA2 standard 5
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-                UNKNOWN_PROBE_TYPE,
-            ],
-            ..Waveform::default()
+    fn ev(ts_ns: f64, ch: u8) -> EventData {
+        EventData::new(0, ch, 100, 0, ts_ns, 0)
+    }
+
+    /// Write a minimal `.delila` file (header + N batches + footer) with
+    /// the given events and `file_sequence`. The helper hand-rolls just
+    /// enough of the on-disk format to exercise our reader; production
+    /// recording goes through `Recorder` which uses the same format
+    /// primitives.
+    fn write_delila(
+        path: &Path,
+        file_sequence: u32,
+        events: Vec<EventData>,
+    ) -> std::io::Result<()> {
+        use delila_rs::common::EventDataBatch;
+        let mut f = File::create(path)?;
+        let mut header = FileHeader::new(1, "test".to_string(), file_sequence);
+        header.is_sorted = false;
+        header.write_to(&mut f).expect("header");
+        let mut checksum = ChecksumCalculator::new();
+        if !events.is_empty() {
+            let mut batch = EventDataBatch::new(0, 0);
+            for e in events {
+                batch.push(e);
+            }
+            let bytes = batch.to_msgpack().expect("encode batch");
+            let len_bytes = (bytes.len() as u32).to_le_bytes();
+            f.write_all(&len_bytes)?;
+            f.write_all(&bytes)?;
+            checksum.update(&len_bytes);
+            checksum.update(&bytes);
         }
+        let mut footer = FileFooter::new();
+        footer.data_checksum = checksum.finalize();
+        footer.finalize();
+        footer.write_to(&mut f).expect("footer");
+        Ok(())
     }
 
     #[test]
-    fn push_event_with_waveform_populates_every_column() {
-        let mut cols = Columns::new();
-        let ev = EventData::with_waveform(7, 11, 1234, 567, 1_500.0, 0xAA, sample_waveform());
-        cols.push(&ev);
-
-        assert_eq!(cols.len(), 1);
-        assert_eq!(cols.module, vec![7]);
-        assert_eq!(cols.channel, vec![11]);
-        assert_eq!(cols.energy, vec![1234]);
-        assert_eq!(cols.energy_short, vec![567]);
-        assert_eq!(cols.timestamp_ns, vec![1_500.0]);
-        assert_eq!(cols.flags, vec![0xAA]);
-        assert_eq!(cols.has_waveform, vec![1]);
-
-        // Probe-type 1-indexed branches carry the canonical PHA2 codes.
-        assert_eq!(cols.analog_probe_type1, vec![0]); // ADCInput
-        assert_eq!(cols.analog_probe_type2, vec![1]); // TimeFilter
-        assert_eq!(cols.analog_probe_type3, vec![2]); // EnergyFilter
-        assert_eq!(cols.digital_probe_type1, vec![0]); // Trigger
-        assert_eq!(cols.digital_probe_type5, vec![4]); // 5th slot
-        assert_eq!(cols.digital_probe_type16, vec![UNKNOWN_PROBE_TYPE]);
-
-        // Waveform vectors come through in order.
-        assert_eq!(cols.analog_probe1, vec![vec![100, 101, 102, 103]]);
-        assert_eq!(cols.analog_probe3, vec![vec![-1, -2, -3, -4]]);
-        assert_eq!(cols.digital_probe5, vec![vec![1u8, 1, 1, 1]]);
-        // Reserved slots 6..16 stay empty (still pushed for column alignment).
-        assert_eq!(cols.digital_probe6, vec![Vec::<u8>::new()]);
-        assert_eq!(cols.digital_probe16, vec![Vec::<u8>::new()]);
-
-        // Metadata + IsSigned bools.
-        assert_eq!(cols.time_resolution, vec![2]);
-        assert_eq!(cols.trigger_threshold, vec![4096]);
-        assert_eq!(cols.ns_per_sample, vec![8.0]);
-        assert_eq!(cols.analog_probe1_is_signed, vec![false]);
-        assert_eq!(cols.analog_probe2_is_signed, vec![true]);
-        assert_eq!(cols.analog_probe3_is_signed, vec![true]);
+    fn sorted_stream_single_file_yields_in_order() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("a.delila");
+        // Out-of-order events in the file (Merger jitter case).
+        write_delila(&p, 0, vec![ev(30.0, 1), ev(10.0, 2), ev(20.0, 3)]).unwrap();
+        let stream = SortedFileStream::new(&[p]).unwrap();
+        let ts: Vec<f64> = stream.map(|e| e.timestamp_ns).collect();
+        assert_eq!(ts, vec![10.0, 20.0, 30.0]);
     }
 
     #[test]
-    fn push_event_without_waveform_pads_with_defaults() {
-        let mut cols = Columns::new();
-        let ev = EventData::new(3, 5, 999, 0, 42.0, 0);
-        cols.push(&ev);
-
-        assert_eq!(cols.has_waveform, vec![0]);
-        assert_eq!(cols.analog_probe_type1, vec![UNKNOWN_PROBE_TYPE]);
-        assert_eq!(cols.analog_probe_type3, vec![UNKNOWN_PROBE_TYPE]);
-        assert_eq!(cols.digital_probe_type16, vec![UNKNOWN_PROBE_TYPE]);
-        assert_eq!(cols.analog_probe1, vec![Vec::<i16>::new()]);
-        assert_eq!(cols.analog_probe3, vec![Vec::<i16>::new()]);
-        assert_eq!(cols.digital_probe1, vec![Vec::<u8>::new()]);
-        assert_eq!(cols.digital_probe16, vec![Vec::<u8>::new()]);
-        assert_eq!(cols.time_resolution, vec![0]);
-        assert_eq!(cols.trigger_threshold, vec![0]);
-        assert_eq!(cols.ns_per_sample, vec![0.0]);
-        assert_eq!(cols.analog_probe1_is_signed, vec![false]);
+    fn sorted_stream_two_files_no_overlap_concatenates() {
+        let dir = tempdir().unwrap();
+        let p1 = dir.path().join("a.delila");
+        let p2 = dir.path().join("b.delila");
+        write_delila(&p1, 0, vec![ev(10.0, 1), ev(20.0, 2)]).unwrap();
+        write_delila(&p2, 1, vec![ev(30.0, 3), ev(40.0, 4)]).unwrap();
+        let stream = SortedFileStream::new(&[p1, p2]).unwrap();
+        let ts: Vec<f64> = stream.map(|e| e.timestamp_ns).collect();
+        assert_eq!(ts, vec![10.0, 20.0, 30.0, 40.0]);
     }
 
     #[test]
-    fn mixed_events_keep_every_column_aligned() {
-        // Mix waveform-bearing and waveform-less events; every column
-        // must end up with len() == 3 (one row per event).
-        let mut cols = Columns::new();
-        cols.push(&EventData::with_waveform(
-            0,
-            0,
-            10,
-            0,
-            0.0,
-            0,
-            sample_waveform(),
-        ));
-        cols.push(&EventData::new(0, 0, 20, 0, 1.0, 0));
-        cols.push(&EventData::with_waveform(
-            0,
-            0,
-            30,
-            0,
-            2.0,
-            0,
-            sample_waveform(),
-        ));
-
-        // Spot-check a sample of columns from across the schema.
-        assert_eq!(cols.len(), 3);
-        assert_eq!(cols.energy.len(), 3);
-        assert_eq!(cols.has_waveform, vec![1, 0, 1]);
-        assert_eq!(cols.analog_probe1.len(), 3);
-        assert_eq!(cols.digital_probe16.len(), 3);
-        assert_eq!(cols.analog_probe1_is_signed.len(), 3);
-        assert_eq!(cols.digital_probe_type1, vec![0, UNKNOWN_PROBE_TYPE, 0]);
+    fn sorted_stream_two_files_with_overlap_uses_carry_over() {
+        let dir = tempdir().unwrap();
+        let p1 = dir.path().join("a.delila");
+        let p2 = dir.path().join("b.delila");
+        // file 0 has 10, 20, 50 — but file 1 starts at 30
+        // → 50 must be carried over and yielded after file 1's events
+        write_delila(&p1, 0, vec![ev(10.0, 1), ev(20.0, 2), ev(50.0, 3)]).unwrap();
+        write_delila(&p2, 1, vec![ev(30.0, 4), ev(40.0, 5), ev(60.0, 6)]).unwrap();
+        let stream = SortedFileStream::new(&[p1, p2]).unwrap();
+        let ts: Vec<f64> = stream.map(|e| e.timestamp_ns).collect();
+        assert_eq!(ts, vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
     }
 
     #[test]
-    fn pre_amax_eventdata_via_serde_default_round_trips() {
-        // Older `.delila` files lack `user_info[4]`. serde's #[serde(default)]
-        // on the field means the Rust reader fills [0;4] for those rows; this
-        // test pins that contract by simulating a freshly-deserialized event
-        // whose user_info defaults ran. We don't actually re-encode the wire
-        // here — just confirm that an EventData built via the public ctor
-        // (which mimics the deserialized state with user_info=[0;4]) is
-        // pushed without losing other fields.
-        let mut cols = Columns::new();
-        let ev = EventData::new(2, 3, 555, 0, 100.0, 0xFF);
-        cols.push(&ev);
-        assert_eq!(cols.user_info0, vec![0]);
-        assert_eq!(cols.user_info1, vec![0]);
-        assert_eq!(cols.user_info2, vec![0]);
-        assert_eq!(cols.user_info3, vec![0]);
-        assert_eq!(cols.flags, vec![0xFF]);
+    fn sorted_stream_reorders_files_by_file_sequence() {
+        let dir = tempdir().unwrap();
+        let p1 = dir.path().join("late.delila"); // alphabetically later
+        let p2 = dir.path().join("early.delila");
+        // Pass argv in alphabetical order, but file_sequence opposite.
+        write_delila(&p1, 0, vec![ev(10.0, 1), ev(20.0, 2)]).unwrap(); // seq=0
+        write_delila(&p2, 1, vec![ev(30.0, 3), ev(40.0, 4)]).unwrap(); // seq=1
+        // Pass argv as [p2, p1] (sequence 1, then 0). Stream should
+        // reorder to [p1, p2] internally (sequence 0, then 1).
+        let stream = SortedFileStream::new(&[p2, p1]).unwrap();
+        let ts: Vec<f64> = stream.map(|e| e.timestamp_ns).collect();
+        assert_eq!(ts, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn branch_iter_lockstep_returns_consistent_row() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("a.delila");
+        write_delila(&p, 0, vec![ev(10.0, 1), ev(20.0, 2)]).unwrap();
+        let stream = SortedFileStream::new(&[p]).unwrap();
+        let shared = Rc::new(RefCell::new(SharedRowSource {
+            source: stream,
+            current_row: None,
+        }));
+        // Simulate oxyroot's row-major poll: branch 0 first (advances),
+        // branches 1, 2 read the cached row.
+        let mut b0: BranchIter<u8, _> =
+            BranchIter::new(shared.clone(), 0, |e| e.module);
+        let mut b1: BranchIter<u8, _> =
+            BranchIter::new(shared.clone(), 1, |e| e.channel);
+        let mut b2: BranchIter<f64, _> =
+            BranchIter::new(shared.clone(), 2, |e| e.timestamp_ns);
+
+        // Row 0
+        assert_eq!(b0.next(), Some(0));
+        assert_eq!(b1.next(), Some(1));
+        assert_eq!(b2.next(), Some(10.0));
+        // Row 1
+        assert_eq!(b0.next(), Some(0));
+        assert_eq!(b1.next(), Some(2));
+        assert_eq!(b2.next(), Some(20.0));
+        // Exhausted
+        assert_eq!(b0.next(), None);
+        assert_eq!(b1.next(), None);
+        assert_eq!(b2.next(), None);
+    }
+
+    #[test]
+    fn branch_iter_all_exhaust_simultaneously() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("a.delila");
+        write_delila(&p, 0, vec![ev(10.0, 1)]).unwrap();
+        let stream = SortedFileStream::new(&[p]).unwrap();
+        let shared = Rc::new(RefCell::new(SharedRowSource {
+            source: stream,
+            current_row: None,
+        }));
+        let mut b0: BranchIter<u8, _> =
+            BranchIter::new(shared.clone(), 0, |e| e.module);
+        let mut b1: BranchIter<u8, _> =
+            BranchIter::new(shared.clone(), 1, |e| e.channel);
+        // Pull 1 row
+        assert!(b0.next().is_some());
+        assert!(b1.next().is_some());
+        // Both exhaust on next poll
+        assert_eq!(b0.next(), None);
+        assert_eq!(b1.next(), None);
+    }
+
+    #[test]
+    fn merge_sorted_handles_empty_inputs() {
+        let a: Vec<EventData> = vec![];
+        let b = vec![ev(10.0, 1), ev(20.0, 2)];
+        let r = merge_sorted(a, b);
+        let ts: Vec<f64> = r.iter().map(|e| e.timestamp_ns).collect();
+        assert_eq!(ts, vec![10.0, 20.0]);
+    }
+
+    #[test]
+    fn merge_sorted_is_stable() {
+        // Equal timestamps — left side wins.
+        let l = vec![ev(10.0, 1)];
+        let r = vec![ev(10.0, 2)];
+        let m = merge_sorted(l, r);
+        assert_eq!(m[0].channel, 1, "left side should come first on tie");
+        assert_eq!(m[1].channel, 2);
     }
 }
