@@ -611,11 +611,13 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!(
-        "Sorted {} files by file_sequence in {:.2}s",
-        stream.files.len(),
-        meta_start.elapsed().as_secs_f64()
-    );
+    if stream.files.len() > 1 {
+        println!(
+            "Reordered {} files by file_sequence in {:.3}s",
+            stream.files.len(),
+            meta_start.elapsed().as_secs_f64()
+        );
+    }
 
     let shared = Rc::new(RefCell::new(SharedRowSource {
         source: stream,
