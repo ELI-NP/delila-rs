@@ -490,7 +490,7 @@ HWM:      0 (unlimited, データ落とさない原則)
 EOS:      Message::EndOfStream { run_number }
 ```
 
-C++ EB 用の 14 B 固定バイナリ wire format (`event_bridge_wire_format.md` v1.0) は **deprecated**。Phase 4 完了後に該当ドキュメント削除。
+C++ EB 用の 14 B 固定バイナリ wire format と `event_bridge` バイナリは Phase Q (2026-05-19) で削除済み。`docs/event_bridge_wire_format.md` も同時に削除。
 
 ---
 
@@ -546,10 +546,14 @@ pub enum HitBatch<H> {
 - `time_sort.rs`, `slice_builder.rs`, `time_calibrator.rs`
 - `pipeline.rs`: Sorter thread / Worker threads / Writer thread
 
-### 11.4 残課題
+### 11.4 進捗
 
-- **Phase 4**: `ZmqHitSource` 実装 + Online EB を統一 pipeline 上に乗せる
-- **Phase 5**: 旧 `online.rs` (独自 pipeline) を削除、`event_bridge` binary も廃止
+- **Phase 4** (✓ 2026-05-19): `ZmqHitSource` 実装 + Online EB を統一 pipeline 上に乗せ替え
+- **Phase 5** (✓ 2026-05-19): 旧 `online.rs` (独自 pipeline) 削除
+- **Phase J** (✓ 2026-05-19): `chSettings.json` を tags + 較正 のみに slim 化、`L1Builder` 削除
+- **Phase Q** (✓ 2026-05-19): `event_bridge` バイナリ + wire format doc 削除
+- **L1 残**: `and` / `multiplicity` (stateful, chunk_builder API 拡張要)
+- **M**: EB Monitor プロセス本体（histograms + REST）
 
 ---
 

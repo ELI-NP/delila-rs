@@ -650,6 +650,13 @@ pub struct EventBuilderNetworkConfig {
     #[serde(default)]
     pub time_calib_file: Option<String>,
 
+    /// Path to the EB runtime config (`eb_config.json` — SPEC § 4.1).
+    /// When set, L1 trigger config and L2 filter are derived from it
+    /// (replacing the legacy chSettings-driven trigger path). Highly
+    /// recommended for any new setup.
+    #[serde(default)]
+    pub eb_config_file: Option<String>,
+
     /// Optional ZMQ PUB endpoint for the BuiltEvent stream feeding the
     /// EB Monitor (SPEC § 9.3). Unset → PUB thread is not spawned.
     /// Example: `"tcp://*:5610"`.

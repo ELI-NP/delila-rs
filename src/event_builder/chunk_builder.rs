@@ -80,41 +80,6 @@ impl TriggerConfig {
             .copied()
             .unwrap_or(u32::MAX)
     }
-
-    /// Build TriggerConfig from a ChannelConfig (loaded from JSON settings file).
-    ///
-    /// Pure function — no file I/O. Extracts triggers, priorities, and AC pairs
-    /// from the channel settings.
-    pub fn from_channel_config(
-        config: &super::config::ChannelConfig,
-        coincidence_window_ns: f64,
-    ) -> Self {
-        let mut triggers = HashSet::new();
-        let mut priorities = HashMap::new();
-        let mut ac_pairs = HashMap::new();
-
-        for module_channels in config {
-            for settings in module_channels {
-                let key = (settings.module, settings.channel);
-                if settings.is_event_trigger {
-                    triggers.insert(key);
-                    priorities.insert(key, settings.id as u32);
-                }
-                // Guard: ac_module == 128 means "no AC" in ELIFANT convention
-                if settings.has_ac && settings.ac_module != 128 {
-                    ac_pairs.insert(key, (settings.ac_module, settings.ac_channel));
-                }
-            }
-        }
-
-        Self {
-            triggers,
-            priorities,
-            ac_pairs,
-            coincidence_window_ns,
-            trigger_energy_gates: HashMap::new(),
-        }
-    }
 }
 
 /// ソート済みチャンクからイベントを構築する (pure, 副作用なし)
@@ -1016,92 +981,10 @@ mod tests {
         assert!(!tc.passes_trigger_gate(&super::super::hit::Hit::new(1, 0, 5000, 0, 1000.0)));
     }
 
-    #[test]
-    fn test_trigger_config_from_channel_config() {
-        use super::super::config::ChSettings;
-
-        let config = vec![vec![
-            ChSettings {
-                id: 0,
-                module: 0,
-                channel: 0,
-                is_event_trigger: true,
-                threshold_adc: 100,
-                has_ac: false,
-                ac_module: 128,
-                ac_channel: 0,
-                detector_type: "HPGe".to_string(),
-                tags: vec![],
-                p0: 0.0,
-                p1: 1.0,
-                p2: 0.0,
-                p3: 0.0,
-            },
-            ChSettings {
-                id: 1,
-                module: 0,
-                channel: 1,
-                is_event_trigger: false,
-                threshold_adc: 100,
-                has_ac: true,
-                ac_module: 1,
-                ac_channel: 0,
-                detector_type: "HPGe".to_string(),
-                tags: vec![],
-                p0: 0.0,
-                p1: 1.0,
-                p2: 0.0,
-                p3: 0.0,
-            },
-        ]];
-
-        let tc = TriggerConfig::from_channel_config(&config, 500.0);
-
-        assert!(tc.is_trigger(0, 0));
-        assert!(!tc.is_trigger(0, 1));
-        assert_eq!(tc.priority(0, 0), 0);
-        assert_eq!(tc.coincidence_window_ns, 500.0);
-        assert_eq!(tc.ac_pairs.get(&(0, 1)), Some(&(1, 0)));
-        assert!(!tc.ac_pairs.contains_key(&(0, 0))); // no AC
-    }
-
-    #[test]
-    fn test_trigger_config_from_channel_config_ac_module_128() {
-        use super::super::config::ChSettings;
-
-        // ac_module=128 means "no AC" in ELIFANT convention
-        let config = vec![vec![ChSettings {
-            id: 0,
-            module: 0,
-            channel: 0,
-            is_event_trigger: true,
-            threshold_adc: 100,
-            has_ac: true,
-            ac_module: 128,
-            ac_channel: 0,
-            detector_type: "HPGe".to_string(),
-            tags: vec![],
-            p0: 0.0,
-            p1: 1.0,
-            p2: 0.0,
-            p3: 0.0,
-        }]];
-
-        let tc = TriggerConfig::from_channel_config(&config, 500.0);
-
-        assert!(tc.is_trigger(0, 0));
-        // ac_module=128 should be excluded
-        assert!(tc.ac_pairs.is_empty());
-    }
-
-    #[test]
-    fn test_trigger_config_from_empty_config() {
-        let config: Vec<Vec<super::super::config::ChSettings>> = vec![];
-        let tc = TriggerConfig::from_channel_config(&config, 500.0);
-
-        assert!(tc.triggers.is_empty());
-        assert!(tc.priorities.is_empty());
-        assert!(tc.ac_pairs.is_empty());
-        assert_eq!(tc.coincidence_window_ns, 500.0);
-    }
+    // Tests for the removed `TriggerConfig::from_channel_config()` were
+    // deleted in Phase J (2026-05-19). The L1 trigger set now comes from
+    // `EbRuntimeConfig::build_trigger_config()` — see
+    // `runtime_config.rs::tests::build_trigger_config_*` for the
+    // replacement coverage and `tests/eb_integration.rs` for the
+    // end-to-end exercise.
 }

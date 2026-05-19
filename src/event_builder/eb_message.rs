@@ -7,11 +7,12 @@
 //!
 //! # Why MessagePack and not a fixed binary?
 //!
-//! The legacy `docs/event_bridge_wire_format.md` v1.0 chose a 14 B/hit
-//! packed binary because the consumer was C++ and avoiding zero-copy
-//! deserialization mattered. Now the consumer is also Rust + serde, so
-//! MessagePack + `#[serde(default)]` gives schema evolution at near-zero
-//! cost. See SPEC § 9.3.
+//! An earlier "Event Bridge" path picked a 14 B/hit packed binary so a
+//! separate C++ EB process could read it without serde. That hand-off
+//! was retired in Phase Q (2026-05-19) along with the `event_bridge`
+//! binary and its wire-format doc. The consumer is now also Rust + serde,
+//! so MessagePack + `#[serde(default)]` gives schema evolution at
+//! near-zero cost. See SPEC § 9.3.
 
 use serde::{Deserialize, Serialize};
 

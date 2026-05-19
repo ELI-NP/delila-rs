@@ -23,7 +23,15 @@ pub enum ConfigError {
 
 /// Per-channel settings (ELIFANT-Event 互換)
 ///
-/// JSON フィールド名は ELIFANT-Event と同じ (PascalCase)
+/// Pure hardware descriptor: detector ID, location, tags, and per-channel
+/// calibration. Trigger / AC / threshold logic now lives in
+/// `eb_config.json` (L1 / L2 named-ops, SPEC § 6 + § 7). Old chSettings.json
+/// files carrying `IsEventTrigger` / `HasAC` / `ACModule` / `ACChannel` /
+/// `ThresholdADC` still parse — serde silently ignores unknown fields — but
+/// those fields are no longer wired to anything; users should migrate them
+/// into the L1 / L2 ops as documented in SPEC v0.5.1 § 4.2.
+///
+/// JSON フィールド名は ELIFANT-Event と同じ (PascalCase)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ChSettings {
@@ -37,33 +45,14 @@ pub struct ChSettings {
     /// Channel number
     pub channel: u8,
 
-    /// Is this a trigger channel?
-    pub is_event_trigger: bool,
-
-    /// ADC threshold for accepting hits
-    #[serde(rename = "ThresholdADC")]
-    pub threshold_adc: u32,
-
-    /// Has associated AC detector?
-    #[serde(rename = "HasAC")]
-    pub has_ac: bool,
-
-    /// AC detector module
-    #[serde(rename = "ACModule")]
-    pub ac_module: u8,
-
-    /// AC detector channel
-    #[serde(rename = "ACChannel")]
-    pub ac_channel: u8,
-
     /// Detector type (Si, HPGe, AC, PMT, etc.)
     pub detector_type: String,
 
-    /// User-defined tags
+    /// User-defined tags (used by L2 `counter` ops to select hits — SPEC § 7).
     #[serde(default)]
     pub tags: Vec<String>,
 
-    /// Energy calibration coefficients
+    /// Energy calibration coefficients `E = p0 + p1·ADC + p2·ADC² + p3·ADC³`.
     #[serde(default)]
     pub p0: f64,
     #[serde(default)]
@@ -79,16 +68,6 @@ impl ChSettings {
     #[inline]
     pub fn channel_key(&self) -> u16 {
         ((self.module as u16) << 8) | (self.channel as u16)
-    }
-
-    /// Get AC pair channel key if has_ac is true
-    pub fn ac_channel_key(&self) -> Option<u16> {
-        if self.has_ac && self.ac_module != 128 {
-            // 128 is "no AC" marker in ELIFANT-Event
-            Some(((self.ac_module as u16) << 8) | (self.ac_channel as u16))
-        } else {
-            None
-        }
     }
 
     /// Apply energy calibration: E = p0 + p1*ADC + p2*ADC^2 + p3*ADC^3
@@ -126,19 +105,6 @@ pub fn build_channel_map(config: &ChannelConfig) -> HashMap<(u8, u8), ChSettings
         }
     }
     map
-}
-
-/// Get all trigger channels from configuration
-pub fn get_trigger_channels(config: &ChannelConfig) -> Vec<(u8, u8)> {
-    let mut triggers = Vec::new();
-    for module_channels in config {
-        for ch in module_channels {
-            if ch.is_event_trigger {
-                triggers.push((ch.module, ch.channel));
-            }
-        }
-    }
-    triggers
 }
 
 /// Time calibration offsets
@@ -380,11 +346,6 @@ mod tests {
             id: 0,
             module: 5,
             channel: 10,
-            is_event_trigger: false,
-            threshold_adc: 0,
-            has_ac: false,
-            ac_module: 128,
-            ac_channel: 128,
             detector_type: "Si".to_string(),
             tags: vec![],
             p0: 0.0,
@@ -395,34 +356,8 @@ mod tests {
         assert_eq!(ch.channel_key(), (5 << 8) | 10);
     }
 
-    #[test]
-    fn test_ch_settings_ac_pair() {
-        let ch_with_ac = ChSettings {
-            id: 0,
-            module: 0,
-            channel: 0,
-            is_event_trigger: true,
-            threshold_adc: 0,
-            has_ac: true,
-            ac_module: 0,
-            ac_channel: 1,
-            detector_type: "HPGe".to_string(),
-            tags: vec![],
-            p0: 0.0,
-            p1: 1.0,
-            p2: 0.0,
-            p3: 0.0,
-        };
-        assert_eq!(ch_with_ac.ac_channel_key(), Some(1));
-
-        let ch_no_ac = ChSettings {
-            has_ac: false,
-            ac_module: 128,
-            ac_channel: 128,
-            ..ch_with_ac.clone()
-        };
-        assert_eq!(ch_no_ac.ac_channel_key(), None);
-    }
+    // `test_ch_settings_ac_pair` was deleted in Phase J — AC pairing moved
+    // to L2 `ac_veto` op (see `l2_eval.rs::tests::ac_veto_*`).
 
     #[test]
     fn test_ch_settings_calibrate_energy() {
@@ -430,11 +365,6 @@ mod tests {
             id: 0,
             module: 0,
             channel: 0,
-            is_event_trigger: false,
-            threshold_adc: 0,
-            has_ac: false,
-            ac_module: 128,
-            ac_channel: 128,
             detector_type: "Si".to_string(),
             tags: vec![],
             p0: 10.0,
@@ -466,11 +396,6 @@ mod tests {
                 id: 0,
                 module: 0,
                 channel: 0,
-                is_event_trigger: true,
-                threshold_adc: 0,
-                has_ac: false,
-                ac_module: 128,
-                ac_channel: 128,
                 detector_type: "Si".to_string(),
                 tags: vec![],
                 p0: 0.0,
@@ -482,11 +407,6 @@ mod tests {
                 id: 1,
                 module: 0,
                 channel: 1,
-                is_event_trigger: false,
-                threshold_adc: 0,
-                has_ac: false,
-                ac_module: 128,
-                ac_channel: 128,
                 detector_type: "Si".to_string(),
                 tags: vec![],
                 p0: 0.0,
@@ -498,50 +418,14 @@ mod tests {
 
         let map = build_channel_map(&config);
         assert_eq!(map.len(), 2);
-        assert!(map.get(&(0, 0)).unwrap().is_event_trigger);
-        assert!(!map.get(&(0, 1)).unwrap().is_event_trigger);
+        // Pure-descriptor checks (Phase J).
+        assert_eq!(map.get(&(0, 0)).unwrap().id, 0);
+        assert_eq!(map.get(&(0, 1)).unwrap().id, 1);
     }
 
-    #[test]
-    fn test_get_trigger_channels() {
-        let config: ChannelConfig = vec![vec![
-            ChSettings {
-                id: 0,
-                module: 0,
-                channel: 0,
-                is_event_trigger: true,
-                threshold_adc: 0,
-                has_ac: false,
-                ac_module: 128,
-                ac_channel: 128,
-                detector_type: "Si".to_string(),
-                tags: vec![],
-                p0: 0.0,
-                p1: 1.0,
-                p2: 0.0,
-                p3: 0.0,
-            },
-            ChSettings {
-                id: 1,
-                module: 0,
-                channel: 1,
-                is_event_trigger: false,
-                threshold_adc: 0,
-                has_ac: false,
-                ac_module: 128,
-                ac_channel: 128,
-                detector_type: "Si".to_string(),
-                tags: vec![],
-                p0: 0.0,
-                p1: 1.0,
-                p2: 0.0,
-                p3: 0.0,
-            },
-        ]];
-
-        let triggers = get_trigger_channels(&config);
-        assert_eq!(triggers, vec![(0, 0)]);
-    }
+    // `test_get_trigger_channels` removed in Phase J — the helper was a
+    // wrapper around `ch.is_event_trigger`, which is no longer a field.
+    // Trigger channels now come from `EbRuntimeConfig::build_trigger_config()`.
 
     #[test]
     fn test_l2_settings_counter_serialization() {

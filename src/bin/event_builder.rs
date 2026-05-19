@@ -405,72 +405,50 @@ fn run_event_building(
         n_writers,
     );
 
-    // Build TriggerConfig
-    let trigger_config = if let Some(config_path) = config {
-        // Load from channel settings JSON
-        let ch_config = load_channel_config(config_path)
-            .with_context(|| format!("Failed to load config: {}", config_path.display()))?;
-
-        let mut tc = TriggerConfig::from_channel_config(&ch_config, window);
-        info!(
-            "Loaded channel config from: {} ({} triggers, {} AC pairs)",
-            config_path.display(),
-            tc.triggers.len(),
-            tc.ac_pairs.len()
-        );
-
-        // Override triggers from CLI if provided
-        if !trigger_args.is_empty() {
-            tc.triggers.clear();
-            tc.priorities.clear();
-            for (priority, trig) in trigger_args.iter().enumerate() {
-                let parts: Vec<&str> = trig.split(':').collect();
-                if parts.len() == 2 {
-                    let module: u8 = parts[0].parse().context("Invalid trigger module")?;
-                    let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
-                    tc.triggers.insert((module, channel));
-                    tc.priorities.insert((module, channel), priority as u32);
-                    info!(
-                        "CLI trigger override: ({}, {}) priority {}",
-                        module, channel, priority
-                    );
-                } else {
-                    warn!("Invalid trigger format: {} (expected module:channel)", trig);
-                }
-            }
+    // chSettings.json is now a pure detector/tag descriptor (Phase J) — it
+    // no longer carries trigger flags. Trigger channels come from CLI
+    // `--trigger module:channel` args; for richer L1/L2 setups use the
+    // online binary with an `eb_config.json` instead.
+    if let Some(config_path) = config {
+        match load_channel_config(config_path) {
+            Ok(_) => info!(
+                "Loaded chSettings.json (descriptor only) from: {}",
+                config_path.display()
+            ),
+            Err(e) => warn!(
+                "Failed to load chSettings.json {}: {} — continuing without it",
+                config_path.display(),
+                e
+            ),
         }
-        tc
-    } else {
-        // Build from CLI --trigger args only
-        let mut triggers = HashSet::new();
-        let mut priorities = HashMap::new();
-        for (priority, trig) in trigger_args.iter().enumerate() {
-            let parts: Vec<&str> = trig.split(':').collect();
-            if parts.len() == 2 {
-                let module: u8 = parts[0].parse().context("Invalid trigger module")?;
-                let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
-                triggers.insert((module, channel));
-                priorities.insert((module, channel), priority as u32);
-                info!(
-                    "Added trigger: ({}, {}) priority {}",
-                    module, channel, priority
-                );
-            } else {
-                warn!("Invalid trigger format: {} (expected module:channel)", trig);
-            }
-        }
+    }
 
-        if triggers.is_empty() {
-            warn!("No triggers specified! Use --trigger or -c config with IsEventTrigger=true");
+    let mut triggers = HashSet::new();
+    let mut priorities = HashMap::new();
+    for (priority, trig) in trigger_args.iter().enumerate() {
+        let parts: Vec<&str> = trig.split(':').collect();
+        if parts.len() == 2 {
+            let module: u8 = parts[0].parse().context("Invalid trigger module")?;
+            let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
+            triggers.insert((module, channel));
+            priorities.insert((module, channel), priority as u32);
+            info!(
+                "Added trigger: ({}, {}) priority {}",
+                module, channel, priority
+            );
+        } else {
+            warn!("Invalid trigger format: {} (expected module:channel)", trig);
         }
-
-        TriggerConfig {
-            triggers,
-            priorities,
-            ac_pairs: HashMap::new(),
-            coincidence_window_ns: window,
-            trigger_energy_gates: std::collections::HashMap::new(),
-        }
+    }
+    if triggers.is_empty() {
+        warn!("No triggers specified — pass at least one `--trigger module:channel`");
+    }
+    let trigger_config = TriggerConfig {
+        triggers,
+        priorities,
+        ac_pairs: HashMap::new(),
+        coincidence_window_ns: window,
+        trigger_energy_gates: std::collections::HashMap::new(),
     };
 
     // Load time calibration
