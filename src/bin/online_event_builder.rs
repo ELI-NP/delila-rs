@@ -137,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
             priorities: Default::default(),
             ac_pairs: Default::default(),
             coincidence_window_ns: eb.coincidence_window_ns,
+            trigger_energy_gates: std::collections::HashMap::new(),
         }
     };
 

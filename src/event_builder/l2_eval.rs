@@ -66,7 +66,12 @@ impl L2Filter {
         let mut has_accept = false;
         for op in &ops {
             match op {
-                L2Op::Counter { .. } => {}
+                L2Op::Counter { .. }
+                | L2Op::EnergyGate { .. }
+                | L2Op::MinHits { .. }
+                | L2Op::AcVeto { .. } => {
+                    // Standalone ops (no inter-op references to resolve).
+                }
                 L2Op::Flag { name, monitor, .. } => {
                     if !by_name.contains_key(monitor) {
                         return Err(L2FilterError::UnknownReference {
@@ -85,24 +90,6 @@ impl L2Filter {
                             });
                         }
                     }
-                }
-                L2Op::EnergyGate { name, .. } => {
-                    return Err(L2FilterError::Unimplemented {
-                        name: name.clone(),
-                        op_type: "energy_gate",
-                    });
-                }
-                L2Op::AcVeto { name, .. } => {
-                    return Err(L2FilterError::Unimplemented {
-                        name: name.clone(),
-                        op_type: "ac_veto",
-                    });
-                }
-                L2Op::MinHits { name, .. } => {
-                    return Err(L2FilterError::Unimplemented {
-                        name: name.clone(),
-                        op_type: "min_hits",
-                    });
                 }
             }
         }
@@ -173,9 +160,69 @@ impl L2Filter {
                         accepted.push(name.clone());
                     }
                 }
-                _ => {
-                    // Unreachable: `new` rejects unimplemented variants.
-                    debug_assert!(false, "evaluator should not see {op:?}");
+                L2Op::EnergyGate {
+                    name,
+                    module,
+                    channel,
+                    min_adc,
+                    max_adc,
+                } => {
+                    // True if at least one hit on (module, channel) has
+                    // energy in [min_adc, max_adc]. Treated as a `flag`
+                    // for downstream `accept` references.
+                    let result = event.hits.iter().any(|h| {
+                        h.module == *module
+                            && h.channel == *channel
+                            && h.energy >= *min_adc
+                            && h.energy <= *max_adc
+                    });
+                    flags.insert(name.as_str(), result);
+                }
+                L2Op::MinHits { name, min } => {
+                    flags.insert(name.as_str(), (event.hits.len() as u32) >= *min);
+                }
+                L2Op::AcVeto {
+                    name,
+                    trigger_channels,
+                    veto_channels,
+                    window_ns,
+                } => {
+                    // Veto fires if any trigger-channel hit has a
+                    // veto-channel hit within ±window_ns.
+                    //
+                    // SPEC § 7.2: a true `flag` here means "this event
+                    // SHOULD BE VETOED". Downstream Accept ops typically
+                    // chain via `monitor: ["veto_flag", "good_flag"]`
+                    // with operator AND of (NOT veto), so the eval here
+                    // is "any pair within window → true". Users should
+                    // compose a `flag` of `==0` on a `counter` named
+                    // veto to invert (or extend the SPEC with a `not`
+                    // op later).
+                    let trigger_set: std::collections::HashSet<(u8, u8)> = trigger_channels
+                        .iter()
+                        .map(|c| (c.module, c.channel))
+                        .collect();
+                    let veto_set: std::collections::HashSet<(u8, u8)> = veto_channels
+                        .iter()
+                        .map(|c| (c.module, c.channel))
+                        .collect();
+
+                    let mut vetoed = false;
+                    'outer: for ht in &event.hits {
+                        if !trigger_set.contains(&(ht.module, ht.channel)) {
+                            continue;
+                        }
+                        for hv in &event.hits {
+                            if !veto_set.contains(&(hv.module, hv.channel)) {
+                                continue;
+                            }
+                            if (ht.relative_time - hv.relative_time).abs() <= *window_ns {
+                                vetoed = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                    flags.insert(name.as_str(), vetoed);
                 }
             }
         }
@@ -361,29 +408,163 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_op_rejected_at_filter_construction() {
+    fn min_hits_keeps_when_multiplicity_threshold_met() {
         let ops = vec![
             L2Op::MinHits {
-                name: "atleast2".into(),
+                name: "at_least_2".into(),
                 min: 2,
             },
             L2Op::Accept {
                 name: "keep".into(),
-                monitor: vec![],
+                monitor: vec!["at_least_2".into()],
                 operator: LogicOp::And,
             },
         ];
-        let err = L2Filter::new(ops, HashMap::new()).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                L2FilterError::Unimplemented {
-                    op_type: "min_hits",
-                    ..
-                }
-            ),
-            "got {err:?}"
-        );
+        let f = L2Filter::new(ops, HashMap::new()).unwrap();
+        assert!(f.keeps(&ev_with(&[(0, 0), (0, 1)])));
+        assert!(f.keeps(&ev_with(&[(0, 0), (0, 1), (0, 2)])));
+        assert!(!f.keeps(&ev_with(&[(0, 0)])));
+    }
+
+    fn ev_with_energy(hits: &[(u8, u8, u16)]) -> BuiltEvent {
+        let mut ev = BuiltEvent {
+            trigger_module: hits[0].0,
+            trigger_channel: hits[0].1,
+            ..BuiltEvent::default()
+        };
+        for (m, c, e) in hits {
+            ev.hits.push(EventHit {
+                module: *m,
+                channel: *c,
+                energy: *e,
+                energy_short: 0,
+                relative_time: 0.0,
+                with_ac: false,
+            });
+        }
+        ev
+    }
+
+    #[test]
+    fn energy_gate_filters_by_adc_range() {
+        let ops = vec![
+            L2Op::EnergyGate {
+                name: "HPGe0_good".into(),
+                module: 0,
+                channel: 0,
+                min_adc: 100,
+                max_adc: 16000,
+            },
+            L2Op::Accept {
+                name: "keep".into(),
+                monitor: vec!["HPGe0_good".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let f = L2Filter::new(ops, HashMap::new()).unwrap();
+
+        assert!(f.keeps(&ev_with_energy(&[(0, 0, 5000)])));
+        assert!(!f.keeps(&ev_with_energy(&[(0, 0, 50)]))); // below min
+        assert!(!f.keeps(&ev_with_energy(&[(0, 0, 20000)]))); // above max
+        assert!(!f.keeps(&ev_with_energy(&[(1, 0, 5000)]))); // wrong channel
+                                                             // OK if at least one hit on (0,0) is in range.
+        assert!(f.keeps(&ev_with_energy(&[(0, 0, 50), (0, 0, 5000)])));
+    }
+
+    fn ev_with_times(hits: &[(u8, u8, f64)]) -> BuiltEvent {
+        let mut ev = BuiltEvent {
+            trigger_module: hits[0].0,
+            trigger_channel: hits[0].1,
+            trigger_time: 0.0,
+            ..BuiltEvent::default()
+        };
+        for (m, c, rt) in hits {
+            ev.hits.push(EventHit {
+                module: *m,
+                channel: *c,
+                energy: 0,
+                energy_short: 0,
+                relative_time: *rt,
+                with_ac: false,
+            });
+        }
+        ev
+    }
+
+    #[test]
+    fn ac_veto_flag_fires_inside_window_clears_outside() {
+        use crate::event_builder::runtime_config::{ChannelRef, CmpOp};
+        let ops = vec![
+            L2Op::AcVeto {
+                name: "vetoed".into(),
+                trigger_channels: vec![ChannelRef {
+                    module: 0,
+                    channel: 0,
+                }],
+                veto_channels: vec![ChannelRef {
+                    module: 0,
+                    channel: 1,
+                }],
+                window_ns: 200.0,
+            },
+            L2Op::Flag {
+                name: "vetoed_flag".into(),
+                monitor: "vetoed".into(),
+                operator: CmpOp::Eq,
+                value: 1,
+            },
+            L2Op::Accept {
+                name: "is_vetoed".into(),
+                monitor: vec!["vetoed_flag".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let f = L2Filter::new(ops, HashMap::new()).unwrap();
+
+        // veto channel fires inside window → vetoed = true.
+        assert!(f.keeps(&ev_with_times(&[(0, 0, 0.0), (0, 1, 50.0)])));
+        // veto channel fires outside window → vetoed = false.
+        assert!(!f.keeps(&ev_with_times(&[(0, 0, 0.0), (0, 1, 500.0)])));
+        // No veto channel in event → not vetoed.
+        assert!(!f.keeps(&ev_with_times(&[(0, 0, 0.0)])));
+    }
+
+    #[test]
+    fn keep_unless_vetoed_via_flag_negation() {
+        use crate::event_builder::runtime_config::{ChannelRef, CmpOp};
+        let ops = vec![
+            L2Op::AcVeto {
+                name: "vetoed".into(),
+                trigger_channels: vec![ChannelRef {
+                    module: 0,
+                    channel: 0,
+                }],
+                veto_channels: vec![ChannelRef {
+                    module: 0,
+                    channel: 1,
+                }],
+                window_ns: 200.0,
+            },
+            L2Op::Flag {
+                name: "not_vetoed".into(),
+                monitor: "vetoed".into(),
+                operator: CmpOp::Eq,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "keep".into(),
+                monitor: vec!["not_vetoed".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let f = L2Filter::new(ops, HashMap::new()).unwrap();
+
+        // Vetoed → dropped.
+        assert!(!f.keeps(&ev_with_times(&[(0, 0, 0.0), (0, 1, 50.0)])));
+        // Not vetoed (outside window) → kept.
+        assert!(f.keeps(&ev_with_times(&[(0, 0, 0.0), (0, 1, 500.0)])));
+        // No veto channel hit → kept.
+        assert!(f.keeps(&ev_with_times(&[(0, 0, 0.0)])));
     }
 
     #[test]

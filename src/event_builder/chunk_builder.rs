@@ -42,6 +42,12 @@ pub struct TriggerConfig {
     pub ac_pairs: HashMap<(u8, u8), (u8, u8)>,
     /// コインシデンスウィンドウ [ns]
     pub coincidence_window_ns: f64,
+    /// Optional per-channel L1 energy gate `(min_adc, max_adc)`.
+    /// When present for a trigger channel, hits whose energy falls outside
+    /// the inclusive range do NOT become trigger anchors. Hits below the
+    /// gate are still candidates for *coincident* hits inside an event
+    /// triggered by some other channel — see SPEC § 5 / § 6.2.
+    pub trigger_energy_gates: HashMap<(u8, u8), (u16, u16)>,
 }
 
 impl TriggerConfig {
@@ -49,6 +55,21 @@ impl TriggerConfig {
     #[inline]
     pub fn is_trigger(&self, module: u8, channel: u8) -> bool {
         self.triggers.contains(&(module, channel))
+    }
+
+    /// Full trigger admission check used by `chunk_builder`: the hit's
+    /// `(module, channel)` must be a configured trigger AND its energy
+    /// must lie inside the optional L1 energy gate.
+    #[inline]
+    pub fn passes_trigger_gate(&self, hit: &super::hit::Hit) -> bool {
+        if !self.is_trigger(hit.module, hit.channel) {
+            return false;
+        }
+        if let Some(&(min, max)) = self.trigger_energy_gates.get(&(hit.module, hit.channel)) {
+            hit.energy >= min && hit.energy <= max
+        } else {
+            true
+        }
     }
 
     /// Get trigger priority (lower = higher priority, u32::MAX = not a trigger)
@@ -91,6 +112,7 @@ impl TriggerConfig {
             priorities,
             ac_pairs,
             coincidence_window_ns,
+            trigger_energy_gates: HashMap::new(),
         }
     }
 }
@@ -126,7 +148,7 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
     let mut merged_windows: Vec<MergedWindow> = Vec::new();
 
     for hit in hits.iter() {
-        if !config.is_trigger(hit.module, hit.channel) {
+        if !config.passes_trigger_gate(hit) {
             continue;
         }
         // Skip triggers in unsafe region (processed in next chunk)
@@ -307,6 +329,7 @@ mod tests {
             priorities,
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         }
     }
 
@@ -387,6 +410,7 @@ mod tests {
             priorities: HashMap::new(),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         };
 
         let chunk = SortedChunk {
@@ -417,6 +441,7 @@ mod tests {
             priorities: HashMap::new(),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         };
 
         let chunk = SortedChunk {
@@ -465,6 +490,7 @@ mod tests {
             priorities: HashMap::new(),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         };
 
         let chunk = SortedChunk {
@@ -841,6 +867,7 @@ mod tests {
             },
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 100.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         };
 
         // Shuffle hits within 30ms chunks (simulate network disorder)
@@ -960,6 +987,33 @@ mod tests {
         // Total: all 3 triggers accounted for
         let total = events1.len() + events2.len();
         assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn passes_trigger_gate_honors_energy_window() {
+        let mut tc = TriggerConfig {
+            triggers: {
+                let mut s = HashSet::new();
+                s.insert((0, 0));
+                s
+            },
+            priorities: HashMap::new(),
+            ac_pairs: HashMap::new(),
+            coincidence_window_ns: 500.0,
+            trigger_energy_gates: HashMap::new(),
+        };
+
+        // Without a gate, every hit on a trigger channel qualifies.
+        let h = super::super::hit::Hit::new(0, 0, 5000, 0, 1000.0);
+        assert!(tc.passes_trigger_gate(&h));
+
+        // Add a gate: only [100, 16000] qualifies.
+        tc.trigger_energy_gates.insert((0, 0), (100, 16000));
+        assert!(tc.passes_trigger_gate(&super::super::hit::Hit::new(0, 0, 5000, 0, 1000.0)));
+        assert!(!tc.passes_trigger_gate(&super::super::hit::Hit::new(0, 0, 50, 0, 1000.0)));
+        assert!(!tc.passes_trigger_gate(&super::super::hit::Hit::new(0, 0, 20000, 0, 1000.0)));
+        // Non-trigger channels stay rejected regardless of energy.
+        assert!(!tc.passes_trigger_gate(&super::super::hit::Hit::new(1, 0, 5000, 0, 1000.0)));
     }
 
     #[test]

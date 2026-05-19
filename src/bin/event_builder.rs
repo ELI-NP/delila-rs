@@ -469,6 +469,7 @@ fn run_event_building(
             priorities,
             ac_pairs: HashMap::new(),
             coincidence_window_ns: window,
+            trigger_energy_gates: std::collections::HashMap::new(),
         }
     };
 

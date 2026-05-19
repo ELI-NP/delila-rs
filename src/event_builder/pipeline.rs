@@ -721,6 +721,7 @@ mod tests {
             priorities: HashMap::from([((0, 0), 0)]),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         };
 
         let config = PipelineConfig {
@@ -760,6 +761,7 @@ mod tests {
             priorities: HashMap::from([((0, 0), 0)]),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
+            trigger_energy_gates: std::collections::HashMap::new(),
         };
 
         let tmp_dir = tempfile::tempdir().unwrap();

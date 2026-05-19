@@ -305,6 +305,7 @@ impl EbRuntimeConfig {
 
         let mut triggers: HashSet<(u8, u8)> = HashSet::new();
         let mut priorities: HashMap<(u8, u8), u32> = HashMap::new();
+        let mut energy_gates: HashMap<(u8, u8), (u16, u16)> = HashMap::new();
         let mut visiting: HashSet<&str> = HashSet::new();
 
         self.collect_trigger_channels(
@@ -312,6 +313,8 @@ impl EbRuntimeConfig {
             &by_name,
             &mut triggers,
             &mut priorities,
+            &mut energy_gates,
+            None,
             &mut visiting,
         )?;
 
@@ -320,15 +323,24 @@ impl EbRuntimeConfig {
             priorities,
             ac_pairs: HashMap::new(),
             coincidence_window_ns: self.timing.coincidence_window_ns,
+            trigger_energy_gates: energy_gates,
         })
     }
 
+    /// DFS over the L1 op graph that resolves `name` down to a set of
+    /// `Channel` ops, optionally restricting them to an inherited
+    /// `(min_adc, max_adc)` energy gate that the surrounding
+    /// `EnergyGate` op pushed down. Concrete results are accumulated
+    /// into the three out-parameter maps.
+    #[allow(clippy::too_many_arguments)]
     fn collect_trigger_channels<'a>(
         &'a self,
         name: &'a str,
         by_name: &HashMap<&'a str, &'a L1Op>,
         triggers: &mut HashSet<(u8, u8)>,
         priorities: &mut HashMap<(u8, u8), u32>,
+        energy_gates: &mut HashMap<(u8, u8), (u16, u16)>,
+        inherited_gate: Option<(u16, u16)>,
         visiting: &mut HashSet<&'a str>,
     ) -> Result<(), RuntimeConfigError> {
         let op = *by_name.get(name).ok_or_else(|| {
@@ -352,31 +364,68 @@ impl EbRuntimeConfig {
                     let prio = priorities.len() as u32;
                     priorities.insert(key, prio);
                 }
+                if let Some(gate) = inherited_gate {
+                    // Refuse to silently intersect two different gates on
+                    // the same channel — make the user write the intent
+                    // explicitly.
+                    if let Some(existing) = energy_gates.get(&key) {
+                        if *existing != gate {
+                            return Err(RuntimeConfigError::Invalid(format!(
+                                "L1: channel ({}, {}) reached via two conflicting energy_gate ops ({:?} vs {:?})",
+                                module, channel, existing, gate
+                            )));
+                        }
+                    } else {
+                        energy_gates.insert(key, gate);
+                    }
+                }
             }
             L1Op::Or { inputs, .. } => {
                 for child in inputs {
-                    self.collect_trigger_channels(child, by_name, triggers, priorities, visiting)?;
+                    self.collect_trigger_channels(
+                        child,
+                        by_name,
+                        triggers,
+                        priorities,
+                        energy_gates,
+                        inherited_gate,
+                        visiting,
+                    )?;
                 }
             }
-            // Remaining variants are declared in the SPEC but not yet
-            // implemented in the evaluator. Reject explicitly so the caller
-            // sees a clear migration message rather than silently empty
-            // triggers.
-            L1Op::EnergyGate { .. } => {
-                return Err(RuntimeConfigError::Invalid(format!(
-                    "L1 op `{}`: `energy_gate` not yet implemented (MVP supports `channel`/`or` only)",
-                    op.name()
-                )));
+            L1Op::EnergyGate {
+                source,
+                min_adc,
+                max_adc,
+                ..
+            } => {
+                if inherited_gate.is_some() {
+                    return Err(RuntimeConfigError::Invalid(format!(
+                        "L1 op `{}`: nested energy_gate is not supported (MVP)",
+                        op.name()
+                    )));
+                }
+                self.collect_trigger_channels(
+                    source,
+                    by_name,
+                    triggers,
+                    priorities,
+                    energy_gates,
+                    Some((*min_adc, *max_adc)),
+                    visiting,
+                )?;
             }
+            // The remaining stateful variants need cross-hit history; keep
+            // them rejected with a clear migration message.
             L1Op::And { .. } => {
                 return Err(RuntimeConfigError::Invalid(format!(
-                    "L1 op `{}`: `and` not yet implemented (MVP supports `channel`/`or` only)",
+                    "L1 op `{}`: `and` not yet implemented (MVP supports `channel`/`or`/`energy_gate`)",
                     op.name()
                 )));
             }
             L1Op::Multiplicity { .. } => {
                 return Err(RuntimeConfigError::Invalid(format!(
-                    "L1 op `{}`: `multiplicity` not yet implemented (MVP supports `channel`/`or` only)",
+                    "L1 op `{}`: `multiplicity` not yet implemented (MVP supports `channel`/`or`/`energy_gate`)",
                     op.name()
                 )));
             }
@@ -832,6 +881,73 @@ mod tests {
         cfg.l1.trigger = "mult".to_string();
         let e = cfg.build_trigger_config().unwrap_err();
         assert!(e.to_string().contains("multiplicity"), "got {e}");
+    }
+
+    #[test]
+    fn build_trigger_config_supports_energy_gate() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::EnergyGate {
+            name: "HPGe0_good".to_string(),
+            source: "HPGe0".to_string(),
+            min_adc: 100,
+            max_adc: 16000,
+        });
+        cfg.l1.trigger = "HPGe0_good".to_string();
+        let tc = cfg.build_trigger_config().unwrap();
+
+        assert!(tc.triggers.contains(&(0, 0)));
+        assert_eq!(tc.trigger_energy_gates.get(&(0, 0)), Some(&(100, 16000)));
+    }
+
+    #[test]
+    fn energy_gate_propagates_through_or() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::Channel {
+            name: "HPGe1".into(),
+            module: 0,
+            channel: 1,
+        });
+        cfg.l1.definitions.push(L1Op::Or {
+            name: "both".into(),
+            inputs: vec!["HPGe0".into(), "HPGe1".into()],
+        });
+        cfg.l1.definitions.push(L1Op::EnergyGate {
+            name: "both_good".into(),
+            source: "both".into(),
+            min_adc: 200,
+            max_adc: 12000,
+        });
+        cfg.l1.trigger = "both_good".into();
+
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.triggers.len(), 2);
+        // Both channels should inherit the same gate.
+        assert_eq!(tc.trigger_energy_gates.get(&(0, 0)), Some(&(200, 12000)));
+        assert_eq!(tc.trigger_energy_gates.get(&(0, 1)), Some(&(200, 12000)));
+    }
+
+    #[test]
+    fn conflicting_energy_gates_on_same_channel_rejected() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::EnergyGate {
+            name: "g1".into(),
+            source: "HPGe0".into(),
+            min_adc: 100,
+            max_adc: 1000,
+        });
+        cfg.l1.definitions.push(L1Op::EnergyGate {
+            name: "g2".into(),
+            source: "HPGe0".into(),
+            min_adc: 500,
+            max_adc: 5000,
+        });
+        cfg.l1.definitions.push(L1Op::Or {
+            name: "any".into(),
+            inputs: vec!["g1".into(), "g2".into()],
+        });
+        cfg.l1.trigger = "any".into();
+        let e = cfg.build_trigger_config().unwrap_err();
+        assert!(e.to_string().contains("conflicting"), "got {e}");
     }
 
     #[test]
