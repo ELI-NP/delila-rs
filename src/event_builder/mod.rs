@@ -18,9 +18,11 @@ mod l1_builder;
 pub mod online;
 pub mod pipeline;
 mod root_io;
+pub mod runtime_config;
 mod slice_builder;
 pub mod source;
 mod time_calibrator;
+pub mod time_offsets;
 mod time_slice;
 mod time_sort;
 
@@ -31,16 +33,23 @@ pub use config::{
     save_channel_config, save_l2_settings, ChSettings, ChannelConfig, ConfigError,
     EventBuildingParams, L2LogicalOperator, L2Operator, L2Setting, L2Settings, TimeCalibration,
 };
-pub use hit::Hit;
+pub use hit::{Hit, HitLike, OfflineHit, OnlineHit};
 pub use l1_builder::L1Builder;
 pub use pipeline::{EventBuilderPipeline, PipelineConfig, PipelineStats};
 pub use root_io::{
     read_hits_from_root, write_events_to_root, write_hits_to_root, write_time_histograms_to_root,
     RootError,
 };
+pub use runtime_config::{
+    ChannelRef, CmpOp, EbRuntimeConfig, L1Config, L1Op, L2Op, LogicOp, OutputConfig,
+    RuntimeConfigError, TimingConfig,
+};
 pub use slice_builder::{SliceBuilder, SliceBuilderStats};
 pub use source::{DelilaFileHitSource, HitBatch, HitSource, SourceError};
 pub use time_calibrator::{TimeCalibrator, TimeHistogram};
+pub use time_offsets::{
+    ParentRef, ResolvedRow, ResolvedTimeOffsets, TimeOffsetEntry, TimeOffsetsError, TimeOffsetsFile,
+};
 
 #[cfg(feature = "root")]
 pub use source::RootFileHitSource;

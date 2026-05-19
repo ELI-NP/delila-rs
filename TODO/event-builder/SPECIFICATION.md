@@ -1,11 +1,19 @@
 # Event Builder 仕様書
 
-**Version:** 0.4.0
-**Date:** 2026-02-02
-**Status:** Implementation Phase 7 (Time Slice)
+**Version:** 0.5.1
+**Date:** 2026-05-19
+**Status:** Design (Unified Pipeline + named-ops L1/L2 + tree-based time offsets)
 
-> **Note:** Phase 1-6 では Moving Time Window 方式で実装されたが、
-> Phase 7 で本仕様書の Time Slice 方式に移行中。
+> v0.4 → v0.5 主要変更:
+> - C++ Event Builder (別リポジトリ) 経路を **撤回** — Rust 側で完結
+> - Online/Offline で **Hit 構造を分離** (`OnlineHit` / `OfflineHit` + `HitLike` trait)
+> - L1/L2 を **named-ops AST** で表現（ELIFANT-Event の L2 設計を L1 にも拡張）
+> - **Threshold を 3 層に分離**（noise floor / trigger gate / event filter）
+> - **Event Bridge プロセスを retire**、Online EB は Merger PUB に直接 subscribe
+> - EB output は **MessagePack** `BuiltEventBatch`、EB Monitor が subscribe
+>
+> v0.5 → v0.5.1:
+> - `timeSettings.json` を **tree モデル** に刷新（§ 4.3）— 多 root 許容 + 1 回適用 + ingress-time alignment
 
 ---
 
@@ -13,593 +21,598 @@
 
 ### 1.1 目的
 
-核物理実験（DELILA）のDAQシステム向けイベントビルダー。
+核物理実験 (DELILA) の DAQ システム向けイベントビルダー。
 複数デジタイザからの非同期ヒットデータを時間順に整列し、
 コインシデンスウィンドウ内のヒットをイベントとして構築する。
 
 ### 1.2 動作モード
 
-| モード | 入力 | 出力 | 用途 | 状態 |
-|--------|------|------|------|------|
-| オンライン | ZeroMQ (Event Bridge) | ROOT + ヒストグラム | リアルタイム処理 | **Phase 1 (今回)** |
-| オフライン | ROOTファイル | ROOTファイル | 過去データの再解析 | 将来拡張 |
+| モード | 入力 | Hit 型 | 出力 |
+|--------|------|--------|------|
+| **オンライン** | Merger PUB (MessagePack `EventDataBatch`) | `OnlineHit` (lean, 16 B) | ROOT (Rust) + ZMQ PUB → EB Monitor |
+| **オフライン** | `.delila` ファイル / ROOT ファイル | `OfflineHit` (rich, 56 B) | ROOT (Rust) |
+
+両モードとも **同じ chunk_builder コア**を使用し、`HitSource` trait で入力を切り替える（§ 11）。
 
 ### 1.3 要求仕様サマリ
 
 | 項目 | 値 |
 |------|-----|
-| 処理レート（オンライン） | 2 MHz |
-| 許容レイテンシ | 10秒 〜 1分 |
+| 処理レート（オンライン） | 2 MHz hits |
+| 許容レイテンシ | 10 秒 〜 1 分 |
 | メモリ使用量上限 | 10 GB |
 | コインシデンスウィンドウ | ±500 ns（設定可能） |
-| 最大到着遅延 | 1秒未満 |
+| 最大到着遅延 | 1 秒未満 |
 
 ---
 
 ## 2. 入力データ
 
-### 2.1 ヒットデータ構造
+### 2.1 OnlineHit (lean, 24 B)
 
-ELIFANT-Event (C++) の構造体に基づく：
-
-```cpp
-struct HitData {
-    unsigned char Mod;      // モジュールID (0-10)
-    unsigned char Ch;       // チャンネルID (0-15)
-    double FineTS;          // タイムスタンプ [ns]
-    uint16_t ChargeLong;    // エネルギー値 (ADC) - 長ゲート
-    uint16_t ChargeShort;   // エネルギー値 (ADC) - 短ゲート (PSD用)
-};
-```
-
-**Rust表現:**
+オンライン処理に必要な最小フィールドのみ。波形・user_info・flags は **drop**（raw `.delila` がオフライン解析時の safety net）。
 
 ```rust
-/// 1ヒットのデータ
-#[derive(Debug, Clone, PartialEq)]
-pub struct Hit {
-    /// モジュールID (0-10)
+pub struct OnlineHit {
     pub module: u8,
-    
-    /// チャンネルID (0-15)
     pub channel: u8,
-    
-    /// タイムスタンプ [ns]
-    pub timestamp_ns: f64,
-    
-    /// エネルギー値 - 長ゲート積分 (ADC units)
     pub energy: u16,
-    
-    /// エネルギー値 - 短ゲート積分 (ADC units)
-    /// PSD (Pulse Shape Discrimination) に使用
     pub energy_short: u16,
+    pub timestamp_ns: f64,
+    pub with_ac: bool,    // L2 で AC veto 判定時に set
 }
 ```
 
-**メモリレイアウト（参考）:**
+メモリレイアウト: 24 B (align 8、padding 込み)。
 
+### 2.2 OfflineHit (rich, 64 B)
+
+オフライン解析では `user_info[4]` と `flags` を保持。波形は **持たない**（raw `.delila` を別途 join するか、必要なら EB 出力に sample range pointer を付ける拡張）。
+
+```rust
+pub struct OfflineHit {
+    pub module: u8,
+    pub channel: u8,
+    pub energy: u16,
+    pub energy_short: u16,
+    pub timestamp_ns: f64,
+    pub with_ac: bool,
+    pub flags: u64,
+    pub user_info: [u64; 4],
+}
 ```
-フィールド        サイズ    累積
-─────────────────────────────
-module            1 byte    1
-channel           1 byte    2
-(padding)         6 bytes   8
-timestamp_ns      8 bytes   16
-energy            2 bytes   18
-energy_short      2 bytes   20
-(padding)         4 bytes   24
-─────────────────────────────
-合計: 24 bytes（アライメント込み）
+
+メモリレイアウト: 64 B。
+
+### 2.3 共通 trait `HitLike`
+
+`chunk_builder`, `time_sort`, `slice_builder` 等の pipeline 中核は **trait しか触らない**。output stage だけ具体型に分岐する。
+
+```rust
+pub trait HitLike {
+    fn module(&self) -> u8;
+    fn channel(&self) -> u8;
+    fn timestamp_ns(&self) -> f64;
+    fn energy(&self) -> u16;
+    fn energy_short(&self) -> u16;
+    fn with_ac(&self) -> bool;
+    fn channel_key(&self) -> u16 {
+        ((self.module() as u16) << 8) | (self.channel() as u16)
+    }
+}
 ```
 
-### 2.2 データソース
+### 2.4 データソース
 
-#### オンライン: Event Bridge (Phase 1)
+#### オンライン: Merger PUB に直接 subscribe
 
-- **プロトコル:** ZeroMQ SUB/PUB パターン
-- **データ形式:** 固定バイナリフォーマット (14 bytes/hit, パディングなし)
-- **詳細仕様:** `docs/event_bridge_wire_format.md`
-- **デフォルトアドレス:** `tcp://localhost:5600`
-- **到着順序:** Merger がタイムソート済み (バッチ内は時間順保証)
+- **プロトコル:** ZeroMQ SUB
+- **データ形式:** MessagePack (`Message::Data(EventDataBatch)`)
+- **デフォルトアドレス:** `tcp://localhost:5556` (Merger PUB)
+- `EventData` → `OnlineHit` 変換は EB 入口で実施（waveform/user_info/flags を drop）
 
-#### オフライン: ROOTファイル (✅ 実装済み)
+**Event Bridge プロセスは廃止** (v0.3 で導入された 14 B/hit 固定バイナリ + 別プロセス架構は撤回)。
 
-- **TTree構造:**
-  - Branch: `Mod` (UChar_t)
-  - Branch: `Ch` (UChar_t)
-  - Branch: `FineTS` (Double_t) - 単位: **ns** (delila-rs) / **ps** (ELIFANT レガシー)
-  - Branch: `ChargeLong` (UShort_t)
-  - Branch: `ChargeShort` (UShort_t)
+#### オフライン: `.delila` / ROOT ファイル
 
-- **典型的なファイル:** 数十秒分のデータ、約4100万ヒット/ファイル
-
-- **タイムスタンプ単位:**
-  - **delila-rs 出力:** ns (ナノ秒) — 新規実装の標準
-  - **ELIFANT レガシー:** ps (ピコ秒) — 旧システムのデータ
-  - 実装では `--timestamp-unit` オプションで指定可能にする予定
-
-### 2.3 システム構成
-
-```
-総チャンネル数: 11モジュール × 16チャンネル = 176チャンネル
-
-Module 0:  Ch 0-15
-Module 1:  Ch 0-15
-...
-Module 10: Ch 0-15
-```
+- `DelilaFileHitSource`: `.delila` を `DataFileReader` 経由でストリーミング、`EventData` → `OfflineHit` 変換
+- `RootFileHitSource` (feature="root"): oxyroot で ROOT を 1 ファイルずつロード
 
 ---
 
-## 3. チャンネル設定
+## 3. システム構成
 
-### 3.1 設定ファイル形式 (JSON)
+```
+Reader → Merger ┬─→ Recorder
+                ├─→ Monitor (hit-level)
+                └─→ EB ┬─→ ROOT writer (内蔵)
+                       └─→ ZMQ PUB ─→ EB Monitor (event-level, 別プロセス)
+```
 
-```json
+- **Monitor:** 既存。hit-level (Mod, Ch ごとの E スペクトル / レート / 波形)、ポート 8081
+- **EB Monitor:** 新規プロセス、event-level (multiplicity, coincidence matrix, AC veto 効率, gated E スペ等)、ポート 8082 想定
+- 各 pipeline stage が独立プロセス + 自前 REST、という既存パターンを踏襲
+
+---
+
+## 4. 設定ファイル
+
+### 4.1 `eb_config.json` (新規、ランタイム設定)
+
+```jsonc
 {
-  "timestamp_unit": "ns",
-  "coincidence_window_ns": 500.0,
-  "buffer_delay_ns": 1000000000.0,
-  "slice_duration_ns": 10000000.0,
-  
-  "channels": [
+  "version": "1.0",
+
+  "timing": {
+    "coincidence_window_ns": 500.0,
+    "buffer_delay_ns": 1.0e9,
+    "slice_duration_ns": 1.0e7
+  },
+
+  "channels_file": "chSettings.json",
+  "time_offsets_file": "timeSettings.json",
+
+  "l1": {
+    "definitions": [ /* named-ops; § 6.1 */ ],
+    "trigger": "<name of root op>"
+  },
+
+  "l2": [ /* named-ops; § 7.1 */ ],
+
+  "output": {
+    "events_per_file": 1000000,
+    "directory": "./eb_output",
+    "zmq_pub_endpoint": "tcp://*:5610"
+  }
+}
+```
+
+### 4.2 `chSettings.json` (slim、ハードウェア記述)
+
+```jsonc
+[
+  [
     {
-      "module": 0,
-      "channel": 0,
-      "name": "HPGe_0",
-      "detector_type": "HPGe",
-      "is_trigger": true,
-      "tags": ["HPGe", "Trigger"],
-      "ac_pair": null
-    },
-    {
-      "module": 0,
-      "channel": 1,
-      "name": "AC_0",
-      "detector_type": "AC",
-      "is_trigger": false,
-      "tags": ["AC"],
-      "ac_pair": null
-    },
-    {
-      "module": 1,
-      "channel": 0,
-      "name": "Si_E_0",
-      "detector_type": "Si",
-      "is_trigger": false,
-      "tags": ["Si", "E_Sector"],
-      "ac_pair": [0, 1]
+      "ID": 0,
+      "Module": 0,
+      "Channel": 0,
+      "DetectorType": "HPGe",
+      "Tags": ["HPGe", "Trigger"],
+      "ThresholdADC": 100,   // hit-level noise floor (§ 5.1)
+      "p0": 0.0, "p1": 1.0, "p2": 0.0, "p3": 0.0
     }
+  ]
+]
+```
+
+**削除フィールド** (v0.4 以前との非互換):
+
+| 旧フィールド | 移動先 |
+|---|---|
+| `IsEventTrigger` | `eb_config.json` の `l1.definitions` (named channel op + trigger 参照) |
+| `HasAC`, `ACModule`, `ACChannel` | `eb_config.json` の `l2` (ac_veto op) |
+
+### 4.3 `timeSettings.json` (時刻オフセット較正、tree モデル)
+
+各 ch は **親 ch への参照と offset** を持つ。tree の root は `ref: null`。多 root 許容（disconnected timing domain を表現）。
+
+```jsonc
+{
+  "version": "1.0",
+  "entries": [
+    {"module": 9, "channel": 0, "ref": null,   "offset_ns": 0.0},      // root
+    {"module": 9, "channel": 1, "ref": [9, 0], "offset_ns": 0.05},
+    {"module": 0, "channel": 0, "ref": [9, 0], "offset_ns": 46.75},
+    {"module": 5, "channel": 0, "ref": [0, 0], "offset_ns": 12.3}      // 経由参照
   ]
 }
 ```
 
-### 3.2 検出器タイプ
+#### 4.3.1 セマンティクス
 
-| タイプ | 説明 | 用途 |
-|--------|------|------|
-| HPGe | 高純度ゲルマニウム | ガンマ線検出、主トリガー |
-| Si | シリコン検出器 | 荷電粒子 (E/dE) |
-| AC | アクティブシールド | バックグラウンド除去 |
-| PMT | 光電子増倍管 | シンチレータ読み出し |
+- **符号:** `aligned_ts = raw_ts - offset_ns`（親より遅延している量を負値で書く）
+  - `offset_ns > 0` → この ch は親より早く届く（aligned 化で時間軸が後退）
+  - 現行 `Hit::apply_offset` ([src/event_builder/hit.rs:67](src/event_builder/hit.rs#L67)) と一致
+- **絶対 offset:** root から目的 ch までの path 上の `offset_ns` 合計
+- **適用タイミング:** HitSource 入口で 1 回のみ。以降 pipeline は **aligned space** で動作（raw/aligned の二重管理なし）
+- **多 root の扱い:** EB は root 群を区別せず、各 ch の絶対 offset だけ使って同一 timeline として coincidence 判定する（root 単位の reject なし）
+- **freeze:** run 開始時に load + resolve、run 中は不変
 
-### 3.3 トリガーチャンネル
+#### 4.3.2 Load 時処理
 
-- JSON設定で `"is_trigger": true` と指定
-- 複数トリガーチャンネル可
-- トリガーヒットを中心にイベント構築
+1. `entries` を読み込み、`HashMap<(mod, ch), &Entry>` 構築
+2. 各 ch から root まで DFS で walk、絶対 offset を累積 → `HashMap<(mod, ch), f64>` flat キャッシュ
+3. 以降 hit 単位の lookup は O(1)
+
+#### 4.3.3 Validation (load 時 check)
+
+| 種別 | 条件 | 対処 |
+|---|---|---|
+| Error | Cycle あり | abort |
+| Error | `ref` 先が `entries` に存在しない | abort |
+| Error | 同一 (mod, ch) entry 重複 | abort |
+| Warn | root が 2 個以上 | warn ログ（disconnected timing domain）|
+| Warn | `chSettings` に存在するが `timeSettings` に欠損 | warn ログ + `offset_ns = 0` で続行 |
+| Warn | tree depth > 5 | warn ログ（drift 蓄積懸念）|
+
+`--strict-time-offsets` フラグで warn を error に昇格可。
+
+#### 4.3.4 補助 CLI
+
+```
+delila2root eb-offsets <timeSettings.json>
+```
+
+→ tree を resolve し flat な `(module, channel, absolute_offset_ns, depth, root)` 表を stdout 出力。JSON 編集時の確認用。
+
+#### 4.3.5 生成ツール
+
+`time_calibrator.rs` が以下を自動実施:
+
+1. 入力 `.delila` / ROOT から全 pair の coincidence histogram 計算
+2. 統計十分なペアのみ keep して **graph 構築**
+3. `--root M:C` または「最も connected な ch」を root に選択
+4. BFS spanning tree → tree 形式の `timeSettings.json` を出力
+5. graph が複数の連結成分に分かれる → multi-root として出力 + warn
+
+#### 4.3.6 将来拡張
+
+- ホットリロード via REST `/api/eb/reload-time-offsets`（slice 境界で apply）
+- 複数 timeSettings を input file group 別に適用（version-tagged run の合併解析向け）
+- Module-level shorthand (`channel: null`) — 現状不採用、必要なら追加
 
 ---
 
-## 4. イベント構築アルゴリズム
+## 5. 閾値モデル（3 層）
 
-### 4.1 処理フロー
+| 層 | 場所 | 適用タイミング | 性質 | 復元可否 |
+|---|---|---|---|---|
+| **(1) Hit-level floor** | `chSettings.json` `ThresholdADC` per channel | EB 入口 (ingress) | ノイズフロア (hardware-tied) | **不可** — drop された hit は EB に渡らない |
+| **(2) Trigger gate** | L1 `energy_gate` op | L1 trigger 認識 | analysis-tied、min + max | 可 — 非トリガー hit は event に残る |
+| **(3) Event filter** | L2 op | built event 後 | per-event physics cut | 可 — reject された event のみ捨てる |
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Event Builder                            │
-│                                                                 │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐ │
-│  │  Input   │───▶│  Time    │───▶│ Timeslice│───▶│  Event   │ │
-│  │  Buffer  │    │  Sort    │    │ Builder  │    │  Output  │ │
-│  └──────────┘    └──────────┘    └──────────┘    └──────────┘ │
-│       ▲                               │                        │
-│       │                               ▼                        │
-│  [到着遅延吸収]              [コインシデンス検出]              │
-│   最大1秒                      ±500 ns                         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 4.2 時間ソート
-
-**目的:** 非同期到着するヒットを時間順に整列
-
-**アルゴリズム:**
-1. ヒットをBTreeMap<timestamp, Vec<Hit>>に挿入
-2. `current_time - buffer_delay` より古いヒットを取り出し
-3. 取り出したヒットは時間順が保証される
-
-**パラメータ:**
-- `buffer_delay`: 1秒（到着遅延の最大値 + マージン）
-
-### 4.3 タイムスライス
-
-**目的:** 連続データを独立処理可能な単位に分割
-
-**採用方式: オーバーラップ方式**
-
-```
-時間軸 ─────────────────────────────────────────────────────────▶
-
-Slice N:   [========= Core =========][= Overlap =]
-                                      ↑
-                                 coincidence_window
-
-Slice N+1:                     [= Overlap =][======= Core =======]
-```
-
-**境界処理ルール:**
-- トリガーがCore領域内 → このスライスで処理
-- トリガーがOverlap領域内 → 次スライスで処理（重複防止）
-
-**パラメータ:**
-- `slice_duration`: 10 ms（調整可能）
-- `overlap`: 500 ns（= coincidence_window）
-
-**設計判断の記録:**
-
-| 方式 | 説明 | 採用 |
-|------|------|------|
-| **オーバーラップ方式** | Core + Overlap領域で分割、Overlap内トリガーは次スライス | ✓ 採用 |
-| 境界またぎマージ | 不完全イベントを次スライスとマージ | 複雑 |
-| グローバルソート | タイムスライスなし、全データ順次処理 | 並列化困難 |
-| イベント単位持ち越し | 必要ヒットのみ次スライスへ | 複雑 |
-
-**採用理由:**
-- CBM/FLESで実績あり
-- 実装がシンプル
-- 重複なし保証が明確
-
-### 4.4 コインシデンス検出
-
-**アルゴリズム:**
-
-```
-for each hit in sorted_hits:
-    if hit is not trigger:
-        continue
-    
-    if hit.timestamp >= slice.core_end:
-        continue  // Overlap領域のトリガーは次スライスで処理
-    
-    event = new Event(trigger_time = hit.timestamp)
-    
-    // 後方検索: より早い時刻のヒットを収集
-    for prev_hit in hits_before(hit):
-        time_diff = hit.timestamp - prev_hit.timestamp
-        if time_diff > coincidence_window:
-            break  // ウィンドウ外
-        
-        if prev_hit is trigger:
-            // 先行トリガーあり → このトリガーはスキップ
-            discard event
-            goto next_hit
-        
-        event.add(prev_hit)
-    
-    // 前方検索: より遅い時刻のヒットを収集  
-    for next_hit in hits_after(hit):
-        time_diff = next_hit.timestamp - hit.timestamp
-        if time_diff > coincidence_window:
-            break  // ウィンドウ外
-        
-        if next_hit is trigger:
-            break  // 後続トリガーで停止（そのヒットは後続イベントへ）
-        
-        event.add(next_hit)
-    
-    output(event)
-
-next_hit:
-```
-
-### 4.5 ダブルカウント防止
-
-**採用方式: 時間優先方式**
-
-```
-時間軸 ──────────────────────────────────────────▶
-              T1        T2
-              ●─────────●
-              │◀─window─▶│
-              
-T1がイベント構築 ✓
-T2はスキップ（T1が先行するため）
-```
-
-**ロジック:**
-- 後方検索で先行トリガーを発見 → 現在のトリガーをスキップ
-- 前方検索で後続トリガーを発見 → 検索停止（後続ヒットは次イベントへ）
-
-**設計判断の記録:**
-
-| 方式 | 説明 | 採用 |
-|------|------|------|
-| **時間優先** | 時刻が早いトリガーを採用 | ✓ 採用 |
-| ID優先 | IDが大きい/小さい方を採用（ELIFANT-Event現行） | 物理的意味なし |
-| エネルギー優先 | エネルギーが高い方を採用 | 常に正しいとは限らない |
-| 重複許容 | 両方構築、後処理で除去 | データ量増加 |
-
-**採用理由:**
-- 物理的に自然（先に起きた事象を採用）
-- 実装がシンプル
-- 恣意性がない
-
-### 4.6 AC（アクティブシールド）判定
-
-**目的:** HPGeヒットがACと同時計数した場合にフラグを設定
-
-**アルゴリズム:**
-1. チャンネル設定から `ac_pair` を取得
-2. イベント内でペアチャンネルのヒットを検索
-3. 時間差がコインシデンスウィンドウ内なら `with_ac = true`
+**指針:**
+- 検出器固有のノイズ閾値（HPGe 50 keV、Si 1 MeV 等）は **(1)** に置く
+- 「HPGe trigger は 100 keV〜 16 MeV」のような実験パラメータは **(2)** に置く
+- 「sum-E > 1 MeV のイベントだけ残す」のような物理 cut は **(3)** に置く
 
 ---
 
-## 5. 出力データ
+## 6. L1: トリガー認識
 
-### 5.1 構築済みイベント構造
+### 6.1 Named-ops モデル
+
+各 op に `name` を付け、下流は **名前で参照**。JSON ツリー = AST → **パーサ不要**。
+
+```jsonc
+"l1": {
+  "definitions": [
+    {"type": "channel", "name": "HPGe0", "module": 0, "channel": 0},
+    {"type": "channel", "name": "HPGe1", "module": 0, "channel": 1},
+    {"type": "energy_gate", "name": "HPGe0_good", "source": "HPGe0",
+     "min_adc": 100, "max_adc": 16000},
+    {"type": "or", "name": "HPGe_any_good", "inputs": ["HPGe0_good", "HPGe1"]},
+    {"type": "multiplicity", "name": "HPGe_pair",
+     "channels": ["HPGe0", "HPGe1"], "min": 2, "window_ns": 100}
+  ],
+  "trigger": "HPGe_any_good"
+}
+```
+
+`trigger` フィールドはルート op の名前。
+
+### 6.2 Op 種別
+
+| Type | フィールド | 意味 | MVP |
+|---|---|---|---|
+| `channel` | `module`, `channel` | 指定チャンネルの hit を trigger 候補に | ✓ |
+| `energy_gate` | `source`, `min_adc`, `max_adc` | エネルギー範囲で trigger 候補を制限 | 後 |
+| `or` | `inputs: [name]` | 複数候補の OR | 後 |
+| `and` | `inputs: [name]`, `window_ns` | window 内で複数候補が同時発火 | 後 |
+| `multiplicity` | `channels: [name]`, `min`, `window_ns` | window 内に min 個以上の hit | 後 |
+
+**MVP:** `channel` のみ実装。`trigger` が `channel` op の name を直接指す形（ELIFANT 相当）。残りは順次追加（JSON 形式変更なし）。
+
+### 6.3 評価アルゴリズム
+
+```
+for each hit at the EB input:
+    for each named-op in definitions (topological order):
+        evaluate(op) → bool (per hit) or accumulate (multiplicity)
+    if op[trigger] is true for this hit:
+        mark hit as trigger anchor → 後続の coincidence / overlap 判定へ
+```
+
+実装メモ: definitions は依存順 (DAG sort) で評価。`HashMap<String, bool>` に中間結果。
+
+### 6.4 ダブルカウント防止
+
+§ 8.5 のルールを適用: 後方検索で先行トリガーを発見した場合は現在のトリガーを skip（「時間優先」）。
+
+---
+
+## 7. L2: built-event filter
+
+### 7.1 Named-ops モデル (ELIFANT 流)
+
+3 段 chain: `Counter → Flag → Accept`。各 op は `Name` + `Type`、下流は名前参照。
+
+```jsonc
+"l2": [
+  {"type": "counter", "name": "E_Sector_Counter", "tags": ["E_Sector"]},
+  {"type": "counter", "name": "dE_Sector_Counter", "tags": ["dE_Sector"]},
+  {"type": "flag", "name": "E_pos", "monitor": "E_Sector_Counter",
+   "operator": ">", "value": 0},
+  {"type": "flag", "name": "dE_pos", "monitor": "dE_Sector_Counter",
+   "operator": ">", "value": 0},
+  {"type": "accept", "name": "Si_Both",
+   "monitor": ["E_pos", "dE_pos"], "operator": "AND"}
+]
+```
+
+EB は **すべての `accept` op を OR で**評価し、いずれかが true なら event を出力（出力時に accept 名のリストを attach）。
+
+### 7.2 Op 種別
+
+| Type | フィールド | 意味 | MVP |
+|---|---|---|---|
+| `counter` | `tags: [string]` | event 内 hit のうち tag が一致する数を count | ✓ |
+| `flag` | `monitor`, `operator` (`==`/`!=`/`<`/`<=`/`>`/`>=`), `value` | counter 値と value の比較 → bool | ✓ |
+| `accept` | `monitor: [name]`, `operator` (`AND`/`OR`) | flag 群を結合 → event 採否 | ✓ |
+| `energy_gate` | `module`, `channel`, `min_adc`, `max_adc` | 特定 ch hit の E が範囲内か | 後 |
+| `ac_veto` | `trigger_channels: [{module,channel}]`, `veto_channels: [{module,channel}]`, `window_ns` | trigger 周辺に veto ch が発火 → reject | 後 |
+| `min_hits` | `min: u32` | event 内 hit 数下限 | 後 |
+
+### 7.3 評価アルゴリズム
+
+```
+for each built event:
+    reset counter map
+    for each op in l2 (順序):
+        match op.type:
+            Counter: for hit in event: if hit.tags ∩ op.tags: counter[op.name]++
+            Flag: flag[op.name] = compare(counter[op.monitor], op.operator, op.value)
+            Accept: result[op.name] = combine(flag[m] for m in op.monitor, op.operator)
+            ...
+    if any accept is true: keep event (attach accepted names)
+    else: drop
+```
+
+---
+
+## 8. イベント構築アルゴリズム
+
+### 8.1 処理フロー
+
+```
+HitSource ─→ Time Sort ─→ Time Slice ─→ L1 → Coincidence → L2 → Output
+            (buffer 1s)   (10ms slice +    detect    ±window     filter
+                          500ns overlap)  trigger    coincidence  + accept
+                                                     hits
+```
+
+### 8.2 時間ソート
+
+非同期到着 hit を時間順に整列。
+
+- データ構造: 時刻 key の sorted buffer (実装は `time_sort.rs` 参照)
+- 取り出し: `current_time - buffer_delay_ns` より古い hit を pop（時間順保証）
+- `buffer_delay_ns`: デフォルト 1 秒（到着遅延の最大値 + マージン）
+
+### 8.3 タイムスライス（オーバーラップ方式）
+
+```
+時間軸 ─────────────────────────────▶
+Slice N:   [===== Core =====][= Overlap =]
+                              ↑
+                         coincidence_window
+Slice N+1:               [= Overlap =][===== Core =====]
+```
+
+**境界処理:**
+- トリガーが Core 内 → 当該 slice で処理
+- トリガーが Overlap 内 → **次 slice で処理**（重複防止）
+
+`slice_duration_ns`: デフォルト 10 ms、`overlap` = `coincidence_window_ns`。
+
+### 8.4 コインシデンス検出
+
+トリガー周辺 ±`coincidence_window_ns` の hit を集める。
+
+```
+trigger anchor hit at t0:
+    後方検索: t0 - coincidence_window_ns まで遡って hit を収集
+    前方検索: t0 + coincidence_window_ns まで進んで hit を収集
+    途中で他の trigger anchor を発見:
+        後方 → 現在の trigger を破棄（時間優先、§ 8.5）
+        前方 → 検索停止（次 event へ）
+```
+
+### 8.5 ダブルカウント防止（時間優先）
+
+```
+時間軸 ──────────────────────────▶
+        T1        T2
+        ●─────────●
+        │◀─window─▶│
+T1 で event 構築 ✓、T2 は skip
+```
+
+採用理由: 物理的に自然（先に起きた事象を採用）、実装シンプル、恣意性なし。
+
+---
+
+## 9. 出力データ
+
+### 9.1 `BuiltEvent` 構造
 
 ```rust
-/// 構築済みイベント
-#[derive(Debug, Clone)]
 pub struct BuiltEvent {
-    /// イベント通し番号
     pub event_id: u64,
-    
-    /// トリガー時刻 [ns]
-    pub trigger_time: f64,
-    
-    /// トリガーチャンネル
+    pub trigger_time_ns: f64,
     pub trigger_module: u8,
     pub trigger_channel: u8,
-    
-    /// イベント内ヒット
-    pub hits: Vec<EventHit>,
+    pub hits: Vec<EventHit>,        // 型は OnlineHit/OfflineHit 派生
+    pub accepted: Vec<String>,      // L2 で true になった accept op の名前
 }
 
-/// イベント内の1ヒット
-#[derive(Debug, Clone)]
 pub struct EventHit {
     pub module: u8,
     pub channel: u8,
     pub energy: u16,
     pub energy_short: u16,
-    
-    /// トリガー基準の相対時刻 [ns]
-    pub relative_time: f64,
-    
-    /// ACとの同時計数フラグ
+    pub relative_time_ns: f64,      // trigger 基準
     pub with_ac: bool,
+    // OfflineHit 由来時のみ:
+    pub flags: Option<u64>,
+    pub user_info: Option<[u64; 4]>,
 }
 ```
 
-### 5.2 出力方式
+### 9.2 ROOT 出力（Rust 内蔵）
 
-#### システムアーキテクチャ
+`event_builder::root_io` (oxyroot) で直接書き込み。TTree `Events`、ファイルローテーション `events_per_file` 単位。
+
+**Branch:**
+- `EventID` (ULong64_t), `TriggerTime` (Double_t), `TriggerMod`/`TriggerCh` (UChar_t), `NHits` (UInt_t)
+- 可変長配列: `HitMod[NHits]`, `HitCh[NHits]`, `HitEnergy[NHits]`, `HitEnergyShort[NHits]`, `HitTime[NHits]`, `HitWithAC[NHits]`
+- オフラインのみ: `HitFlags[NHits]` (ULong64_t), `HitUserInfo0..3[NHits]` (ULong64_t)
+- `Accepted` (vector<string>) — L2 で採用された accept op 名
+
+### 9.3 ZMQ PUB → EB Monitor
 
 ```
-delila-rs パイプライン (Rust)              C++ Event Builder (別リポジトリ)
-
-┌────────┐   ┌────────┐   ┌────────┐
-│ Reader │──▶│ Merger │──▶│Recorder│
-└────────┘   └───┬────┘   └────────┘
-                 │ PUB (MessagePack)
-                 ├──────────▶ Monitor
-                 │
-                 ▼
-            ┌──────────┐  PUB (固定バイナリ)  ┌───────────────────┐
-            │  Event   │────────────────────▶│  Event Builder    │
-            │  Bridge  │  14 bytes/hit       │  (C++)            │
-            │  (Rust)  │                     │  ├─ Time Sort     │
-            └──────────┘                     │  ├─ Coincidence   │
-                                             │  ├─ ROOT Writer   │
-                                             │  └─ THttpServer   │
-                                             └───────────────────┘
+形式:     MessagePack (rmp-serde)
+型:       BuiltEventBatch { events: Vec<BuiltEvent> }
+エンドポイント: tcp://*:5610 (デフォルト)
+パターン: PUB / SUB
+HWM:      0 (unlimited, データ落とさない原則)
+EOS:      Message::EndOfStream { run_number }
 ```
 
-**設計方針:**
-- Event Bridge (Rust) が Merger の MessagePack を固定バイナリに変換
-- イベント構築・ROOT出力・ヒストグラム表示は全て C++ で実装
-- Merger のゼロコピー設計を維持（Bridge は独立プロセス）
-- ワイヤフォーマット仕様: `docs/event_bridge_wire_format.md`
-- Bridge 実装計画: `TODO/event-builder/IMPLEMENTATION.md`
-
-**Event Bridge の入力:**
-- Merger PUB (MessagePack: `Message::Data(EventDataBatch)`)
-- デフォルト: `tcp://localhost:5556`
-
-**Event Bridge の出力:**
-- 固定バイナリフォーマット (PUB/SUB)
-- デフォルト: `tcp://*:5600`
-- フォーマット詳細: `docs/event_bridge_wire_format.md`
-
-#### ROOT出力（C++ Event Builder 内）
-
-**責務:**
-- Event Bridge の PUB から固定バイナリを受信
-- コインシデンス判定後の BuiltEvent を ROOT ファイルに書き込み
-
-**TTree構造:**
-
-```cpp
-TTree* tree = new TTree("Events", "Built Events");
-
-ULong64_t event_id;
-Double_t  trigger_time;
-UChar_t   trigger_mod;
-UChar_t   trigger_ch;
-UInt_t    n_hits;
-
-// 可変長配列（最大ヒット数を想定）
-static const int MAX_HITS = 256;
-UChar_t   hit_mod[MAX_HITS];
-UChar_t   hit_ch[MAX_HITS];
-UShort_t  hit_energy[MAX_HITS];
-UShort_t  hit_energy_short[MAX_HITS];
-Double_t  hit_time[MAX_HITS];
-Bool_t    hit_with_ac[MAX_HITS];
-
-tree->Branch("EventID",      &event_id,     "EventID/l");
-tree->Branch("TriggerTime",  &trigger_time, "TriggerTime/D");
-tree->Branch("TriggerMod",   &trigger_mod,  "TriggerMod/b");
-tree->Branch("TriggerCh",    &trigger_ch,   "TriggerCh/b");
-tree->Branch("NHits",        &n_hits,       "NHits/i");
-tree->Branch("HitMod",       hit_mod,       "HitMod[NHits]/b");
-tree->Branch("HitCh",        hit_ch,        "HitCh[NHits]/b");
-tree->Branch("HitEnergy",    hit_energy,    "HitEnergy[NHits]/s");
-tree->Branch("HitEnergyShort", hit_energy_short, "HitEnergyShort[NHits]/s");
-tree->Branch("HitTime",      hit_time,      "HitTime[NHits]/D");
-tree->Branch("HitWithAC",    hit_with_ac,   "HitWithAC[NHits]/O");
-```
-
-#### ヒストグラム表示（C++ Event Builder 内）
-
-**責務:**
-- BuiltEvent からヒストグラムを更新
-- THttpServerでWeb公開
-
-**ヒストグラム種類:**
-- エネルギースペクトル（チャンネル別）
-- 時間分布（相対時刻）
-- イベントレート（時系列）
-- ヒットマルチプリシティ分布
-
-**THttpServer設定:**
-
-```cpp
-THttpServer* server = new THttpServer("http:8082");
-server->Register("/Histograms", histDir);
-```
+C++ EB 用の 14 B 固定バイナリ wire format (`event_bridge_wire_format.md` v1.0) は **deprecated**。Phase 4 完了後に該当ドキュメント削除。
 
 ---
 
-## 6. 性能要件
+## 10. 性能要件
 
-### 6.1 処理レート
+### 10.1 処理レート
 
 | 条件 | 要求 |
 |------|------|
-| オンライン入力レート | 2 MHz (2,000,000 hits/sec) |
-| イベント構築レート | TBD（トリガーレートに依存） |
+| オンライン入力 | 2 MHz hits |
+| イベント構築レート | trigger レート依存（typical 10〜100 kHz） |
 
-### 6.2 レイテンシ
+### 10.2 メモリ使用量
 
-```
-入力 ──────────────────────────────────────────▶ 出力
-      │                                      │
-      │◀── buffer_delay ──▶│◀─ processing ─▶│
-      │      (1 sec)       │    (< 1 sec)    │
-      │                                      │
-      │◀────── 合計: 10秒 〜 1分 許容 ───────▶│
-```
+**波形は EB に渡さない前提**で見積もり:
 
-- バッファ遅延: 1秒（到着遅延吸収）
-- 処理時間: 入力レートに追従できること
-- 許容範囲が広いため、バッファを大きく取れる
+| モード | 1 hit | 1 秒分 (2 MHz) | 安全マージン 10× |
+|---|---|---|---|
+| Online (16 B) | 32 MB | 320 MB | 10 GB 上限内 |
+| Offline (56 B) | 112 MB | 1.12 GB | 通常オンラインレートで走らせない |
 
-### 6.3 メモリ使用量
-
-**見積もり:**
-
-```
-Hit構造体サイズ: 24バイト（アライメント込み）
-
-バッファ遅延中のヒット数:
-  2 MHz × 1秒 = 2,000,000 hits
-
-メモリ使用量:
-  2,000,000 × 24 bytes = 48 MB
-
-安全マージン (10倍):
-  480 MB
-
-上限 10 GB に対して十分な余裕あり
-```
+波形が必要な解析は raw `.delila` から別途読み出し（オフライン EB 出力に sample range pointer を attach する拡張は将来検討）。
 
 ---
 
-## 7. エラー処理
+## 11. 統一パイプライン (TODO 38)
 
-### 7.1 データ異常
+### 11.1 `HitSource` trait
 
-| 異常 | 検出方法 | 対処 |
-|------|----------|------|
-| タイムスタンプ逆転 | 前回より小さい値 | 警告ログ、スキップ |
-| 無効なモジュール/チャンネル | 範囲外の値 | 警告ログ、スキップ |
-| タイムスタンプギャップ | 大きな時間ジャンプ | 情報ログ、継続 |
+```rust
+pub trait HitSource<H: HitLike> {
+    fn next_batch(&mut self, timeout: Duration) -> Result<HitBatch<H>, SourceError>;
+    fn name(&self) -> &str;
+}
 
-### 7.2 システム異常
+pub enum HitBatch<H> {
+    Hits(Vec<H>),
+    Eos,
+}
+```
 
-| 異常 | 検出方法 | 対処 |
-|------|----------|------|
-| メモリ不足 | バッファサイズ監視 | バックプレッシャー発行 |
-| 入力停止 | タイムアウト | フラッシュ処理 |
-| 出力エラー | I/O エラー | リトライ、ログ |
-| C++プロセス異常 | ZeroMQ接続監視 | 再接続、警告 |
+### 11.2 実装一覧
 
----
+| 実装 | モード | 入力 | Hit 型 | Phase |
+|---|---|---|---|---|
+| `DelilaFileHitSource` | Offline | `.delila` | `OfflineHit` | ✓ (Phase 1) |
+| `RootFileHitSource` | Offline | ROOT | `OfflineHit` | ✓ (Phase 1) |
+| `ZmqHitSource` | Online | Merger PUB | `OnlineHit` | **Phase 4 (未着手)** |
 
-## 8. 設定パラメータ一覧
+### 11.3 共通中核
 
-| パラメータ | 型 | デフォルト | 説明 |
-|------------|-----|-----------|------|
-| `timestamp_unit` | string | "ns" | タイムスタンプ単位 ("ns" or "ps") |
-| `coincidence_window_ns` | f64 | 500.0 | コインシデンスウィンドウ [ns] |
-| `buffer_delay_ns` | f64 | 1e9 | バッファ遅延 [ns] (1秒) |
-| `slice_duration_ns` | f64 | 1e7 | タイムスライス長 [ns] (10ms) |
-| `max_buffer_hits` | usize | 10_000_000 | 最大バッファヒット数 |
-| `zmq_output_endpoint` | string | "tcp://*:5555" | ZeroMQ出力エンドポイント |
+- `chunk_builder.rs`: trigger 認識 + coincidence 検出 (`HitLike` generic)
+- `time_sort.rs`, `slice_builder.rs`, `time_calibrator.rs`
+- `pipeline.rs`: Sorter thread / Worker threads / Writer thread
 
----
+### 11.4 残課題
 
-## 9. 将来の拡張
-
-### 9.1 L2フィルタリング
-
-- Counter/Flag/Acceptance による条件フィルタ
-- 設計は `12_event_builder_design.md` に記載済み
-- Phase 2 以降で実装
-
-### 9.2 並列処理
-
-- タイムスライス単位での並列イベント構築
-- Rayon による自動並列化
-- 性能が不足した場合に検討
+- **Phase 4**: `ZmqHitSource` 実装 + Online EB を統一 pipeline 上に乗せる
+- **Phase 5**: 旧 `online.rs` (独自 pipeline) を削除、`event_bridge` binary も廃止
 
 ---
 
-## 10. 用語集
+## 12. エラー処理
+
+### 12.1 データ異常
+
+| 異常 | 検出 | 対処 |
+|------|------|------|
+| タイムスタンプ逆転 | 前 hit より小さい | warn ログ + skip |
+| 無効 mod/ch | chSettings 範囲外 | warn ログ + skip |
+| 大きな時間ジャンプ | configurable threshold 超過 | info ログ + 継続 |
+
+### 12.2 システム異常
+
+| 異常 | 検出 | 対処 |
+|------|------|------|
+| メモリ不足 | sorter buffer サイズ監視 | backpressure (HitSource 側に伝播) |
+| 入力停止 | timeout | flush 処理 |
+| 出力エラー | I/O error | retry + ログ |
+| EB Monitor 切断 | ZMQ HWM = 0 で堆積 | PUB は止めない（subscribe 復帰で再送される） |
+
+---
+
+## 13. 設定パラメータ一覧
+
+| パラメータ | 型 | デフォルト | 場所 |
+|---|---|---|---|
+| `coincidence_window_ns` | f64 | 500.0 | `eb_config.json` `timing` |
+| `buffer_delay_ns` | f64 | 1e9 | 〃 |
+| `slice_duration_ns` | f64 | 1e7 | 〃 |
+| `events_per_file` | u64 | 1_000_000 | `output` |
+| `directory` | string | `./eb_output` | 〃 |
+| `zmq_pub_endpoint` | string | `tcp://*:5610` | 〃 |
+| `ThresholdADC` | u32 | 0 | `chSettings.json` per channel |
+
+---
+
+## 14. 用語集
 
 | 用語 | 説明 |
-|------|------|
-| Hit | デジタイザからの1検出信号 |
-| Event | コインシデンスウィンドウ内のヒット集合 |
-| Trigger | イベント構築の基準となるヒット |
-| Timeslice | 独立処理可能な時間区間 |
-| Core | タイムスライスの主要部分（トリガー処理対象） |
-| Overlap | タイムスライスの重複部分（境界イベント用） |
-| AC | Active Shield（アクティブシールド） |
-| Coincidence | 時間的に近接した複数ヒットの同時検出 |
+|---|---|
+| Hit | デジタイザからの 1 検出信号 (`OnlineHit` / `OfflineHit`) |
+| Event | コインシデンスウィンドウ内の hit 集合 (`BuiltEvent`) |
+| Trigger anchor | L1 で選ばれた event 構築の基準 hit |
+| L1 | Trigger 認識（どの hit を event の起点にするか） |
+| L2 | Built event のフィルタリング (Accept / Reject) |
+| Timeslice | 独立処理可能な時間区間 (Core + Overlap) |
+| Coincidence | 時間的に近接した複数 hit の同時検出 |
+| AC | Active Shield（アクティブシールド、L2 veto op） |
 | PSD | Pulse Shape Discrimination（波形弁別） |
+| Tag | チャンネルに付ける free-form 識別子 (`chSettings.Tags`) |
+| Named-ops | 各 op が `name` を持ち、下流が名前で参照する DSL パターン |
 
 ---
 
-## 変更履歴
+## 15. 変更履歴
 
 | 日付 | バージョン | 変更内容 |
 |------|-----------|----------|
 | 2025-01-27 | 0.1.0 | 初版作成 |
-| 2025-01-27 | 0.2.0 | energy_short追加、ROOT/ヒストグラム方式決定、設計判断記録追加 |
-| 2026-01-27 | 0.3.0 | アーキテクチャ決定: Event Bridge (Rust) 経由の固定バイナリ方式採用。オンラインモード優先。C++ Event Builder は全て C++ 実装 (別リポジトリ)。ワイヤフォーマット仕様を `docs/event_bridge_wire_format.md` に分離 |
-| 2026-02-02 | 0.4.0 | **Rust 実装 Phase 7**: Time Slice 方式への移行開始。Phase 1-6 では Moving Time Window で実装完了済み |
+| 2025-01-27 | 0.2.0 | energy_short 追加、ROOT/ヒストグラム方式決定 |
+| 2026-01-27 | 0.3.0 | Event Bridge (Rust) → C++ EB 経路の決定 |
+| 2026-02-02 | 0.4.0 | Phase 7: Time Slice 方式へ移行 |
+| 2026-05-19 | 0.5.0 | **大規模改訂**: C++ EB 経路を撤回 / OnlineHit と OfflineHit 分離 / L1+L2 named-ops モデル / 3 層 threshold モデル / Event Bridge retire / EB Monitor 新プロセス / 統一パイプライン位置付け明確化 |
+| 2026-05-19 | 0.5.1 | `timeSettings.json` を tree モデルに刷新（C 案）— 多 root 許容 / HitSource 入口でオフセット 1 回適用 / `time_reference` field 廃止 / 補助 CLI `eb-offsets` 追加 |

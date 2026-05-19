@@ -163,7 +163,7 @@ pub fn create_slices(hits: &[Hit], slice_duration_ns: f64, overlap_ns: f64) -> V
         // Find which slice(s) this hit belongs to
         for slice in slices.iter_mut() {
             if slice.contains(ts) {
-                slice.add_hit(hit.clone());
+                slice.add_hit(*hit);
             }
         }
     }

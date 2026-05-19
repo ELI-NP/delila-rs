@@ -233,6 +233,10 @@ path = "src/bin/delila_to_root.rs"
 required-features = ["root"]
 
 [[bin]]
+name = "eb_offsets"
+path = "src/bin/eb_offsets.rs"
+
+[[bin]]
 name = "caen_simple_test"
 path = "src/bin/caen_simple_test.rs"
 required-features = ["dev-tools"]

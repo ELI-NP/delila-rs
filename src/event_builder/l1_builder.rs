@@ -191,7 +191,7 @@ impl L1Builder {
                 continue;
             }
 
-            let mut coincident_hit = hit.clone();
+            let mut coincident_hit = *hit;
 
             // Check AC coincidence
             if let Some(&(ac_mod, ac_ch)) = self.ac_pairs.get(&(hit.module, hit.channel)) {
