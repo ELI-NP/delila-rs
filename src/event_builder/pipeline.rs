@@ -722,6 +722,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         let config = PipelineConfig {
@@ -762,6 +763,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         let tmp_dir = tempfile::tempdir().unwrap();

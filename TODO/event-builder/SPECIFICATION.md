@@ -303,15 +303,15 @@ delila2root eb-offsets <timeSettings.json>
 
 ### 6.2 Op 種別
 
-| Type | フィールド | 意味 | MVP |
+| Type | フィールド | 意味 | 状態 |
 |---|---|---|---|
 | `channel` | `module`, `channel` | 指定チャンネルの hit を trigger 候補に | ✓ |
-| `energy_gate` | `source`, `min_adc`, `max_adc` | エネルギー範囲で trigger 候補を制限 | 後 |
-| `or` | `inputs: [name]` | 複数候補の OR | 後 |
-| `and` | `inputs: [name]`, `window_ns` | window 内で複数候補が同時発火 | 後 |
-| `multiplicity` | `channels: [name]`, `min`, `window_ns` | window 内に min 個以上の hit | 後 |
+| `or` | `inputs: [name]` | 複数候補の OR | ✓ |
+| `energy_gate` | `source`, `min_adc`, `max_adc` | エネルギー範囲で trigger 候補を制限 | ✓ |
+| `multiplicity` | `channels: [name]`, `min`, `window_ns` | window 内で `min` 個以上の **distinct** channel が発火 | ✓ |
+| `and` | `inputs: [name]`, `window_ns` | window 内で全 channel が発火（= multiplicity の `min == |inputs|`） | ✓ |
 
-**MVP:** `channel` のみ実装。`trigger` が `channel` op の name を直接指す形（ELIFANT 相当）。残りは順次追加（JSON 形式変更なし）。
+**Stateful ops (`multiplicity` / `and`):** `inputs` / `channels` は **leaf `channel` op 名のみ**（MVP の制限）。nest 内で `or`/`energy_gate` を参照することは未対応。内部的には [`chunk_builder::MultiplicityTrigger`](../../src/event_builder/chunk_builder.rs) の sliding-window scan として実装される。`and` は `min == |inputs|` の multiplicity に lower される。
 
 ### 6.3 評価アルゴリズム
 
@@ -552,7 +552,7 @@ pub enum HitBatch<H> {
 - **Phase 5** (✓ 2026-05-19): 旧 `online.rs` (独自 pipeline) 削除
 - **Phase J** (✓ 2026-05-19): `chSettings.json` を tags + 較正 のみに slim 化、`L1Builder` 削除
 - **Phase Q** (✓ 2026-05-19): `event_bridge` バイナリ + wire format doc 削除
-- **L1 残**: `and` / `multiplicity` (stateful, chunk_builder API 拡張要)
+- **L1 stateful** (✓ 2026-05-19): `multiplicity` + `and` を `MultiplicityTrigger` の sliding-window scan として実装
 - **M**: EB Monitor プロセス本体（histograms + REST）
 
 ---

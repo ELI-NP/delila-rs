@@ -14,26 +14,25 @@
 //! checks). The actual L1/L2 evaluators land alongside the unified
 //! pipeline refactor (SPEC § 11.4 Phase 4/5).
 //!
-//! # MVP variant set
+//! # Variant coverage
 //!
-//! The enums below declare every L1/L2 op listed in the SPEC, but the
-//! evaluator implementations cover only the MVP subset:
+//! All L1 and L2 ops declared in SPEC v0.5.1 are now wired up:
 //!
-//! | Layer | MVP ops | Deferred |
-//! |-------|---------|----------|
-//! | L1    | `Channel` | `EnergyGate`, `Or`, `And`, `Multiplicity` |
-//! | L2    | `Counter`, `Flag`, `Accept` | `EnergyGate`, `AcVeto`, `MinHits` |
+//! | Layer | Implemented |
+//! |-------|-------------|
+//! | L1    | `Channel`, `Or`, `EnergyGate`, `Multiplicity`, `And` |
+//! | L2    | `Counter`, `Flag`, `Accept`, `EnergyGate`, `MinHits`, `AcVeto` |
 //!
-//! Defining the deferred variants up front means JSON files written for
-//! a future delila-rs release can already be parsed (the loader will reject
-//! variants the running build does not yet implement, with a clear error).
+//! `And` and `Multiplicity` are stateful — they get lowered into a
+//! [`MultiplicityTrigger`] (sliding-window check evaluated inside
+//! `chunk_builder::build_events_from_chunk`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
-use crate::event_builder::chunk_builder::TriggerConfig;
+use crate::event_builder::chunk_builder::{MultiplicityTrigger, TriggerConfig};
 
 /// Top-level runtime config: `eb_config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -105,6 +104,17 @@ pub enum L1Op {
         min: u32,
         window_ns: f64,
     },
+}
+
+/// Discriminator string used in error messages.
+fn op_type_str(op: &L1Op) -> &'static str {
+    match op {
+        L1Op::Channel { .. } => "channel",
+        L1Op::EnergyGate { .. } => "energy_gate",
+        L1Op::Or { .. } => "or",
+        L1Op::And { .. } => "and",
+        L1Op::Multiplicity { .. } => "multiplicity",
+    }
 }
 
 impl L1Op {
@@ -306,6 +316,7 @@ impl EbRuntimeConfig {
         let mut triggers: HashSet<(u8, u8)> = HashSet::new();
         let mut priorities: HashMap<(u8, u8), u32> = HashMap::new();
         let mut energy_gates: HashMap<(u8, u8), (u16, u16)> = HashMap::new();
+        let mut multiplicities: Vec<MultiplicityTrigger> = Vec::new();
         let mut visiting: HashSet<&str> = HashSet::new();
 
         self.collect_trigger_channels(
@@ -314,6 +325,7 @@ impl EbRuntimeConfig {
             &mut triggers,
             &mut priorities,
             &mut energy_gates,
+            &mut multiplicities,
             None,
             &mut visiting,
         )?;
@@ -324,7 +336,30 @@ impl EbRuntimeConfig {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: self.timing.coincidence_window_ns,
             trigger_energy_gates: energy_gates,
+            multiplicity_triggers: multiplicities,
         })
+    }
+
+    /// Resolve an `L1Op` name expected to be a leaf `Channel` op,
+    /// returning the `(module, channel)` pair. Used by `and` /
+    /// `multiplicity` resolution where inputs must be concrete channels.
+    fn resolve_leaf_channel<'a>(
+        name: &'a str,
+        by_name: &HashMap<&'a str, &'a L1Op>,
+        parent_op: &str,
+    ) -> Result<(u8, u8), RuntimeConfigError> {
+        match by_name.get(name) {
+            Some(L1Op::Channel {
+                module, channel, ..
+            }) => Ok((*module, *channel)),
+            Some(other) => Err(RuntimeConfigError::Invalid(format!(
+                "L1 op `{parent_op}` expects a `channel` input, but `{name}` is `{}`",
+                op_type_str(other)
+            ))),
+            None => Err(RuntimeConfigError::Invalid(format!(
+                "L1 op `{parent_op}` references unknown name `{name}`"
+            ))),
+        }
     }
 
     /// DFS over the L1 op graph that resolves `name` down to a set of
@@ -340,6 +375,7 @@ impl EbRuntimeConfig {
         triggers: &mut HashSet<(u8, u8)>,
         priorities: &mut HashMap<(u8, u8), u32>,
         energy_gates: &mut HashMap<(u8, u8), (u16, u16)>,
+        multiplicities: &mut Vec<MultiplicityTrigger>,
         inherited_gate: Option<(u16, u16)>,
         visiting: &mut HashSet<&'a str>,
     ) -> Result<(), RuntimeConfigError> {
@@ -388,6 +424,7 @@ impl EbRuntimeConfig {
                         triggers,
                         priorities,
                         energy_gates,
+                        multiplicities,
                         inherited_gate,
                         visiting,
                     )?;
@@ -411,23 +448,61 @@ impl EbRuntimeConfig {
                     triggers,
                     priorities,
                     energy_gates,
+                    multiplicities,
                     Some((*min_adc, *max_adc)),
                     visiting,
                 )?;
             }
-            // The remaining stateful variants need cross-hit history; keep
-            // them rejected with a clear migration message.
-            L1Op::And { .. } => {
-                return Err(RuntimeConfigError::Invalid(format!(
-                    "L1 op `{}`: `and` not yet implemented (MVP supports `channel`/`or`/`energy_gate`)",
-                    op.name()
-                )));
+            // `and` lowers to a Multiplicity with min = |inputs| (must all
+            // fire). `multiplicity` keeps its own min. Both require their
+            // inputs / channels to resolve to leaf `channel` ops in the
+            // MVP — nested combinators inside a stateful trigger are not
+            // supported yet.
+            L1Op::And {
+                inputs, window_ns, ..
+            } => {
+                let mut channel_set: HashSet<(u8, u8)> = HashSet::new();
+                for child in inputs {
+                    let (m, c) = Self::resolve_leaf_channel(child, by_name, op.name())?;
+                    channel_set.insert((m, c));
+                }
+                let min = channel_set.len() as u32;
+                multiplicities.push(MultiplicityTrigger {
+                    channels: channel_set,
+                    min,
+                    window_ns: *window_ns,
+                });
             }
-            L1Op::Multiplicity { .. } => {
-                return Err(RuntimeConfigError::Invalid(format!(
-                    "L1 op `{}`: `multiplicity` not yet implemented (MVP supports `channel`/`or`/`energy_gate`)",
-                    op.name()
-                )));
+            L1Op::Multiplicity {
+                channels,
+                min,
+                window_ns,
+                ..
+            } => {
+                let mut channel_set: HashSet<(u8, u8)> = HashSet::new();
+                for child in channels {
+                    let (m, c) = Self::resolve_leaf_channel(child, by_name, op.name())?;
+                    channel_set.insert((m, c));
+                }
+                if *min == 0 {
+                    return Err(RuntimeConfigError::Invalid(format!(
+                        "L1 op `{}`: multiplicity `min` must be > 0",
+                        op.name()
+                    )));
+                }
+                if (*min as usize) > channel_set.len() {
+                    return Err(RuntimeConfigError::Invalid(format!(
+                        "L1 op `{}`: multiplicity `min` ({}) exceeds the number of channels ({})",
+                        op.name(),
+                        min,
+                        channel_set.len()
+                    )));
+                }
+                multiplicities.push(MultiplicityTrigger {
+                    channels: channel_set,
+                    min: *min,
+                    window_ns: *window_ns,
+                });
             }
         }
         visiting.remove(op.name());
@@ -870,17 +945,87 @@ mod tests {
     }
 
     #[test]
-    fn build_trigger_config_rejects_unimplemented_ops() {
+    fn multiplicity_lowers_to_trigger_config() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::Channel {
+            name: "HPGe1".into(),
+            module: 0,
+            channel: 1,
+        });
+        cfg.l1.definitions.push(L1Op::Multiplicity {
+            name: "mult".into(),
+            channels: vec!["HPGe0".into(), "HPGe1".into()],
+            min: 2,
+            window_ns: 100.0,
+        });
+        cfg.l1.trigger = "mult".into();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.multiplicity_triggers.len(), 1);
+        let mt = &tc.multiplicity_triggers[0];
+        assert_eq!(mt.min, 2);
+        assert!((mt.window_ns - 100.0).abs() < 1e-9);
+        assert!(mt.channels.contains(&(0, 0)));
+        assert!(mt.channels.contains(&(0, 1)));
+        // Multiplicity channels are NOT added to `triggers`: a single hit
+        // on (0, 0) alone shouldn't fire — only the stateful sliding-window
+        // check inside chunk_builder decides anchor-ness.
+        assert!(tc.triggers.is_empty(), "got {:?}", tc.triggers);
+    }
+
+    #[test]
+    fn and_lowers_to_multiplicity_with_min_equal_inputs() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::Channel {
+            name: "HPGe1".into(),
+            module: 0,
+            channel: 1,
+        });
+        cfg.l1.definitions.push(L1Op::And {
+            name: "both".into(),
+            inputs: vec!["HPGe0".into(), "HPGe1".into()],
+            window_ns: 50.0,
+        });
+        cfg.l1.trigger = "both".into();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.multiplicity_triggers.len(), 1);
+        let mt = &tc.multiplicity_triggers[0];
+        assert_eq!(mt.min, 2, "and: min must equal number of channels");
+        assert_eq!(mt.channels.len(), 2);
+    }
+
+    #[test]
+    fn multiplicity_min_must_not_exceed_channel_count() {
         let mut cfg = minimal_valid_config();
         cfg.l1.definitions.push(L1Op::Multiplicity {
-            name: "mult".to_string(),
-            channels: vec!["HPGe0".to_string()],
+            name: "mult".into(),
+            channels: vec!["HPGe0".into()],
+            min: 2, // exceeds 1 channel
+            window_ns: 100.0,
+        });
+        cfg.l1.trigger = "mult".into();
+        let e = cfg.build_trigger_config().unwrap_err();
+        assert!(e.to_string().contains("exceeds"), "got {e}");
+    }
+
+    #[test]
+    fn multiplicity_input_must_be_channel_op() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::Or {
+            name: "any_HPGe".into(),
+            inputs: vec!["HPGe0".into()],
+        });
+        cfg.l1.definitions.push(L1Op::Multiplicity {
+            name: "mult".into(),
+            channels: vec!["any_HPGe".into()], // OR op, not a channel op
             min: 1,
             window_ns: 100.0,
         });
-        cfg.l1.trigger = "mult".to_string();
+        cfg.l1.trigger = "mult".into();
         let e = cfg.build_trigger_config().unwrap_err();
-        assert!(e.to_string().contains("multiplicity"), "got {e}");
+        assert!(
+            e.to_string().contains("expects a `channel` input"),
+            "got {e}"
+        );
     }
 
     #[test]

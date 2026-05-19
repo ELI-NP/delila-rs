@@ -215,3 +215,73 @@ fn three_config_files_drive_l1_l2_pipeline() {
         de_hit.relative_time
     );
 }
+
+/// Stateful L1: a multiplicity trigger fires only when **at least 2 distinct
+/// channels** from {(0,0), (0,1)} fire within a 100 ns window. Neither
+/// channel is configured as a "static" trigger, so this is the only path
+/// that can produce events.
+#[test]
+fn multiplicity_trigger_drives_event_building() {
+    use delila_rs::event_builder::Hit;
+
+    let eb_config_json = r#"
+    {
+      "version": "1.0",
+      "timing": {
+        "coincidence_window_ns": 200.0,
+        "buffer_delay_ns": 1.0e9,
+        "slice_duration_ns": 1.0e7
+      },
+      "channels_file": "chSettings.json",
+      "time_offsets_file": "timeSettings.json",
+      "l1": {
+        "definitions": [
+          {"type": "channel",      "name": "HPGe0", "module": 0, "channel": 0},
+          {"type": "channel",      "name": "HPGe1", "module": 0, "channel": 1},
+          {"type": "multiplicity", "name": "HPGe_pair",
+           "channels": ["HPGe0", "HPGe1"], "min": 2, "window_ns": 100.0}
+        ],
+        "trigger": "HPGe_pair"
+      },
+      "l2": [
+        {"type": "min_hits", "name": "atleast2", "min": 2},
+        {"type": "accept",   "name": "keep",
+         "monitor": ["atleast2"], "operator": "AND"}
+      ],
+      "output": {
+        "events_per_file": 1000000,
+        "directory": "/tmp",
+        "zmq_pub_endpoint": "tcp://*:5610"
+      }
+    }
+    "#;
+
+    let cfg: EbRuntimeConfig = serde_json::from_str(eb_config_json).unwrap();
+    cfg.validate().unwrap();
+    let tc = cfg.build_trigger_config().unwrap();
+    assert_eq!(tc.multiplicity_triggers.len(), 1);
+
+    let l2 = L2Filter::new(cfg.l2.clone(), HashMap::new()).unwrap();
+
+    // Two channels fire within 50 ns → multiplicity fires at the 2nd hit.
+    // Then a lonely HPGe0 hit alone — no second channel → no event.
+    let hits = vec![
+        Hit::new(0, 0, 5000, 0, 1000.0), // mult anchor candidate
+        Hit::new(0, 1, 4000, 0, 1050.0), // completes multiplicity
+        Hit::new(0, 0, 5000, 0, 5000.0), // isolated — no event
+    ];
+    let chunk = SortedChunk {
+        hits,
+        core_end: 1.0e6,
+    };
+    let events = build_events_from_chunk(&chunk, &tc);
+    // Only one event from the (0,0)+(0,1) pair; the isolated hit produces nothing.
+    assert_eq!(events.len(), 1);
+    let ev = &events[0];
+    // Anchor is the hit that COMPLETED the multiplicity (later one — (0,1) at 1050).
+    assert_eq!((ev.trigger_module, ev.trigger_channel), (0, 1));
+    assert_eq!(ev.hits.len(), 2);
+
+    // L2 keeps it (min_hits ≥ 2 ✓).
+    assert!(l2.keeps(ev));
+}

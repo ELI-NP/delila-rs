@@ -9,10 +9,66 @@
 //! 2. `build_events_from_chunk()` がソート済みチャンクからイベントを構築
 //! 3. core 領域のトリガーのみ emit（境界イベントの重複・欠落を防ぐ）
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::built_event::{BuiltEvent, EventHit};
 use super::hit::Hit;
+
+/// Stateful L1 trigger: a hit becomes an anchor when at least `min`
+/// **distinct** channels from `channels` have fired within a span of
+/// `window_ns`, ending at this hit.
+///
+/// Backs both `L1Op::Multiplicity` and `L1Op::And` — for `and` the runtime
+/// config lowering sets `min == channels.len()` so a single uniform check
+/// covers both ops.
+#[derive(Debug, Clone)]
+pub struct MultiplicityTrigger {
+    pub channels: HashSet<(u8, u8)>,
+    pub min: u32,
+    pub window_ns: f64,
+}
+
+impl MultiplicityTrigger {
+    /// Walk a sorted hit slice and mark the index of every hit that
+    /// **completes** the multiplicity (returns one `bool` per input hit).
+    pub fn compute_anchors(&self, hits: &[Hit]) -> Vec<bool> {
+        let mut anchors = vec![false; hits.len()];
+        // Indices into `hits` of matching hits still within window of the
+        // current hit. `recent` is ordered by timestamp ascending.
+        let mut recent: VecDeque<usize> = VecDeque::new();
+        // Per-(mod, ch) count inside the window — avoids recomputing the
+        // HashSet of distinct channels on each step.
+        let mut counts: HashMap<(u8, u8), u32> = HashMap::new();
+
+        for (i, hit) in hits.iter().enumerate() {
+            if !self.channels.contains(&(hit.module, hit.channel)) {
+                continue;
+            }
+            // Slide the window: drop hits older than `window_ns` from `i`.
+            while let Some(&head) = recent.front() {
+                if hit.timestamp_ns - hits[head].timestamp_ns > self.window_ns {
+                    let key = (hits[head].module, hits[head].channel);
+                    if let Some(c) = counts.get_mut(&key) {
+                        *c -= 1;
+                        if *c == 0 {
+                            counts.remove(&key);
+                        }
+                    }
+                    recent.pop_front();
+                } else {
+                    break;
+                }
+            }
+            recent.push_back(i);
+            *counts.entry((hit.module, hit.channel)).or_insert(0) += 1;
+
+            if counts.len() as u32 >= self.min {
+                anchors[i] = true;
+            }
+        }
+        anchors
+    }
+}
 
 /// ソート済みチャンク
 ///
@@ -48,6 +104,11 @@ pub struct TriggerConfig {
     /// gate are still candidates for *coincident* hits inside an event
     /// triggered by some other channel — see SPEC § 5 / § 6.2.
     pub trigger_energy_gates: HashMap<(u8, u8), (u16, u16)>,
+    /// Stateful trigger conditions (L1 `multiplicity` / `and` ops). A hit
+    /// becomes an anchor whenever **any** of these conditions fires at
+    /// that hit. Evaluated per-hit by a sliding window scan over the
+    /// sorted chunk inside `build_events_from_chunk`.
+    pub multiplicity_triggers: Vec<MultiplicityTrigger>,
 }
 
 impl TriggerConfig {
@@ -109,11 +170,26 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
 
     let window = config.coincidence_window_ns;
 
+    // Phase 0: Pre-compute per-hit "is anchor" flags for stateful triggers
+    // (multiplicity / and). OR'd with the per-hit static check below.
+    let stateful_anchors: Vec<bool> = if config.multiplicity_triggers.is_empty() {
+        Vec::new()
+    } else {
+        let mut combined = vec![false; hits.len()];
+        for mt in &config.multiplicity_triggers {
+            for (i, b) in mt.compute_anchors(hits).into_iter().enumerate() {
+                combined[i] |= b;
+            }
+        }
+        combined
+    };
+    let is_stateful_anchor = |i: usize| stateful_anchors.get(i).copied().unwrap_or(false);
+
     // Phase 1: Collect trigger windows in core region, merging overlaps
     let mut merged_windows: Vec<MergedWindow> = Vec::new();
 
-    for hit in hits.iter() {
-        if !config.passes_trigger_gate(hit) {
+    for (i, hit) in hits.iter().enumerate() {
+        if !config.passes_trigger_gate(hit) && !is_stateful_anchor(i) {
             continue;
         }
         // Skip triggers in unsafe region (processed in next chunk)
@@ -284,6 +360,95 @@ mod tests {
         Hit::new(module, channel, 1000, 500, ts)
     }
 
+    #[test]
+    fn multiplicity_fires_when_two_channels_within_window() {
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1)]),
+            min: 2,
+            window_ns: 100.0,
+        };
+        // Two channels at t=0 and t=50: 50 ≤ 100 → fires at the 2nd hit.
+        let hits = vec![make_hit(0, 0, 0.0), make_hit(0, 1, 50.0)];
+        let anchors = mt.compute_anchors(&hits);
+        assert_eq!(anchors, vec![false, true]);
+    }
+
+    #[test]
+    fn multiplicity_does_not_fire_outside_window() {
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1)]),
+            min: 2,
+            window_ns: 100.0,
+        };
+        // 200 > 100 → no anchor.
+        let hits = vec![make_hit(0, 0, 0.0), make_hit(0, 1, 200.0)];
+        assert_eq!(mt.compute_anchors(&hits), vec![false, false]);
+    }
+
+    #[test]
+    fn multiplicity_distinct_channels_only() {
+        // Same channel firing twice ≠ multiplicity of 2 distinct channels.
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1)]),
+            min: 2,
+            window_ns: 100.0,
+        };
+        let hits = vec![make_hit(0, 0, 0.0), make_hit(0, 0, 50.0)];
+        assert_eq!(mt.compute_anchors(&hits), vec![false, false]);
+    }
+
+    #[test]
+    fn multiplicity_ignores_unrelated_channels() {
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1)]),
+            min: 2,
+            window_ns: 100.0,
+        };
+        // Channel (0, 9) is not in the multiplicity's set — should be skipped.
+        let hits = vec![
+            make_hit(0, 0, 0.0),
+            make_hit(0, 9, 25.0), // ignored
+            make_hit(0, 1, 50.0),
+        ];
+        let anchors = mt.compute_anchors(&hits);
+        assert_eq!(anchors, vec![false, false, true]);
+    }
+
+    #[test]
+    fn multiplicity_three_of_three() {
+        // `and` lowers to min == channels.len() == 3.
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1), (0, 2)]),
+            min: 3,
+            window_ns: 100.0,
+        };
+        let hits = vec![
+            make_hit(0, 0, 0.0),
+            make_hit(0, 1, 30.0),
+            make_hit(0, 2, 60.0),
+        ];
+        assert_eq!(mt.compute_anchors(&hits), vec![false, false, true]);
+    }
+
+    #[test]
+    fn multiplicity_window_sliding() {
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1)]),
+            min: 2,
+            window_ns: 100.0,
+        };
+        // Two pairs back-to-back. After the first pair, the second pair
+        // should fire again once both channels are inside window of the
+        // 4th hit.
+        let hits = vec![
+            make_hit(0, 0, 0.0),
+            make_hit(0, 1, 50.0),
+            make_hit(0, 0, 200.0),
+            make_hit(0, 1, 250.0),
+        ];
+        assert_eq!(mt.compute_anchors(&hits), vec![false, true, false, true]);
+    }
+
     fn simple_config() -> TriggerConfig {
         let mut triggers = HashSet::new();
         triggers.insert((0, 0));
@@ -295,6 +460,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         }
     }
 
@@ -376,6 +542,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         let chunk = SortedChunk {
@@ -407,6 +574,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         let chunk = SortedChunk {
@@ -456,6 +624,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         let chunk = SortedChunk {
@@ -833,6 +1002,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 100.0,
             trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         // Shuffle hits within 30ms chunks (simulate network disorder)
@@ -966,6 +1136,7 @@ mod tests {
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
             trigger_energy_gates: HashMap::new(),
+            multiplicity_triggers: Vec::new(),
         };
 
         // Without a gate, every hit on a trigger channel qualifies.

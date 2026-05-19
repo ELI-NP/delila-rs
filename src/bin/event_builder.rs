@@ -449,6 +449,7 @@ fn run_event_building(
         ac_pairs: HashMap::new(),
         coincidence_window_ns: window,
         trigger_energy_gates: std::collections::HashMap::new(),
+        multiplicity_triggers: Vec::new(),
     };
 
     // Load time calibration
