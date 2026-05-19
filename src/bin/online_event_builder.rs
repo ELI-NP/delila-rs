@@ -148,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         n_writers: args.writers,
         output_dir: PathBuf::from(&eb.output_dir),
         run_id: args.run_id,
+        zmq_pub_endpoint: eb.zmq_pub_endpoint.clone(),
         ..PipelineConfig::default()
     };
 
@@ -170,6 +171,11 @@ async fn main() -> anyhow::Result<()> {
         pipeline_cfg.n_workers, pipeline_cfg.n_writers
     );
     println!("  Run ID:            {}", pipeline_cfg.run_id);
+    if let Some(ref ep) = pipeline_cfg.zmq_pub_endpoint {
+        println!("  EB-Monitor PUB:    {ep}");
+    } else {
+        println!("  EB-Monitor PUB:    disabled");
+    }
     println!();
     println!("  Press Ctrl+C to stop.");
     println!("========================================");
@@ -216,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
     println!("  Chunks processed: {}", stats.chunks_processed);
     println!("  Events built:     {}", stats.events_built);
     println!("  Files written:    {}", stats.files_written);
+    println!("  Batches published: {}", stats.batches_published);
     println!("========================================");
 
     Ok(())

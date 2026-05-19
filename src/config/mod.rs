@@ -650,6 +650,12 @@ pub struct EventBuilderNetworkConfig {
     #[serde(default)]
     pub time_calib_file: Option<String>,
 
+    /// Optional ZMQ PUB endpoint for the BuiltEvent stream feeding the
+    /// EB Monitor (SPEC § 9.3). Unset → PUB thread is not spawned.
+    /// Example: `"tcp://*:5610"`.
+    #[serde(default)]
+    pub zmq_pub_endpoint: Option<String>,
+
     /// Pipeline order for Start/Stop sequencing (default: 3)
     #[serde(default = "default_sink_pipeline_order")]
     pub pipeline_order: u32,

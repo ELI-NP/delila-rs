@@ -22,6 +22,7 @@
 mod built_event;
 pub mod chunk_builder;
 mod config;
+pub mod eb_message;
 mod hit;
 mod l1_builder;
 pub mod l2_eval;
@@ -42,6 +43,7 @@ pub use config::{
     save_channel_config, save_l2_settings, ChSettings, ChannelConfig, ConfigError,
     EventBuildingParams, L2LogicalOperator, L2Operator, L2Setting, L2Settings, TimeCalibration,
 };
+pub use eb_message::{BuiltEventBatch, EbMessage};
 pub use hit::{Hit, HitLike, OfflineHit, OnlineHit};
 pub use l1_builder::L1Builder;
 pub use l2_eval::{ChannelTagMap, L2Filter, L2FilterError};

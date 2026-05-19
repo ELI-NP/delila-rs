@@ -498,6 +498,7 @@ fn run_event_building(
         output_dir: output_dir.to_path_buf(),
         run_id,
         output_tree: output_tree.to_string(),
+        zmq_pub_endpoint: None, // offline EB does not publish
     };
 
     let pipeline = EventBuilderPipeline::new(pipeline_config, trigger_config, time_calibration);

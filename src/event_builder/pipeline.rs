@@ -9,13 +9,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel as crossbeam;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::built_event::BuiltEvent;
 use super::chunk_builder::{
     build_events_from_chunk, sort_and_flush, sort_and_split, TriggerConfig,
 };
 use super::config::TimeCalibration;
+use super::eb_message::{BuiltEventBatch, EbMessage};
 use super::l2_eval::L2Filter;
 use super::source::{HitBatch, HitSource, SourceError};
 
@@ -40,6 +41,11 @@ pub struct PipelineConfig {
     pub run_id: u32,
     /// Output tree name
     pub output_tree: String,
+    /// Optional ZMQ PUB endpoint for downstream EB Monitor (SPEC § 9.3).
+    /// When set, every batch of built events is also published as a
+    /// MessagePack [`EbMessage::Events`] frame. `None` disables the PUB
+    /// stream entirely (no extra thread, no clones).
+    pub zmq_pub_endpoint: Option<String>,
 }
 
 impl Default for PipelineConfig {
@@ -54,6 +60,7 @@ impl Default for PipelineConfig {
             output_dir: PathBuf::from("."),
             run_id: 0,
             output_tree: "EventTree".to_string(),
+            zmq_pub_endpoint: None,
         }
     }
 }
@@ -69,6 +76,9 @@ pub struct PipelineStats {
     /// Events that survived L2 (== events_built when no L2 filter is set).
     pub events_kept: u64,
     pub files_written: u64,
+    /// Number of [`EbMessage::Events`] batches successfully published on
+    /// the ZMQ PUB endpoint (0 when no endpoint is configured).
+    pub batches_published: u64,
 }
 
 /// Unified Event Builder Pipeline
@@ -121,12 +131,24 @@ impl EventBuilderPipeline {
         let events_built = Arc::new(AtomicU64::new(0));
         let events_kept = Arc::new(AtomicU64::new(0));
         let files_written = Arc::new(AtomicU64::new(0));
+        let batches_published = Arc::new(AtomicU64::new(0));
         let next_event_id = Arc::new(AtomicU64::new(0));
+        let next_batch_id = Arc::new(AtomicU64::new(0));
         let file_index = Arc::new(AtomicU32::new(0));
 
         // Channels: Sorter → Workers → Writers
         let (chunk_tx, chunk_rx) = crossbeam::bounded(16);
         let (writer_tx, writer_rx) = crossbeam::bounded(64);
+        // Optional fan-out channel: Workers → ZMQ PUB thread.
+        // Unbounded because the PUB socket itself has HWM=0 (zero-loss
+        // policy) — backpressure here would defeat that.
+        let pub_pair: Option<(
+            crossbeam::Sender<BuiltEventBatch>,
+            crossbeam::Receiver<BuiltEventBatch>,
+        )> = config
+            .zmq_pub_endpoint
+            .as_ref()
+            .map(|_| crossbeam::unbounded());
 
         info!(
             source = source.name(),
@@ -153,6 +175,27 @@ impl EventBuilderPipeline {
         }
         drop(writer_rx); // Close our copy so writers detect close when all senders drop
 
+        // Spawn the ZMQ PUB thread if an endpoint is configured.
+        let pub_thread_handle = if let (Some(endpoint), Some((_pub_tx, pub_rx))) =
+            (config.zmq_pub_endpoint.as_ref(), pub_pair.as_ref())
+        {
+            let endpoint = endpoint.clone();
+            let rx = pub_rx.clone();
+            let bp = batches_published.clone();
+            let run_id = config.run_id;
+            Some(
+                std::thread::Builder::new()
+                    .name("eb-zmq-pub".into())
+                    .spawn(move || zmq_pub_thread(endpoint, rx, bp, run_id))
+                    .expect("failed to spawn eb-zmq-pub thread"),
+            )
+        } else {
+            None
+        };
+        // Drop the original receiver — only the PUB thread owns it now.
+        let pub_tx_for_workers: Option<crossbeam::Sender<BuiltEventBatch>> =
+            pub_pair.map(|(tx, _rx)| tx);
+
         // Spawn worker threads
         let mut worker_handles = Vec::with_capacity(config.n_workers);
         for _ in 0..config.n_workers {
@@ -162,13 +205,17 @@ impl EventBuilderPipeline {
             let eb = events_built.clone();
             let ek = events_kept.clone();
             let nei = next_event_id.clone();
+            let nbi = next_batch_id.clone();
             let l2 = self.l2_filter.clone();
+            let ptx = pub_tx_for_workers.clone();
+            let run_id = config.run_id;
             worker_handles.push(std::thread::spawn(move || {
-                worker_thread(crx, wtx, &tc, eb, ek, nei, l2);
+                worker_thread(crx, wtx, &tc, eb, ek, nei, l2, ptx, nbi, run_id);
             }));
         }
         drop(chunk_rx); // Close our copy
         drop(writer_tx); // Close our copy so writers detect close when all workers drop
+        drop(pub_tx_for_workers); // Close our copy so PUB detects close when all workers drop
 
         // Run sorter on this thread (blocking)
         sorter_thread(
@@ -191,6 +238,11 @@ impl EventBuilderPipeline {
         for h in writer_handles {
             let _ = h.join();
         }
+        // Wait for the ZMQ PUB thread (if any). It only exits after the
+        // last worker drops its sender, so this never blocks indefinitely.
+        if let Some(h) = pub_thread_handle {
+            let _ = h.join();
+        }
 
         let stats = PipelineStats {
             received_hits: received_hits.load(Ordering::Relaxed),
@@ -199,6 +251,7 @@ impl EventBuilderPipeline {
             events_built: events_built.load(Ordering::Relaxed),
             events_kept: events_kept.load(Ordering::Relaxed),
             files_written: files_written.load(Ordering::Relaxed),
+            batches_published: batches_published.load(Ordering::Relaxed),
         };
 
         info!(
@@ -208,6 +261,7 @@ impl EventBuilderPipeline {
             events_built = stats.events_built,
             events_kept = stats.events_kept,
             files = stats.files_written,
+            batches_published = stats.batches_published,
             "EventBuilderPipeline finished"
         );
 
@@ -296,6 +350,7 @@ fn sorter_thread(
 }
 
 /// Worker thread: receive chunks → build events → L2 filter → send to writers
+/// (and optionally to the ZMQ PUB fan-out thread).
 #[allow(clippy::too_many_arguments)]
 fn worker_thread(
     chunk_rx: crossbeam::Receiver<super::chunk_builder::SortedChunk>,
@@ -305,6 +360,9 @@ fn worker_thread(
     events_kept: Arc<AtomicU64>,
     next_event_id: Arc<AtomicU64>,
     l2_filter: Option<Arc<L2Filter>>,
+    pub_tx: Option<crossbeam::Sender<BuiltEventBatch>>,
+    next_batch_id: Arc<AtomicU64>,
+    run_id: u32,
 ) {
     while let Ok(chunk) = chunk_rx.recv() {
         let mut events = build_events_from_chunk(&chunk, trigger_config);
@@ -326,10 +384,201 @@ fn worker_thread(
         let kept_n = events.len() as u64;
         events_kept.fetch_add(kept_n, Ordering::Relaxed);
 
-        if !events.is_empty() && writer_tx.send(events).is_err() {
+        if events.is_empty() {
+            continue;
+        }
+
+        // Tee to ZMQ PUB before moving `events` into the writer channel.
+        // Cloning the Vec is the price for fan-out; the PUB consumer can be
+        // dropped (endpoint unconfigured) with zero overhead because
+        // `pub_tx` is None in that case.
+        if let Some(ref tx) = pub_tx {
+            let batch_id = next_batch_id.fetch_add(1, Ordering::Relaxed);
+            let batch = BuiltEventBatch {
+                run_number: run_id,
+                batch_id,
+                events: events.clone(),
+            };
+            // Unbounded channel → only fails if the receiver is gone,
+            // which means the PUB thread already exited (probably
+            // shutting down). Drop silently.
+            let _ = tx.send(batch);
+        }
+
+        if writer_tx.send(events).is_err() {
             error!("Failed to send events to writer (channel closed)");
             break;
         }
+    }
+}
+
+/// ZMQ PUB thread: takes built-event batches from the workers and emits
+/// each as one [`EbMessage::Events`] frame on a SUB-addressable endpoint.
+///
+/// On channel close (all workers dropped their senders) the thread emits a
+/// final [`EbMessage::EndOfStream`] and exits. The PUB socket is set to
+/// `SNDHWM = 0` so it buffers indefinitely rather than dropping under slow
+/// subscribers (SPEC § 12 / CLAUDE.md zero-loss policy).
+fn zmq_pub_thread(
+    endpoint: String,
+    rx: crossbeam::Receiver<BuiltEventBatch>,
+    batches_published: Arc<AtomicU64>,
+    run_id: u32,
+) {
+    let context = zmq::Context::new();
+    let socket = match context.socket(zmq::PUB) {
+        Ok(s) => s,
+        Err(e) => {
+            error!(error = %e, endpoint = %endpoint, "PUB socket() failed");
+            return;
+        }
+    };
+    if let Err(e) = socket.set_sndhwm(0) {
+        warn!(error = %e, "Failed to set PUB SNDHWM=0; continuing");
+    }
+    if let Err(e) = socket.bind(&endpoint) {
+        error!(error = %e, endpoint = %endpoint, "PUB bind() failed");
+        return;
+    }
+    info!(endpoint = %endpoint, run_id, "EB ZMQ PUB bound");
+
+    while let Ok(batch) = rx.recv() {
+        match EbMessage::Events(batch).to_msgpack() {
+            Ok(bytes) => match socket.send(bytes, 0) {
+                Ok(()) => {
+                    batches_published.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    error!(error = %e, "PUB send failed; dropping batch");
+                }
+            },
+            Err(e) => {
+                error!(error = %e, "PUB msgpack encode failed; dropping batch");
+            }
+        }
+    }
+
+    // Channel closed → all workers done. Emit EOS so subscribers can
+    // distinguish "no more data this run" from "still warming up".
+    let eos = EbMessage::EndOfStream { run_number: run_id };
+    match eos.to_msgpack() {
+        Ok(bytes) => {
+            if let Err(e) = socket.send(bytes, 0) {
+                warn!(error = %e, "PUB send EOS failed");
+            } else {
+                info!(run_id, "EB ZMQ PUB emitted EOS");
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "PUB msgpack encode of EOS failed");
+        }
+    }
+}
+
+#[cfg(test)]
+mod zmq_pub_tests {
+    use super::*;
+    use crate::event_builder::built_event::EventHit;
+
+    fn unique_ipc_endpoint() -> String {
+        format!(
+            "ipc:///tmp/delila-eb-pub-test-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    fn dummy_event(id: u64) -> BuiltEvent {
+        BuiltEvent {
+            event_id: id,
+            trigger_time: id as f64 * 100.0,
+            trigger_module: 1,
+            trigger_channel: 2,
+            hits: vec![EventHit {
+                module: 1,
+                channel: 2,
+                energy: 1000,
+                energy_short: 500,
+                relative_time: 0.0,
+                with_ac: false,
+            }],
+        }
+    }
+
+    /// End-to-end: spawn the PUB thread, send one batch, then close the
+    /// channel; verify the subscriber sees Events followed by EOS.
+    #[test]
+    fn pub_thread_emits_events_then_eos() {
+        let endpoint = unique_ipc_endpoint();
+        let (tx, rx) = crossbeam::unbounded::<BuiltEventBatch>();
+        let counter = Arc::new(AtomicU64::new(0));
+
+        // Spawn subscriber FIRST so it's bound before the PUB starts;
+        // for ipc transport the SUB connect can happen before PUB bind
+        // and is queued, but we sleep a tick to dodge timing races.
+        let sub_endpoint = endpoint.clone();
+        let sub_handle = std::thread::spawn(move || {
+            let context = zmq::Context::new();
+            let socket = context.socket(zmq::SUB).unwrap();
+            socket.set_rcvhwm(0).unwrap();
+            socket.connect(&sub_endpoint).unwrap();
+            socket.set_subscribe(b"").unwrap();
+            socket.set_rcvtimeo(5_000).unwrap();
+
+            let mut got_events = false;
+            let mut got_eos = false;
+            for _ in 0..10 {
+                match socket.recv_bytes(0) {
+                    Ok(b) => match EbMessage::from_msgpack(&b).unwrap() {
+                        EbMessage::Events(batch) => {
+                            assert_eq!(batch.run_number, 99);
+                            assert_eq!(batch.events.len(), 2);
+                            got_events = true;
+                        }
+                        EbMessage::EndOfStream { run_number } => {
+                            assert_eq!(run_number, 99);
+                            got_eos = true;
+                            break;
+                        }
+                        EbMessage::Heartbeat { .. } => continue,
+                    },
+                    Err(_) => break, // timeout
+                }
+            }
+            (got_events, got_eos)
+        });
+
+        // Tiny sleep so the SUB has a chance to connect before we publish.
+        std::thread::sleep(Duration::from_millis(100));
+
+        let counter_for_pub = counter.clone();
+        let pub_handle = std::thread::spawn(move || {
+            zmq_pub_thread(endpoint, rx, counter_for_pub, 99);
+        });
+
+        // Another tiny sleep so the PUB bind completes before send. ipc:
+        // SUB queues sends pre-bind on the publisher side, but the
+        // subscriber needs the bind socket up.
+        std::thread::sleep(Duration::from_millis(200));
+
+        tx.send(BuiltEventBatch {
+            run_number: 99,
+            batch_id: 1,
+            events: vec![dummy_event(0), dummy_event(1)],
+        })
+        .unwrap();
+
+        // Drop the sender → PUB thread will emit EOS and exit.
+        drop(tx);
+        pub_handle.join().unwrap();
+
+        let (got_events, got_eos) = sub_handle.join().unwrap();
+        assert!(got_events, "subscriber did not receive Events frame");
+        assert!(got_eos, "subscriber did not receive EOS frame");
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
     }
 }
 
