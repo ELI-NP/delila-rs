@@ -129,6 +129,38 @@ impl ResolvedTimeOffsets {
     pub fn root_count(&self) -> usize {
         self.roots.values().copied().collect::<HashSet<_>>().len()
     }
+
+    /// Convert into the legacy [`TimeCalibration`] shape so existing pipeline
+    /// stages (which expect `time_calibration.get_offset(mod, ch)`) keep
+    /// working unchanged.
+    ///
+    /// The reference channel is picked deterministically — if the forest has
+    /// exactly one root, that root becomes the reference; otherwise we pick
+    /// the lexicographically smallest `(module, channel)` root (the multi-root
+    /// case is already warned at resolve time).
+    ///
+    /// This is meant as a temporary adapter while the rest of the pipeline
+    /// is migrated to consume `ResolvedTimeOffsets` directly (SPEC § 4.3).
+    pub fn into_time_calibration(self) -> crate::event_builder::config::TimeCalibration {
+        use crate::event_builder::config::TimeCalibration;
+
+        let ref_root = {
+            let mut roots: Vec<(u8, u8)> = self
+                .roots
+                .values()
+                .copied()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            roots.sort();
+            roots.into_iter().next().unwrap_or((0, 0))
+        };
+        let mut tc = TimeCalibration::new(ref_root.0, ref_root.1);
+        for ((m, c), off) in self.offsets {
+            tc.set_offset(m, c, off);
+        }
+        tc
+    }
 }
 
 /// One row of the resolved flat table (for CLI dump / debug).
@@ -481,6 +513,47 @@ mod tests {
             assert_eq!(row.root, (0, 0));
             assert!(row.absolute_offset_ns >= 0.0);
         }
+    }
+
+    #[test]
+    fn into_time_calibration_carries_offsets() {
+        let f = TimeOffsetsFile {
+            version: "1.0".into(),
+            entries: vec![
+                entry(9, 0, None, 0.0),
+                entry(9, 1, Some((9, 0)), 0.05),
+                entry(0, 0, Some((9, 0)), 46.75),
+                entry(5, 0, Some((0, 0)), 12.3),
+            ],
+        };
+        let r = f.resolve().unwrap();
+        let tc = r.into_time_calibration();
+        // Ref = single root (9, 0).
+        assert_eq!(tc.ref_module, 9);
+        assert_eq!(tc.ref_channel, 0);
+        assert_eq!(tc.get_offset(9, 0), 0.0);
+        assert!((tc.get_offset(9, 1) - 0.05).abs() < 1e-9);
+        assert!((tc.get_offset(0, 0) - 46.75).abs() < 1e-9);
+        // 5/0 absolute = 0 + 46.75 + 12.3 = 59.05
+        assert!((tc.get_offset(5, 0) - 59.05).abs() < 1e-9);
+        // Unknown channel defaults to 0.
+        assert_eq!(tc.get_offset(7, 7), 0.0);
+    }
+
+    #[test]
+    fn into_time_calibration_picks_min_root_for_multi_root() {
+        let f = TimeOffsetsFile {
+            version: "1.0".into(),
+            entries: vec![
+                entry(5, 0, None, 0.0),
+                entry(0, 0, None, 0.0),
+                entry(0, 1, Some((0, 0)), 1.0),
+            ],
+        };
+        let r = f.resolve().unwrap();
+        let tc = r.into_time_calibration();
+        // The smaller (module, channel) tuple wins → (0, 0)
+        assert_eq!((tc.ref_module, tc.ref_channel), (0, 0));
     }
 
     #[test]

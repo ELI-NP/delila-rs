@@ -16,6 +16,7 @@ use super::chunk_builder::{
     build_events_from_chunk, sort_and_flush, sort_and_split, TriggerConfig,
 };
 use super::config::TimeCalibration;
+use super::l2_eval::L2Filter;
 use super::source::{HitBatch, HitSource, SourceError};
 
 /// Pipeline configuration
@@ -63,7 +64,10 @@ pub struct PipelineStats {
     pub received_hits: u64,
     pub received_batches: u64,
     pub chunks_processed: u64,
+    /// Events that survived L1 (i.e. successfully built by chunk_builder).
     pub events_built: u64,
+    /// Events that survived L2 (== events_built when no L2 filter is set).
+    pub events_kept: u64,
     pub files_written: u64,
 }
 
@@ -75,6 +79,10 @@ pub struct EventBuilderPipeline {
     pub config: PipelineConfig,
     pub trigger_config: Arc<TriggerConfig>,
     pub time_calibration: TimeCalibration,
+    /// Optional L2 filter applied to each built event before it leaves
+    /// the worker (see SPEC § 7). When `None`, every L1-built event flows
+    /// through unchanged (legacy behaviour).
+    pub l2_filter: Option<Arc<L2Filter>>,
 }
 
 impl EventBuilderPipeline {
@@ -87,7 +95,16 @@ impl EventBuilderPipeline {
             config,
             trigger_config: Arc::new(trigger_config),
             time_calibration,
+            l2_filter: None,
         }
+    }
+
+    /// Attach an L2 filter (named-ops chain). The pipeline will drop any
+    /// event for which no `Accept` op evaluates to true.
+    #[must_use]
+    pub fn with_l2_filter(mut self, filter: L2Filter) -> Self {
+        self.l2_filter = Some(Arc::new(filter));
+        self
     }
 
     /// Run the pipeline to completion.
@@ -102,6 +119,7 @@ impl EventBuilderPipeline {
         let received_batches = Arc::new(AtomicU64::new(0));
         let chunks_processed = Arc::new(AtomicU64::new(0));
         let events_built = Arc::new(AtomicU64::new(0));
+        let events_kept = Arc::new(AtomicU64::new(0));
         let files_written = Arc::new(AtomicU64::new(0));
         let next_event_id = Arc::new(AtomicU64::new(0));
         let file_index = Arc::new(AtomicU32::new(0));
@@ -142,9 +160,11 @@ impl EventBuilderPipeline {
             let wtx = writer_tx.clone();
             let tc = self.trigger_config.clone();
             let eb = events_built.clone();
+            let ek = events_kept.clone();
             let nei = next_event_id.clone();
+            let l2 = self.l2_filter.clone();
             worker_handles.push(std::thread::spawn(move || {
-                worker_thread(crx, wtx, &tc, eb, nei);
+                worker_thread(crx, wtx, &tc, eb, ek, nei, l2);
             }));
         }
         drop(chunk_rx); // Close our copy
@@ -177,6 +197,7 @@ impl EventBuilderPipeline {
             received_batches: received_batches.load(Ordering::Relaxed),
             chunks_processed: chunks_processed.load(Ordering::Relaxed),
             events_built: events_built.load(Ordering::Relaxed),
+            events_kept: events_kept.load(Ordering::Relaxed),
             files_written: files_written.load(Ordering::Relaxed),
         };
 
@@ -184,7 +205,8 @@ impl EventBuilderPipeline {
             hits = stats.received_hits,
             batches = stats.received_batches,
             chunks = stats.chunks_processed,
-            events = stats.events_built,
+            events_built = stats.events_built,
+            events_kept = stats.events_kept,
             files = stats.files_written,
             "EventBuilderPipeline finished"
         );
@@ -273,24 +295,36 @@ fn sorter_thread(
     info!("Sorter thread finished");
 }
 
-/// Worker thread: receive chunks → build events → send to writers
+/// Worker thread: receive chunks → build events → L2 filter → send to writers
+#[allow(clippy::too_many_arguments)]
 fn worker_thread(
     chunk_rx: crossbeam::Receiver<super::chunk_builder::SortedChunk>,
     writer_tx: crossbeam::Sender<Vec<BuiltEvent>>,
     trigger_config: &TriggerConfig,
     events_built: Arc<AtomicU64>,
+    events_kept: Arc<AtomicU64>,
     next_event_id: Arc<AtomicU64>,
+    l2_filter: Option<Arc<L2Filter>>,
 ) {
     while let Ok(chunk) = chunk_rx.recv() {
         let mut events = build_events_from_chunk(&chunk, trigger_config);
+        let built_n = events.len() as u64;
+        events_built.fetch_add(built_n, Ordering::Relaxed);
 
-        // Assign sequential event IDs (atomic for cross-worker ordering)
+        // L2 filter (optional). Drops rejected events before they're sent
+        // to writers; this is the post-build filtering step from SPEC § 7.
+        if let Some(ref filter) = l2_filter {
+            events.retain(|ev| filter.keeps(ev));
+        }
+
+        // Assign sequential event IDs AFTER L2 so rejected events don't burn
+        // ID slots — keeps the on-disk EventID sequence dense.
         for event in &mut events {
             event.event_id = next_event_id.fetch_add(1, Ordering::Relaxed);
         }
 
-        let n = events.len() as u64;
-        events_built.fetch_add(n, Ordering::Relaxed);
+        let kept_n = events.len() as u64;
+        events_kept.fetch_add(kept_n, Ordering::Relaxed);
 
         if !events.is_empty() && writer_tx.send(events).is_err() {
             error!("Failed to send events to writer (channel closed)");

@@ -24,6 +24,7 @@ pub mod chunk_builder;
 mod config;
 mod hit;
 mod l1_builder;
+pub mod l2_eval;
 pub mod pipeline;
 mod root_io;
 pub mod runtime_config;
@@ -43,6 +44,7 @@ pub use config::{
 };
 pub use hit::{Hit, HitLike, OfflineHit, OnlineHit};
 pub use l1_builder::L1Builder;
+pub use l2_eval::{ChannelTagMap, L2Filter, L2FilterError};
 pub use pipeline::{EventBuilderPipeline, PipelineConfig, PipelineStats};
 pub use root_io::{
     read_hits_from_root, write_events_to_root, write_hits_to_root, write_time_histograms_to_root,

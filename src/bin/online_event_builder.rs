@@ -20,7 +20,8 @@ use clap::Parser;
 use delila_rs::config::Config;
 use delila_rs::event_builder::chunk_builder::TriggerConfig;
 use delila_rs::event_builder::{
-    load_channel_config, EventBuilderPipeline, PipelineConfig, TimeCalibration, ZmqHitSource,
+    load_channel_config, EventBuilderPipeline, PipelineConfig, TimeCalibration, TimeOffsetsFile,
+    ZmqHitSource,
 };
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -59,20 +60,47 @@ fn load_trigger(
     ))
 }
 
+/// Load a time-calibration file.
+///
+/// First tries the new tree-based `timeSettings.json` schema (SPEC § 4.3);
+/// falls back to the legacy `TimeCalibration` JSON if the new format fails
+/// to parse. Missing or unspecified file → zero offsets.
 fn load_calibration(path: Option<&str>) -> TimeCalibration {
-    match path {
-        Some(p) => match TimeCalibration::from_json_file(Path::new(p)) {
-            Ok(c) => {
-                info!(file = p, "Loaded time calibration");
-                c
+    let Some(p) = path else {
+        info!("No time calibration file specified — using zero offsets");
+        return TimeCalibration::new(0, 0);
+    };
+
+    match TimeOffsetsFile::load(Path::new(p)) {
+        Ok(file) => match file.resolve() {
+            Ok(resolved) => {
+                for w in &resolved.warnings {
+                    warn!(file = p, "{w}");
+                }
+                info!(
+                    file = p,
+                    roots = resolved.root_count(),
+                    "Loaded timeSettings.json (tree schema)"
+                );
+                return resolved.into_time_calibration();
             }
             Err(e) => {
-                warn!(file = p, error = %e, "Time calibration load failed — using zero offsets");
-                TimeCalibration::new(0, 0)
+                warn!(file = p, error = %e, "Failed to resolve timeSettings.json tree");
             }
         },
-        None => {
-            info!("No time calibration file specified — using zero offsets");
+        Err(_) => {
+            // Either not the new schema or a real parse error — fall through
+            // to the legacy loader before bailing.
+        }
+    }
+
+    match TimeCalibration::from_json_file(Path::new(p)) {
+        Ok(c) => {
+            info!(file = p, "Loaded legacy time calibration");
+            c
+        }
+        Err(e) => {
+            warn!(file = p, error = %e, "Time calibration load failed — using zero offsets");
             TimeCalibration::new(0, 0)
         }
     }

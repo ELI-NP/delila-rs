@@ -29,9 +29,11 @@
 //! variants the running build does not yet implement, with a clear error).
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
+
+use crate::event_builder::chunk_builder::TriggerConfig;
 
 /// Top-level runtime config: `eb_config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -277,6 +279,112 @@ pub enum RuntimeConfigError {
 }
 
 impl EbRuntimeConfig {
+    /// Build a [`TriggerConfig`] for the existing `chunk_builder` pipeline
+    /// from this runtime config (MVP: `Channel` ops only).
+    ///
+    /// Walks the L1 op graph starting from `l1.trigger` and collects every
+    /// underlying `Channel` op into the resulting trigger set. Priorities
+    /// are assigned by the order in which channels are first reached
+    /// (depth-first), so a `multiplicity` / `or` op (once implemented)
+    /// will deterministically derive priorities from the JSON ordering.
+    ///
+    /// `ac_pairs` is **always empty** in this MVP. AC veto lives in L2
+    /// (`L2Op::AcVeto`) and is applied by the L2 evaluator on built events,
+    /// not by `chunk_builder`. See SPEC § 5 (3-layer threshold model).
+    ///
+    /// Returns an error if:
+    /// - the `trigger` name does not exist in `l1.definitions`
+    /// - the resolved root op (or any descendant) is not yet supported
+    pub fn build_trigger_config(&self) -> Result<TriggerConfig, RuntimeConfigError> {
+        let by_name: HashMap<&str, &L1Op> = self
+            .l1
+            .definitions
+            .iter()
+            .map(|op| (op.name(), op))
+            .collect();
+
+        let mut triggers: HashSet<(u8, u8)> = HashSet::new();
+        let mut priorities: HashMap<(u8, u8), u32> = HashMap::new();
+        let mut visiting: HashSet<&str> = HashSet::new();
+
+        self.collect_trigger_channels(
+            &self.l1.trigger,
+            &by_name,
+            &mut triggers,
+            &mut priorities,
+            &mut visiting,
+        )?;
+
+        Ok(TriggerConfig {
+            triggers,
+            priorities,
+            ac_pairs: HashMap::new(),
+            coincidence_window_ns: self.timing.coincidence_window_ns,
+        })
+    }
+
+    fn collect_trigger_channels<'a>(
+        &'a self,
+        name: &'a str,
+        by_name: &HashMap<&'a str, &'a L1Op>,
+        triggers: &mut HashSet<(u8, u8)>,
+        priorities: &mut HashMap<(u8, u8), u32>,
+        visiting: &mut HashSet<&'a str>,
+    ) -> Result<(), RuntimeConfigError> {
+        let op = *by_name.get(name).ok_or_else(|| {
+            RuntimeConfigError::Invalid(format!("L1 trigger `{name}` is not defined"))
+        })?;
+
+        if !visiting.insert(op.name()) {
+            return Err(RuntimeConfigError::Invalid(format!(
+                "L1 cycle re-entered at `{}` while building trigger config",
+                op.name()
+            )));
+        }
+
+        match op {
+            L1Op::Channel {
+                module, channel, ..
+            } => {
+                let key = (*module, *channel);
+                if triggers.insert(key) {
+                    // First time we see this channel — assign priority by insertion order.
+                    let prio = priorities.len() as u32;
+                    priorities.insert(key, prio);
+                }
+            }
+            L1Op::Or { inputs, .. } => {
+                for child in inputs {
+                    self.collect_trigger_channels(child, by_name, triggers, priorities, visiting)?;
+                }
+            }
+            // Remaining variants are declared in the SPEC but not yet
+            // implemented in the evaluator. Reject explicitly so the caller
+            // sees a clear migration message rather than silently empty
+            // triggers.
+            L1Op::EnergyGate { .. } => {
+                return Err(RuntimeConfigError::Invalid(format!(
+                    "L1 op `{}`: `energy_gate` not yet implemented (MVP supports `channel`/`or` only)",
+                    op.name()
+                )));
+            }
+            L1Op::And { .. } => {
+                return Err(RuntimeConfigError::Invalid(format!(
+                    "L1 op `{}`: `and` not yet implemented (MVP supports `channel`/`or` only)",
+                    op.name()
+                )));
+            }
+            L1Op::Multiplicity { .. } => {
+                return Err(RuntimeConfigError::Invalid(format!(
+                    "L1 op `{}`: `multiplicity` not yet implemented (MVP supports `channel`/`or` only)",
+                    op.name()
+                )));
+            }
+        }
+        visiting.remove(op.name());
+        Ok(())
+    }
+
     /// Load from a JSON file and validate.
     pub fn load(path: &Path) -> Result<Self, RuntimeConfigError> {
         let content = std::fs::read_to_string(path)?;
@@ -673,6 +781,67 @@ mod tests {
         } else {
             panic!("expected Accept at index 4");
         }
+    }
+
+    #[test]
+    fn build_trigger_config_single_channel() {
+        let cfg = minimal_valid_config();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.triggers.len(), 1);
+        assert!(tc.triggers.contains(&(0, 0)));
+        assert_eq!(tc.priorities.get(&(0, 0)), Some(&0));
+        assert!(tc.ac_pairs.is_empty(), "AC pairs live in L2 ac_veto now");
+        assert_eq!(tc.coincidence_window_ns, 500.0);
+    }
+
+    #[test]
+    fn build_trigger_config_or_collects_all_channels() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::Channel {
+            name: "HPGe1".to_string(),
+            module: 0,
+            channel: 1,
+        });
+        cfg.l1.definitions.push(L1Op::Or {
+            name: "any".to_string(),
+            inputs: vec!["HPGe0".to_string(), "HPGe1".to_string()],
+        });
+        cfg.l1.trigger = "any".to_string();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.triggers.len(), 2);
+        assert!(tc.triggers.contains(&(0, 0)));
+        assert!(tc.triggers.contains(&(0, 1)));
+        // Priorities assigned by visitation order (DFS).
+        let p0 = tc.priorities.get(&(0, 0)).copied().unwrap();
+        let p1 = tc.priorities.get(&(0, 1)).copied().unwrap();
+        assert!(
+            p0 < p1,
+            "first-visited channel should get lower priority value"
+        );
+    }
+
+    #[test]
+    fn build_trigger_config_rejects_unimplemented_ops() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.push(L1Op::Multiplicity {
+            name: "mult".to_string(),
+            channels: vec!["HPGe0".to_string()],
+            min: 1,
+            window_ns: 100.0,
+        });
+        cfg.l1.trigger = "mult".to_string();
+        let e = cfg.build_trigger_config().unwrap_err();
+        assert!(e.to_string().contains("multiplicity"), "got {e}");
+    }
+
+    #[test]
+    fn build_trigger_config_rejects_unknown_trigger() {
+        let mut cfg = minimal_valid_config();
+        // Sneak past validate() by clearing l1 entirely
+        cfg.l1.definitions.clear();
+        cfg.l1.trigger = "Ghost".to_string();
+        let e = cfg.build_trigger_config().unwrap_err();
+        assert!(e.to_string().contains("Ghost"), "got {e}");
     }
 
     #[test]

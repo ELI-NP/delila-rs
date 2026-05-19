@@ -1,0 +1,419 @@
+//! L2 evaluator — filters built events through the named-ops chain
+//! defined in `eb_config.json` § `l2` (SPEC § 7).
+//!
+//! Pipeline placement: runs in the Worker thread **after** `chunk_builder`
+//! has produced `BuiltEvent`s; events for which no `Accept` op evaluates
+//! to true are dropped before being sent to the Writers.
+//!
+//! # MVP variant set
+//!
+//! Implemented now:
+//!
+//! - `counter` — count hits whose channel tags intersect `tags`
+//! - `flag`    — compare a `counter` result against a constant
+//! - `accept`  — combine `flag` results with `AND` / `OR`; the event is
+//!   kept if **any** `accept` op evaluates to true
+//!
+//! Declared in the SPEC but not yet evaluated (will error at filter
+//! construction time so callers see a clear migration message rather than
+//! silent passthrough):
+//!
+//! - `energy_gate`, `ac_veto`, `min_hits`
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::built_event::BuiltEvent;
+#[cfg(test)]
+use super::runtime_config::CmpOp;
+use super::runtime_config::{L2Op, LogicOp};
+
+/// Map of `(module, channel) → list of channel tags`, derived from
+/// `chSettings.json`. Tags are case-sensitive, matched literally.
+pub type ChannelTagMap = HashMap<(u8, u8), Vec<String>>;
+
+/// Pre-validated L2 filter pipeline.
+///
+/// Construct once at startup with [`L2Filter::new`], then call
+/// [`L2Filter::keeps`] on each built event from the hot path.
+#[derive(Debug, Clone)]
+pub struct L2Filter {
+    ops: Vec<L2Op>,
+    /// `(module, channel)` → tag set for counter evaluation.
+    channel_tags: Arc<ChannelTagMap>,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum L2FilterError {
+    #[error("L2 op `{name}` references unknown op `{target}`")]
+    UnknownReference { name: String, target: String },
+    #[error("L2 op `{name}` of type `{op_type}` is declared in the SPEC but not yet implemented")]
+    Unimplemented { name: String, op_type: &'static str },
+    #[error("L2 chain must contain at least one `accept` op")]
+    NoAccept,
+}
+
+impl L2Filter {
+    /// Construct the filter. Validates that every cross-reference points at
+    /// a known op and that every op type is one the evaluator supports.
+    pub fn new(ops: Vec<L2Op>, channel_tags: ChannelTagMap) -> Result<Self, L2FilterError> {
+        let mut by_name: HashMap<String, usize> = HashMap::new();
+        for (i, op) in ops.iter().enumerate() {
+            by_name.insert(op.name().to_string(), i);
+        }
+
+        // Per-op validation
+        let mut has_accept = false;
+        for op in &ops {
+            match op {
+                L2Op::Counter { .. } => {}
+                L2Op::Flag { name, monitor, .. } => {
+                    if !by_name.contains_key(monitor) {
+                        return Err(L2FilterError::UnknownReference {
+                            name: name.clone(),
+                            target: monitor.clone(),
+                        });
+                    }
+                }
+                L2Op::Accept { name, monitor, .. } => {
+                    has_accept = true;
+                    for m in monitor {
+                        if !by_name.contains_key(m) {
+                            return Err(L2FilterError::UnknownReference {
+                                name: name.clone(),
+                                target: m.clone(),
+                            });
+                        }
+                    }
+                }
+                L2Op::EnergyGate { name, .. } => {
+                    return Err(L2FilterError::Unimplemented {
+                        name: name.clone(),
+                        op_type: "energy_gate",
+                    });
+                }
+                L2Op::AcVeto { name, .. } => {
+                    return Err(L2FilterError::Unimplemented {
+                        name: name.clone(),
+                        op_type: "ac_veto",
+                    });
+                }
+                L2Op::MinHits { name, .. } => {
+                    return Err(L2FilterError::Unimplemented {
+                        name: name.clone(),
+                        op_type: "min_hits",
+                    });
+                }
+            }
+        }
+        if !has_accept {
+            return Err(L2FilterError::NoAccept);
+        }
+
+        Ok(Self {
+            ops,
+            channel_tags: Arc::new(channel_tags),
+        })
+    }
+
+    /// Per-event check: returns the list of accepted op names (empty if
+    /// the event should be **dropped**, non-empty if **kept**).
+    ///
+    /// Hot path: allocations are bounded — `counters` and `flags` HashMaps
+    /// have size = number of L2 ops, typically a handful.
+    pub fn evaluate(&self, event: &BuiltEvent) -> Vec<String> {
+        let mut counters: HashMap<&str, i64> = HashMap::with_capacity(self.ops.len());
+        let mut flags: HashMap<&str, bool> = HashMap::with_capacity(self.ops.len());
+        let mut accepted: Vec<String> = Vec::new();
+
+        for op in &self.ops {
+            match op {
+                L2Op::Counter { name, tags } => {
+                    let mut count: i64 = 0;
+                    for hit in &event.hits {
+                        if let Some(channel_tags) =
+                            self.channel_tags.get(&(hit.module, hit.channel))
+                        {
+                            if channel_tags.iter().any(|t| tags.contains(t)) {
+                                count += 1;
+                            }
+                        }
+                    }
+                    counters.insert(name.as_str(), count);
+                }
+                L2Op::Flag {
+                    name,
+                    monitor,
+                    operator,
+                    value,
+                } => {
+                    let lhs = counters
+                        .get(monitor.as_str())
+                        .copied()
+                        // monitor might also refer to another Flag (treated as 0/1).
+                        .or_else(|| flags.get(monitor.as_str()).map(|b| if *b { 1 } else { 0 }))
+                        .unwrap_or(0);
+                    flags.insert(name.as_str(), operator.apply(lhs, *value));
+                }
+                L2Op::Accept {
+                    name,
+                    monitor,
+                    operator,
+                } => {
+                    let inputs: Vec<bool> = monitor
+                        .iter()
+                        .map(|m| flags.get(m.as_str()).copied().unwrap_or(false))
+                        .collect();
+                    let result = match operator {
+                        LogicOp::And => !inputs.is_empty() && inputs.iter().all(|b| *b),
+                        LogicOp::Or => inputs.iter().any(|b| *b),
+                    };
+                    flags.insert(name.as_str(), result);
+                    if result {
+                        accepted.push(name.clone());
+                    }
+                }
+                _ => {
+                    // Unreachable: `new` rejects unimplemented variants.
+                    debug_assert!(false, "evaluator should not see {op:?}");
+                }
+            }
+        }
+
+        accepted
+    }
+
+    /// Hot-path bool check: `true` ↔ at least one `accept` op evaluated to true.
+    #[inline]
+    pub fn keeps(&self, event: &BuiltEvent) -> bool {
+        !self.evaluate(event).is_empty()
+    }
+
+    /// Convenience for tests / introspection.
+    pub fn op_count(&self) -> usize {
+        self.ops.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event_builder::built_event::EventHit;
+
+    fn ev_with(hits: &[(u8, u8)]) -> BuiltEvent {
+        let mut ev = BuiltEvent {
+            trigger_module: hits[0].0,
+            trigger_channel: hits[0].1,
+            ..BuiltEvent::default()
+        };
+        for (m, c) in hits {
+            ev.hits.push(EventHit {
+                module: *m,
+                channel: *c,
+                energy: 0,
+                energy_short: 0,
+                relative_time: 0.0,
+                with_ac: false,
+            });
+        }
+        ev
+    }
+
+    fn tags(pairs: &[((u8, u8), &[&str])]) -> ChannelTagMap {
+        pairs
+            .iter()
+            .map(|(k, v)| (*k, v.iter().map(|s| s.to_string()).collect()))
+            .collect()
+    }
+
+    fn minimal_ops() -> Vec<L2Op> {
+        vec![
+            L2Op::Counter {
+                name: "Si_E".to_string(),
+                tags: vec!["E_Sector".to_string()],
+            },
+            L2Op::Flag {
+                name: "Si_E_pos".to_string(),
+                monitor: "Si_E".to_string(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "keep".to_string(),
+                monitor: vec!["Si_E_pos".to_string()],
+                operator: LogicOp::And,
+            },
+        ]
+    }
+
+    #[test]
+    fn keeps_event_with_matching_tag() {
+        let tags = tags(&[((0, 0), &["E_Sector"])]);
+        let f = L2Filter::new(minimal_ops(), tags).unwrap();
+        let ev = ev_with(&[(0, 0)]);
+        assert!(f.keeps(&ev));
+        assert_eq!(f.evaluate(&ev), vec!["keep".to_string()]);
+    }
+
+    #[test]
+    fn drops_event_without_matching_tag() {
+        let tags = tags(&[((0, 0), &["dE_Sector"])]);
+        let f = L2Filter::new(minimal_ops(), tags).unwrap();
+        let ev = ev_with(&[(0, 0)]);
+        assert!(!f.keeps(&ev));
+        assert!(f.evaluate(&ev).is_empty());
+    }
+
+    #[test]
+    fn drops_event_with_no_known_channels() {
+        let tags = tags(&[((9, 9), &["E_Sector"])]);
+        let f = L2Filter::new(minimal_ops(), tags).unwrap();
+        let ev = ev_with(&[(0, 0)]);
+        assert!(!f.keeps(&ev));
+    }
+
+    #[test]
+    fn elifant_si_both_pattern() {
+        // Reproduces the ELIFANT-Event L2Settings.json example:
+        //   Counter(E_Sector) → Flag(E_pos>0)
+        //   Counter(dE_Sector) → Flag(dE_pos>0)
+        //   Accept(Si_Both = E_pos AND dE_pos)
+        let ops = vec![
+            L2Op::Counter {
+                name: "E_Sector_Counter".into(),
+                tags: vec!["E_Sector".into()],
+            },
+            L2Op::Counter {
+                name: "dE_Sector_Counter".into(),
+                tags: vec!["dE_Sector".into()],
+            },
+            L2Op::Flag {
+                name: "E_pos".into(),
+                monitor: "E_Sector_Counter".into(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Flag {
+                name: "dE_pos".into(),
+                monitor: "dE_Sector_Counter".into(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "Si_Both".into(),
+                monitor: vec!["E_pos".into(), "dE_pos".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let tag_map = tags(&[
+            ((0, 0), &["E_Sector"]),
+            ((0, 1), &["dE_Sector"]),
+            ((1, 0), &["E_Sector"]),
+        ]);
+        let f = L2Filter::new(ops, tag_map).unwrap();
+
+        // Two hits with both tags present → AND of flags is true → accepted.
+        assert!(f.keeps(&ev_with(&[(0, 0), (0, 1)])));
+        // Only E side present → dE_pos is false → AND false → dropped.
+        assert!(!f.keeps(&ev_with(&[(0, 0), (1, 0)])));
+        // Only dE side → E_pos false → dropped.
+        assert!(!f.keeps(&ev_with(&[(0, 1)])));
+    }
+
+    #[test]
+    fn or_accept_passes_with_any_flag_true() {
+        let ops = vec![
+            L2Op::Counter {
+                name: "A".into(),
+                tags: vec!["a".into()],
+            },
+            L2Op::Counter {
+                name: "B".into(),
+                tags: vec!["b".into()],
+            },
+            L2Op::Flag {
+                name: "fA".into(),
+                monitor: "A".into(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Flag {
+                name: "fB".into(),
+                monitor: "B".into(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "either".into(),
+                monitor: vec!["fA".into(), "fB".into()],
+                operator: LogicOp::Or,
+            },
+        ];
+        let tag_map = tags(&[((0, 0), &["a"]), ((0, 1), &["b"])]);
+        let f = L2Filter::new(ops, tag_map).unwrap();
+
+        // Just A — OR accept is true.
+        assert!(f.keeps(&ev_with(&[(0, 0)])));
+        // Just B — also true.
+        assert!(f.keeps(&ev_with(&[(0, 1)])));
+        // Neither — false.
+        assert!(!f.keeps(&ev_with(&[(9, 9)])));
+    }
+
+    #[test]
+    fn unimplemented_op_rejected_at_filter_construction() {
+        let ops = vec![
+            L2Op::MinHits {
+                name: "atleast2".into(),
+                min: 2,
+            },
+            L2Op::Accept {
+                name: "keep".into(),
+                monitor: vec![],
+                operator: LogicOp::And,
+            },
+        ];
+        let err = L2Filter::new(ops, HashMap::new()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                L2FilterError::Unimplemented {
+                    op_type: "min_hits",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn no_accept_rejected() {
+        let ops = vec![L2Op::Counter {
+            name: "A".into(),
+            tags: vec![],
+        }];
+        assert!(matches!(
+            L2Filter::new(ops, HashMap::new()),
+            Err(L2FilterError::NoAccept)
+        ));
+    }
+
+    #[test]
+    fn unknown_reference_rejected() {
+        let ops = vec![
+            L2Op::Flag {
+                name: "f".into(),
+                monitor: "Ghost".into(),
+                operator: CmpOp::Eq,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "a".into(),
+                monitor: vec!["f".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let err = L2Filter::new(ops, HashMap::new()).unwrap_err();
+        assert!(matches!(err, L2FilterError::UnknownReference { .. }));
+    }
+}
