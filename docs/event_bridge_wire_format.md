@@ -2,7 +2,20 @@
 
 **Version:** 1.0.0
 **Date:** 2026-01-27
-**Status:** Draft
+**Status:** ⚠️ **DEPRECATED (2026-05-19)** — see [EB SPEC v0.5.1 § 2.4](../TODO/event-builder/SPECIFICATION.md)
+
+> ## なぜ deprecated か
+>
+> 本ドキュメントは当初「delila-rs (Rust) → 別リポジトリの C++ Event Builder」を
+> 結ぶための 14 B 固定バイナリ wire format を定義していました。SPEC v0.3 以降で
+> C++ EB 経路は撤回され、Event Builder は **Rust 側で完結**するようになり、
+> Online EB は **Merger PUB に直接 subscribe**（MessagePack `EventDataBatch`）
+> する形に移行しました（[`ZmqHitSource`](../src/event_builder/source.rs) +
+> [`EventBuilderPipeline`](../src/event_builder/pipeline.rs)）。
+>
+> 既存の `event_bridge` バイナリ (`src/bin/event_bridge.rs`) は当面残しますが、
+> 新規連携は MessagePack 経由を推奨します。本ドキュメントは Phase 5 完了時に
+> 削除予定。
 
 ---
 

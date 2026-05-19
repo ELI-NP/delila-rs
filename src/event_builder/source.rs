@@ -494,3 +494,317 @@ mod delila_integration_tests {
         assert!(matches!(b3, HitBatch::Eos));
     }
 }
+
+// ===========================================================================
+// ZmqHitSource — Merger PUB → OnlineHit (online EB path)
+// ===========================================================================
+
+/// ZMQ SUB-backed [`HitSource`].
+///
+/// Subscribes to a Merger PUB endpoint, decodes each MessagePack
+/// `Message::Data(EventDataBatch)` into a batch of `Hit` (= `OnlineHit`),
+/// and surfaces `Message::EndOfStream` as `HitBatch::Eos`.
+///
+/// # Design notes
+///
+/// * Uses the raw `zmq` crate (not `tmq`) because the [`HitSource`] trait
+///   is synchronous — wrapping an async tmq socket in a runtime + channel
+///   only to call it from a `std::thread` adds latency and complexity.
+/// * `RCVHWM = 0` (zero-loss policy from CLAUDE.md): the SUB socket buffers
+///   in memory indefinitely rather than dropping messages.
+/// * Heartbeat messages do not produce hits — we return `SourceError::Timeout`
+///   so the sorter thread treats them as "no data yet, keep polling".
+/// * After the first EOS the source is latched; subsequent `next_batch`
+///   calls return [`HitBatch::Eos`] without touching the socket.
+pub struct ZmqHitSource {
+    socket: zmq::Socket,
+    _context: zmq::Context,
+    name: String,
+    saw_eos: bool,
+    last_timeout_ms: i32,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Handle for requesting graceful shutdown of a [`ZmqHitSource`] from
+/// another thread / async task (typically a Ctrl+C handler).
+///
+/// Setting the flag makes the next `next_batch` call (after the current
+/// blocking `recv` returns or times out) drain its latch and surface
+/// `SourceError::Disconnected` to the pipeline so it can flush and exit.
+#[derive(Debug, Clone)]
+pub struct ZmqHitSourceShutdown {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ZmqHitSourceShutdown {
+    pub fn request(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl ZmqHitSource {
+    /// Connect to a Merger PUB endpoint (e.g. `tcp://localhost:5556`).
+    pub fn connect(subscribe_address: &str) -> Result<Self, ZmqHitSourceError> {
+        let context = zmq::Context::new();
+        let socket = context.socket(zmq::SUB)?;
+        socket.set_rcvhwm(0)?; // never drop — buffer in memory (SPEC § 12, CLAUDE.md)
+        socket.connect(subscribe_address)?;
+        socket.set_subscribe(b"")?;
+
+        Ok(Self {
+            socket,
+            _context: context,
+            name: format!("zmq:{subscribe_address}"),
+            saw_eos: false,
+            last_timeout_ms: -1,
+            shutdown: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    /// Get a clonable handle that other threads can use to request shutdown.
+    pub fn shutdown_handle(&self) -> ZmqHitSourceShutdown {
+        ZmqHitSourceShutdown {
+            flag: self.shutdown.clone(),
+        }
+    }
+
+    fn ensure_rcvtimeo(&mut self, timeout: Duration) -> Result<(), SourceError> {
+        let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+        if ms != self.last_timeout_ms {
+            self.socket
+                .set_rcvtimeo(ms)
+                .map_err(|_| SourceError::Disconnected)?;
+            self.last_timeout_ms = ms;
+        }
+        Ok(())
+    }
+}
+
+impl HitSource for ZmqHitSource {
+    fn next_batch(&mut self, timeout: Duration) -> Result<HitBatch, SourceError> {
+        use crate::common::Message;
+
+        if self.saw_eos {
+            return Ok(HitBatch::Eos);
+        }
+        if self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            // External shutdown — tell the pipeline to flush and exit.
+            tracing::info!(source = self.name, "ZmqHitSource shutdown requested");
+            return Err(SourceError::Disconnected);
+        }
+
+        self.ensure_rcvtimeo(timeout)?;
+
+        let msg = match self.socket.recv_bytes(0) {
+            Ok(b) => b,
+            Err(zmq::Error::EAGAIN) => return Err(SourceError::Timeout),
+            Err(e) => {
+                tracing::error!(error = %e, source = self.name, "ZmqHitSource recv failed");
+                return Err(SourceError::Disconnected);
+            }
+        };
+
+        match Message::from_msgpack(&msg) {
+            Ok(Message::Data(batch)) => {
+                let hits: Vec<Hit> = batch.events.iter().map(Hit::from_event_data).collect();
+                Ok(HitBatch::Hits(hits))
+            }
+            Ok(Message::EndOfStream {
+                source_id,
+                run_number,
+            }) => {
+                tracing::info!(
+                    source = self.name,
+                    source_id,
+                    run_number,
+                    "ZmqHitSource: EOS received"
+                );
+                self.saw_eos = true;
+                Ok(HitBatch::Eos)
+            }
+            Ok(Message::Heartbeat(_)) => {
+                // No data; tell the sorter to keep polling.
+                Err(SourceError::Timeout)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    source = self.name,
+                    bytes = msg.len(),
+                    "ZmqHitSource: msgpack decode failed (skipping frame)"
+                );
+                // Treat as no-data so the sorter keeps trying instead of bailing.
+                Err(SourceError::Timeout)
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ZmqHitSourceError {
+    #[error("ZMQ error: {0}")]
+    Zmq(#[from] zmq::Error),
+}
+
+#[cfg(test)]
+mod zmq_tests {
+    use super::*;
+    use crate::common::{EventData, EventDataBatch, Message};
+
+    fn fresh_endpoint() -> String {
+        // Use inproc to avoid port collisions in concurrent test runs.
+        format!(
+            "inproc://zmq-hit-source-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    /// Bind a PUB socket sharing the same context as the SUB (required for
+    /// `inproc://` transport). Returns (ctx, pub_socket, sub_source).
+    fn paired(endpoint: &str) -> (zmq::Context, zmq::Socket, ZmqHitSource) {
+        let context = zmq::Context::new();
+        let publisher = context.socket(zmq::PUB).unwrap();
+        publisher.bind(endpoint).unwrap();
+
+        // Build the SUB on the SAME context so inproc works.
+        let socket = context.socket(zmq::SUB).unwrap();
+        socket.set_rcvhwm(0).unwrap();
+        socket.connect(endpoint).unwrap();
+        socket.set_subscribe(b"").unwrap();
+        let source = ZmqHitSource {
+            socket,
+            _context: context.clone(),
+            name: format!("zmq:{endpoint}"),
+            saw_eos: false,
+            last_timeout_ms: -1,
+            shutdown: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+
+        // SUB late-join on PUB needs a brief warmup window before first send.
+        std::thread::sleep(Duration::from_millis(50));
+        (context, publisher, source)
+    }
+
+    fn send(publisher: &zmq::Socket, msg: &Message) {
+        publisher.send(msg.to_msgpack().unwrap(), 0).unwrap();
+    }
+
+    #[test]
+    fn data_batch_round_trips() {
+        let ep = fresh_endpoint();
+        let (_ctx, publisher, mut source) = paired(&ep);
+
+        let mut batch = EventDataBatch::new(0, 1);
+        batch.events.push(EventData::new(1, 2, 100, 50, 1000.0, 0));
+        batch.events.push(EventData::new(1, 3, 200, 60, 1010.0, 0));
+        send(&publisher, &Message::data(batch));
+
+        // Poll up to ~500 ms total across short windows.
+        let mut got = None;
+        for _ in 0..20 {
+            match source.next_batch(Duration::from_millis(25)) {
+                Ok(HitBatch::Hits(h)) => {
+                    got = Some(h);
+                    break;
+                }
+                Ok(HitBatch::Eos) => panic!("unexpected EOS"),
+                Err(SourceError::Timeout) => continue,
+                Err(SourceError::Disconnected) => panic!("disconnected"),
+            }
+        }
+        let hits = got.expect("expected a Data batch within 500ms");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].channel, 2);
+        assert_eq!(hits[1].channel, 3);
+        assert_eq!(hits[0].timestamp_ns, 1000.0);
+    }
+
+    #[test]
+    fn eos_returns_eos_and_latches() {
+        let ep = fresh_endpoint();
+        let (_ctx, publisher, mut source) = paired(&ep);
+
+        send(&publisher, &Message::eos(7, 42));
+
+        let mut got_eos = false;
+        for _ in 0..20 {
+            match source.next_batch(Duration::from_millis(25)) {
+                Ok(HitBatch::Eos) => {
+                    got_eos = true;
+                    break;
+                }
+                Err(SourceError::Timeout) => continue,
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+        assert!(got_eos, "expected EOS within 500ms");
+
+        // Latched: subsequent calls return EOS immediately even if no message arrives.
+        for _ in 0..3 {
+            assert!(matches!(
+                source.next_batch(Duration::from_millis(1)),
+                Ok(HitBatch::Eos)
+            ));
+        }
+    }
+
+    #[test]
+    fn timeout_when_idle() {
+        let ep = fresh_endpoint();
+        let (_ctx, _publisher, mut source) = paired(&ep);
+
+        let r = source.next_batch(Duration::from_millis(20));
+        assert!(matches!(r, Err(SourceError::Timeout)), "got {r:?}");
+    }
+
+    #[test]
+    fn shutdown_handle_breaks_polling_loop() {
+        let ep = fresh_endpoint();
+        let (_ctx, _publisher, mut source) = paired(&ep);
+        let handle = source.shutdown_handle();
+
+        // Idle source: first poll times out.
+        assert!(matches!(
+            source.next_batch(Duration::from_millis(10)),
+            Err(SourceError::Timeout)
+        ));
+
+        // Request shutdown; the next poll should report Disconnected so
+        // the pipeline can drain and exit.
+        handle.request();
+        assert!(matches!(
+            source.next_batch(Duration::from_millis(10)),
+            Err(SourceError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn heartbeat_is_a_timeout_not_eos() {
+        use crate::common::Heartbeat;
+
+        let ep = fresh_endpoint();
+        let (_ctx, publisher, mut source) = paired(&ep);
+
+        send(&publisher, &Message::Heartbeat(Heartbeat::new(0, 0)));
+
+        // Should not produce Hits or Eos. Within 500ms we should still
+        // see only Timeout errors (or no event at all).
+        for _ in 0..20 {
+            match source.next_batch(Duration::from_millis(25)) {
+                Err(SourceError::Timeout) => continue,
+                Ok(HitBatch::Eos) => panic!("heartbeat must not surface as EOS"),
+                Ok(HitBatch::Hits(_)) => panic!("heartbeat must not surface as Hits"),
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+        assert!(!source.saw_eos);
+    }
+}

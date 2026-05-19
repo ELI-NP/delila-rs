@@ -5,17 +5,25 @@
 //!
 //! # 主要コンポーネント
 //!
-//! - `SliceBuilder` - Time Slice 方式のオフラインイベント構築
-//! - `L1Builder` - Moving Time Window 方式 (非推奨、互換性のため維持)
-//! - `TimeCalibrator` - チャンネル間時間オフセット測定
-//! - `chunk_builder` - チャンクベースのイベント構築 (v2, オンライン用)
+//! - `EventBuilderPipeline` (pipeline.rs) — オンライン/オフライン共通のコア
+//!   (HitSource trait で入力差し替え。Sorter / Workers / Writers の std::thread 構成)
+//! - `chunk_builder` — pure な event 構築ロジック (TriggerConfig + SortedChunk → BuiltEvent)
+//! - `source` — `DelilaFileHitSource` / `RootFileHitSource` / `ZmqHitSource`
+//! - `runtime_config` — `eb_config.json` (L1/L2 named-ops)
+//! - `time_offsets` — `timeSettings.json` (tree モデル, DFS resolver)
+//! - `SliceBuilder` — レガシー Time Slice (互換用、新パスは pipeline)
+//! - `L1Builder` — レガシー Moving Time Window (互換用)
+//! - `TimeCalibrator` — チャンネル間時間オフセット測定
+//!
+//! 旧 `online.rs` (711 行の独自パイプライン) は 2026-05-19 に削除。
+//! Online EB は `bin/online_event_builder.rs` から `EventBuilderPipeline +
+//! ZmqHitSource` を直接呼ぶ形に統一済み。
 
 mod built_event;
 pub mod chunk_builder;
 mod config;
 mod hit;
 mod l1_builder;
-pub mod online;
 pub mod pipeline;
 mod root_io;
 pub mod runtime_config;
@@ -45,7 +53,10 @@ pub use runtime_config::{
     RuntimeConfigError, TimingConfig,
 };
 pub use slice_builder::{SliceBuilder, SliceBuilderStats};
-pub use source::{DelilaFileHitSource, HitBatch, HitSource, SourceError};
+pub use source::{
+    DelilaFileHitSource, HitBatch, HitSource, SourceError, ZmqHitSource, ZmqHitSourceError,
+    ZmqHitSourceShutdown,
+};
 pub use time_calibrator::{TimeCalibrator, TimeHistogram};
 pub use time_offsets::{
     ParentRef, ResolvedRow, ResolvedTimeOffsets, TimeOffsetEntry, TimeOffsetsError, TimeOffsetsFile,
