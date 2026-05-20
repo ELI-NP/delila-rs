@@ -1,0 +1,625 @@
+{
+  "version": "1.0",
+  "timing": {
+    "coincidence_window_ns": 100.0,
+    "buffer_delay_ns": 1000000000.0,
+    "slice_duration_ns": 10000000.0
+  },
+  "channels_file": "chSettings.json",
+  "time_offsets_file": "timeSettings.json",
+  "l1": {
+    "definitions": [
+      {
+        "type": "channel",
+        "name": "trg_M00_C00",
+        "module": 0,
+        "channel": 0
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C01",
+        "module": 0,
+        "channel": 1
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C02",
+        "module": 0,
+        "channel": 2
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C03",
+        "module": 0,
+        "channel": 3
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C04",
+        "module": 0,
+        "channel": 4
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C05",
+        "module": 0,
+        "channel": 5
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C06",
+        "module": 0,
+        "channel": 6
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C07",
+        "module": 0,
+        "channel": 7
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C08",
+        "module": 0,
+        "channel": 8
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C09",
+        "module": 0,
+        "channel": 9
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C10",
+        "module": 0,
+        "channel": 10
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C11",
+        "module": 0,
+        "channel": 11
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C12",
+        "module": 0,
+        "channel": 12
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C13",
+        "module": 0,
+        "channel": 13
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C14",
+        "module": 0,
+        "channel": 14
+      },
+      {
+        "type": "channel",
+        "name": "trg_M00_C15",
+        "module": 0,
+        "channel": 15
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C00",
+        "module": 4,
+        "channel": 0
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C01",
+        "module": 4,
+        "channel": 1
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C02",
+        "module": 4,
+        "channel": 2
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C03",
+        "module": 4,
+        "channel": 3
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C04",
+        "module": 4,
+        "channel": 4
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C05",
+        "module": 4,
+        "channel": 5
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C06",
+        "module": 4,
+        "channel": 6
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C07",
+        "module": 4,
+        "channel": 7
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C08",
+        "module": 4,
+        "channel": 8
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C09",
+        "module": 4,
+        "channel": 9
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C10",
+        "module": 4,
+        "channel": 10
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C11",
+        "module": 4,
+        "channel": 11
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C12",
+        "module": 4,
+        "channel": 12
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C13",
+        "module": 4,
+        "channel": 13
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C14",
+        "module": 4,
+        "channel": 14
+      },
+      {
+        "type": "channel",
+        "name": "trg_M04_C15",
+        "module": 4,
+        "channel": 15
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C00",
+        "module": 9,
+        "channel": 0
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C01",
+        "module": 9,
+        "channel": 1
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C02",
+        "module": 9,
+        "channel": 2
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C03",
+        "module": 9,
+        "channel": 3
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C04",
+        "module": 9,
+        "channel": 4
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C05",
+        "module": 9,
+        "channel": 5
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C06",
+        "module": 9,
+        "channel": 6
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C07",
+        "module": 9,
+        "channel": 7
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C08",
+        "module": 9,
+        "channel": 8
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C09",
+        "module": 9,
+        "channel": 9
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C10",
+        "module": 9,
+        "channel": 10
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C11",
+        "module": 9,
+        "channel": 11
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C12",
+        "module": 9,
+        "channel": 12
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C13",
+        "module": 9,
+        "channel": 13
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C14",
+        "module": 9,
+        "channel": 14
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C15",
+        "module": 9,
+        "channel": 15
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C16",
+        "module": 9,
+        "channel": 16
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C17",
+        "module": 9,
+        "channel": 17
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C18",
+        "module": 9,
+        "channel": 18
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C19",
+        "module": 9,
+        "channel": 19
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C20",
+        "module": 9,
+        "channel": 20
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C21",
+        "module": 9,
+        "channel": 21
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C22",
+        "module": 9,
+        "channel": 22
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C23",
+        "module": 9,
+        "channel": 23
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C24",
+        "module": 9,
+        "channel": 24
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C25",
+        "module": 9,
+        "channel": 25
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C26",
+        "module": 9,
+        "channel": 26
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C27",
+        "module": 9,
+        "channel": 27
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C28",
+        "module": 9,
+        "channel": 28
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C29",
+        "module": 9,
+        "channel": 29
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C30",
+        "module": 9,
+        "channel": 30
+      },
+      {
+        "type": "channel",
+        "name": "trg_M09_C31",
+        "module": 9,
+        "channel": 31
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C00",
+        "module": 10,
+        "channel": 0
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C01",
+        "module": 10,
+        "channel": 1
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C02",
+        "module": 10,
+        "channel": 2
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C03",
+        "module": 10,
+        "channel": 3
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C04",
+        "module": 10,
+        "channel": 4
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C05",
+        "module": 10,
+        "channel": 5
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C06",
+        "module": 10,
+        "channel": 6
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C07",
+        "module": 10,
+        "channel": 7
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C08",
+        "module": 10,
+        "channel": 8
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C09",
+        "module": 10,
+        "channel": 9
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C10",
+        "module": 10,
+        "channel": 10
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C11",
+        "module": 10,
+        "channel": 11
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C12",
+        "module": 10,
+        "channel": 12
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C13",
+        "module": 10,
+        "channel": 13
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C14",
+        "module": 10,
+        "channel": 14
+      },
+      {
+        "type": "channel",
+        "name": "trg_M10_C15",
+        "module": 10,
+        "channel": 15
+      },
+      {
+        "type": "or",
+        "name": "trigger",
+        "inputs": [
+          "trg_M00_C00",
+          "trg_M00_C01",
+          "trg_M00_C02",
+          "trg_M00_C03",
+          "trg_M00_C04",
+          "trg_M00_C05",
+          "trg_M00_C06",
+          "trg_M00_C07",
+          "trg_M00_C08",
+          "trg_M00_C09",
+          "trg_M00_C10",
+          "trg_M00_C11",
+          "trg_M00_C12",
+          "trg_M00_C13",
+          "trg_M00_C14",
+          "trg_M00_C15",
+          "trg_M04_C00",
+          "trg_M04_C01",
+          "trg_M04_C02",
+          "trg_M04_C03",
+          "trg_M04_C04",
+          "trg_M04_C05",
+          "trg_M04_C06",
+          "trg_M04_C07",
+          "trg_M04_C08",
+          "trg_M04_C09",
+          "trg_M04_C10",
+          "trg_M04_C11",
+          "trg_M04_C12",
+          "trg_M04_C13",
+          "trg_M04_C14",
+          "trg_M04_C15",
+          "trg_M09_C00",
+          "trg_M09_C01",
+          "trg_M09_C02",
+          "trg_M09_C03",
+          "trg_M09_C04",
+          "trg_M09_C05",
+          "trg_M09_C06",
+          "trg_M09_C07",
+          "trg_M09_C08",
+          "trg_M09_C09",
+          "trg_M09_C10",
+          "trg_M09_C11",
+          "trg_M09_C12",
+          "trg_M09_C13",
+          "trg_M09_C14",
+          "trg_M09_C15",
+          "trg_M09_C16",
+          "trg_M09_C17",
+          "trg_M09_C18",
+          "trg_M09_C19",
+          "trg_M09_C20",
+          "trg_M09_C21",
+          "trg_M09_C22",
+          "trg_M09_C23",
+          "trg_M09_C24",
+          "trg_M09_C25",
+          "trg_M09_C26",
+          "trg_M09_C27",
+          "trg_M09_C28",
+          "trg_M09_C29",
+          "trg_M09_C30",
+          "trg_M09_C31",
+          "trg_M10_C00",
+          "trg_M10_C01",
+          "trg_M10_C02",
+          "trg_M10_C03",
+          "trg_M10_C04",
+          "trg_M10_C05",
+          "trg_M10_C06",
+          "trg_M10_C07",
+          "trg_M10_C08",
+          "trg_M10_C09",
+          "trg_M10_C10",
+          "trg_M10_C11",
+          "trg_M10_C12",
+          "trg_M10_C13",
+          "trg_M10_C14",
+          "trg_M10_C15"
+        ]
+      }
+    ],
+    "trigger": "trigger"
+  },
+  "l2": [
+    {
+      "type": "counter",
+      "name": "E_Sector_Counter",
+      "tags": [
+        "E_Sector"
+      ]
+    },
+    {
+      "type": "counter",
+      "name": "dE_Sector_Counter",
+      "tags": [
+        "dE_Sector"
+      ]
+    },
+    {
+      "type": "flag",
+      "name": "dE_More_Than_0",
+      "monitor": "dE_Sector_Counter",
+      "operator": ">",
+      "value": 0
+    },
+    {
+      "type": "flag",
+      "name": "E_More_Than_0",
+      "monitor": "E_Sector_Counter",
+      "operator": ">",
+      "value": 0
+    },
+    {
+      "type": "accept",
+      "name": "Si_Both",
+      "monitor": [
+        "E_More_Than_0",
+        "dE_More_Than_0"
+      ],
+      "operator": "AND"
+    }
+  ],
+  "output": {
+    "events_per_file": 1000000,
+    "directory": "./eb_output",
+    "zmq_pub_endpoint": "tcp://*:5610"
+  }
+}

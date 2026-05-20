@@ -1,0 +1,2472 @@
+[
+  [
+    {
+      "ID": 0,
+      "Module": 0,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.44635,
+      "p1": 1.06226,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 1,
+      "Module": 0,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.43275,
+      "p1": 1.06115,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 2,
+      "Module": 0,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.85531,
+      "p1": 1.0923,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 3,
+      "Module": 0,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.48088,
+      "p1": 1.09519,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 4,
+      "Module": 0,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.88395,
+      "p1": 1.10469,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 5,
+      "Module": 0,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.56661,
+      "p1": 1.08949,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 6,
+      "Module": 0,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.24477,
+      "p1": 1.09705,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 7,
+      "Module": 0,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.53631,
+      "p1": 1.10652,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 8,
+      "Module": 0,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.32498,
+      "p1": 1.10498,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 9,
+      "Module": 0,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 4.31269,
+      "p1": 1.0747,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 10,
+      "Module": 0,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 3.84193,
+      "p1": 1.06443,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 11,
+      "Module": 0,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 3.57542,
+      "p1": 1.08427,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 12,
+      "Module": 0,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 3.69743,
+      "p1": 1.10934,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 13,
+      "Module": 0,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 3.35307,
+      "p1": 1.11558,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 14,
+      "Module": 0,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 3.64899,
+      "p1": 1.09612,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 15,
+      "Module": 0,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [
+        "E_Sector"
+      ],
+      "p0": 3.72102,
+      "p1": 1.10777,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 16,
+      "Module": 1,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.32477,
+      "p1": 1.15351,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 17,
+      "Module": 1,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.97708,
+      "p1": 1.13761,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 18,
+      "Module": 1,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.91208,
+      "p1": 1.13422,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 19,
+      "Module": 1,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.63566,
+      "p1": 1.10984,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 20,
+      "Module": 1,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.57818,
+      "p1": 1.15148,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 21,
+      "Module": 1,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.75634,
+      "p1": 1.13727,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 22,
+      "Module": 1,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.26939,
+      "p1": 1.13782,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 23,
+      "Module": 1,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.63455,
+      "p1": 1.12094,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 24,
+      "Module": 1,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.78557,
+      "p1": 1.15994,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 25,
+      "Module": 1,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.92476,
+      "p1": 1.12349,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 26,
+      "Module": 1,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.83185,
+      "p1": 1.15857,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 27,
+      "Module": 1,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.19124,
+      "p1": 1.16342,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 28,
+      "Module": 1,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.50405,
+      "p1": 1.15341,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 29,
+      "Module": 1,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.76082,
+      "p1": 1.15817,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 30,
+      "Module": 1,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.3317,
+      "p1": 1.16414,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 31,
+      "Module": 1,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 32,
+      "Module": 2,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.45377,
+      "p1": 1.08754,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 33,
+      "Module": 2,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.63047,
+      "p1": 1.05504,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 34,
+      "Module": 2,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.41349,
+      "p1": 1.09607,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 35,
+      "Module": 2,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.23288,
+      "p1": 1.13591,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 36,
+      "Module": 2,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.25114,
+      "p1": 1.09454,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 37,
+      "Module": 2,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.79156,
+      "p1": 1.07052,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 38,
+      "Module": 2,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.06956,
+      "p1": 1.05186,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 39,
+      "Module": 2,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.58008,
+      "p1": 1.05361,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 40,
+      "Module": 2,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.61446,
+      "p1": 1.03888,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 41,
+      "Module": 2,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.4041,
+      "p1": 1.03851,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 42,
+      "Module": 2,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 7.42076,
+      "p1": 1.07984,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 43,
+      "Module": 2,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 1.68626,
+      "p1": 1.05935,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 44,
+      "Module": 2,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.13716,
+      "p1": 1.03805,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 45,
+      "Module": 2,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.66723,
+      "p1": 1.04477,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 46,
+      "Module": 2,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.48347,
+      "p1": 1.03128,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 47,
+      "Module": 2,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 48,
+      "Module": 3,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.13857,
+      "p1": 1.02019,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 49,
+      "Module": 3,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.25909,
+      "p1": 1.02497,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 50,
+      "Module": 3,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 2.95558,
+      "p1": 1.03089,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 51,
+      "Module": 3,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.28071,
+      "p1": 0.99805,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 52,
+      "Module": 3,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 2.54986,
+      "p1": 1.05029,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 53,
+      "Module": 3,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 5.84821,
+      "p1": 0.987267,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 54,
+      "Module": 3,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.0183,
+      "p1": 1.03451,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 55,
+      "Module": 3,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.45571,
+      "p1": 1.05915,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 56,
+      "Module": 3,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 3.6147,
+      "p1": 1.04557,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 57,
+      "Module": 3,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 2.34792,
+      "p1": 1.0342,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 58,
+      "Module": 3,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.00934,
+      "p1": 1.02193,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 59,
+      "Module": 3,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.20641,
+      "p1": 1.03582,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 60,
+      "Module": 3,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.38234,
+      "p1": 1.0239,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 61,
+      "Module": 3,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.61835,
+      "p1": 1.00506,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 62,
+      "Module": 3,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 4.61632,
+      "p1": 1.03463,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 63,
+      "Module": 3,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 64,
+      "Module": 4,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 13.1498,
+      "p1": 1.71261,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 65,
+      "Module": 4,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 13.323,
+      "p1": 1.7602,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 66,
+      "Module": 4,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 13.9374,
+      "p1": 1.77245,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 67,
+      "Module": 4,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 13.5416,
+      "p1": 1.73902,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 68,
+      "Module": 4,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 14.0764,
+      "p1": 1.73431,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 69,
+      "Module": 4,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 15.374,
+      "p1": 1.76597,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 70,
+      "Module": 4,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 14.3562,
+      "p1": 1.73717,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 71,
+      "Module": 4,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 14.5948,
+      "p1": 1.72483,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 72,
+      "Module": 4,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 11.9317,
+      "p1": 1.75514,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 73,
+      "Module": 4,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 15.531,
+      "p1": 1.8143,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 74,
+      "Module": 4,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 14.6975,
+      "p1": 1.76743,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 75,
+      "Module": 4,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 13.617,
+      "p1": 1.75745,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 76,
+      "Module": 4,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 11.5291,
+      "p1": 1.20656,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 77,
+      "Module": 4,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 12.73,
+      "p1": 1.71527,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 78,
+      "Module": 4,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 11.49,
+      "p1": 1.77726,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 79,
+      "Module": 4,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [
+        "dE_Sector"
+      ],
+      "p0": 12.8246,
+      "p1": 1.75272,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 80,
+      "Module": 5,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.9578,
+      "p1": 1.93382,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 81,
+      "Module": 5,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.1646,
+      "p1": 1.88394,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 82,
+      "Module": 5,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 11.8615,
+      "p1": 1.90934,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 83,
+      "Module": 5,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.0359,
+      "p1": 1.92188,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 84,
+      "Module": 5,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 11.2125,
+      "p1": 1.91246,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 85,
+      "Module": 5,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 10.8076,
+      "p1": 1.89539,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 86,
+      "Module": 5,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 11.3476,
+      "p1": 1.93609,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 87,
+      "Module": 5,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 10.5202,
+      "p1": 1.90957,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 88,
+      "Module": 5,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 10.0554,
+      "p1": 1.89977,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 89,
+      "Module": 5,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 10.5387,
+      "p1": 1.93968,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 90,
+      "Module": 5,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 10.5085,
+      "p1": 1.92692,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 91,
+      "Module": 5,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 8.94803,
+      "p1": 1.8876,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 92,
+      "Module": 5,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 10.7638,
+      "p1": 1.9247,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 93,
+      "Module": 5,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 7.70676,
+      "p1": 1.83953,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 94,
+      "Module": 5,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 7.52653,
+      "p1": 1.95352,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 95,
+      "Module": 5,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 96,
+      "Module": 6,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 13.4757,
+      "p1": 1.74677,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 97,
+      "Module": 6,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 13.1814,
+      "p1": 1.82534,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 98,
+      "Module": 6,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 99,
+      "Module": 6,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 100,
+      "Module": 6,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 14.6926,
+      "p1": 1.7906,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 101,
+      "Module": 6,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 13.8739,
+      "p1": 1.78767,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 102,
+      "Module": 6,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 15.1651,
+      "p1": 1.79426,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 103,
+      "Module": 6,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 14.4833,
+      "p1": 1.78934,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 104,
+      "Module": 6,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.369,
+      "p1": 1.88505,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 105,
+      "Module": 6,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.4989,
+      "p1": 2.03395,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 106,
+      "Module": 6,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.9742,
+      "p1": 1.82891,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 107,
+      "Module": 6,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 13.1629,
+      "p1": 1.75853,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 108,
+      "Module": 6,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 12.4429,
+      "p1": 1.75902,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 109,
+      "Module": 6,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 11.8518,
+      "p1": 1.71406,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 110,
+      "Module": 6,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 111,
+      "Module": 6,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 112,
+      "Module": 7,
+      "Channel": 0,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 18.3361,
+      "p1": 1.84132,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 113,
+      "Module": 7,
+      "Channel": 1,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 15.2114,
+      "p1": 1.8122,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 114,
+      "Module": 7,
+      "Channel": 2,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 15.6523,
+      "p1": 1.80898,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 115,
+      "Module": 7,
+      "Channel": 3,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 116,
+      "Module": 7,
+      "Channel": 4,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 15.7806,
+      "p1": 1.86212,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 117,
+      "Module": 7,
+      "Channel": 5,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 118,
+      "Module": 7,
+      "Channel": 6,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 15.096,
+      "p1": 1.83439,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 119,
+      "Module": 7,
+      "Channel": 7,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 16.4886,
+      "p1": 1.84341,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 120,
+      "Module": 7,
+      "Channel": 8,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 14.0902,
+      "p1": 1.7943,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 121,
+      "Module": 7,
+      "Channel": 9,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 15.8569,
+      "p1": 1.83483,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 122,
+      "Module": 7,
+      "Channel": 10,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 17.3132,
+      "p1": 1.8505,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 123,
+      "Module": 7,
+      "Channel": 11,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 14.8359,
+      "p1": 1.89955,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 124,
+      "Module": 7,
+      "Channel": 12,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 18.0171,
+      "p1": 1.85234,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 125,
+      "Module": 7,
+      "Channel": 13,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 14.7383,
+      "p1": 1.74503,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 126,
+      "Module": 7,
+      "Channel": 14,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 13.2247,
+      "p1": 1.739,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 127,
+      "Module": 7,
+      "Channel": 15,
+      "DetectorType": "Si",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 128,
+      "Module": 8,
+      "Channel": 0,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 129,
+      "Module": 8,
+      "Channel": 1,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 130,
+      "Module": 8,
+      "Channel": 2,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 131,
+      "Module": 8,
+      "Channel": 3,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 132,
+      "Module": 8,
+      "Channel": 4,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 133,
+      "Module": 8,
+      "Channel": 5,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 134,
+      "Module": 8,
+      "Channel": 6,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 135,
+      "Module": 8,
+      "Channel": 7,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 136,
+      "Module": 8,
+      "Channel": 8,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 137,
+      "Module": 8,
+      "Channel": 9,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 138,
+      "Module": 8,
+      "Channel": 10,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 139,
+      "Module": 8,
+      "Channel": 11,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 140,
+      "Module": 8,
+      "Channel": 12,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 141,
+      "Module": 8,
+      "Channel": 13,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 142,
+      "Module": 8,
+      "Channel": 14,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 143,
+      "Module": 8,
+      "Channel": 15,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 144,
+      "Module": 8,
+      "Channel": 16,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 145,
+      "Module": 8,
+      "Channel": 17,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 146,
+      "Module": 8,
+      "Channel": 18,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 147,
+      "Module": 8,
+      "Channel": 19,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 148,
+      "Module": 8,
+      "Channel": 20,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 149,
+      "Module": 8,
+      "Channel": 21,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 150,
+      "Module": 8,
+      "Channel": 22,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 151,
+      "Module": 8,
+      "Channel": 23,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 152,
+      "Module": 8,
+      "Channel": 24,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 153,
+      "Module": 8,
+      "Channel": 25,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 154,
+      "Module": 8,
+      "Channel": 26,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 155,
+      "Module": 8,
+      "Channel": 27,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 156,
+      "Module": 8,
+      "Channel": 28,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 157,
+      "Module": 8,
+      "Channel": 29,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 158,
+      "Module": 8,
+      "Channel": 30,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 159,
+      "Module": 8,
+      "Channel": 31,
+      "DetectorType": "AC",
+      "Tags": [],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 160,
+      "Module": 9,
+      "Channel": 0,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -71.8249,
+      "p1": 0.976192,
+      "p2": -1.69972e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 161,
+      "Module": 9,
+      "Channel": 1,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -83.3101,
+      "p1": 1.03426,
+      "p2": -2.70459e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 162,
+      "Module": 9,
+      "Channel": 2,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -77.1502,
+      "p1": 1.0118,
+      "p2": -1.68768e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 163,
+      "Module": 9,
+      "Channel": 3,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -145.145,
+      "p1": 0.715017,
+      "p2": 2.65579e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 164,
+      "Module": 9,
+      "Channel": 4,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -139.968,
+      "p1": 0.738915,
+      "p2": 5.21217e-07,
+      "p3": 0.0
+    },
+    {
+      "ID": 165,
+      "Module": 9,
+      "Channel": 5,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -143.351,
+      "p1": 0.834067,
+      "p2": 1.96967e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 166,
+      "Module": 9,
+      "Channel": 6,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -74.0733,
+      "p1": 1.09267,
+      "p2": -2.52918e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 167,
+      "Module": 9,
+      "Channel": 7,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -76.4921,
+      "p1": 1.08718,
+      "p2": -4.02073e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 168,
+      "Module": 9,
+      "Channel": 8,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -130.362,
+      "p1": 0.717846,
+      "p2": 2.26013e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 169,
+      "Module": 9,
+      "Channel": 9,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -111.244,
+      "p1": 0.69309,
+      "p2": 3.2849e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 170,
+      "Module": 9,
+      "Channel": 10,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 171,
+      "Module": 9,
+      "Channel": 11,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 172,
+      "Module": 9,
+      "Channel": 12,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 173,
+      "Module": 9,
+      "Channel": 13,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 174,
+      "Module": 9,
+      "Channel": 14,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 175,
+      "Module": 9,
+      "Channel": 15,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -69.6192,
+      "p1": 1.02048,
+      "p2": -2.81655e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 176,
+      "Module": 9,
+      "Channel": 16,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -77.6403,
+      "p1": 1.09745,
+      "p2": -2.26791e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 177,
+      "Module": 9,
+      "Channel": 17,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -73.0399,
+      "p1": 0.98887,
+      "p2": -2.24891e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 178,
+      "Module": 9,
+      "Channel": 18,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": -77.0513,
+      "p1": 1.00548,
+      "p2": 1.59153e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 179,
+      "Module": 9,
+      "Channel": 19,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 180,
+      "Module": 9,
+      "Channel": 20,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 181,
+      "Module": 9,
+      "Channel": 21,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 182,
+      "Module": 9,
+      "Channel": 22,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 183,
+      "Module": 9,
+      "Channel": 23,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 184,
+      "Module": 9,
+      "Channel": 24,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 185,
+      "Module": 9,
+      "Channel": 25,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 186,
+      "Module": 9,
+      "Channel": 26,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 187,
+      "Module": 9,
+      "Channel": 27,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 188,
+      "Module": 9,
+      "Channel": 28,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 189,
+      "Module": 9,
+      "Channel": 29,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 190,
+      "Module": 9,
+      "Channel": 30,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 191,
+      "Module": 9,
+      "Channel": 31,
+      "DetectorType": "PMT",
+      "Tags": [
+        "PMT"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ],
+  [
+    {
+      "ID": 192,
+      "Module": 10,
+      "Channel": 0,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 159.757,
+      "p1": 0.784285,
+      "p2": 1.22218e-05,
+      "p3": 0.0
+    },
+    {
+      "ID": 193,
+      "Module": 10,
+      "Channel": 1,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 119.772,
+      "p1": 0.653837,
+      "p2": 6.4977e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 194,
+      "Module": 10,
+      "Channel": 2,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 147.633,
+      "p1": 0.632132,
+      "p2": 7.78318e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 195,
+      "Module": 10,
+      "Channel": 3,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 197.637,
+      "p1": 0.501957,
+      "p2": 6.9801e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 196,
+      "Module": 10,
+      "Channel": 4,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 85.4862,
+      "p1": 0.914083,
+      "p2": 8.41378e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 197,
+      "Module": 10,
+      "Channel": 5,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 168.663,
+      "p1": 0.531598,
+      "p2": 6.37566e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 198,
+      "Module": 10,
+      "Channel": 6,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 137.449,
+      "p1": 0.635794,
+      "p2": 6.9315e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 199,
+      "Module": 10,
+      "Channel": 7,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 97.9064,
+      "p1": 0.548418,
+      "p2": 3.63087e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 200,
+      "Module": 10,
+      "Channel": 8,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 142.024,
+      "p1": 0.453865,
+      "p2": 4.12441e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 201,
+      "Module": 10,
+      "Channel": 9,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 170.452,
+      "p1": 0.597797,
+      "p2": 7.90235e-06,
+      "p3": 0.0
+    },
+    {
+      "ID": 202,
+      "Module": 10,
+      "Channel": 10,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 203,
+      "Module": 10,
+      "Channel": 11,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 204,
+      "Module": 10,
+      "Channel": 12,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 205,
+      "Module": 10,
+      "Channel": 13,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 206,
+      "Module": 10,
+      "Channel": 14,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    },
+    {
+      "ID": 207,
+      "Module": 10,
+      "Channel": 15,
+      "DetectorType": "HPGe",
+      "Tags": [
+        "HPGe"
+      ],
+      "p0": 0.0,
+      "p1": 1.0,
+      "p2": 0.0,
+      "p3": 0.0
+    }
+  ]
+]

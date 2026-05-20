@@ -128,9 +128,26 @@ enum Commands {
         #[arg(long, default_value = "100000")]
         events_per_file: usize,
 
-        /// Trigger channels (module:channel), can be repeated
+        /// Trigger channels (module:channel), can be repeated.
+        /// Ignored when --eb-config is supplied.
         #[arg(long)]
         trigger: Vec<String>,
+
+        /// Path to eb_config.json (SPEC § 4.1). When set, both L1
+        /// (trigger config) and L2 (filter) are derived from it,
+        /// overriding --trigger / --window / -c.
+        #[arg(long)]
+        eb_config: Option<PathBuf>,
+
+        /// Treat input files as ELIFANT-style ROOT (`ELIADE_Tree`)
+        /// instead of `.delila`. Useful for re-analysing data from
+        /// older runs through the unified pipeline.
+        #[arg(long)]
+        root_input: bool,
+
+        /// Tree name used when --root-input is set.
+        #[arg(long, default_value = "ELIADE_Tree")]
+        root_tree: String,
     },
 }
 
@@ -184,6 +201,9 @@ fn main() -> Result<()> {
             writers,
             events_per_file,
             trigger,
+            eb_config,
+            root_input,
+            root_tree,
         } => {
             run_event_building(
                 &input,
@@ -197,6 +217,9 @@ fn main() -> Result<()> {
                 writers,
                 events_per_file,
                 &trigger,
+                eb_config.as_deref(),
+                root_input,
+                &root_tree,
             )?;
         }
     }
@@ -391,65 +414,113 @@ fn run_event_building(
     n_writers: usize,
     events_per_file: usize,
     trigger_args: &[String],
+    eb_config: Option<&std::path::Path>,
+    root_input: bool,
+    root_tree: &str,
 ) -> Result<()> {
     use delila_rs::event_builder::chunk_builder::TriggerConfig;
     use delila_rs::event_builder::pipeline::{EventBuilderPipeline, PipelineConfig};
-    use delila_rs::event_builder::{load_channel_config, DelilaFileHitSource};
+    use delila_rs::event_builder::{
+        load_channel_config, ChannelTagMap, DelilaFileHitSource, EbRuntimeConfig, HitSource,
+        L2Filter, RootFileHitSource,
+    };
     use std::collections::{HashMap, HashSet};
 
     info!(
-        "Building events: window={}ns, {} input files, {} workers, {} writers",
-        window,
+        "Building events: {} input files ({}), {} workers, {} writers",
         input_files.len(),
+        if root_input { "ROOT" } else { ".delila" },
         n_workers,
         n_writers,
     );
 
-    // chSettings.json is now a pure detector/tag descriptor (Phase J) — it
-    // no longer carries trigger flags. Trigger channels come from CLI
-    // `--trigger module:channel` args; for richer L1/L2 setups use the
-    // online binary with an `eb_config.json` instead.
-    if let Some(config_path) = config {
-        match load_channel_config(config_path) {
-            Ok(_) => info!(
-                "Loaded chSettings.json (descriptor only) from: {}",
-                config_path.display()
-            ),
-            Err(e) => warn!(
-                "Failed to load chSettings.json {}: {} — continuing without it",
-                config_path.display(),
-                e
-            ),
+    // ── Resolve TriggerConfig + L2Filter ────────────────────────────────
+    //
+    // Two paths:
+    //   (a) --eb-config supplied → derive both L1 (TriggerConfig) and L2
+    //       (L2Filter) from eb_config.json + the tag map in chSettings.json.
+    //       This is the new SPEC v0.5.1 path and the only one that supports
+    //       multi-channel triggers / multiplicity / L2 cuts.
+    //   (b) Legacy: --trigger CLI args build a static TriggerConfig; L2
+    //       filter is disabled.
+    let (trigger_config, l2_filter, effective_window) = if let Some(eb_cfg_path) = eb_config {
+        let rt = EbRuntimeConfig::load(eb_cfg_path).with_context(|| {
+            format!("Failed to load eb_config.json: {}", eb_cfg_path.display())
+        })?;
+        let tc = rt
+            .build_trigger_config()
+            .context("Failed to derive TriggerConfig from eb_config.l1")?;
+        let ch_tags: ChannelTagMap = match config {
+            Some(p) => {
+                let cfg = load_channel_config(p)
+                    .with_context(|| format!("Failed to load chSettings.json: {}", p.display()))?;
+                let mut m = HashMap::new();
+                for module_chs in &cfg {
+                    for c in module_chs {
+                        m.insert((c.module, c.channel), c.tags.clone());
+                    }
+                }
+                m
+            }
+            None => {
+                warn!("--eb-config supplied but --config (chSettings.json) is not — \
+                       L2 counter ops will see no tags");
+                HashMap::new()
+            }
+        };
+        let l2 = L2Filter::new(rt.l2.clone(), ch_tags).context("Failed to build L2 filter")?;
+        info!(
+            file = %eb_cfg_path.display(),
+            coincidence = rt.timing.coincidence_window_ns,
+            triggers = tc.triggers.len(),
+            mult = tc.multiplicity_triggers.len(),
+            l2_ops = rt.l2.len(),
+            "Loaded eb_config.json"
+        );
+        (tc, Some(l2), rt.timing.coincidence_window_ns)
+    } else {
+        if let Some(config_path) = config {
+            match load_channel_config(config_path) {
+                Ok(_) => info!(
+                    "Loaded chSettings.json (descriptor only) from: {}",
+                    config_path.display()
+                ),
+                Err(e) => warn!(
+                    "Failed to load chSettings.json {}: {} — continuing without it",
+                    config_path.display(),
+                    e
+                ),
+            }
         }
-    }
-
-    let mut triggers = HashSet::new();
-    let mut priorities = HashMap::new();
-    for (priority, trig) in trigger_args.iter().enumerate() {
-        let parts: Vec<&str> = trig.split(':').collect();
-        if parts.len() == 2 {
-            let module: u8 = parts[0].parse().context("Invalid trigger module")?;
-            let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
-            triggers.insert((module, channel));
-            priorities.insert((module, channel), priority as u32);
-            info!(
-                "Added trigger: ({}, {}) priority {}",
-                module, channel, priority
-            );
-        } else {
-            warn!("Invalid trigger format: {} (expected module:channel)", trig);
+        let mut triggers = HashSet::new();
+        let mut priorities = HashMap::new();
+        for (priority, trig) in trigger_args.iter().enumerate() {
+            let parts: Vec<&str> = trig.split(':').collect();
+            if parts.len() == 2 {
+                let module: u8 = parts[0].parse().context("Invalid trigger module")?;
+                let channel: u8 = parts[1].parse().context("Invalid trigger channel")?;
+                triggers.insert((module, channel));
+                priorities.insert((module, channel), priority as u32);
+                info!(
+                    "Added trigger: ({}, {}) priority {}",
+                    module, channel, priority
+                );
+            } else {
+                warn!("Invalid trigger format: {} (expected module:channel)", trig);
+            }
         }
-    }
-    if triggers.is_empty() {
-        warn!("No triggers specified — pass at least one `--trigger module:channel`");
-    }
-    let trigger_config = TriggerConfig {
-        triggers,
-        priorities,
-        ac_pairs: HashMap::new(),
-        coincidence_window_ns: window,
-        trigger_energy_gates: std::collections::HashMap::new(),
-        multiplicity_triggers: Vec::new(),
+        if triggers.is_empty() {
+            warn!("No triggers specified — pass --trigger or --eb-config");
+        }
+        let tc = TriggerConfig {
+            triggers,
+            priorities,
+            ac_pairs: HashMap::new(),
+            coincidence_window_ns: window,
+            trigger_energy_gates: std::collections::HashMap::new(),
+            multiplicity_triggers: Vec::new(),
+        };
+        (tc, None, window)
     };
 
     // Load time calibration
@@ -463,11 +534,9 @@ fn run_event_building(
         TimeCalibration::new(0, 0)
     };
 
-    // Ensure output directory exists
     std::fs::create_dir_all(output_dir)
         .with_context(|| format!("Failed to create output dir: {}", output_dir.display()))?;
 
-    // Create pipeline
     let pipeline_config = PipelineConfig {
         safe_horizon_ns: 50_000_000.0, // 50ms
         n_workers,
@@ -481,17 +550,42 @@ fn run_event_building(
         zmq_pub_endpoint: None, // offline EB does not publish
     };
 
-    let pipeline = EventBuilderPipeline::new(pipeline_config, trigger_config, time_calibration);
+    info!(
+        "Pipeline config: coincidence={} ns, events_per_file={}, output_dir={}",
+        effective_window,
+        events_per_file,
+        output_dir.display()
+    );
 
-    // Create source from .delila files
-    let source = DelilaFileHitSource::new(input_files.to_vec());
+    let mut pipeline =
+        EventBuilderPipeline::new(pipeline_config, trigger_config, time_calibration);
+    if let Some(l2) = l2_filter {
+        pipeline = pipeline.with_l2_filter(l2);
+    }
 
-    // Run pipeline (blocking)
-    let stats = pipeline.run(source);
+    let stats = if root_input {
+        // ELIFANT-style ROOT (ELIADE_Tree). Batch size of 100k is a balance
+        // between memory and worker throughput — matches `events_per_file`
+        // order of magnitude.
+        let source: RootFileHitSource =
+            RootFileHitSource::new(input_files.to_vec(), root_tree, 100_000);
+        info!(
+            "Reading ROOT files from `{}` tree (source: {})",
+            root_tree,
+            source.name()
+        );
+        pipeline.run(source)
+    } else {
+        let source = DelilaFileHitSource::new(input_files.to_vec());
+        pipeline.run(source)
+    };
 
     info!(
-        "Event building complete: {} hits → {} events in {} files",
-        stats.received_hits, stats.events_built, stats.files_written
+        hits = stats.received_hits,
+        events_built = stats.events_built,
+        events_kept = stats.events_kept,
+        files = stats.files_written,
+        "Event building complete"
     );
 
     Ok(())
