@@ -523,13 +523,38 @@ fn run_event_building(
         (tc, None, window)
     };
 
-    // Load time calibration
+    // Load time calibration — try the SPEC v0.5.1 tree schema first
+    // (`{version, entries: [...]}`), fall back to the legacy single-ref
+    // JSON if that fails to parse.
     let time_calibration = if let Some(calib_path) = time_calib {
-        let calib = TimeCalibration::from_json_file(calib_path).with_context(|| {
-            format!("Failed to load time calibration: {}", calib_path.display())
-        })?;
-        info!("Loaded time calibration from: {}", calib_path.display());
-        calib
+        use delila_rs::event_builder::TimeOffsetsFile;
+        if let Ok(tree_file) = TimeOffsetsFile::load(calib_path) {
+            match tree_file.resolve() {
+                Ok(resolved) => {
+                    for w in &resolved.warnings {
+                        warn!("{w}");
+                    }
+                    info!(
+                        "Loaded timeSettings.json (tree schema, {} roots) from: {}",
+                        resolved.root_count(),
+                        calib_path.display()
+                    );
+                    resolved.into_time_calibration()
+                }
+                Err(e) => {
+                    warn!("Failed to resolve tree-form timeSettings: {e} — falling back to legacy loader");
+                    TimeCalibration::from_json_file(calib_path).with_context(|| {
+                        format!("Failed to load time calibration: {}", calib_path.display())
+                    })?
+                }
+            }
+        } else {
+            let calib = TimeCalibration::from_json_file(calib_path).with_context(|| {
+                format!("Failed to load time calibration: {}", calib_path.display())
+            })?;
+            info!("Loaded legacy time calibration from: {}", calib_path.display());
+            calib
+        }
     } else {
         TimeCalibration::new(0, 0)
     };

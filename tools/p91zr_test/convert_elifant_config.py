@@ -56,9 +56,14 @@ def build_slim_ch_settings(elifant_ch: list) -> list:
     return slim
 
 
-def build_l1_or_of_triggers(elifant_ch: list) -> dict:
+def build_l1_or_of_triggers(elifant_ch: list, trigger_min_adc: int = 0) -> dict:
     """ELIFANT marks each trigger channel with IsEventTrigger=true. Map this
     to one `channel` op per trigger + a top-level `or` op named `trigger`.
+
+    When `trigger_min_adc > 0`, wrap each `channel` op in an `energy_gate`
+    so that hits below the threshold do NOT become trigger anchors
+    (SPEC § 5.2 trigger gate — kills the very-low-energy noise floor that
+    otherwise produces accidental coincidences).
     """
     definitions = []
     or_inputs = []
@@ -66,14 +71,25 @@ def build_l1_or_of_triggers(elifant_ch: list) -> dict:
         for ch in mod:
             if not ch.get("IsEventTrigger", False):
                 continue
-            name = f"trg_M{ch['Module']:02d}_C{ch['Channel']:02d}"
+            ch_name = f"trg_M{ch['Module']:02d}_C{ch['Channel']:02d}"
             definitions.append({
                 "type": "channel",
-                "name": name,
+                "name": ch_name,
                 "module": ch["Module"],
                 "channel": ch["Channel"],
             })
-            or_inputs.append(name)
+            if trigger_min_adc > 0:
+                gated_name = f"{ch_name}_gate"
+                definitions.append({
+                    "type": "energy_gate",
+                    "name": gated_name,
+                    "source": ch_name,
+                    "min_adc": trigger_min_adc,
+                    "max_adc": 65535,
+                })
+                or_inputs.append(gated_name)
+            else:
+                or_inputs.append(ch_name)
 
     definitions.append({
         "type": "or",
@@ -137,6 +153,14 @@ def main():
         default=None,
         help="Override CoincidenceWindow from settings.json",
     )
+    ap.add_argument(
+        "--trigger-min-adc",
+        type=int,
+        default=0,
+        help="If > 0, wrap every L1 channel op in an `energy_gate` "
+             "with `min_adc` set to this and `max_adc` = 65535. "
+             "Acts as a noise floor on trigger candidates.",
+    )
     args = ap.parse_args()
 
     elifant_dir = Path(args.elifant_dir)
@@ -158,7 +182,7 @@ def main():
 
     # eb_config.json
     coincidence = args.coincidence_window_ns or settings["CoincidenceWindow"]
-    l1 = build_l1_or_of_triggers(elifant_ch)
+    l1 = build_l1_or_of_triggers(elifant_ch, trigger_min_adc=args.trigger_min_adc)
     l2 = [convert_l2_op(op) for op in elifant_l2]
 
     eb_config = {
