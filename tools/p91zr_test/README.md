@@ -54,18 +54,28 @@ End-to-end smoke test of the delila-rs EB on the ELIFANT2025 p91Zr data set.
    - `si_e_de.root` — multiplicity / per-detector ADC spectra / Si E vs dE 2D
    - `si_e_de.png` — quick visual of the 2D plot
 
-## Latest run (10 files, 2026-05-20)
+## Full-dataset run (205 files, 2026-05-20)
 
-| metric              | value         |
-|---------------------|---------------|
-| input files         | 10            |
-| input hits          | 413,031,122   |
-| L1 events built     | 102,256,329   |
-| L2 events kept      | 32,317        |
-| ROOT files written  | 2             |
-| pipeline runtime    | 44 s          |
+| metric              | value           |
+|---------------------|-----------------|
+| input files         | 205             |
+| input hits          | 8,425,960,061   |
+| L1 events built     | 2,045,229,984   |
+| L2 events kept      | 643,643         |
+| ROOT files written  | 2               |
+| pipeline runtime    | 14 min 39 s     |
 
-L1 → L2 ratio ≈ 0.03 % (driven by `Si_Both = E_Sector AND dE_Sector`).
+L1 → L2 ratio ≈ 0.031 % (driven by `Si_Both = E_Sector AND dE_Sector`).
+
+### Output PNGs
+
+The macro emits three views of the Si E vs dE 2D:
+
+| file | content |
+|---|---|
+| `si_e_de_raw.png`      | raw ADC, **zoomed to the physics region** (0..10 k × 0..6 k). The two clear bananas (heavy / light charged particles) live here. |
+| `si_e_de_raw_full.png` | raw ADC, full 0..65 k × 0..65 k. The physics is squashed into the bottom-left corner; horizontal/vertical stripes at ADC ≈ 32 768 are channels saturating their 15-bit ADC. |
+| `si_e_de_kev.png`      | calibrated using `chSettings.p0..p3`. Same shape as raw, axis label keV. |
 
 ## Known limitations / next iteration
 
