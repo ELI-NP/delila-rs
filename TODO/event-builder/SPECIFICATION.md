@@ -1,8 +1,8 @@
 # Event Builder 仕様書
 
-**Version:** 0.5.1
-**Date:** 2026-05-19
-**Status:** Design (Unified Pipeline + named-ops L1/L2 + tree-based time offsets)
+**Version:** 0.6.0
+**Date:** 2026-05-20
+**Status:** Design (Unified Pipeline + named-ops L1/L2 + tree-based time offsets + scope-boundary principle)
 
 > v0.4 → v0.5 主要変更:
 > - C++ Event Builder (別リポジトリ) 経路を **撤回** — Rust 側で完結
@@ -43,6 +43,53 @@
 | メモリ使用量上限 | 10 GB |
 | コインシデンスウィンドウ | ±500 ns（設定可能） |
 | 最大到着遅延 | 1 秒未満 |
+
+### 1.4 設計原則 — EB の責務境界
+
+> **EB は「物理屋が解析しやすい時間整列済みデータ」を最大限の情報量で提供する。
+> 最終的な物理判断は物理屋が下流で一つ一つ確認しながら行う。**
+
+EB は **汎用のイベント構築エンジン**であり、特定実験の物理仮定を組み込まない。
+判断が分かれる cut は **EB に入れず、必ず下流の解析側に置く**こと。
+
+#### 1.4.1 EB に入れて良いもの
+
+1. **時間整列 + コインシデンスウィンドウ**でのイベント構築 (§ 8)
+2. **検出器固有のノイズフロア** (per-channel `ThresholdADC`、§ 5.1) ―
+   *hardware-tied、再較正不要*
+3. **L1 トリガー認識** (§ 6) ― 「どの hit を event の起点にするか」の汎用判定
+4. **L2 named-ops filter** (§ 7) で**汎用的な**条件:
+   - tag ベースの hit カウント (`counter` / `flag` / `accept`)
+   - event hit 数下限 (`min_hits`)
+   - 時刻窓ベースの veto (`ac_veto` ― 物理 generic な意味で)
+   - 単一 (mod, ch) のエネルギー範囲 (`energy_gate`)
+
+#### 1.4.2 EB に入れてはならないもの
+
+| Cut | なぜダメか |
+|---|---|
+| **検出器配置に依存するペアリング** (例: `mod0_ch X ↔ mod4_ch (15−X)`) | geometry が変われば全データ silent 汚染 |
+| **2 body / N body kinematic cut** | 反応仮定が必要、新仮説で再解析する自由を奪う |
+| **較正後エネルギーに依存する cut** (Bethe-Bloch banana 上の event だけ採用 等) | 較正パラメータの変更で結果が変わる、再現性低い |
+| **粒子種仮定が必要な選択** (proton/α 識別 等) | 物理判断、解析者の責務 |
+| **Multiplicity-conditional pairing** (1 sector のみ採用 等) | 反応 topology 依存 |
+
+#### 1.4.3 違反した場合のリスク
+
+1. **データ消失が永続化** ― EB がフィルタで落とした event は ROOT に書かれず、二度と戻らない。CLAUDE.md の zero-loss 原則に直接違反
+2. **デバッグ不能** ― 落とされた event は見えず、不審な構造の正体（accidental か real か）が診断できない
+3. **再解析の自由を奪う** ― 新しい物理仮定で見直したくなった時、EB を再走させる必要が出る (時間 + ディスク + データ整合性のコスト)
+4. **EB が一実験専用ツールに退化** ― 汎用 EB の意味が失われる
+
+#### 1.4.4 物理 cut の正しい置き場所
+
+| 層 | ツール | 例 |
+|---|---|---|
+| 解析 (人間が確認しながら) | ROOT macro / Python (uproot) / Rust 自前 binary | anti-diagonal pairing, kinematic cut, PID banana, calibration-dependent thresholds |
+
+EB は **追加 cut なしで全 coincidence event を吐き出す**。物理屋は ROOT 出力に対して macro で一段ずつ cut を入れ、各段で histogram を見て妥当性を確認する。
+
+我々の責務は **その解析がやりやすくなるように、event に可能な限り情報を付ける** ことに尽きる (`UserInfo[]`、波形ポインタ、L2 で評価した中間 flag の保存、等の将来拡張)。
 
 ---
 
@@ -620,3 +667,4 @@ pub enum HitBatch<H> {
 | 2026-02-02 | 0.4.0 | Phase 7: Time Slice 方式へ移行 |
 | 2026-05-19 | 0.5.0 | **大規模改訂**: C++ EB 経路を撤回 / OnlineHit と OfflineHit 分離 / L1+L2 named-ops モデル / 3 層 threshold モデル / Event Bridge retire / EB Monitor 新プロセス / 統一パイプライン位置付け明確化 |
 | 2026-05-19 | 0.5.1 | `timeSettings.json` を tree モデルに刷新（C 案）— 多 root 許容 / HitSource 入口でオフセット 1 回適用 / `time_reference` field 廃止 / 補助 CLI `eb-offsets` 追加 |
+| 2026-05-20 | 0.6.0 | **§ 1.4 設計原則 — EB の責務境界**を追加。EB は汎用エンジン、実験固有の geometry / kinematic / particle-ID cut は物理屋が下流解析で行う、と明文化。ELIFANT2025 p91Zr の実データテストで anti-diagonal sector pairing を EB に押し込む誘惑が発生したのを契機に整理 |
