@@ -145,9 +145,9 @@ void analyse_si_e_de(const char* output_dir = "eb_output",
   // ---- Histograms -----------------------------------------------------------
   TH1F* h_mult = new TH1F("h_mult", "Event multiplicity;hits / event;count",
                          32, -0.5, 31.5);
-  TH1F* h_e_adc = new TH1F("h_e_adc", "E_Sector raw ADC (mod=0);ADC;count",
+  TH1F* h_e_adc = new TH1F("h_e_adc", "E raw ADC (mod 4, det-B front);ADC;count",
                           4096, 0, 65536);
-  TH1F* h_de_adc = new TH1F("h_de_adc", "dE_Sector raw ADC (mod=4);ADC;count",
+  TH1F* h_de_adc = new TH1F("h_de_adc", "dE raw ADC (mod 0, det-A front);ADC;count",
                            4096, 0, 65536);
   TH1F* h_trigger_mod =
       new TH1F("h_trigger_mod", "Trigger module distribution;module;count",
@@ -158,33 +158,72 @@ void analyse_si_e_de(const char* output_dir = "eb_output",
                401, -200.5, 200.5);
 
   // Raw ADC: full range and zoomed to the physics region.
+  // Convention: X = E (total, mod 4), Y = dE (energy loss, mod 0).
   TH2F* h_e_de_2d_raw_full =
       new TH2F("h_e_de_2d_raw_full",
-               "Si E vs dE (raw ADC, full range);"
-               "dE (mod 4) ADC;E (mod 0) ADC",
+               "Si dE vs E (raw ADC, full range, **naive any+any pairing**);"
+               "E (mod 4) ADC;dE (mod 0) ADC",
                256, 0, 65536, 256, 0, 65536);
   TH2F* h_e_de_2d_raw =
       new TH2F("h_e_de_2d_raw",
-               "Si E vs dE (raw ADC, physics zoom);"
-               "dE (mod 4) ADC;E (mod 0) ADC",
-               400, 0, 10000, 300, 0, 6000);
+               "Si dE vs E (raw ADC, zoom, **naive any+any pairing**);"
+               "E (mod 4) ADC;dE (mod 0) ADC",
+               400, 0, 12000, 300, 0, 12000);
 
-  // Calibrated: axes chosen so the proton/alpha banana fits comfortably.
-  // The exact keV range depends on the per-channel polynomials; if needed
-  // the limits below are easy to widen.
   TH2F* h_e_de_2d_kev =
       new TH2F("h_e_de_2d_kev",
-               "Si E vs dE (calibrated);"
-               "dE [keV];E [keV]",
-               400, 0, 12000, 300, 0, 8000);
+               "Si dE vs E (calibrated, **naive any+any pairing**);"
+               "E [keV] (mod 4);dE [keV] (mod 0)",
+               400, 0, 12000, 300, 0, 12000);
+
+  // Kinematic-pair (anti-diagonal) mapping between the two telescope
+  // fronts. The user confirmed mod0_ch X ↔ mod4_ch (15 - X) by inspection
+  // of the histSectorSector image (a clean anti-diagonal band — the
+  // expected 2-body back-to-back kinematics for this layout). The
+  // ring_ring.cpp variable naming makes mod 0 the *dE* (det-A front)
+  // and mod 4 the *E* (det-B front); the chSettings.json tags use
+  // the opposite labels and should be ignored for physics.
+  auto partner_of_mod0 = [](int ch) -> int { return 15 - ch; };
+  auto partner_of_mod4 = [](int ch) -> int { return 15 - ch; };
+
+  TH2F* h_e_de_paired_kev =
+      new TH2F("h_e_de_paired_kev",
+               "Si dE vs E (calibrated, **anti-diagonal pairing**);"
+               "E [keV] (mod 4);dE [keV] (mod 0)",
+               400, 0, 12000, 300, 0, 12000);
+  TH2F* h_e_de_paired_raw =
+      new TH2F("h_e_de_paired_raw",
+               "Si dE vs E (raw ADC, **anti-diagonal pairing**);"
+               "E (mod 4) ADC;dE (mod 0) ADC",
+               400, 0, 12000, 300, 0, 12000);
+
+  // Per-channel diagnostics: dE_ch vs dE_ADC (mod 4) and E_ch vs E_ADC
+  // (mod 0). Helps identify whether the vertical stripe at dE ≈ 8.1 MeV
+  // comes from one specific channel firing at fixed amplitude.
+  TH2F* h_de_ch_vs_adc =
+      new TH2F("h_de_ch_vs_adc",
+               "Per-channel dE spectrum (mod 4);ch;ADC",
+               16, -0.5, 15.5, 400, 0, 10000);
+  TH2F* h_e_ch_vs_adc =
+      new TH2F("h_e_ch_vs_adc",
+               "Per-channel E spectrum (mod 0);ch;ADC",
+               16, -0.5, 15.5, 400, 0, 10000);
 
   // ---- Loop -----------------------------------------------------------------
   const Long64_t n_entries = ch.GetEntries();
   Long64_t coincident_pairs = 0;
+  Long64_t paired_sectors = 0;
   for (Long64_t i = 0; i < n_entries; ++i) {
     ch.GetEntry(i);
     h_mult->Fill(multiplicity);
     h_trigger_mod->Fill(trigger_mod);
+
+    // Per-channel first-hit arrays for the anti-diagonal pairing:
+    // index by raw ch (0..15), record ADC + ch.
+    std::array<int, 16> mod0_adc{};  // dE side (front, thin)
+    std::array<int, 16> mod4_adc{};  // E side (front, thick)
+    mod0_adc.fill(-1);
+    mod4_adc.fill(-1);
 
     int e_adc = -1, de_adc = -1;
     int e_mod = -1, e_ch = -1, de_mod = -1, de_ch = -1;
@@ -195,35 +234,66 @@ void analyse_si_e_de(const char* output_dir = "eb_output",
       auto rt = (*rel_time)[j];
       h_rel_time->Fill(rt);
       if (m == 0) {
-        h_e_adc->Fill(e);
-        if (e_adc < 0) {
-          e_adc = e;
-          e_mod = m;
-          e_ch = c;
-        }
-      } else if (m == 4) {
-        h_de_adc->Fill(e);
+        // mod 0 → dE detector (per ring_ring.cpp variable naming)
+        h_de_adc->Fill(e);  // <-- mod 0 is dE
+        h_de_ch_vs_adc->Fill(c, e);
         if (de_adc < 0) {
           de_adc = e;
           de_mod = m;
           de_ch = c;
         }
+        if (c < 16 && mod0_adc[c] < 0) {
+          mod0_adc[c] = e;
+        }
+      } else if (m == 4) {
+        // mod 4 → E detector (per ring_ring.cpp variable naming)
+        h_e_adc->Fill(e);  // <-- mod 4 is E
+        h_e_ch_vs_adc->Fill(c, e);
+        if (e_adc < 0) {
+          e_adc = e;
+          e_mod = m;
+          e_ch = c;
+        }
+        if (c < 16 && mod4_adc[c] < 0) {
+          mod4_adc[c] = e;
+        }
       }
     }
     if (e_adc >= 0 && de_adc >= 0) {
-      h_e_de_2d_raw->Fill(de_adc, e_adc);
-      h_e_de_2d_raw_full->Fill(de_adc, e_adc);
+      // Convention: X = E (mod 4), Y = dE (mod 0)
+      h_e_de_2d_raw->Fill(e_adc, de_adc);
+      h_e_de_2d_raw_full->Fill(e_adc, de_adc);
       double e_kev = cal_or_raw(calib, e_mod, e_ch, e_adc);
       double de_kev = cal_or_raw(calib, de_mod, de_ch, de_adc);
-      h_e_de_2d_kev->Fill(de_kev, e_kev);
+      h_e_de_2d_kev->Fill(e_kev, de_kev);
       coincident_pairs++;
     }
+
+    // Anti-diagonal pairing: for each ch X in mod 0, pair with ch (15-X)
+    // in mod 4. Both must have fired.
+    for (int x = 0; x < 16; ++x) {
+      int partner = partner_of_mod0(x);  // = 15 - x
+      if (mod0_adc[x] >= 0 && mod4_adc[partner] >= 0) {
+        int de = mod0_adc[x];
+        int e = mod4_adc[partner];
+        // Convention: X = E, Y = dE
+        h_e_de_paired_raw->Fill(e, de);
+        double de_kev = cal_or_raw(calib, 0, x, de);
+        double e_kev = cal_or_raw(calib, 4, partner, e);
+        h_e_de_paired_kev->Fill(e_kev, de_kev);
+        paired_sectors++;
+      }
+    }
+    // Silence "unused" warning when partner_of_mod4 is not used directly.
+    (void)partner_of_mod4;
   }
 
   std::cout << "\n=== Summary ===\n";
-  std::cout << "Total events:     " << n_entries << "\n";
-  std::cout << "E + dE pairs:     " << coincident_pairs << " ("
+  std::cout << "Total events:           " << n_entries << "\n";
+  std::cout << "E + dE pairs (naive):   " << coincident_pairs << " ("
             << 100.0 * coincident_pairs / n_entries << "%)\n";
+  std::cout << "Same-sector pairs:      " << paired_sectors << " ("
+            << 100.0 * paired_sectors / n_entries << "%)\n";
   std::cout << "Trigger-mod distribution:\n";
   for (int b = 1; b <= h_trigger_mod->GetNbinsX(); ++b) {
     if (h_trigger_mod->GetBinContent(b) > 0) {
@@ -240,6 +310,10 @@ void analyse_si_e_de(const char* output_dir = "eb_output",
   h_e_de_2d_raw->Write();
   h_e_de_2d_raw_full->Write();
   h_e_de_2d_kev->Write();
+  h_e_de_paired_raw->Write();
+  h_e_de_paired_kev->Write();
+  h_de_ch_vs_adc->Write();
+  h_e_ch_vs_adc->Write();
   h_trigger_mod->Write();
   h_rel_time->Write();
   fout.Close();
@@ -257,4 +331,8 @@ void analyse_si_e_de(const char* output_dir = "eb_output",
   save_png(h_e_de_2d_raw, "raw");
   save_png(h_e_de_2d_raw_full, "raw_full");
   save_png(h_e_de_2d_kev, "kev");
+  save_png(h_e_de_paired_raw, "paired_raw");
+  save_png(h_e_de_paired_kev, "paired_kev");
+  save_png(h_de_ch_vs_adc, "de_per_channel");
+  save_png(h_e_ch_vs_adc, "e_per_channel");
 }

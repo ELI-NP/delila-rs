@@ -67,26 +67,47 @@ End-to-end smoke test of the delila-rs EB on the ELIFANT2025 p91Zr data set.
 
 L1 → L2 ratio ≈ 0.031 % (driven by `Si_Both = E_Sector AND dE_Sector`).
 
+### Setup (per the user, 2026-05-20)
+
+- **2 telescope** configuration (Det A, Det B).
+- **mod 0 = dE (Det A front sectors), mod 4 = E (Det B front sectors)** —
+  follow the `ring_ring.cpp` variable naming, not the `chSettings.json`
+  tags (which use the opposite labels and are misleading).
+- **Geometric correspondence: mod0 ch X ↔ mod4 ch (15 − X)**
+  (an anti-diagonal in the sector-vs-sector plot, confirming back-to-back
+  2-body kinematics). The naive "any mod 0 + any mod 4" pairing also
+  produces cross-sector accidentals, so the anti-diagonal cut is needed
+  to clean up the PID banana.
+
 ### Output PNGs
 
-The macro emits three views of the Si E vs dE 2D:
+Convention throughout: **X = E (mod 4), Y = dE (mod 0)** — the canonical
+ΔE-E PID orientation. The macro now emits:
 
 | file | content |
 |---|---|
-| `si_e_de_raw.png`      | raw ADC, **zoomed to the physics region** (0..10 k × 0..6 k). The two clear bananas (heavy / light charged particles) live here. |
-| `si_e_de_raw_full.png` | raw ADC, full 0..65 k × 0..65 k. The physics is squashed into the bottom-left corner; horizontal/vertical stripes at ADC ≈ 32 768 are channels saturating their 15-bit ADC. |
-| `si_e_de_kev.png`      | calibrated using `chSettings.p0..p3`. Same shape as raw, axis label keV. |
+| `si_e_de_kev.png`        | naive any+any pairing, calibrated keV. Two bananas visible, with a vertical stripe at E ≈ 8 MeV that is a cross-sector accidental (the 8.1 MeV peak in one mod 4 channel paired with random mod 0 hits). |
+| `si_e_de_raw.png`        | same as above, raw ADC, zoomed. |
+| `si_e_de_raw_full.png`   | full 0..65 k × 0..65 k. Saturation stripes at ADC ≈ 32 768 visible. |
+| `si_e_de_paired_kev.png` | **anti-diagonal pairing** (mod0_X ↔ mod4_(15−X)), calibrated keV. Clean Bethe-Bloch banana. The 8 MeV stripe is gone. |
+| `si_e_de_paired_raw.png` | anti-diagonal pairing, raw ADC. |
+| `si_e_de_de_per_channel.png` | mod 4 dE spectrum vs ch. Shows the 8.2 MeV peak lives on multiple channels (mostly odd ch → even sectors after `GetSector`). |
+| `si_e_de_e_per_channel.png`  | mod 0 dE spectrum vs ch. |
 
 ## Known limitations / next iteration
 
 1. **L2 lacks positional correlation** — current `Si_Both` only requires
-   *any* mod 0 hit + *any* mod 4 hit. Real ΔE-E coincidence wants matching
-   sectors. Either extend L2 with a "same-channel" op, or filter at the
-   analysis stage.
+   *any* mod 0 hit + *any* mod 4 hit. Real ΔE-E coincidence wants the
+   anti-diagonal (mod0_X ↔ mod4_(15−X)) pairing. The analysis macro
+   already filters this way; could be pushed into a new L2 op so the
+   filter happens in the EB pipeline itself.
 2. **No L1 energy gate** — noise hits in both layers pass within 100 ns
    accidentally, inflating the low-energy population in the 2D plot.
    Add `{"type": "energy_gate", ...}` op around each trigger channel.
-3. **Raw ADC** in the macro — `chSettings.p0..p3` calibration not yet
-   applied at the analysis stage.
-4. **No timeSettings.json** — every channel runs with offset = 0. Run
-   `event_builder time-calib` to produce one and re-run the EB.
+3. **No timeSettings.json** — every channel runs with offset = 0. Run
+   `event_builder time-calib` to produce one and re-run the EB for the
+   strictest coincidence check.
+4. **Multiplicity ≥ 2 not filtered** — events where multiple sectors
+   fire produce multiple anti-diagonal pairs per event. `ring_ring.cpp`
+   uses `dECounter == 1 || eCounter == 1` to suppress this; could be
+   replicated in the macro for the cleanest banana.
