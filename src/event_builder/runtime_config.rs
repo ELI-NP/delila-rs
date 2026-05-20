@@ -16,16 +16,21 @@
 //!
 //! # Variant coverage
 //!
-//! All L1 and L2 ops declared in SPEC v0.5.1 are now wired up:
+//! All L1 and L2 ops declared in SPEC v0.7 are wired up:
 //!
 //! | Layer | Implemented |
 //! |-------|-------------|
-//! | L1    | `Channel`, `Or`, `EnergyGate`, `Multiplicity`, `And` |
+//! | L1    | `Channel`, `Or`, `Multiplicity`, `And` |
 //! | L2    | `Counter`, `Flag`, `Accept`, `EnergyGate`, `MinHits`, `AcVeto` |
 //!
 //! `And` and `Multiplicity` are stateful — they get lowered into a
 //! [`MultiplicityTrigger`] (sliding-window check evaluated inside
 //! `chunk_builder::build_events_from_chunk`).
+//!
+//! L1 `EnergyGate` was removed in v0.7 — pushing per-channel threshold
+//! cuts into the EB violated the data-preservation principle in SPEC
+//! § 1.4 for no measurable gain (p91Zr v3 run: 100 ADC gate dropped
+//! < 0.1 % of events). Threshold cuts now live in analysis macros.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -76,28 +81,21 @@ pub struct L1Config {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum L1Op {
-    /// "This (module, channel) hit qualifies as a trigger candidate." — MVP.
+    /// "This (module, channel) hit qualifies as a trigger candidate."
     Channel {
         name: String,
         module: u8,
         channel: u8,
     },
-    /// "Source op is true AND hit energy in [min_adc, max_adc]." — deferred.
-    EnergyGate {
-        name: String,
-        source: String,
-        min_adc: u16,
-        max_adc: u16,
-    },
-    /// "Any input op is true (logical OR)." — deferred.
+    /// "Any input op is true (logical OR)."
     Or { name: String, inputs: Vec<String> },
-    /// "All inputs fire within `window_ns` of each other." — deferred.
+    /// "All inputs fire within `window_ns` of each other."
     And {
         name: String,
         inputs: Vec<String>,
         window_ns: f64,
     },
-    /// "`min` of the listed channels fire within `window_ns`." — deferred.
+    /// "`min` of the listed channels fire within `window_ns`."
     Multiplicity {
         name: String,
         channels: Vec<String>,
@@ -110,7 +108,6 @@ pub enum L1Op {
 fn op_type_str(op: &L1Op) -> &'static str {
     match op {
         L1Op::Channel { .. } => "channel",
-        L1Op::EnergyGate { .. } => "energy_gate",
         L1Op::Or { .. } => "or",
         L1Op::And { .. } => "and",
         L1Op::Multiplicity { .. } => "multiplicity",
@@ -121,7 +118,6 @@ impl L1Op {
     pub fn name(&self) -> &str {
         match self {
             Self::Channel { name, .. }
-            | Self::EnergyGate { name, .. }
             | Self::Or { name, .. }
             | Self::And { name, .. }
             | Self::Multiplicity { name, .. } => name,
@@ -132,7 +128,6 @@ impl L1Op {
     pub fn dependencies(&self) -> Vec<&str> {
         match self {
             Self::Channel { .. } => Vec::new(),
-            Self::EnergyGate { source, .. } => vec![source.as_str()],
             Self::Or { inputs, .. } | Self::And { inputs, .. } => {
                 inputs.iter().map(String::as_str).collect()
             }
@@ -298,9 +293,9 @@ impl EbRuntimeConfig {
     /// (depth-first), so a `multiplicity` / `or` op (once implemented)
     /// will deterministically derive priorities from the JSON ordering.
     ///
-    /// `ac_pairs` is **always empty** in this MVP. AC veto lives in L2
-    /// (`L2Op::AcVeto`) and is applied by the L2 evaluator on built events,
-    /// not by `chunk_builder`. See SPEC § 5 (3-layer threshold model).
+    /// `ac_pairs` is **always empty**. AC veto lives in L2 (`L2Op::AcVeto`)
+    /// and is applied by the L2 evaluator on built events, not by
+    /// `chunk_builder`. See SPEC § 5 (2-layer threshold model).
     ///
     /// Returns an error if:
     /// - the `trigger` name does not exist in `l1.definitions`
@@ -315,7 +310,6 @@ impl EbRuntimeConfig {
 
         let mut triggers: HashSet<(u8, u8)> = HashSet::new();
         let mut priorities: HashMap<(u8, u8), u32> = HashMap::new();
-        let mut energy_gates: HashMap<(u8, u8), (u16, u16)> = HashMap::new();
         let mut multiplicities: Vec<MultiplicityTrigger> = Vec::new();
         let mut visiting: HashSet<&str> = HashSet::new();
 
@@ -324,9 +318,7 @@ impl EbRuntimeConfig {
             &by_name,
             &mut triggers,
             &mut priorities,
-            &mut energy_gates,
             &mut multiplicities,
-            None,
             &mut visiting,
         )?;
 
@@ -335,7 +327,6 @@ impl EbRuntimeConfig {
             priorities,
             ac_pairs: HashMap::new(),
             coincidence_window_ns: self.timing.coincidence_window_ns,
-            trigger_energy_gates: energy_gates,
             multiplicity_triggers: multiplicities,
         })
     }
@@ -363,20 +354,15 @@ impl EbRuntimeConfig {
     }
 
     /// DFS over the L1 op graph that resolves `name` down to a set of
-    /// `Channel` ops, optionally restricting them to an inherited
-    /// `(min_adc, max_adc)` energy gate that the surrounding
-    /// `EnergyGate` op pushed down. Concrete results are accumulated
-    /// into the three out-parameter maps.
-    #[allow(clippy::too_many_arguments)]
+    /// `Channel` ops. Concrete results are accumulated into the
+    /// out-parameter maps.
     fn collect_trigger_channels<'a>(
         &'a self,
         name: &'a str,
         by_name: &HashMap<&'a str, &'a L1Op>,
         triggers: &mut HashSet<(u8, u8)>,
         priorities: &mut HashMap<(u8, u8), u32>,
-        energy_gates: &mut HashMap<(u8, u8), (u16, u16)>,
         multiplicities: &mut Vec<MultiplicityTrigger>,
-        inherited_gate: Option<(u16, u16)>,
         visiting: &mut HashSet<&'a str>,
     ) -> Result<(), RuntimeConfigError> {
         let op = *by_name.get(name).ok_or_else(|| {
@@ -400,21 +386,6 @@ impl EbRuntimeConfig {
                     let prio = priorities.len() as u32;
                     priorities.insert(key, prio);
                 }
-                if let Some(gate) = inherited_gate {
-                    // Refuse to silently intersect two different gates on
-                    // the same channel — make the user write the intent
-                    // explicitly.
-                    if let Some(existing) = energy_gates.get(&key) {
-                        if *existing != gate {
-                            return Err(RuntimeConfigError::Invalid(format!(
-                                "L1: channel ({}, {}) reached via two conflicting energy_gate ops ({:?} vs {:?})",
-                                module, channel, existing, gate
-                            )));
-                        }
-                    } else {
-                        energy_gates.insert(key, gate);
-                    }
-                }
             }
             L1Op::Or { inputs, .. } => {
                 for child in inputs {
@@ -423,35 +394,10 @@ impl EbRuntimeConfig {
                         by_name,
                         triggers,
                         priorities,
-                        energy_gates,
                         multiplicities,
-                        inherited_gate,
                         visiting,
                     )?;
                 }
-            }
-            L1Op::EnergyGate {
-                source,
-                min_adc,
-                max_adc,
-                ..
-            } => {
-                if inherited_gate.is_some() {
-                    return Err(RuntimeConfigError::Invalid(format!(
-                        "L1 op `{}`: nested energy_gate is not supported (MVP)",
-                        op.name()
-                    )));
-                }
-                self.collect_trigger_channels(
-                    source,
-                    by_name,
-                    triggers,
-                    priorities,
-                    energy_gates,
-                    multiplicities,
-                    Some((*min_adc, *max_adc)),
-                    visiting,
-                )?;
             }
             // `and` lowers to a Multiplicity with min = |inputs| (must all
             // fire). `multiplicity` keeps its own min. Both require their
@@ -862,11 +808,9 @@ mod tests {
             "definitions": [
               {"type": "channel", "name": "HPGe0", "module": 0, "channel": 0},
               {"type": "channel", "name": "HPGe1", "module": 0, "channel": 1},
-              {"type": "energy_gate", "name": "HPGe0_good", "source": "HPGe0",
-               "min_adc": 100, "max_adc": 16000},
-              {"type": "or", "name": "HPGe_any_good", "inputs": ["HPGe0_good", "HPGe1"]}
+              {"type": "or", "name": "HPGe_any", "inputs": ["HPGe0", "HPGe1"]}
             ],
-            "trigger": "HPGe_any_good"
+            "trigger": "HPGe_any"
           },
           "l2": [
             {"type": "counter", "name": "E_Sector_Counter", "tags": ["E_Sector"]},
@@ -892,7 +836,7 @@ mod tests {
         "#;
         let cfg: EbRuntimeConfig = serde_json::from_str(json).unwrap();
         cfg.validate().unwrap();
-        assert_eq!(cfg.l1.definitions.len(), 4);
+        assert_eq!(cfg.l1.definitions.len(), 3);
         assert_eq!(cfg.l2.len(), 7);
         // Operator round-trips:
         if let L2Op::Flag { operator, .. } = &cfg.l2[2] {
@@ -1028,72 +972,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_trigger_config_supports_energy_gate() {
-        let mut cfg = minimal_valid_config();
-        cfg.l1.definitions.push(L1Op::EnergyGate {
-            name: "HPGe0_good".to_string(),
-            source: "HPGe0".to_string(),
-            min_adc: 100,
-            max_adc: 16000,
-        });
-        cfg.l1.trigger = "HPGe0_good".to_string();
-        let tc = cfg.build_trigger_config().unwrap();
-
-        assert!(tc.triggers.contains(&(0, 0)));
-        assert_eq!(tc.trigger_energy_gates.get(&(0, 0)), Some(&(100, 16000)));
-    }
-
-    #[test]
-    fn energy_gate_propagates_through_or() {
-        let mut cfg = minimal_valid_config();
-        cfg.l1.definitions.push(L1Op::Channel {
-            name: "HPGe1".into(),
-            module: 0,
-            channel: 1,
-        });
-        cfg.l1.definitions.push(L1Op::Or {
-            name: "both".into(),
-            inputs: vec!["HPGe0".into(), "HPGe1".into()],
-        });
-        cfg.l1.definitions.push(L1Op::EnergyGate {
-            name: "both_good".into(),
-            source: "both".into(),
-            min_adc: 200,
-            max_adc: 12000,
-        });
-        cfg.l1.trigger = "both_good".into();
-
-        let tc = cfg.build_trigger_config().unwrap();
-        assert_eq!(tc.triggers.len(), 2);
-        // Both channels should inherit the same gate.
-        assert_eq!(tc.trigger_energy_gates.get(&(0, 0)), Some(&(200, 12000)));
-        assert_eq!(tc.trigger_energy_gates.get(&(0, 1)), Some(&(200, 12000)));
-    }
-
-    #[test]
-    fn conflicting_energy_gates_on_same_channel_rejected() {
-        let mut cfg = minimal_valid_config();
-        cfg.l1.definitions.push(L1Op::EnergyGate {
-            name: "g1".into(),
-            source: "HPGe0".into(),
-            min_adc: 100,
-            max_adc: 1000,
-        });
-        cfg.l1.definitions.push(L1Op::EnergyGate {
-            name: "g2".into(),
-            source: "HPGe0".into(),
-            min_adc: 500,
-            max_adc: 5000,
-        });
-        cfg.l1.definitions.push(L1Op::Or {
-            name: "any".into(),
-            inputs: vec!["g1".into(), "g2".into()],
-        });
-        cfg.l1.trigger = "any".into();
-        let e = cfg.build_trigger_config().unwrap_err();
-        assert!(e.to_string().contains("conflicting"), "got {e}");
-    }
+    // L1 `energy_gate` was removed in v0.7 — pushing threshold cuts at
+    // the EB layer caused permanent data loss for negligible benefit (see
+    // p91Zr v3 run: 100 ADC gate dropped <0.1 % of events). The matching
+    // tests have been deleted; threshold cuts now live in analysis macros.
 
     #[test]
     fn build_trigger_config_rejects_unknown_trigger() {

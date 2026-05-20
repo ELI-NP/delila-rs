@@ -1,8 +1,8 @@
 # Event Builder 仕様書
 
-**Version:** 0.6.0
+**Version:** 0.7.0
 **Date:** 2026-05-20
-**Status:** Design (Unified Pipeline + named-ops L1/L2 + tree-based time offsets + scope-boundary principle)
+**Status:** Design (Unified Pipeline + named-ops L1/L2 + tree-based time offsets + scope-boundary principle + 2-layer threshold)
 
 > v0.4 → v0.5 主要変更:
 > - C++ Event Builder (別リポジトリ) 経路を **撤回** — Rust 側で完結
@@ -310,18 +310,23 @@ delila2root eb-offsets <timeSettings.json>
 
 ---
 
-## 5. 閾値モデル（3 層）
+## 5. 閾値モデル（2 層）
 
 | 層 | 場所 | 適用タイミング | 性質 | 復元可否 |
 |---|---|---|---|---|
-| **(1) Hit-level floor** | `chSettings.json` `ThresholdADC` per channel | EB 入口 (ingress) | ノイズフロア (hardware-tied) | **不可** — drop された hit は EB に渡らない |
-| **(2) Trigger gate** | L1 `energy_gate` op | L1 trigger 認識 | analysis-tied、min + max | 可 — 非トリガー hit は event に残る |
-| **(3) Event filter** | L2 op | built event 後 | per-event physics cut | 可 — reject された event のみ捨てる |
+| **(1) Event filter** | L2 op | built event 後 | per-event の汎用フィルタ (`min_hits`, `ac_veto`, tag-based counters) | 可 — reject された event のみ捨てる |
+| **(2) Analysis cut** | 解析マクロ / Python / 自前 binary | EB 出力を読んだ後 | 実験固有の cut (calibration、geometry、particle ID、energy threshold) | 可 — EB 出力は再解析可能 |
 
 **指針:**
-- 検出器固有のノイズ閾値（HPGe 50 keV、Si 1 MeV 等）は **(1)** に置く
-- 「HPGe trigger は 100 keV〜 16 MeV」のような実験パラメータは **(2)** に置く
-- 「sum-E > 1 MeV のイベントだけ残す」のような物理 cut は **(3)** に置く
+
+- EB は **エネルギー閾値を一切持たない**。すべての hit を coincidence window 内で event に組み入れる
+- ノイズ削減・物理 cut は **すべて解析側** (層 2)
+- L2 (層 1) は **物理仮定を含まない汎用フィルタ**のみ。例: 「最低 2 hit 以上」「AC ch が時刻窓内に発火 → reject」「特定タグ集合の hit 数で条件」
+
+**履歴:**
+
+- v0.5.1 から v0.6 までは「3 層モデル」(hit-level floor + L1 trigger gate + L2 event filter) で記述されていた
+- v0.7 で `chSettings.ThresholdADC` (Phase J で既に削除) と L1 `energy_gate` (v0.7 で削除) が両方とも EB の責務外 (§ 1.4) であることが確定し、2 層に簡素化
 
 ---
 
@@ -336,13 +341,11 @@ delila2root eb-offsets <timeSettings.json>
   "definitions": [
     {"type": "channel", "name": "HPGe0", "module": 0, "channel": 0},
     {"type": "channel", "name": "HPGe1", "module": 0, "channel": 1},
-    {"type": "energy_gate", "name": "HPGe0_good", "source": "HPGe0",
-     "min_adc": 100, "max_adc": 16000},
-    {"type": "or", "name": "HPGe_any_good", "inputs": ["HPGe0_good", "HPGe1"]},
+    {"type": "or", "name": "HPGe_any", "inputs": ["HPGe0", "HPGe1"]},
     {"type": "multiplicity", "name": "HPGe_pair",
      "channels": ["HPGe0", "HPGe1"], "min": 2, "window_ns": 100}
   ],
-  "trigger": "HPGe_any_good"
+  "trigger": "HPGe_any"
 }
 ```
 
@@ -354,11 +357,12 @@ delila2root eb-offsets <timeSettings.json>
 |---|---|---|---|
 | `channel` | `module`, `channel` | 指定チャンネルの hit を trigger 候補に | ✓ |
 | `or` | `inputs: [name]` | 複数候補の OR | ✓ |
-| `energy_gate` | `source`, `min_adc`, `max_adc` | エネルギー範囲で trigger 候補を制限 | ✓ |
 | `multiplicity` | `channels: [name]`, `min`, `window_ns` | window 内で `min` 個以上の **distinct** channel が発火 | ✓ |
 | `and` | `inputs: [name]`, `window_ns` | window 内で全 channel が発火（= multiplicity の `min == |inputs|`） | ✓ |
 
-**Stateful ops (`multiplicity` / `and`):** `inputs` / `channels` は **leaf `channel` op 名のみ**（MVP の制限）。nest 内で `or`/`energy_gate` を参照することは未対応。内部的には [`chunk_builder::MultiplicityTrigger`](../../src/event_builder/chunk_builder.rs) の sliding-window scan として実装される。`and` は `min == |inputs|` の multiplicity に lower される。
+**Stateful ops (`multiplicity` / `and`):** `inputs` / `channels` は **leaf `channel` op 名のみ**。nest 内で `or` を参照することは未対応。内部的には [`chunk_builder::MultiplicityTrigger`](../../src/event_builder/chunk_builder.rs) の sliding-window scan として実装される。`and` は `min == |inputs|` の multiplicity に lower される。
+
+> **削除されたバリアント:** `energy_gate` は v0.7 で削除されました。per-channel エネルギー閾値は SPEC § 1.4 が禁ずる「データ消失を伴う実験固有 cut」に該当するため、解析マクロ側で実施します。
 
 ### 6.3 評価アルゴリズム
 
@@ -668,3 +672,4 @@ pub enum HitBatch<H> {
 | 2026-05-19 | 0.5.0 | **大規模改訂**: C++ EB 経路を撤回 / OnlineHit と OfflineHit 分離 / L1+L2 named-ops モデル / 3 層 threshold モデル / Event Bridge retire / EB Monitor 新プロセス / 統一パイプライン位置付け明確化 |
 | 2026-05-19 | 0.5.1 | `timeSettings.json` を tree モデルに刷新（C 案）— 多 root 許容 / HitSource 入口でオフセット 1 回適用 / `time_reference` field 廃止 / 補助 CLI `eb-offsets` 追加 |
 | 2026-05-20 | 0.6.0 | **§ 1.4 設計原則 — EB の責務境界**を追加。EB は汎用エンジン、実験固有の geometry / kinematic / particle-ID cut は物理屋が下流解析で行う、と明文化。ELIFANT2025 p91Zr の実データテストで anti-diagonal sector pairing を EB に押し込む誘惑が発生したのを契機に整理 |
+| 2026-05-20 | 0.7.0 | **L1 `energy_gate` 廃止**。p91Zr v3 ラン (`min_adc=100`) で 0.06 % しか events 変動せず、§ 1.4 が禁ずる「永続的データ消失を伴う閾値 cut」に該当することが実証された。閾値モデルを 3 層 → 2 層 (L2 generic filter + 解析 cut) に簡素化。SPEC § 5 / § 6.2 / runtime_config.rs から `energy_gate` / `trigger_energy_gates` 関連を完全削除 |

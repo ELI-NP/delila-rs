@@ -16,24 +16,10 @@
         "channel": 0
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C00_gate",
-        "source": "trg_M00_C00",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C01",
         "module": 0,
         "channel": 1
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C01_gate",
-        "source": "trg_M00_C01",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -42,24 +28,10 @@
         "channel": 2
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C02_gate",
-        "source": "trg_M00_C02",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C03",
         "module": 0,
         "channel": 3
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C03_gate",
-        "source": "trg_M00_C03",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -68,24 +40,10 @@
         "channel": 4
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C04_gate",
-        "source": "trg_M00_C04",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C05",
         "module": 0,
         "channel": 5
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C05_gate",
-        "source": "trg_M00_C05",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -94,24 +52,10 @@
         "channel": 6
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C06_gate",
-        "source": "trg_M00_C06",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C07",
         "module": 0,
         "channel": 7
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C07_gate",
-        "source": "trg_M00_C07",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -120,24 +64,10 @@
         "channel": 8
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C08_gate",
-        "source": "trg_M00_C08",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C09",
         "module": 0,
         "channel": 9
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C09_gate",
-        "source": "trg_M00_C09",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -146,24 +76,10 @@
         "channel": 10
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C10_gate",
-        "source": "trg_M00_C10",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C11",
         "module": 0,
         "channel": 11
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C11_gate",
-        "source": "trg_M00_C11",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -172,24 +88,10 @@
         "channel": 12
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C12_gate",
-        "source": "trg_M00_C12",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C13",
         "module": 0,
         "channel": 13
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C13_gate",
-        "source": "trg_M00_C13",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -198,24 +100,10 @@
         "channel": 14
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M00_C14_gate",
-        "source": "trg_M00_C14",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M00_C15",
         "module": 0,
         "channel": 15
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M00_C15_gate",
-        "source": "trg_M00_C15",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -224,24 +112,10 @@
         "channel": 0
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C00_gate",
-        "source": "trg_M04_C00",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C01",
         "module": 4,
         "channel": 1
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C01_gate",
-        "source": "trg_M04_C01",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -250,24 +124,10 @@
         "channel": 2
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C02_gate",
-        "source": "trg_M04_C02",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C03",
         "module": 4,
         "channel": 3
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C03_gate",
-        "source": "trg_M04_C03",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -276,24 +136,10 @@
         "channel": 4
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C04_gate",
-        "source": "trg_M04_C04",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C05",
         "module": 4,
         "channel": 5
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C05_gate",
-        "source": "trg_M04_C05",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -302,24 +148,10 @@
         "channel": 6
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C06_gate",
-        "source": "trg_M04_C06",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C07",
         "module": 4,
         "channel": 7
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C07_gate",
-        "source": "trg_M04_C07",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -328,24 +160,10 @@
         "channel": 8
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C08_gate",
-        "source": "trg_M04_C08",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C09",
         "module": 4,
         "channel": 9
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C09_gate",
-        "source": "trg_M04_C09",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -354,24 +172,10 @@
         "channel": 10
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C10_gate",
-        "source": "trg_M04_C10",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C11",
         "module": 4,
         "channel": 11
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C11_gate",
-        "source": "trg_M04_C11",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -380,24 +184,10 @@
         "channel": 12
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C12_gate",
-        "source": "trg_M04_C12",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C13",
         "module": 4,
         "channel": 13
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C13_gate",
-        "source": "trg_M04_C13",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -406,24 +196,10 @@
         "channel": 14
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M04_C14_gate",
-        "source": "trg_M04_C14",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M04_C15",
         "module": 4,
         "channel": 15
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M04_C15_gate",
-        "source": "trg_M04_C15",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -432,24 +208,10 @@
         "channel": 0
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C00_gate",
-        "source": "trg_M09_C00",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C01",
         "module": 9,
         "channel": 1
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C01_gate",
-        "source": "trg_M09_C01",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -458,24 +220,10 @@
         "channel": 2
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C02_gate",
-        "source": "trg_M09_C02",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C03",
         "module": 9,
         "channel": 3
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C03_gate",
-        "source": "trg_M09_C03",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -484,24 +232,10 @@
         "channel": 4
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C04_gate",
-        "source": "trg_M09_C04",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C05",
         "module": 9,
         "channel": 5
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C05_gate",
-        "source": "trg_M09_C05",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -510,24 +244,10 @@
         "channel": 6
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C06_gate",
-        "source": "trg_M09_C06",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C07",
         "module": 9,
         "channel": 7
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C07_gate",
-        "source": "trg_M09_C07",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -536,24 +256,10 @@
         "channel": 8
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C08_gate",
-        "source": "trg_M09_C08",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C09",
         "module": 9,
         "channel": 9
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C09_gate",
-        "source": "trg_M09_C09",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -562,24 +268,10 @@
         "channel": 10
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C10_gate",
-        "source": "trg_M09_C10",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C11",
         "module": 9,
         "channel": 11
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C11_gate",
-        "source": "trg_M09_C11",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -588,24 +280,10 @@
         "channel": 12
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C12_gate",
-        "source": "trg_M09_C12",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C13",
         "module": 9,
         "channel": 13
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C13_gate",
-        "source": "trg_M09_C13",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -614,24 +292,10 @@
         "channel": 14
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C14_gate",
-        "source": "trg_M09_C14",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C15",
         "module": 9,
         "channel": 15
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C15_gate",
-        "source": "trg_M09_C15",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -640,24 +304,10 @@
         "channel": 16
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C16_gate",
-        "source": "trg_M09_C16",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C17",
         "module": 9,
         "channel": 17
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C17_gate",
-        "source": "trg_M09_C17",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -666,24 +316,10 @@
         "channel": 18
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C18_gate",
-        "source": "trg_M09_C18",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C19",
         "module": 9,
         "channel": 19
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C19_gate",
-        "source": "trg_M09_C19",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -692,24 +328,10 @@
         "channel": 20
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C20_gate",
-        "source": "trg_M09_C20",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C21",
         "module": 9,
         "channel": 21
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C21_gate",
-        "source": "trg_M09_C21",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -718,24 +340,10 @@
         "channel": 22
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C22_gate",
-        "source": "trg_M09_C22",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C23",
         "module": 9,
         "channel": 23
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C23_gate",
-        "source": "trg_M09_C23",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -744,24 +352,10 @@
         "channel": 24
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C24_gate",
-        "source": "trg_M09_C24",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C25",
         "module": 9,
         "channel": 25
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C25_gate",
-        "source": "trg_M09_C25",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -770,24 +364,10 @@
         "channel": 26
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C26_gate",
-        "source": "trg_M09_C26",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C27",
         "module": 9,
         "channel": 27
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C27_gate",
-        "source": "trg_M09_C27",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -796,24 +376,10 @@
         "channel": 28
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C28_gate",
-        "source": "trg_M09_C28",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C29",
         "module": 9,
         "channel": 29
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C29_gate",
-        "source": "trg_M09_C29",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -822,24 +388,10 @@
         "channel": 30
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M09_C30_gate",
-        "source": "trg_M09_C30",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M09_C31",
         "module": 9,
         "channel": 31
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M09_C31_gate",
-        "source": "trg_M09_C31",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -848,24 +400,10 @@
         "channel": 0
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C00_gate",
-        "source": "trg_M10_C00",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C01",
         "module": 10,
         "channel": 1
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C01_gate",
-        "source": "trg_M10_C01",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -874,24 +412,10 @@
         "channel": 2
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C02_gate",
-        "source": "trg_M10_C02",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C03",
         "module": 10,
         "channel": 3
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C03_gate",
-        "source": "trg_M10_C03",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -900,24 +424,10 @@
         "channel": 4
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C04_gate",
-        "source": "trg_M10_C04",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C05",
         "module": 10,
         "channel": 5
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C05_gate",
-        "source": "trg_M10_C05",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -926,24 +436,10 @@
         "channel": 6
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C06_gate",
-        "source": "trg_M10_C06",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C07",
         "module": 10,
         "channel": 7
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C07_gate",
-        "source": "trg_M10_C07",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -952,24 +448,10 @@
         "channel": 8
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C08_gate",
-        "source": "trg_M10_C08",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C09",
         "module": 10,
         "channel": 9
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C09_gate",
-        "source": "trg_M10_C09",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -978,24 +460,10 @@
         "channel": 10
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C10_gate",
-        "source": "trg_M10_C10",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C11",
         "module": 10,
         "channel": 11
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C11_gate",
-        "source": "trg_M10_C11",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -1004,24 +472,10 @@
         "channel": 12
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C12_gate",
-        "source": "trg_M10_C12",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C13",
         "module": 10,
         "channel": 13
-      },
-      {
-        "type": "energy_gate",
-        "name": "trg_M10_C13_gate",
-        "source": "trg_M10_C13",
-        "min_adc": 100,
-        "max_adc": 65535
       },
       {
         "type": "channel",
@@ -1030,109 +484,95 @@
         "channel": 14
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C14_gate",
-        "source": "trg_M10_C14",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "channel",
         "name": "trg_M10_C15",
         "module": 10,
         "channel": 15
       },
       {
-        "type": "energy_gate",
-        "name": "trg_M10_C15_gate",
-        "source": "trg_M10_C15",
-        "min_adc": 100,
-        "max_adc": 65535
-      },
-      {
         "type": "or",
         "name": "trigger",
         "inputs": [
-          "trg_M00_C00_gate",
-          "trg_M00_C01_gate",
-          "trg_M00_C02_gate",
-          "trg_M00_C03_gate",
-          "trg_M00_C04_gate",
-          "trg_M00_C05_gate",
-          "trg_M00_C06_gate",
-          "trg_M00_C07_gate",
-          "trg_M00_C08_gate",
-          "trg_M00_C09_gate",
-          "trg_M00_C10_gate",
-          "trg_M00_C11_gate",
-          "trg_M00_C12_gate",
-          "trg_M00_C13_gate",
-          "trg_M00_C14_gate",
-          "trg_M00_C15_gate",
-          "trg_M04_C00_gate",
-          "trg_M04_C01_gate",
-          "trg_M04_C02_gate",
-          "trg_M04_C03_gate",
-          "trg_M04_C04_gate",
-          "trg_M04_C05_gate",
-          "trg_M04_C06_gate",
-          "trg_M04_C07_gate",
-          "trg_M04_C08_gate",
-          "trg_M04_C09_gate",
-          "trg_M04_C10_gate",
-          "trg_M04_C11_gate",
-          "trg_M04_C12_gate",
-          "trg_M04_C13_gate",
-          "trg_M04_C14_gate",
-          "trg_M04_C15_gate",
-          "trg_M09_C00_gate",
-          "trg_M09_C01_gate",
-          "trg_M09_C02_gate",
-          "trg_M09_C03_gate",
-          "trg_M09_C04_gate",
-          "trg_M09_C05_gate",
-          "trg_M09_C06_gate",
-          "trg_M09_C07_gate",
-          "trg_M09_C08_gate",
-          "trg_M09_C09_gate",
-          "trg_M09_C10_gate",
-          "trg_M09_C11_gate",
-          "trg_M09_C12_gate",
-          "trg_M09_C13_gate",
-          "trg_M09_C14_gate",
-          "trg_M09_C15_gate",
-          "trg_M09_C16_gate",
-          "trg_M09_C17_gate",
-          "trg_M09_C18_gate",
-          "trg_M09_C19_gate",
-          "trg_M09_C20_gate",
-          "trg_M09_C21_gate",
-          "trg_M09_C22_gate",
-          "trg_M09_C23_gate",
-          "trg_M09_C24_gate",
-          "trg_M09_C25_gate",
-          "trg_M09_C26_gate",
-          "trg_M09_C27_gate",
-          "trg_M09_C28_gate",
-          "trg_M09_C29_gate",
-          "trg_M09_C30_gate",
-          "trg_M09_C31_gate",
-          "trg_M10_C00_gate",
-          "trg_M10_C01_gate",
-          "trg_M10_C02_gate",
-          "trg_M10_C03_gate",
-          "trg_M10_C04_gate",
-          "trg_M10_C05_gate",
-          "trg_M10_C06_gate",
-          "trg_M10_C07_gate",
-          "trg_M10_C08_gate",
-          "trg_M10_C09_gate",
-          "trg_M10_C10_gate",
-          "trg_M10_C11_gate",
-          "trg_M10_C12_gate",
-          "trg_M10_C13_gate",
-          "trg_M10_C14_gate",
-          "trg_M10_C15_gate"
+          "trg_M00_C00",
+          "trg_M00_C01",
+          "trg_M00_C02",
+          "trg_M00_C03",
+          "trg_M00_C04",
+          "trg_M00_C05",
+          "trg_M00_C06",
+          "trg_M00_C07",
+          "trg_M00_C08",
+          "trg_M00_C09",
+          "trg_M00_C10",
+          "trg_M00_C11",
+          "trg_M00_C12",
+          "trg_M00_C13",
+          "trg_M00_C14",
+          "trg_M00_C15",
+          "trg_M04_C00",
+          "trg_M04_C01",
+          "trg_M04_C02",
+          "trg_M04_C03",
+          "trg_M04_C04",
+          "trg_M04_C05",
+          "trg_M04_C06",
+          "trg_M04_C07",
+          "trg_M04_C08",
+          "trg_M04_C09",
+          "trg_M04_C10",
+          "trg_M04_C11",
+          "trg_M04_C12",
+          "trg_M04_C13",
+          "trg_M04_C14",
+          "trg_M04_C15",
+          "trg_M09_C00",
+          "trg_M09_C01",
+          "trg_M09_C02",
+          "trg_M09_C03",
+          "trg_M09_C04",
+          "trg_M09_C05",
+          "trg_M09_C06",
+          "trg_M09_C07",
+          "trg_M09_C08",
+          "trg_M09_C09",
+          "trg_M09_C10",
+          "trg_M09_C11",
+          "trg_M09_C12",
+          "trg_M09_C13",
+          "trg_M09_C14",
+          "trg_M09_C15",
+          "trg_M09_C16",
+          "trg_M09_C17",
+          "trg_M09_C18",
+          "trg_M09_C19",
+          "trg_M09_C20",
+          "trg_M09_C21",
+          "trg_M09_C22",
+          "trg_M09_C23",
+          "trg_M09_C24",
+          "trg_M09_C25",
+          "trg_M09_C26",
+          "trg_M09_C27",
+          "trg_M09_C28",
+          "trg_M09_C29",
+          "trg_M09_C30",
+          "trg_M09_C31",
+          "trg_M10_C00",
+          "trg_M10_C01",
+          "trg_M10_C02",
+          "trg_M10_C03",
+          "trg_M10_C04",
+          "trg_M10_C05",
+          "trg_M10_C06",
+          "trg_M10_C07",
+          "trg_M10_C08",
+          "trg_M10_C09",
+          "trg_M10_C10",
+          "trg_M10_C11",
+          "trg_M10_C12",
+          "trg_M10_C13",
+          "trg_M10_C14",
+          "trg_M10_C15"
         ]
       }
     ],

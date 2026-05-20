@@ -721,7 +721,6 @@ mod tests {
             priorities: HashMap::from([((0, 0), 0)]),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
-            trigger_energy_gates: std::collections::HashMap::new(),
             multiplicity_triggers: Vec::new(),
         };
 
@@ -762,7 +761,6 @@ mod tests {
             priorities: HashMap::from([((0, 0), 0)]),
             ac_pairs: HashMap::new(),
             coincidence_window_ns: 500.0,
-            trigger_energy_gates: std::collections::HashMap::new(),
             multiplicity_triggers: Vec::new(),
         };
 

@@ -36,11 +36,9 @@ const EB_CONFIG_JSON: &str = r#"
   "time_offsets_file": "timeSettings.json",
   "l1": {
     "definitions": [
-      {"type": "channel",     "name": "HPGe0",      "module": 0, "channel": 0},
-      {"type": "energy_gate", "name": "HPGe0_good", "source": "HPGe0",
-       "min_adc": 1000, "max_adc": 50000}
+      {"type": "channel", "name": "HPGe0", "module": 0, "channel": 0}
     ],
-    "trigger": "HPGe0_good"
+    "trigger": "HPGe0"
   },
   "l2": [
     {"type": "counter", "name": "dE_count",  "tags": ["dE_Sector"]},
@@ -140,31 +138,21 @@ fn three_config_files_drive_l1_l2_pipeline() {
     let trigger_config = eb_cfg.build_trigger_config().expect("L1 adapter succeeds");
     let l2_filter = L2Filter::new(eb_cfg.l2.clone(), tag_map).expect("L2 filter builds");
 
-    // Energy gate from `HPGe0_good` should have made it into the trigger config.
-    assert_eq!(
-        trigger_config.trigger_energy_gates.get(&(0, 0)),
-        Some(&(1000, 50000))
-    );
-
     // --- Synthesise hits ----------------------------------------------------
-    // Event A: HPGe trigger with valid energy + a coincident dE hit + an
-    //          E_Sector hit. multiplicity ≥ 2 AND dE present → KEEP.
+    // Event A: HPGe trigger + a coincident dE hit + an E_Sector hit.
+    //          multiplicity ≥ 2 AND dE present → L2 KEEP.
     //
-    // Event B: HPGe trigger below energy gate (1000 ADC threshold), so it
-    //          never becomes a trigger anchor. The dE/E hits with no trigger
-    //          → no event built at all.
-    //
-    // Event C: HPGe trigger with valid energy but NO dE hit alongside →
+    // Event B: HPGe trigger with NO dE hit alongside →
     //          dE_count is 0 → has_dE is false → L2 rejects.
+    //
+    // Threshold cuts are deliberately NOT exercised at the EB layer
+    // (SPEC § 1.4 / § 5 — they belong in analysis macros).
     let mut hits = vec![
         // Event A trigger
         Hit::new(0, 0, 5000, 0, 1000.0),
         Hit::new(0, 1, 800, 0, 1020.0), // dE_Sector @ +20 ns from trigger (post-calib)
         Hit::new(0, 2, 1200, 0, 1100.0), // E_Sector @ +100 ns
-        // Event B (sub-threshold trigger, should not anchor anything)
-        Hit::new(0, 0, 500, 0, 5000.0), // below energy gate
-        Hit::new(0, 1, 800, 0, 5020.0),
-        // Event C (no dE → L2 rejects)
+        // Event B (no dE → L2 rejects)
         Hit::new(0, 0, 5000, 0, 9000.0),
         Hit::new(0, 2, 1200, 0, 9050.0),
     ];
@@ -184,9 +172,8 @@ fn three_config_files_drive_l1_l2_pipeline() {
     // --- Run L1 (chunk_builder) ---------------------------------------------
     let l1_events = build_events_from_chunk(&chunk, &trigger_config);
 
-    // Two anchors fire (Event A trigger and Event C trigger). Event B is
-    // gated out by the L1 energy gate.
-    assert_eq!(l1_events.len(), 2, "expected 2 L1 events (A and C)");
+    // Two anchors fire (Event A trigger and Event B trigger).
+    assert_eq!(l1_events.len(), 2, "expected 2 L1 events (A and B)");
 
     // --- Run L2 -------------------------------------------------------------
     let kept_events: Vec<_> = l1_events.iter().filter(|ev| l2_filter.keeps(ev)).collect();

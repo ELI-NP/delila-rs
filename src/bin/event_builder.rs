@@ -444,9 +444,8 @@ fn run_event_building(
     //   (b) Legacy: --trigger CLI args build a static TriggerConfig; L2
     //       filter is disabled.
     let (trigger_config, l2_filter, effective_window) = if let Some(eb_cfg_path) = eb_config {
-        let rt = EbRuntimeConfig::load(eb_cfg_path).with_context(|| {
-            format!("Failed to load eb_config.json: {}", eb_cfg_path.display())
-        })?;
+        let rt = EbRuntimeConfig::load(eb_cfg_path)
+            .with_context(|| format!("Failed to load eb_config.json: {}", eb_cfg_path.display()))?;
         let tc = rt
             .build_trigger_config()
             .context("Failed to derive TriggerConfig from eb_config.l1")?;
@@ -463,8 +462,10 @@ fn run_event_building(
                 m
             }
             None => {
-                warn!("--eb-config supplied but --config (chSettings.json) is not — \
-                       L2 counter ops will see no tags");
+                warn!(
+                    "--eb-config supplied but --config (chSettings.json) is not — \
+                       L2 counter ops will see no tags"
+                );
                 HashMap::new()
             }
         };
@@ -517,7 +518,6 @@ fn run_event_building(
             priorities,
             ac_pairs: HashMap::new(),
             coincidence_window_ns: window,
-            trigger_energy_gates: std::collections::HashMap::new(),
             multiplicity_triggers: Vec::new(),
         };
         (tc, None, window)
@@ -552,7 +552,10 @@ fn run_event_building(
             let calib = TimeCalibration::from_json_file(calib_path).with_context(|| {
                 format!("Failed to load time calibration: {}", calib_path.display())
             })?;
-            info!("Loaded legacy time calibration from: {}", calib_path.display());
+            info!(
+                "Loaded legacy time calibration from: {}",
+                calib_path.display()
+            );
             calib
         }
     } else {
@@ -582,8 +585,7 @@ fn run_event_building(
         output_dir.display()
     );
 
-    let mut pipeline =
-        EventBuilderPipeline::new(pipeline_config, trigger_config, time_calibration);
+    let mut pipeline = EventBuilderPipeline::new(pipeline_config, trigger_config, time_calibration);
     if let Some(l2) = l2_filter {
         pipeline = pipeline.with_l2_filter(l2);
     }
