@@ -1,0 +1,68 @@
+{
+  "$schema": "../../schemas/eb_config.schema.json",
+
+  "//1": "HPGe trigger + active Compton-suppression (AC) veto.",
+  "//2": "",
+  "//3": "L1: any of the listed HPGe sectors triggers an event window.",
+  "//4": "L2: count HPGe hits → require ≥ 1; ac_veto checks whether the AC",
+  "//5": "    ring fired within ±200 ns of the HPGe trigger; the event is kept",
+  "//6": "    only when at least one HPGe hit is present AND the AC was NOT",
+  "//7": "    triggered (Flag(==0) inverts the veto into a 'pass' flag).",
+
+  "version": "1.0",
+  "timing": {
+    "coincidence_window_ns": 1000.0,
+    "buffer_delay_ns": 1.0e9,
+    "slice_duration_ns": 1.0e7
+  },
+  "channels_file": "chSettings.json",
+  "time_offsets_file": "timeSettings.json",
+
+  "l1": {
+    "definitions": [
+      {"type": "channel", "name": "HPGe0", "module": 10, "channel": 0},
+      {"type": "channel", "name": "HPGe1", "module": 10, "channel": 1},
+      {"type": "channel", "name": "HPGe2", "module": 10, "channel": 2},
+      {"type": "channel", "name": "HPGe3", "module": 10, "channel": 3},
+
+      {"type": "or", "name": "any_HPGe",
+       "inputs": ["HPGe0", "HPGe1", "HPGe2", "HPGe3"]}
+    ],
+    "trigger": "any_HPGe"
+  },
+
+  "l2": [
+    {"type": "counter", "name": "HPGe_count", "tags": ["HPGe"]},
+    {"type": "flag",    "name": "HPGe_present", "monitor": "HPGe_count",
+     "operator": ">", "value": 0},
+
+    {
+      "type": "ac_veto",
+      "name": "ac_vetoed",
+      "trigger_channels": [
+        {"module": 10, "channel": 0},
+        {"module": 10, "channel": 1},
+        {"module": 10, "channel": 2},
+        {"module": 10, "channel": 3}
+      ],
+      "veto_channels": [
+        {"module": 8, "channel": 0},
+        {"module": 8, "channel": 1},
+        {"module": 8, "channel": 2},
+        {"module": 8, "channel": 3}
+      ],
+      "window_ns": 200.0
+    },
+    {"type": "flag", "name": "ac_passed", "monitor": "ac_vetoed",
+     "operator": "==", "value": 0},
+
+    {"type": "accept", "name": "keep_clean_HPGe",
+     "monitor": ["HPGe_present", "ac_passed"], "operator": "AND"}
+  ],
+
+  "output": {
+    "events_per_file": 1000000,
+    "directory": "./eb_output",
+    "zmq_pub_endpoint": null
+  }
+}

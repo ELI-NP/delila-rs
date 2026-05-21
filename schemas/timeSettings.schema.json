@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/aogaki/delila-rs/schemas/timeSettings.schema.json",
+  "title": "DELILA-Rust per-channel time offsets (timeSettings.json, tree form)",
+  "description": "Tree-based per-channel time offset table (SPEC v0.5.1 § 4.3). Each entry has a parent reference and an offset to apply at HitSource ingress. Convention: aligned_ts = raw_ts - offset_ns. Multi-root forests are allowed (warn at load). The legacy single-reference TimeCalibration schema is also accepted by `event_builder build` but lives outside this file.",
+  "type": "object",
+  "required": ["version", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional reference back to this schema (editor hint)."
+    },
+    "version": {
+      "type": "string",
+      "examples": ["1.0"]
+    },
+    "entries": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/Entry"}
+    }
+  },
+  "$defs": {
+    "Entry": {
+      "type": "object",
+      "required": ["module", "channel", "ref", "offset_ns"],
+      "additionalProperties": false,
+      "properties": {
+        "module": {"type": "integer", "minimum": 0, "maximum": 255},
+        "channel": {"type": "integer", "minimum": 0, "maximum": 255},
+        "ref": {
+          "oneOf": [
+            {
+              "type": "null",
+              "description": "This entry is a root of the offset tree (no parent)."
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {"type": "integer", "minimum": 0, "maximum": 255},
+              "description": "[parent_module, parent_channel] — must point at another entry in the file."
+            }
+          ]
+        },
+        "offset_ns": {
+          "type": "number",
+          "description": "Offset relative to the parent; aligned_ts = raw_ts - offset_ns. Root entries usually have offset_ns = 0."
+        }
+      }
+    }
+  }
+}

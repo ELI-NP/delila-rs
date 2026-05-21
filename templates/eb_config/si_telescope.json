@@ -1,0 +1,86 @@
+{
+  "$schema": "../../schemas/eb_config.schema.json",
+
+  "//1": "ELIFANT-style Si ΔE-E telescope coincidence (replica of",
+  "//2": "all_run_p91Zr/L2Settings.json + IsEventTrigger flags).",
+  "//3": "L1: any of 16 ch on mod 0 (E_Sector) or 16 ch on mod 4 (dE_Sector)",
+  "//4": "    triggers an event window.",
+  "//5": "L2: require at least one hit tagged 'E_Sector' AND one tagged",
+  "//6": "    'dE_Sector' inside the window.",
+
+  "version": "1.0",
+  "timing": {
+    "coincidence_window_ns": 100.0,
+    "buffer_delay_ns": 1.0e9,
+    "slice_duration_ns": 1.0e7
+  },
+  "channels_file": "chSettings.json",
+  "time_offsets_file": "timeSettings.json",
+
+  "l1": {
+    "definitions": [
+      {"type": "channel", "name": "E0_00", "module": 0, "channel": 0},
+      {"type": "channel", "name": "E0_01", "module": 0, "channel": 1},
+      {"type": "channel", "name": "E0_02", "module": 0, "channel": 2},
+      {"type": "channel", "name": "E0_03", "module": 0, "channel": 3},
+      {"type": "channel", "name": "E0_04", "module": 0, "channel": 4},
+      {"type": "channel", "name": "E0_05", "module": 0, "channel": 5},
+      {"type": "channel", "name": "E0_06", "module": 0, "channel": 6},
+      {"type": "channel", "name": "E0_07", "module": 0, "channel": 7},
+      {"type": "channel", "name": "E0_08", "module": 0, "channel": 8},
+      {"type": "channel", "name": "E0_09", "module": 0, "channel": 9},
+      {"type": "channel", "name": "E0_10", "module": 0, "channel": 10},
+      {"type": "channel", "name": "E0_11", "module": 0, "channel": 11},
+      {"type": "channel", "name": "E0_12", "module": 0, "channel": 12},
+      {"type": "channel", "name": "E0_13", "module": 0, "channel": 13},
+      {"type": "channel", "name": "E0_14", "module": 0, "channel": 14},
+      {"type": "channel", "name": "E0_15", "module": 0, "channel": 15},
+
+      {"type": "channel", "name": "dE4_00", "module": 4, "channel": 0},
+      {"type": "channel", "name": "dE4_01", "module": 4, "channel": 1},
+      {"type": "channel", "name": "dE4_02", "module": 4, "channel": 2},
+      {"type": "channel", "name": "dE4_03", "module": 4, "channel": 3},
+      {"type": "channel", "name": "dE4_04", "module": 4, "channel": 4},
+      {"type": "channel", "name": "dE4_05", "module": 4, "channel": 5},
+      {"type": "channel", "name": "dE4_06", "module": 4, "channel": 6},
+      {"type": "channel", "name": "dE4_07", "module": 4, "channel": 7},
+      {"type": "channel", "name": "dE4_08", "module": 4, "channel": 8},
+      {"type": "channel", "name": "dE4_09", "module": 4, "channel": 9},
+      {"type": "channel", "name": "dE4_10", "module": 4, "channel": 10},
+      {"type": "channel", "name": "dE4_11", "module": 4, "channel": 11},
+      {"type": "channel", "name": "dE4_12", "module": 4, "channel": 12},
+      {"type": "channel", "name": "dE4_13", "module": 4, "channel": 13},
+      {"type": "channel", "name": "dE4_14", "module": 4, "channel": 14},
+      {"type": "channel", "name": "dE4_15", "module": 4, "channel": 15},
+
+      {
+        "type": "or",
+        "name": "any_si_sector",
+        "inputs": [
+          "E0_00", "E0_01", "E0_02", "E0_03", "E0_04", "E0_05", "E0_06", "E0_07",
+          "E0_08", "E0_09", "E0_10", "E0_11", "E0_12", "E0_13", "E0_14", "E0_15",
+          "dE4_00", "dE4_01", "dE4_02", "dE4_03", "dE4_04", "dE4_05", "dE4_06", "dE4_07",
+          "dE4_08", "dE4_09", "dE4_10", "dE4_11", "dE4_12", "dE4_13", "dE4_14", "dE4_15"
+        ]
+      }
+    ],
+    "trigger": "any_si_sector"
+  },
+
+  "l2": [
+    {"type": "counter", "name": "E_Sector_Counter",  "tags": ["E_Sector"]},
+    {"type": "counter", "name": "dE_Sector_Counter", "tags": ["dE_Sector"]},
+    {"type": "flag",    "name": "E_pos",   "monitor": "E_Sector_Counter",
+     "operator": ">",   "value": 0},
+    {"type": "flag",    "name": "dE_pos",  "monitor": "dE_Sector_Counter",
+     "operator": ">",   "value": 0},
+    {"type": "accept",  "name": "Si_Both",
+     "monitor": ["E_pos", "dE_pos"], "operator": "AND"}
+  ],
+
+  "output": {
+    "events_per_file": 1000000,
+    "directory": "./eb_output",
+    "zmq_pub_endpoint": null
+  }
+}

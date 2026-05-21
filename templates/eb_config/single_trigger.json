@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/eb_config.schema.json",
+
+  "//1": "Minimal single-trigger configuration.",
+  "//2": "Use as a starting point when one specific channel is the only event seed",
+  "//3": "and you just want every coincidence within ±window. No physics cuts.",
+
+  "version": "1.0",
+  "timing": {
+    "coincidence_window_ns": 500.0,
+    "buffer_delay_ns": 1.0e9,
+    "slice_duration_ns": 1.0e7
+  },
+  "channels_file": "chSettings.json",
+  "time_offsets_file": "timeSettings.json",
+
+  "l1": {
+    "definitions": [
+      {"type": "channel", "name": "trigger_ch", "module": 0, "channel": 0}
+    ],
+    "trigger": "trigger_ch"
+  },
+
+  "//l2": "Accept every event that L1 built. No filtering. Replace this for real cuts.",
+  "l2": [
+    {"type": "min_hits", "name": "any_event", "min": 1},
+    {"type": "accept", "name": "keep_all",
+     "monitor": ["any_event"], "operator": "AND"}
+  ],
+
+  "output": {
+    "events_per_file": 1000000,
+    "directory": "./eb_output",
+    "zmq_pub_endpoint": null
+  }
+}

@@ -257,7 +257,12 @@ pub struct ChannelRef {
 pub struct OutputConfig {
     pub events_per_file: u64,
     pub directory: String,
-    pub zmq_pub_endpoint: String,
+    /// Optional ZMQ PUB endpoint for the live BuiltEvent stream
+    /// (SPEC § 9.3). `None` / `null` / missing all disable the PUB
+    /// thread; the value is consumed by `online_event_builder` and
+    /// ignored by the offline `event_builder build`.
+    #[serde(default)]
+    pub zmq_pub_endpoint: Option<String>,
 }
 
 impl Default for OutputConfig {
@@ -265,7 +270,7 @@ impl Default for OutputConfig {
         Self {
             events_per_file: 1_000_000,
             directory: "./eb_output".to_string(),
-            zmq_pub_endpoint: "tcp://*:5610".to_string(),
+            zmq_pub_endpoint: Some("tcp://*:5610".to_string()),
         }
     }
 }

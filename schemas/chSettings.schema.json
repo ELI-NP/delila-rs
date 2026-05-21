@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/aogaki/delila-rs/schemas/chSettings.schema.json",
+  "title": "DELILA-Rust channel descriptor (chSettings.json)",
+  "description": "Pure hardware descriptor: detector ID, tags, calibration polynomial. Phase J (SPEC v0.7) removed the legacy trigger/AC/threshold fields — those live in eb_config.json now. Format: array of modules, each module is an array of channels.",
+  "type": "array",
+  "items": {
+    "type": "array",
+    "description": "One module: array of channels.",
+    "items": {"$ref": "#/$defs/ChSettings"}
+  },
+  "$defs": {
+    "ChSettings": {
+      "type": "object",
+      "description": "One channel descriptor. PascalCase keys for ELIFANT-Event compatibility.",
+      "required": ["ID", "Module", "Channel", "DetectorType"],
+      "additionalProperties": true,
+      "properties": {
+        "ID": {
+          "type": "integer",
+          "description": "Globally unique detector ID across all modules/channels."
+        },
+        "Module": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "Channel": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "DetectorType": {
+          "type": "string",
+          "description": "Free-form detector type label (HPGe / Si / AC / PMT / ...). Documentation only — does not affect EB behaviour.",
+          "examples": ["HPGe", "Si", "AC", "PMT"]
+        },
+        "Tags": {
+          "type": "array",
+          "description": "Tags used by L2 `counter` ops to select this channel's hits. Choose names that match the strings you'll use in eb_config.json L2 ops (e.g. \"HPGe\", \"E_Sector\", \"dE_Sector\").",
+          "items": {"type": "string"},
+          "default": []
+        },
+        "p0": {
+          "type": "number",
+          "description": "Energy calibration constant term: E = p0 + p1·ADC + p2·ADC² + p3·ADC³.",
+          "default": 0.0
+        },
+        "p1": {
+          "type": "number",
+          "description": "Energy calibration linear term.",
+          "default": 1.0
+        },
+        "p2": {
+          "type": "number",
+          "description": "Energy calibration quadratic term.",
+          "default": 0.0
+        },
+        "p3": {
+          "type": "number",
+          "description": "Energy calibration cubic term.",
+          "default": 0.0
+        }
+      }
+    }
+  }
+}

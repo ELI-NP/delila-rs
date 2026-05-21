@@ -1,0 +1,53 @@
+{
+  "$schema": "../../schemas/eb_config.schema.json",
+
+  "//1": "Multiplicity trigger: an event is only built when at least 2 distinct",
+  "//2": "channels from the listed set fire within `window_ns`. A single hit on",
+  "//3": "any one channel does NOT trigger.",
+  "//4": "",
+  "//5": "Useful for HPGe coincidence experiments where singles are dominated by",
+  "//6": "natural background.",
+
+  "version": "1.0",
+  "timing": {
+    "coincidence_window_ns": 500.0,
+    "buffer_delay_ns": 1.0e9,
+    "slice_duration_ns": 1.0e7
+  },
+  "channels_file": "chSettings.json",
+  "time_offsets_file": "timeSettings.json",
+
+  "l1": {
+    "definitions": [
+      {"type": "channel", "name": "HPGe0", "module": 0, "channel": 0},
+      {"type": "channel", "name": "HPGe1", "module": 0, "channel": 1},
+      {"type": "channel", "name": "HPGe2", "module": 0, "channel": 2},
+      {"type": "channel", "name": "HPGe3", "module": 0, "channel": 3},
+
+      {
+        "type": "multiplicity",
+        "name": "HPGe_pair",
+        "channels": ["HPGe0", "HPGe1", "HPGe2", "HPGe3"],
+        "min": 2,
+        "window_ns": 200.0
+      }
+    ],
+    "trigger": "HPGe_pair"
+  },
+
+  "//l2": "Keep events with at least 2 hits AND at least one HPGe-tagged hit.",
+  "l2": [
+    {"type": "min_hits", "name": "atleast2", "min": 2},
+    {"type": "counter", "name": "HPGe_count", "tags": ["HPGe"]},
+    {"type": "flag",    "name": "HPGe_present", "monitor": "HPGe_count",
+     "operator": ">", "value": 0},
+    {"type": "accept",  "name": "keep",
+     "monitor": ["atleast2", "HPGe_present"], "operator": "AND"}
+  ],
+
+  "output": {
+    "events_per_file": 1000000,
+    "directory": "./eb_output",
+    "zmq_pub_endpoint": null
+  }
+}

@@ -40,9 +40,38 @@ struct Cli {
     command: Commands,
 }
 
+/// Which config schema to validate against. When `None`, the validator
+/// probes each schema in turn.
+#[derive(clap::ValueEnum, Clone, Debug)]
+#[cfg(feature = "root")]
+enum ConfigKind {
+    /// eb_config.json (EbRuntimeConfig)
+    EbConfig,
+    /// chSettings.json (ChannelConfig)
+    ChSettings,
+    /// timeSettings.json (tree form preferred; legacy single-ref also accepted)
+    TimeOffsets,
+}
+
 #[derive(Subcommand)]
 #[cfg(feature = "root")]
 enum Commands {
+    /// Validate an eb_config.json / chSettings.json / timeSettings.json
+    /// against the SPEC. Catches: syntactic JSON errors, unknown-name
+    /// references in L1/L2 ops, cycles, L2 chains with no `accept`,
+    /// timeSettings tree cycles / dangling parents / duplicates.
+    ValidateConfig {
+        /// Path to the file. Format is auto-detected by content.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Hint the file kind explicitly (eb-config / ch-settings /
+        /// time-offsets). When omitted, the validator probes each
+        /// schema in turn.
+        #[arg(long, value_enum)]
+        kind: Option<ConfigKind>,
+    },
+
     /// Run time calibration to measure channel time offsets
     TimeCalib {
         /// Input .delila file(s)
@@ -164,6 +193,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::ValidateConfig { file, kind } => {
+            run_validate_config(&file, kind.as_ref())?;
+        }
         Commands::TimeCalib {
             input,
             output,
@@ -224,6 +256,112 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Validate one of the three EB JSON config files against its Rust loader
+/// (which mirrors the JSON Schema published in `schemas/`). When the kind
+/// is not given, each loader is tried in turn and the first that parses
+/// is reported.
+#[cfg(feature = "root")]
+fn run_validate_config(file: &std::path::Path, kind: Option<&ConfigKind>) -> Result<()> {
+    use delila_rs::event_builder::{
+        load_channel_config, EbRuntimeConfig, L2Filter, TimeCalibration, TimeOffsetsFile,
+    };
+
+    // Helper closures wrap each loader behind a uniform `(name, Result)` form
+    // so the auto-detect path can iterate over them.
+    let try_eb_config = || -> Result<String> {
+        let cfg = EbRuntimeConfig::load(file)
+            .with_context(|| format!("eb_config.json: {}", file.display()))?;
+        // Also exercise the derived structures so cross-references get
+        // checked end-to-end.
+        let tc = cfg
+            .build_trigger_config()
+            .context("L1 → TriggerConfig lowering")?;
+        // L2 needs a tag map; an empty one is enough to catch op-graph errors.
+        let _l2 = L2Filter::new(cfg.l2.clone(), std::collections::HashMap::new())
+            .context("L2 filter construction")?;
+        Ok(format!(
+            "eb_config.json — OK ({} L1 ops, root='{}', {} multiplicity ops, {} L2 ops, {} static triggers)",
+            cfg.l1.definitions.len(),
+            cfg.l1.trigger,
+            tc.multiplicity_triggers.len(),
+            cfg.l2.len(),
+            tc.triggers.len(),
+        ))
+    };
+
+    let try_ch_settings = || -> Result<String> {
+        let cfg = load_channel_config(file)
+            .with_context(|| format!("chSettings.json: {}", file.display()))?;
+        let n_mod = cfg.len();
+        let n_ch: usize = cfg.iter().map(|m| m.len()).sum();
+        Ok(format!(
+            "chSettings.json — OK ({} modules, {} channels total)",
+            n_mod, n_ch
+        ))
+    };
+
+    let try_time_offsets = || -> Result<String> {
+        // Tree schema first.
+        if let Ok(tree) = TimeOffsetsFile::load(file) {
+            let resolved = tree
+                .resolve()
+                .with_context(|| format!("timeSettings.json (tree): {}", file.display()))?;
+            for w in &resolved.warnings {
+                eprintln!("warning: {w}");
+            }
+            return Ok(format!(
+                "timeSettings.json — OK (tree schema, {} entries, {} root(s))",
+                tree.entries.len(),
+                resolved.root_count()
+            ));
+        }
+        // Legacy form.
+        let legacy = TimeCalibration::from_json_file(file)
+            .with_context(|| format!("timeSettings.json (legacy): {}", file.display()))?;
+        Ok(format!(
+            "timeSettings.json — OK (legacy single-ref schema, reference = mod {}, ch {})",
+            legacy.ref_module, legacy.ref_channel
+        ))
+    };
+
+    match kind {
+        Some(ConfigKind::EbConfig) => {
+            println!("[OK] {}", try_eb_config()?);
+        }
+        Some(ConfigKind::ChSettings) => {
+            println!("[OK] {}", try_ch_settings()?);
+        }
+        Some(ConfigKind::TimeOffsets) => {
+            println!("[OK] {}", try_time_offsets()?);
+        }
+        None => {
+            // Auto-detect: try each schema, report the first success.
+            // {:#} prints the full anyhow chain (Caused by ...).
+            let mut last_errs: Vec<String> = Vec::new();
+            for (label, attempt) in [
+                ("eb_config", try_eb_config()),
+                ("ch_settings", try_ch_settings()),
+                ("time_offsets", try_time_offsets()),
+            ] {
+                match attempt {
+                    Ok(msg) => {
+                        println!("[OK] {msg}");
+                        return Ok(());
+                    }
+                    Err(e) => last_errs.push(format!("  - tried as {label}: {e:#}")),
+                }
+            }
+            anyhow::bail!(
+                "Could not validate {} as any known config kind. Diagnostics:\n{}\n\n\
+                 If the auto-detect heuristic is misleading, pass `--kind eb-config|ch-settings|time-offsets`.",
+                file.display(),
+                last_errs.join("\n")
+            );
+        }
+    }
     Ok(())
 }
 

@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/aogaki/delila-rs/schemas/eb_config.schema.json",
+  "title": "DELILA-Rust EB runtime config (eb_config.json)",
+  "description": "Defines the timing windows, L1 trigger recognition (named-ops), L2 event filter, and output destination for the Event Builder. See TODO/event-builder/SPECIFICATION.md (v0.7+) for the full reference. Add `\"$schema\": \"path/to/eb_config.schema.json\"` to the top of your config to enable editor autocomplete and validation.",
+  "type": "object",
+  "required": [
+    "version",
+    "timing",
+    "channels_file",
+    "time_offsets_file",
+    "l1",
+    "l2",
+    "output"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional reference back to this schema (editor hint)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Schema version of this file. Use \"1.0\".",
+      "examples": ["1.0"]
+    },
+    "timing": {
+      "$ref": "#/$defs/TimingConfig"
+    },
+    "channels_file": {
+      "type": "string",
+      "description": "Path (relative to this file) to chSettings.json. Provides Tags and energy calibration per channel.",
+      "examples": ["chSettings.json"]
+    },
+    "time_offsets_file": {
+      "type": "string",
+      "description": "Path (relative to this file) to timeSettings.json (tree form preferred; legacy single-ref form is also accepted).",
+      "examples": ["timeSettings.json"]
+    },
+    "l1": {
+      "$ref": "#/$defs/L1Config"
+    },
+    "l2": {
+      "type": "array",
+      "description": "Ordered list of L2 ops (named-ops AST). Lines forming a Counter→Flag→Accept chain are evaluated top-to-bottom. The event is kept iff at least one `accept` op evaluates to true.",
+      "items": {"$ref": "#/$defs/L2Op"}
+    },
+    "output": {
+      "$ref": "#/$defs/OutputConfig"
+    }
+  },
+  "$defs": {
+    "TimingConfig": {
+      "type": "object",
+      "description": "Timing windows used by chunk_builder and the sorter.",
+      "required": ["coincidence_window_ns", "buffer_delay_ns", "slice_duration_ns"],
+      "additionalProperties": false,
+      "properties": {
+        "coincidence_window_ns": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Trigger ±window in nanoseconds. Hits within this distance of an L1 anchor are pulled into the event. Typical: 100–500.",
+          "examples": [100.0, 500.0]
+        },
+        "buffer_delay_ns": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Time-sort buffer depth in ns. Absorbs arrival jitter. Typical: 1e9 (1 second).",
+          "examples": [1.0e9]
+        },
+        "slice_duration_ns": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Time slice length in ns for the chunk-based pipeline. Must be > coincidence_window_ns. Typical: 1e7 (10 ms).",
+          "examples": [1.0e7]
+        }
+      }
+    },
+    "L1Config": {
+      "type": "object",
+      "description": "L1 trigger recognition: a DAG of named ops, with `trigger` pointing at the root.",
+      "required": ["definitions", "trigger"],
+      "additionalProperties": false,
+      "properties": {
+        "definitions": {
+          "type": "array",
+          "description": "Named L1 ops. Each must have a unique `name`. Downstream ops reference upstream ops by name. Evaluation respects topological order (cycles are rejected at load).",
+          "items": {"$ref": "#/$defs/L1Op"}
+        },
+        "trigger": {
+          "type": "string",
+          "description": "Name of the op whose truth value triggers event construction at each hit."
+        }
+      }
+    },
+    "L1Op": {
+      "oneOf": [
+        {"$ref": "#/$defs/L1OpChannel"},
+        {"$ref": "#/$defs/L1OpOr"},
+        {"$ref": "#/$defs/L1OpAnd"},
+        {"$ref": "#/$defs/L1OpMultiplicity"}
+      ]
+    },
+    "L1OpChannel": {
+      "title": "channel",
+      "description": "Marks one (module, channel) hit as a trigger candidate. This is the leaf op — every other L1 op resolves down to channels.",
+      "type": "object",
+      "required": ["type", "name", "module", "channel"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "channel"},
+        "name": {"type": "string", "minLength": 1, "description": "Unique identifier for this op."},
+        "module": {"type": "integer", "minimum": 0, "maximum": 255},
+        "channel": {"type": "integer", "minimum": 0, "maximum": 255}
+      }
+    },
+    "L1OpOr": {
+      "title": "or",
+      "description": "Logical OR: this op fires when any of `inputs` fires.",
+      "type": "object",
+      "required": ["type", "name", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "or"},
+        "name": {"type": "string", "minLength": 1},
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "description": "Name of an upstream L1 op."}
+        }
+      }
+    },
+    "L1OpAnd": {
+      "title": "and",
+      "description": "All `inputs` fire within `window_ns`. Lowered to a Multiplicity with min == |inputs|. MVP restriction: inputs must resolve to leaf `channel` ops.",
+      "type": "object",
+      "required": ["type", "name", "inputs", "window_ns"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "and"},
+        "name": {"type": "string", "minLength": 1},
+        "inputs": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"type": "string", "description": "Name of an upstream L1 `channel` op."}
+        },
+        "window_ns": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "L1OpMultiplicity": {
+      "title": "multiplicity",
+      "description": "Fires when `min` distinct channels from `channels` fire within `window_ns` (sliding window). MVP restriction: channels must resolve to leaf `channel` ops.",
+      "type": "object",
+      "required": ["type", "name", "channels", "min", "window_ns"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "multiplicity"},
+        "name": {"type": "string", "minLength": 1},
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "description": "Name of an upstream L1 `channel` op."}
+        },
+        "min": {"type": "integer", "minimum": 1},
+        "window_ns": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "L2Op": {
+      "oneOf": [
+        {"$ref": "#/$defs/L2OpCounter"},
+        {"$ref": "#/$defs/L2OpFlag"},
+        {"$ref": "#/$defs/L2OpAccept"},
+        {"$ref": "#/$defs/L2OpEnergyGate"},
+        {"$ref": "#/$defs/L2OpAcVeto"},
+        {"$ref": "#/$defs/L2OpMinHits"}
+      ]
+    },
+    "L2OpCounter": {
+      "title": "counter",
+      "description": "Count event hits whose channel Tags intersect the given tag set. Tags come from chSettings.json.",
+      "type": "object",
+      "required": ["type", "name", "tags"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "counter"},
+        "name": {"type": "string", "minLength": 1},
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "description": "Tag string as defined in chSettings.json `Tags`."}
+        }
+      }
+    },
+    "L2OpFlag": {
+      "title": "flag",
+      "description": "Compare a `counter` (or another `flag`) result against `value` with `operator`. Produces a boolean.",
+      "type": "object",
+      "required": ["type", "name", "monitor", "operator", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "flag"},
+        "name": {"type": "string", "minLength": 1},
+        "monitor": {"type": "string", "description": "Name of an upstream `counter` or `flag`."},
+        "operator": {
+          "type": "string",
+          "enum": ["==", "!=", "<", "<=", ">", ">="],
+          "description": "Comparison operator."
+        },
+        "value": {"type": "integer"}
+      }
+    },
+    "L2OpAccept": {
+      "title": "accept",
+      "description": "Combine `flag` results with AND/OR. If any `accept` in the L2 chain evaluates to true, the event is kept.",
+      "type": "object",
+      "required": ["type", "name", "monitor", "operator"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "accept"},
+        "name": {"type": "string", "minLength": 1},
+        "monitor": {
+          "type": "array",
+          "items": {"type": "string", "description": "Name of an upstream `flag` op."}
+        },
+        "operator": {
+          "type": "string",
+          "enum": ["AND", "OR"]
+        }
+      }
+    },
+    "L2OpEnergyGate": {
+      "title": "energy_gate",
+      "description": "Per-(module, channel) energy gate. Fires when at least one event hit on this channel has energy in [min_adc, max_adc]. The result is exposed as a `flag` of the same name (downstream ops reference it via `monitor`).",
+      "type": "object",
+      "required": ["type", "name", "module", "channel", "min_adc", "max_adc"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "energy_gate"},
+        "name": {"type": "string", "minLength": 1},
+        "module": {"type": "integer", "minimum": 0, "maximum": 255},
+        "channel": {"type": "integer", "minimum": 0, "maximum": 255},
+        "min_adc": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "max_adc": {"type": "integer", "minimum": 0, "maximum": 65535}
+      }
+    },
+    "L2OpAcVeto": {
+      "title": "ac_veto",
+      "description": "Fires when any `trigger_channels` hit has a `veto_channels` hit within ±window_ns. Result is a `flag` named after this op (true means VETOED). To drop vetoed events, chain a `flag` with `operator: \"==\", value: 0` to invert and then `accept` it.",
+      "type": "object",
+      "required": ["type", "name", "trigger_channels", "veto_channels", "window_ns"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "ac_veto"},
+        "name": {"type": "string", "minLength": 1},
+        "trigger_channels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/ChannelRef"}
+        },
+        "veto_channels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/ChannelRef"}
+        },
+        "window_ns": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "L2OpMinHits": {
+      "title": "min_hits",
+      "description": "Fires when the event has at least `min` hits.",
+      "type": "object",
+      "required": ["type", "name", "min"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "min_hits"},
+        "name": {"type": "string", "minLength": 1},
+        "min": {"type": "integer", "minimum": 1}
+      }
+    },
+    "ChannelRef": {
+      "type": "object",
+      "required": ["module", "channel"],
+      "additionalProperties": false,
+      "properties": {
+        "module": {"type": "integer", "minimum": 0, "maximum": 255},
+        "channel": {"type": "integer", "minimum": 0, "maximum": 255}
+      }
+    },
+    "OutputConfig": {
+      "type": "object",
+      "required": ["events_per_file", "directory"],
+      "additionalProperties": false,
+      "properties": {
+        "events_per_file": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Roll over to a new ROOT file every N events.",
+          "examples": [100000, 1000000]
+        },
+        "directory": {
+          "type": "string",
+          "description": "Where ROOT output files are written (created if missing).",
+          "examples": ["./eb_output"]
+        },
+        "zmq_pub_endpoint": {
+          "type": ["string", "null"],
+          "description": "Optional ZMQ PUB endpoint for the live BuiltEvent stream (SPEC § 9.3). Set to null (or omit) to disable.",
+          "examples": [null, "tcp://*:5610"]
+        }
+      }
+    }
+  }
+}
