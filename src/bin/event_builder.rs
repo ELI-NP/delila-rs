@@ -510,9 +510,6 @@ fn run_event_building(
                 warn!("Invalid trigger format: {} (expected module:channel)", trig);
             }
         }
-        if triggers.is_empty() {
-            warn!("No triggers specified — pass --trigger or --eb-config");
-        }
         let tc = TriggerConfig {
             triggers,
             priorities,
@@ -522,6 +519,20 @@ fn run_event_building(
         };
         (tc, None, window)
     };
+
+    // Fast exit: with no triggers at all (neither static channels nor
+    // stateful multiplicity ops) every L1 check is `false`, so the
+    // pipeline would just stream-read all input files and build zero
+    // events. Bail before doing the I/O so the user notices.
+    if trigger_config.triggers.is_empty() && trigger_config.multiplicity_triggers.is_empty() {
+        warn!(
+            "No triggers configured (neither --trigger nor --eb-config produced any). \
+             Nothing to build — exiting without reading input. \
+             Pass --eb-config <file> with at least one L1 op, or one or more \
+             --trigger module:channel."
+        );
+        return Ok(());
+    }
 
     // Load time calibration — try the SPEC v0.5.1 tree schema first
     // (`{version, entries: [...]}`), fall back to the legacy single-ref
