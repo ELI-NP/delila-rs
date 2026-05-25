@@ -23,6 +23,7 @@ pub mod chunk_builder;
 mod config;
 pub mod eb_message;
 mod hit;
+pub mod init;
 pub mod l2_eval;
 pub mod pipeline;
 mod root_io;

@@ -55,6 +55,63 @@ enum ConfigKind {
 
 #[derive(Subcommand)]
 #[cfg(feature = "root")]
+enum InitKind {
+    /// Generate a `chSettings.json` skeleton with `modules × channels` entries.
+    /// Defaults: DetectorType="Unknown", Tags=[], calibration identity (p1=1).
+    /// Use `--module-type` to set per-module DetectorType+Tags up front.
+    Chsettings {
+        /// Total number of modules (modules are numbered 0..N).
+        #[arg(long)]
+        modules: u8,
+
+        /// Channels per module.
+        #[arg(long, default_value = "16")]
+        channels: u8,
+
+        /// Per-module override, format: `"M:DetectorType[:tag1,tag2,...]"`.
+        /// Repeatable. Modules not listed inherit the "Unknown" default.
+        /// Example: `--module-type "0:HPGe:HPGe,Trigger" --module-type "4:Si:E_Sector"`.
+        #[arg(long = "module-type")]
+        module_type: Vec<String>,
+
+        /// Output path.
+        #[arg(short, long, default_value = "chSettings.json")]
+        output: PathBuf,
+    },
+
+    /// Generate a `timeSettings.json` skeleton (tree form) where every channel
+    /// points at `--root` with offset_ns=0. Replace the offsets with real
+    /// values from `event_builder time-calib` afterwards.
+    Timesettings {
+        /// Read channels from this `chSettings.json`. When supplied, takes
+        /// precedence over `--modules` / `--channels`.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+
+        /// Number of modules (used only when `--config` is not supplied).
+        #[arg(long)]
+        modules: Option<u8>,
+
+        /// Channels per module (used only when `--config` is not supplied).
+        #[arg(long, default_value = "16")]
+        channels: u8,
+
+        /// Reference channel for the offset tree, as `"M:C"`. Typically the
+        /// trigger channel — every other channel's offset is measured relative
+        /// to this one's timestamp. Use the same `(M, C)` later with
+        /// `event_builder time-calib --ref-module M --ref-channel C` to fill
+        /// in real offsets.
+        #[arg(long)]
+        root: String,
+
+        /// Output path.
+        #[arg(short, long, default_value = "timeSettings.json")]
+        output: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+#[cfg(feature = "root")]
 enum Commands {
     /// Validate an eb_config.json / chSettings.json / timeSettings.json
     /// against the SPEC. Catches: syntactic JSON errors, unknown-name
@@ -113,6 +170,14 @@ enum Commands {
         /// Reference trigger energy maximum (ADC units, 16-bit)
         #[arg(long, default_value = "65535")]
         ref_energy_max: u16,
+    },
+
+    /// Generate skeleton config files (chSettings.json, timeSettings.json).
+    /// Saves the structural boilerplate so users only have to fill in
+    /// detector types, tags, and calibrations.
+    Init {
+        #[command(subcommand)]
+        kind: InitKind,
     },
 
     /// Build events from .delila files using unified pipeline
@@ -196,6 +261,31 @@ fn main() -> Result<()> {
         Commands::ValidateConfig { file, kind } => {
             run_validate_config(&file, kind.as_ref())?;
         }
+        Commands::Init { kind } => match kind {
+            InitKind::Chsettings {
+                modules,
+                channels,
+                module_type,
+                output,
+            } => {
+                run_init_chsettings(modules, channels, &module_type, &output)?;
+            }
+            InitKind::Timesettings {
+                config,
+                modules,
+                channels,
+                root,
+                output,
+            } => {
+                run_init_timesettings(
+                    config.as_deref(),
+                    modules,
+                    channels,
+                    &root,
+                    &output,
+                )?;
+            }
+        },
         Commands::TimeCalib {
             input,
             output,
@@ -327,7 +417,18 @@ fn run_validate_config(file: &std::path::Path, kind: Option<&ConfigKind>) -> Res
         ))
     };
 
-    match kind {
+    // Resolve which kind to validate. Priority:
+    //   1. Explicit --kind flag (user override)
+    //   2. `$schema` field inside the file (eb_config / chSettings / timeSettings)
+    //   3. Top-level JSON shape: a bare array can only be chSettings
+    //   4. Fall back to auto-detect across (eb_config, time_offsets) and
+    //      report only failures relevant to that subset
+    let resolved_kind = match kind {
+        Some(k) => Some(k.clone()),
+        None => detect_kind_from_file(file),
+    };
+
+    match resolved_kind {
         Some(ConfigKind::EbConfig) => {
             println!("[OK] {}", try_eb_config()?);
         }
@@ -339,11 +440,14 @@ fn run_validate_config(file: &std::path::Path, kind: Option<&ConfigKind>) -> Res
         }
         None => {
             // Auto-detect: try each schema, report the first success.
+            // ch_settings is excluded here because step 3 of resolve_kind
+            // already handles the bare-array case — at this point we know
+            // the file is an Object with no usable `$schema` hint, so
+            // ch_settings (which is an Array) cannot match.
             // {:#} prints the full anyhow chain (Caused by ...).
             let mut last_errs: Vec<String> = Vec::new();
             for (label, attempt) in [
                 ("eb_config", try_eb_config()),
-                ("ch_settings", try_ch_settings()),
                 ("time_offsets", try_time_offsets()),
             ] {
                 match attempt {
@@ -356,12 +460,166 @@ fn run_validate_config(file: &std::path::Path, kind: Option<&ConfigKind>) -> Res
             }
             anyhow::bail!(
                 "Could not validate {} as any known config kind. Diagnostics:\n{}\n\n\
-                 If the auto-detect heuristic is misleading, pass `--kind eb-config|ch-settings|time-offsets`.",
+                 Tip: add `\"$schema\": \"path/to/schemas/<eb_config|chSettings|timeSettings>.schema.json\"` \
+                 to the file (gives a single-error report and editor autocomplete), \
+                 or pass `--kind eb-config|ch-settings|time-offsets` explicitly.",
                 file.display(),
                 last_errs.join("\n")
             );
         }
     }
+    Ok(())
+}
+
+/// Peek inside the file to decide which `ConfigKind` to run. Returns `None`
+/// when there's no usable hint — caller falls back to auto-detect across the
+/// object-rooted kinds (eb_config / time_offsets).
+///
+/// Resolution rules, in priority order:
+/// 1. Top-level array → `ChSettings` (it's the only array-rooted schema)
+/// 2. `"$schema"` key whose value ends in one of the known schema filenames
+/// 3. Otherwise unknown; caller decides
+#[cfg(feature = "root")]
+fn detect_kind_from_file(file: &std::path::Path) -> Option<ConfigKind> {
+    let content = std::fs::read_to_string(file).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    if value.is_array() {
+        return Some(ConfigKind::ChSettings);
+    }
+
+    let schema = value.get("$schema").and_then(|v| v.as_str())?;
+    if schema.ends_with("eb_config.schema.json") {
+        Some(ConfigKind::EbConfig)
+    } else if schema.ends_with("chSettings.schema.json") {
+        Some(ConfigKind::ChSettings)
+    } else if schema.ends_with("timeSettings.schema.json") {
+        Some(ConfigKind::TimeOffsets)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "root")]
+fn run_init_chsettings(
+    modules: u8,
+    channels: u8,
+    module_type_specs: &[String],
+    output: &std::path::Path,
+) -> Result<()> {
+    use delila_rs::event_builder::init::{build_chsettings_skeleton, parse_module_type_spec};
+    use delila_rs::event_builder::save_channel_config;
+
+    if modules == 0 {
+        anyhow::bail!("--modules must be >= 1");
+    }
+    if channels == 0 {
+        anyhow::bail!("--channels must be >= 1");
+    }
+
+    let overrides = module_type_specs
+        .iter()
+        .map(|s| parse_module_type_spec(s))
+        .collect::<Result<Vec<_>>>()
+        .context("parsing --module-type")?;
+
+    // Reject overrides pointing at modules that don't exist (off-by-one is
+    // by far the most common typo).
+    for o in &overrides {
+        if o.module >= modules {
+            anyhow::bail!(
+                "--module-type references module {} but --modules {} only defines 0..{}",
+                o.module,
+                modules,
+                modules - 1
+            );
+        }
+    }
+
+    let cfg = build_chsettings_skeleton(modules, channels, &overrides);
+    save_channel_config(&cfg, output)
+        .with_context(|| format!("writing {}", output.display()))?;
+
+    println!(
+        "[OK] Wrote chSettings.json skeleton: {} modules × {} channels = {} entries → {}",
+        modules,
+        channels,
+        modules as usize * channels as usize,
+        output.display()
+    );
+    if !overrides.is_empty() {
+        println!(
+            "     Per-module overrides applied: {}",
+            overrides
+                .iter()
+                .map(|o| format!("mod {} → {}", o.module, o.detector_type))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    println!(
+        "     Next: edit DetectorType/Tags/p0..p3 per channel, then \
+         `event_builder validate-config {}`.",
+        output.display()
+    );
+    Ok(())
+}
+
+#[cfg(feature = "root")]
+fn run_init_timesettings(
+    config: Option<&std::path::Path>,
+    modules: Option<u8>,
+    channels: u8,
+    root_spec: &str,
+    output: &std::path::Path,
+) -> Result<()> {
+    use delila_rs::event_builder::init::{
+        build_chsettings_skeleton, build_timesettings_skeleton, channels_from_chsettings,
+        parse_module_channel,
+    };
+    use delila_rs::event_builder::load_channel_config;
+
+    let root = parse_module_channel(root_spec).context("--root")?;
+
+    let channel_list: Vec<(u8, u8)> = match config {
+        Some(path) => {
+            let cfg = load_channel_config(path)
+                .with_context(|| format!("loading --config {}", path.display()))?;
+            channels_from_chsettings(&cfg)
+        }
+        None => {
+            let m = modules.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "must supply either --config <chSettings.json> or --modules <N>"
+                )
+            })?;
+            if m == 0 || channels == 0 {
+                anyhow::bail!("--modules and --channels must be >= 1");
+            }
+            // Reuse the chsettings skeleton just to enumerate (m, c) pairs.
+            channels_from_chsettings(&build_chsettings_skeleton(m, channels, &[]))
+        }
+    };
+
+    let file = build_timesettings_skeleton(&channel_list, root)?;
+    let json = serde_json::to_string_pretty(&file)
+        .context("serializing timeSettings.json")?;
+    std::fs::write(output, json).with_context(|| format!("writing {}", output.display()))?;
+
+    println!(
+        "[OK] Wrote timeSettings.json skeleton: {} entries, root=({}, {}), offsets=0 → {}",
+        channel_list.len(),
+        root.0,
+        root.1,
+        output.display()
+    );
+    println!(
+        "     Next: run `event_builder time-calib -i <data.delila> -o {} \
+         --ref-module {} --ref-channel {}` to fill in real offsets.",
+        output.display(),
+        root.0,
+        root.1
+    );
     Ok(())
 }
 
