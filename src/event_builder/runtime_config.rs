@@ -87,6 +87,16 @@ pub enum L1Op {
         module: u8,
         channel: u8,
     },
+    /// "Any hit in module `module` (channels `0..channels`) qualifies."
+    /// Syntactic sugar — expands to the same set of `(module, c)` tuples a
+    /// hand-rolled `or` over `channel` ops would produce. Useful when a
+    /// digitizer has 16/32/64 channels and you'd otherwise write a wall of
+    /// `channel` entries plus one `or`.
+    Module {
+        name: String,
+        module: u8,
+        channels: u8,
+    },
     /// "Any input op is true (logical OR)."
     Or { name: String, inputs: Vec<String> },
     /// "All inputs fire within `window_ns` of each other."
@@ -108,6 +118,7 @@ pub enum L1Op {
 fn op_type_str(op: &L1Op) -> &'static str {
     match op {
         L1Op::Channel { .. } => "channel",
+        L1Op::Module { .. } => "module",
         L1Op::Or { .. } => "or",
         L1Op::And { .. } => "and",
         L1Op::Multiplicity { .. } => "multiplicity",
@@ -118,6 +129,7 @@ impl L1Op {
     pub fn name(&self) -> &str {
         match self {
             Self::Channel { name, .. }
+            | Self::Module { name, .. }
             | Self::Or { name, .. }
             | Self::And { name, .. }
             | Self::Multiplicity { name, .. } => name,
@@ -127,7 +139,7 @@ impl L1Op {
     /// Names this op references (used for topological / DAG validation).
     pub fn dependencies(&self) -> Vec<&str> {
         match self {
-            Self::Channel { .. } => Vec::new(),
+            Self::Channel { .. } | Self::Module { .. } => Vec::new(),
             Self::Or { inputs, .. } | Self::And { inputs, .. } => {
                 inputs.iter().map(String::as_str).collect()
             }
@@ -336,20 +348,25 @@ impl EbRuntimeConfig {
         })
     }
 
-    /// Resolve an `L1Op` name expected to be a leaf `Channel` op,
-    /// returning the `(module, channel)` pair. Used by `and` /
-    /// `multiplicity` resolution where inputs must be concrete channels.
-    fn resolve_leaf_channel<'a>(
+    /// Resolve an `L1Op` name expected to refer to channels (a `channel` leaf
+    /// or a `module` group), returning every concrete `(module, channel)` it
+    /// covers. Used by `and` / `multiplicity` resolution. `module` expands
+    /// to `0..channels` so `multiplicity` over a `module` op gives "any N of
+    /// M's channels within window".
+    fn resolve_leaf_channels<'a>(
         name: &'a str,
         by_name: &HashMap<&'a str, &'a L1Op>,
         parent_op: &str,
-    ) -> Result<(u8, u8), RuntimeConfigError> {
+    ) -> Result<Vec<(u8, u8)>, RuntimeConfigError> {
         match by_name.get(name) {
             Some(L1Op::Channel {
                 module, channel, ..
-            }) => Ok((*module, *channel)),
+            }) => Ok(vec![(*module, *channel)]),
+            Some(L1Op::Module {
+                module, channels, ..
+            }) => Ok((0..*channels).map(|c| (*module, c)).collect()),
             Some(other) => Err(RuntimeConfigError::Invalid(format!(
-                "L1 op `{parent_op}` expects a `channel` input, but `{name}` is `{}`",
+                "L1 op `{parent_op}` expects a `channel` or `module` input, but `{name}` is `{}`",
                 op_type_str(other)
             ))),
             None => Err(RuntimeConfigError::Invalid(format!(
@@ -392,6 +409,17 @@ impl EbRuntimeConfig {
                     priorities.insert(key, prio);
                 }
             }
+            L1Op::Module {
+                module, channels, ..
+            } => {
+                for c in 0..*channels {
+                    let key = (*module, c);
+                    if triggers.insert(key) {
+                        let prio = priorities.len() as u32;
+                        priorities.insert(key, prio);
+                    }
+                }
+            }
             L1Op::Or { inputs, .. } => {
                 for child in inputs {
                     self.collect_trigger_channels(
@@ -414,8 +442,9 @@ impl EbRuntimeConfig {
             } => {
                 let mut channel_set: HashSet<(u8, u8)> = HashSet::new();
                 for child in inputs {
-                    let (m, c) = Self::resolve_leaf_channel(child, by_name, op.name())?;
-                    channel_set.insert((m, c));
+                    for ch in Self::resolve_leaf_channels(child, by_name, op.name())? {
+                        channel_set.insert(ch);
+                    }
                 }
                 let min = channel_set.len() as u32;
                 multiplicities.push(MultiplicityTrigger {
@@ -432,8 +461,9 @@ impl EbRuntimeConfig {
             } => {
                 let mut channel_set: HashSet<(u8, u8)> = HashSet::new();
                 for child in channels {
-                    let (m, c) = Self::resolve_leaf_channel(child, by_name, op.name())?;
-                    channel_set.insert((m, c));
+                    for ch in Self::resolve_leaf_channels(child, by_name, op.name())? {
+                        channel_set.insert(ch);
+                    }
                 }
                 if *min == 0 {
                     return Err(RuntimeConfigError::Invalid(format!(
@@ -519,6 +549,13 @@ impl EbRuntimeConfig {
             .map_err(|n| RuntimeConfigError::Invalid(format!("L1 duplicate name: {n}")))?;
 
         for op in &self.l1.definitions {
+            if let L1Op::Module { name, channels, .. } = op {
+                if *channels == 0 {
+                    return Err(RuntimeConfigError::Invalid(format!(
+                        "L1 op `{name}`: module `channels` must be >= 1"
+                    )));
+                }
+            }
             for dep in op.dependencies() {
                 if !names.contains(dep) {
                     return Err(RuntimeConfigError::Invalid(format!(
@@ -972,7 +1009,7 @@ mod tests {
         cfg.l1.trigger = "mult".into();
         let e = cfg.build_trigger_config().unwrap_err();
         assert!(
-            e.to_string().contains("expects a `channel` input"),
+            e.to_string().contains("expects a `channel` or `module` input"),
             "got {e}"
         );
     }
@@ -981,6 +1018,100 @@ mod tests {
     // the EB layer caused permanent data loss for negligible benefit (see
     // p91Zr v3 run: 100 ADC gate dropped <0.1 % of events). The matching
     // tests have been deleted; threshold cuts now live in analysis macros.
+
+    #[test]
+    fn module_op_at_top_level_expands_to_all_channels() {
+        // A 16-ch `module` op used directly as the trigger root should
+        // register all 16 channels as triggers, just like an `or` over 16
+        // explicit `channel` ops would.
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.clear();
+        cfg.l1.definitions.push(L1Op::Module {
+            name: "any_M0".into(),
+            module: 0,
+            channels: 16,
+        });
+        cfg.l1.trigger = "any_M0".into();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.triggers.len(), 16);
+        for c in 0..16u8 {
+            assert!(tc.triggers.contains(&(0, c)), "missing (0, {c})");
+        }
+    }
+
+    #[test]
+    fn module_op_inside_or() {
+        // Two modules ORed — the trigger set should be the union.
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.clear();
+        cfg.l1.definitions.push(L1Op::Module {
+            name: "any_M0".into(),
+            module: 0,
+            channels: 4,
+        });
+        cfg.l1.definitions.push(L1Op::Module {
+            name: "any_M4".into(),
+            module: 4,
+            channels: 4,
+        });
+        cfg.l1.definitions.push(L1Op::Or {
+            name: "any".into(),
+            inputs: vec!["any_M0".into(), "any_M4".into()],
+        });
+        cfg.l1.trigger = "any".into();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.triggers.len(), 8);
+        assert!(tc.triggers.contains(&(0, 0)));
+        assert!(tc.triggers.contains(&(0, 3)));
+        assert!(tc.triggers.contains(&(4, 0)));
+        assert!(tc.triggers.contains(&(4, 3)));
+    }
+
+    #[test]
+    fn module_op_inside_multiplicity() {
+        // "Any 2 of module 0's 8 channels within 200 ns" — the typical HPGe
+        // pair-coincidence shortcut. The expanded multiplicity should cover
+        // all 8 channels.
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.clear();
+        cfg.l1.definitions.push(L1Op::Module {
+            name: "any_HPGe".into(),
+            module: 0,
+            channels: 8,
+        });
+        cfg.l1.definitions.push(L1Op::Multiplicity {
+            name: "HPGe_pair".into(),
+            channels: vec!["any_HPGe".into()],
+            min: 2,
+            window_ns: 200.0,
+        });
+        cfg.l1.trigger = "HPGe_pair".into();
+        let tc = cfg.build_trigger_config().unwrap();
+        assert_eq!(tc.multiplicity_triggers.len(), 1);
+        let m = &tc.multiplicity_triggers[0];
+        assert_eq!(m.min, 2);
+        assert_eq!(m.channels.len(), 8);
+        for c in 0..8u8 {
+            assert!(m.channels.contains(&(0, c)), "missing (0, {c})");
+        }
+    }
+
+    #[test]
+    fn module_op_with_zero_channels_is_rejected() {
+        let mut cfg = minimal_valid_config();
+        cfg.l1.definitions.clear();
+        cfg.l1.definitions.push(L1Op::Module {
+            name: "empty".into(),
+            module: 0,
+            channels: 0,
+        });
+        cfg.l1.trigger = "empty".into();
+        let e = cfg.validate().unwrap_err();
+        assert!(
+            e.to_string().contains("`channels` must be >= 1"),
+            "got {e}"
+        );
+    }
 
     #[test]
     fn build_trigger_config_rejects_unknown_trigger() {
