@@ -195,6 +195,26 @@ path = "src/bin/eb_test_sender.rs"
 required-features = ["root", "dev-tools"]
 
 [[bin]]
+name = "eb_delila_replay"
+path = "src/bin/eb_delila_replay.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "delila_source_replay"
+path = "src/bin/delila_source_replay.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "delila_merger_replay"
+path = "src/bin/delila_merger_replay.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "eb_monitor_cli"
+path = "src/bin/eb_monitor_cli.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "psd1_waveform_test"
 path = "src/bin/psd1_waveform_test.rs"
 required-features = ["dev-tools"]
