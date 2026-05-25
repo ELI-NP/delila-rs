@@ -51,6 +51,25 @@ pub enum L2FilterError {
     Unimplemented { name: String, op_type: &'static str },
     #[error("L2 chain must contain at least one `accept` op")]
     NoAccept,
+    #[error(
+        "L2 counter name `{name}` is not a valid ROOT TTree branch name. \
+         Counter names are written as ROOT branches in the output and must \
+         match [A-Za-z_][A-Za-z0-9_]* (no `-`, `.`, spaces, leading digits). \
+         Rename to something like `HPGe_count`."
+    )]
+    InvalidCounterName { name: String },
+}
+
+/// True if `s` is a valid ROOT TTree branch name (and a valid C identifier).
+/// Used by [`L2Filter::new`] to reject counter `name`s that would otherwise
+/// collide with ROOT operator characters (e.g. `-` is parsed as subtraction).
+fn is_root_safe_branch_name(s: &str) -> bool {
+    let mut bytes = s.bytes();
+    match bytes.next() {
+        Some(b) if b.is_ascii_alphabetic() || b == b'_' => {}
+        _ => return false,
+    }
+    bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 impl L2Filter {
@@ -66,10 +85,20 @@ impl L2Filter {
         let mut has_accept = false;
         for op in &ops {
             match op {
-                L2Op::Counter { .. }
-                | L2Op::EnergyGate { .. }
-                | L2Op::MinHits { .. }
-                | L2Op::AcVeto { .. } => {
+                L2Op::Counter { name, .. } => {
+                    // Counter names become ROOT branches in the output, so
+                    // reject anything ROOT can't accept (`-`, `.`, spaces,
+                    // leading digit, ...). Same check is also in the JSON
+                    // Schema for IDE feedback; this is the runtime safety net
+                    // when validate-config or build is run on a file that
+                    // bypassed the schema.
+                    if !is_root_safe_branch_name(name) {
+                        return Err(L2FilterError::InvalidCounterName {
+                            name: name.clone(),
+                        });
+                    }
+                }
+                L2Op::EnergyGate { .. } | L2Op::MinHits { .. } | L2Op::AcVeto { .. } => {
                     // Standalone ops (no inter-op references to resolve).
                 }
                 L2Op::Flag { name, monitor, .. } => {
@@ -103,12 +132,51 @@ impl L2Filter {
         })
     }
 
+    /// Names of every `counter` L2 op in definition order. Used by the ROOT
+    /// writer to declare one branch per counter so all events in a file share
+    /// the same set of branches.
+    pub fn counter_names(&self) -> Vec<String> {
+        self.ops
+            .iter()
+            .filter_map(|op| match op {
+                L2Op::Counter { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Filter events in-place: drop events that pass no `accept` op, and for
+    /// the kept ones write each `counter` value into `event.counters`. This is
+    /// the canonical path from the pipeline worker — combining filter + counter
+    /// annotation in one pass avoids re-evaluating L2 ops for the writer.
+    pub fn filter_and_annotate(&self, events: &mut Vec<BuiltEvent>) {
+        events.retain_mut(|ev| {
+            let (accepted, counters) = self.evaluate_with_counters(ev);
+            if accepted.is_empty() {
+                false
+            } else {
+                ev.counters = counters;
+                true
+            }
+        });
+    }
+
     /// Per-event check: returns the list of accepted op names (empty if
     /// the event should be **dropped**, non-empty if **kept**).
     ///
     /// Hot path: allocations are bounded — `counters` and `flags` HashMaps
     /// have size = number of L2 ops, typically a handful.
     pub fn evaluate(&self, event: &BuiltEvent) -> Vec<String> {
+        self.evaluate_with_counters(event).0
+    }
+
+    /// Same as [`evaluate`] but also returns the per-counter snapshot keyed by
+    /// counter op name. Used by [`filter_and_annotate`] and tests; the writer
+    /// pulls these values out of `BuiltEvent.counters` afterward.
+    pub fn evaluate_with_counters(
+        &self,
+        event: &BuiltEvent,
+    ) -> (Vec<String>, HashMap<String, i64>) {
         let mut counters: HashMap<&str, i64> = HashMap::with_capacity(self.ops.len());
         let mut flags: HashMap<&str, bool> = HashMap::with_capacity(self.ops.len());
         let mut accepted: Vec<String> = Vec::new();
@@ -227,7 +295,15 @@ impl L2Filter {
             }
         }
 
-        accepted
+        // Snapshot the per-counter values into an owned-key map so the caller
+        // (writer / filter_and_annotate) can store them in BuiltEvent.counters
+        // beyond the lifetime of this evaluation.
+        let counter_snapshot: HashMap<String, i64> = counters
+            .iter()
+            .map(|(&name, &value)| (name.to_string(), value))
+            .collect();
+
+        (accepted, counter_snapshot)
     }
 
     /// Hot-path bool check: `true` ↔ at least one `accept` op evaluated to true.
@@ -317,6 +393,140 @@ mod tests {
         let f = L2Filter::new(minimal_ops(), tags).unwrap();
         let ev = ev_with(&[(0, 0)]);
         assert!(!f.keeps(&ev));
+    }
+
+    #[test]
+    fn counter_names_listed_in_definition_order() {
+        let ops = vec![
+            L2Op::Counter {
+                name: "HPGe_count".into(),
+                tags: vec!["HPGe".into()],
+            },
+            L2Op::Counter {
+                name: "Si_count".into(),
+                tags: vec!["Si".into()],
+            },
+            L2Op::Flag {
+                name: "any".into(),
+                monitor: "HPGe_count".into(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "keep".into(),
+                monitor: vec!["any".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let f = L2Filter::new(ops, ChannelTagMap::new()).unwrap();
+        assert_eq!(
+            f.counter_names(),
+            vec!["HPGe_count".to_string(), "Si_count".to_string()]
+        );
+    }
+
+    #[test]
+    fn filter_and_annotate_writes_counters_into_kept_events() {
+        // Two channels with different tags. Counter sees both, flag selects
+        // events with HPGe_count > 0.
+        let tags = tags(&[((0, 0), &["HPGe"]), ((1, 0), &["Si"])]);
+        let ops = vec![
+            L2Op::Counter {
+                name: "HPGe_count".into(),
+                tags: vec!["HPGe".into()],
+            },
+            L2Op::Counter {
+                name: "Si_count".into(),
+                tags: vec!["Si".into()],
+            },
+            L2Op::Flag {
+                name: "has_HPGe".into(),
+                monitor: "HPGe_count".into(),
+                operator: CmpOp::Gt,
+                value: 0,
+            },
+            L2Op::Accept {
+                name: "keep".into(),
+                monitor: vec!["has_HPGe".into()],
+                operator: LogicOp::And,
+            },
+        ];
+        let f = L2Filter::new(ops, tags).unwrap();
+        let mut events = vec![
+            ev_with(&[(0, 0), (1, 0)]), // HPGe=1, Si=1 → kept
+            ev_with(&[(1, 0)]),         // HPGe=0, Si=1 → dropped
+            ev_with(&[(0, 0), (0, 0)]), // HPGe=2, Si=0 → kept
+        ];
+        f.filter_and_annotate(&mut events);
+        assert_eq!(events.len(), 2, "dropped exactly one event");
+        // First kept event has HPGe=1, Si=1
+        assert_eq!(events[0].counters.get("HPGe_count"), Some(&1));
+        assert_eq!(events[0].counters.get("Si_count"), Some(&1));
+        // Second kept event has HPGe=2, Si=0
+        assert_eq!(events[1].counters.get("HPGe_count"), Some(&2));
+        assert_eq!(events[1].counters.get("Si_count"), Some(&0));
+    }
+
+    #[test]
+    fn rejects_counter_name_with_hyphen() {
+        let ops = vec![
+            L2Op::Counter {
+                name: "HPGe-count".into(),
+                tags: vec!["HPGe".into()],
+            },
+            L2Op::Accept {
+                name: "keep".into(),
+                monitor: vec![],
+                operator: LogicOp::Or,
+            },
+        ];
+        let err = L2Filter::new(ops, ChannelTagMap::new()).unwrap_err();
+        assert!(
+            matches!(err, L2FilterError::InvalidCounterName { ref name } if name == "HPGe-count"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_counter_name_with_dot_space_or_leading_digit() {
+        for bad in ["HPGe.count", "HPGe count", "2HPGe", ""] {
+            let ops = vec![
+                L2Op::Counter {
+                    name: bad.into(),
+                    tags: vec!["HPGe".into()],
+                },
+                L2Op::Accept {
+                    name: "keep".into(),
+                    monitor: vec![],
+                    operator: LogicOp::Or,
+                },
+            ];
+            let err = L2Filter::new(ops, ChannelTagMap::new()).unwrap_err();
+            assert!(
+                matches!(err, L2FilterError::InvalidCounterName { .. }),
+                "name `{bad}` should be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_counter_name_with_underscore_and_digits() {
+        // ELIFANT-Event style names — all C-identifier-safe.
+        for good in ["HPGe_count", "E_Sector_Counter", "_internal", "x42"] {
+            let ops = vec![
+                L2Op::Counter {
+                    name: good.into(),
+                    tags: vec!["HPGe".into()],
+                },
+                L2Op::Accept {
+                    name: "keep".into(),
+                    monitor: vec![],
+                    operator: LogicOp::Or,
+                },
+            ];
+            L2Filter::new(ops, ChannelTagMap::new())
+                .unwrap_or_else(|e| panic!("name `{good}` should be accepted, got {e:?}"));
+        }
     }
 
     #[test]

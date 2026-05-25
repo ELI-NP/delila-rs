@@ -90,7 +90,7 @@ fn bench_events(dir: &Path, n_events: usize) {
     let path = dir.join("bench_events.root");
 
     let start = Instant::now();
-    write_events_to_root(&path, "events", &events).unwrap();
+    write_events_to_root(&path, "events", &events, &[]).unwrap();
     let elapsed = start.elapsed();
 
     let file_size = std::fs::metadata(&path).unwrap().len();
@@ -117,7 +117,7 @@ fn bench_file_per_batch(dir: &Path, total_events: usize, batch_size: usize) {
 
     for chunk in events.chunks(batch_size) {
         let path = dir.join(format!("bench_batch_{file_count:04}.root"));
-        write_events_to_root(&path, "events", chunk).unwrap();
+        write_events_to_root(&path, "events", chunk, &[]).unwrap();
         total_bytes += std::fs::metadata(&path).unwrap().len();
         file_count += 1;
     }
@@ -386,7 +386,7 @@ fn bench_batch_sweep(dir: &Path, total_events: usize) {
 
         for chunk in events.chunks(batch_size) {
             let path = dir.join(format!("sweep_{batch_size}_{file_count:04}.root"));
-            write_events_to_root(&path, "events", chunk).unwrap();
+            write_events_to_root(&path, "events", chunk, &[]).unwrap();
             total_bytes += std::fs::metadata(&path).unwrap().len();
             file_count += 1;
         }

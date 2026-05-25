@@ -123,6 +123,7 @@ pub fn write_events_to_root(
     path: &Path,
     tree_name: &str,
     events: &[BuiltEvent],
+    counter_names: &[String],
 ) -> Result<(), RootError> {
     // Flatten events into per-entry vectors for TTree branches
     let event_ids: Vec<u64> = events.iter().map(|e| e.event_id).collect();
@@ -179,6 +180,17 @@ pub fn write_events_to_root(
     tree.new_branch("RelTime", rel_times.into_iter());
     tree.new_branch("WithAC", with_acs.into_iter());
 
+    // L2 counter values — one branch per counter name. Each event's
+    // `counters` map is populated by `L2Filter::filter_and_annotate`; missing
+    // entries (events that never went through L2) fall back to 0.
+    for counter_name in counter_names {
+        let values: Vec<i64> = events
+            .iter()
+            .map(|e| e.counters.get(counter_name).copied().unwrap_or(0))
+            .collect();
+        tree.new_branch(counter_name, values.into_iter());
+    }
+
     tree.write(&mut file)
         .map_err(|e| RootError::WriteError(format!("{:?}", e)))?;
 
@@ -193,6 +205,7 @@ pub fn write_events_to_root(
     _path: &Path,
     _tree_name: &str,
     _events: &[BuiltEvent],
+    _counter_names: &[String],
 ) -> Result<(), RootError> {
     Err(RootError::FeatureNotEnabled)
 }
@@ -383,6 +396,7 @@ mod tests {
         assert!(path.metadata().unwrap().len() > 0);
     }
 
+
     #[test]
     fn test_write_events() {
         let dir = tempdir().unwrap();
@@ -397,10 +411,76 @@ mod tests {
         let events = vec![event];
 
         // Write to ROOT file
-        write_events_to_root(&path, "events", &events).unwrap();
+        write_events_to_root(&path, "events", &events, &[]).unwrap();
 
         // Verify file exists
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_write_events_with_counter_branches() {
+        // Two events with annotated L2 counter values — the writer should
+        // produce one ROOT branch per counter name and round-trip the values
+        // through oxyroot's reader.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_events_with_counters.root");
+
+        let mut ev1 = BuiltEvent::new(1, &make_hit(0, 0, 1000.0));
+        ev1.counters.insert("HPGe_count".into(), 3);
+        ev1.counters.insert("Si_count".into(), 1);
+
+        let mut ev2 = BuiltEvent::new(2, &make_hit(0, 0, 2000.0));
+        ev2.counters.insert("HPGe_count".into(), 0);
+        ev2.counters.insert("Si_count".into(), 2);
+
+        let counter_names = vec!["HPGe_count".to_string(), "Si_count".to_string()];
+        write_events_to_root(&path, "events", &[ev1, ev2], &counter_names).unwrap();
+
+        // Read back via oxyroot to verify the branches exist with the right
+        // per-event values.
+        let mut file =
+            oxyroot::RootFile::open(path.to_str().unwrap()).expect("open ROOT file");
+        let tree = file.get_tree("events").expect("get events tree");
+
+        let hpge: Vec<i64> = tree
+            .branch("HPGe_count")
+            .expect("HPGe_count branch exists")
+            .as_iter::<i64>()
+            .expect("HPGe_count i64 stream")
+            .collect();
+        let si: Vec<i64> = tree
+            .branch("Si_count")
+            .expect("Si_count branch exists")
+            .as_iter::<i64>()
+            .expect("Si_count i64 stream")
+            .collect();
+        assert_eq!(hpge, vec![3, 0]);
+        assert_eq!(si, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_write_events_missing_counter_defaults_to_zero() {
+        // If a kept event doesn't have a particular counter populated
+        // (e.g. partial L2 annotation), the writer must fall back to 0 rather
+        // than crashing — every event needs a value for every declared branch.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_missing_counter.root");
+
+        let ev1 = BuiltEvent::new(1, &make_hit(0, 0, 1000.0));
+        // ev1.counters is empty.
+        let counter_names = vec!["HPGe_count".to_string()];
+        write_events_to_root(&path, "events", &[ev1], &counter_names).unwrap();
+
+        let mut file =
+            oxyroot::RootFile::open(path.to_str().unwrap()).expect("open ROOT file");
+        let tree = file.get_tree("events").expect("get events tree");
+        let hpge: Vec<i64> = tree
+            .branch("HPGe_count")
+            .expect("HPGe_count branch")
+            .as_iter::<i64>()
+            .expect("i64 stream")
+            .collect();
+        assert_eq!(hpge, vec![0]);
     }
 }
 

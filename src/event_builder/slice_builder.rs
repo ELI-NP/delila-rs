@@ -277,6 +277,7 @@ impl SliceBuilder {
             trigger_module: trigger.module,
             trigger_channel: trigger.channel,
             hits: event_hits,
+            counters: std::collections::HashMap::new(),
         })
     }
 

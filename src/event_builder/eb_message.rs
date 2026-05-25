@@ -92,6 +92,7 @@ mod tests {
                 relative_time: 0.0,
                 with_ac: false,
             }],
+            counters: std::collections::HashMap::new(),
         }
     }
 

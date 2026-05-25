@@ -239,6 +239,7 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
                 trigger_module: mw.primary_trigger_module,
                 trigger_channel: mw.primary_trigger_channel,
                 hits: event_hits,
+                counters: std::collections::HashMap::new(),
             });
         }
     }

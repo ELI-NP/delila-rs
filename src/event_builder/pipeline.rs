@@ -159,6 +159,14 @@ impl EventBuilderPipeline {
             "Starting EventBuilderPipeline"
         );
 
+        // Collect L2 counter names once (cheap; happens at startup) so each
+        // writer thread can declare a stable set of ROOT branches.
+        let counter_names: Vec<String> = self
+            .l2_filter
+            .as_ref()
+            .map(|f| f.counter_names())
+            .unwrap_or_default();
+
         // Spawn writer threads
         let mut writer_handles = Vec::with_capacity(config.n_writers);
         for _ in 0..config.n_writers {
@@ -169,8 +177,9 @@ impl EventBuilderPipeline {
             let fw = files_written.clone();
             let run_id = config.run_id;
             let tree_name = config.output_tree.clone();
+            let counter_names = counter_names.clone();
             writer_handles.push(std::thread::spawn(move || {
-                writer_thread(rx, dir, epf, fi, fw, run_id, &tree_name);
+                writer_thread(rx, dir, epf, fi, fw, run_id, &tree_name, &counter_names);
             }));
         }
         drop(writer_rx); // Close our copy so writers detect close when all senders drop
@@ -371,8 +380,11 @@ fn worker_thread(
 
         // L2 filter (optional). Drops rejected events before they're sent
         // to writers; this is the post-build filtering step from SPEC § 7.
+        // For kept events, `filter_and_annotate` also stamps L2 counter
+        // values into `event.counters` so the ROOT writer can expose them as
+        // per-event branches downstream.
         if let Some(ref filter) = l2_filter {
-            events.retain(|ev| filter.keeps(ev));
+            filter.filter_and_annotate(&mut events);
         }
 
         // Assign sequential event IDs AFTER L2 so rejected events don't burn
@@ -505,6 +517,7 @@ mod zmq_pub_tests {
                 relative_time: 0.0,
                 with_ac: false,
             }],
+            counters: std::collections::HashMap::new(),
         }
     }
 
@@ -584,6 +597,7 @@ mod zmq_pub_tests {
 
 /// Writer thread: receive event batches → accumulate → write to ROOT files
 #[cfg(feature = "root")]
+#[allow(clippy::too_many_arguments)]
 fn writer_thread(
     writer_rx: crossbeam::Receiver<Vec<BuiltEvent>>,
     output_dir: PathBuf,
@@ -592,6 +606,7 @@ fn writer_thread(
     files_written: Arc<AtomicU64>,
     run_id: u32,
     tree_name: &str,
+    counter_names: &[String],
 ) {
     let mut buffer: Vec<BuiltEvent> = Vec::with_capacity(events_per_file + events_per_file / 10);
 
@@ -606,6 +621,7 @@ fn writer_thread(
                 tree_name,
                 &file_index,
                 &files_written,
+                counter_names,
             );
         }
     }
@@ -619,11 +635,13 @@ fn writer_thread(
             tree_name,
             &file_index,
             &files_written,
+            counter_names,
         );
     }
 }
 
 #[cfg(feature = "root")]
+#[allow(clippy::too_many_arguments)]
 fn write_buffer_to_root(
     buffer: &mut Vec<BuiltEvent>,
     output_dir: &std::path::Path,
@@ -631,6 +649,7 @@ fn write_buffer_to_root(
     tree_name: &str,
     file_index: &AtomicU32,
     files_written: &AtomicU64,
+    counter_names: &[String],
 ) {
     use super::root_io::write_events_to_root;
 
@@ -639,7 +658,7 @@ fn write_buffer_to_root(
     let idx = file_index.fetch_add(1, Ordering::Relaxed);
     let file_path = output_dir.join(format!("eb_run{:04}_{:04}_events.root", run_id, idx));
 
-    match write_events_to_root(&file_path, tree_name, buffer) {
+    match write_events_to_root(&file_path, tree_name, buffer, counter_names) {
         Ok(()) => {
             files_written.fetch_add(1, Ordering::Relaxed);
             info!(
@@ -657,6 +676,7 @@ fn write_buffer_to_root(
 
 /// Writer thread stub when ROOT feature is not enabled
 #[cfg(not(feature = "root"))]
+#[allow(clippy::too_many_arguments)]
 fn writer_thread(
     writer_rx: crossbeam::Receiver<Vec<BuiltEvent>>,
     _output_dir: PathBuf,
@@ -665,6 +685,7 @@ fn writer_thread(
     _files_written: Arc<AtomicU64>,
     _run_id: u32,
     _tree_name: &str,
+    _counter_names: &[String],
 ) {
     let mut total = 0u64;
     while let Ok(batch) = writer_rx.recv() {

@@ -4,6 +4,7 @@
 
 use super::hit::Hit;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A hit within a built event (with relative time)
 ///
@@ -62,6 +63,14 @@ pub struct BuiltEvent {
     pub trigger_channel: u8,
     /// All hits in this event (trigger is the first element)
     pub hits: Vec<EventHit>,
+    /// L2 counter values annotated by `L2Filter::filter_and_annotate`.
+    /// Keys are L2 `counter` op names; values are per-event hit counts.
+    /// Empty when L2 has no counter ops or the event never went through L2
+    /// (e.g. raw `chunk_builder` output before filtering). Wire-format-safe:
+    /// older subscribers without this field round-trip cleanly via
+    /// `#[serde(default)]`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub counters: HashMap<String, i64>,
 }
 
 impl BuiltEvent {
@@ -85,6 +94,7 @@ impl BuiltEvent {
             trigger_module: trigger.module,
             trigger_channel: trigger.channel,
             hits: vec![trigger_hit],
+            counters: HashMap::new(),
         }
     }
 
@@ -154,6 +164,7 @@ impl Default for BuiltEvent {
             trigger_module: 0,
             trigger_channel: 0,
             hits: Vec::new(),
+            counters: HashMap::new(),
         }
     }
 }
@@ -244,5 +255,44 @@ mod tests {
             with_ac: false,
         };
         assert_eq!(hit.channel_key(), (5 << 8) | 10);
+    }
+
+    #[test]
+    fn counters_field_round_trips_via_json() {
+        let mut ev = BuiltEvent::new(7, &make_hit(0, 0, 100.0));
+        ev.counters.insert("HPGe_count".to_string(), 3);
+        ev.counters.insert("Si_count".to_string(), 1);
+
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: BuiltEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.counters.get("HPGe_count"), Some(&3));
+        assert_eq!(back.counters.get("Si_count"), Some(&1));
+    }
+
+    #[test]
+    fn legacy_payload_without_counters_field_deserializes_with_empty_map() {
+        // Wire-format compat: subscribers running pre-counter-feature code
+        // emitted BuiltEvent JSON / msgpack without the `counters` key. Newer
+        // readers (this codebase) must accept that and default to an empty
+        // map so the rest of the pipeline keeps working.
+        let json = r#"{
+            "event_id": 1,
+            "trigger_time": 0.0,
+            "trigger_module": 0,
+            "trigger_channel": 0,
+            "hits": []
+        }"#;
+        let ev: BuiltEvent = serde_json::from_str(json).unwrap();
+        assert!(ev.counters.is_empty());
+    }
+
+    #[test]
+    fn counters_field_skipped_in_json_when_empty() {
+        // `skip_serializing_if` keeps the wire payload identical to the
+        // pre-feature shape when L2 has no counter ops, so older subscribers
+        // see no schema change.
+        let ev = BuiltEvent::new(0, &make_hit(0, 0, 0.0));
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(!json.contains("counters"));
     }
 }
