@@ -1,0 +1,6 @@
+[2m2026-05-20T08:37:28.501335Z[0m [32m INFO[0m [2mevent_builder[0m[2m:[0m Building events: 205 input files (ROOT), 4 workers, 2 writers
+[2m2026-05-20T08:37:28.502065Z[0m [32m INFO[0m [2mevent_builder[0m[2m:[0m Loaded eb_config.json [3mfile[0m[2m=[0m./eb_config.json [3mcoincidence[0m[2m=[0m100.0 [3mtriggers[0m[2m=[0m80 [3mmult[0m[2m=[0m0 [3ml2_ops[0m[2m=[0m5
+[2m2026-05-20T08:37:28.502301Z[0m [32m INFO[0m [2mevent_builder[0m[2m:[0m Loaded timeSettings.json (tree schema, 1 roots) from: ./timeSettings.json
+[2m2026-05-20T08:37:28.502332Z[0m [32m INFO[0m [2mevent_builder[0m[2m:[0m Pipeline config: coincidence=100 ns, events_per_file=1000000, output_dir=./eb_output
+[2m2026-05-20T08:37:28.502386Z[0m [32m INFO[0m [2mevent_builder[0m[2m:[0m Reading ROOT files from `ELIADE_Tree` tree (source: RootFile)
+[2m2026-05-20T08:52:40.855282Z[0m [32m INFO[0m [2mevent_builder[0m[2m:[0m Event building complete [3mhits[0m[2m=[0m8425960061 [3mevents_built[0m[2m=[0m2040805337 [3mevents_kept[0m[2m=[0m12399990 [3mfiles[0m[2m=[0m14

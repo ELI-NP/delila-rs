@@ -90,12 +90,9 @@
         {
           "sourceId": 0,
           "channelId": 1,
-          "xRange": {
-            "min": 0,
-            "max": 23.56329113924051
-          },
+          "xRange": "auto",
           "yRange": "auto",
-          "isLocked": true,
+          "isLocked": false,
           "isEmpty": false
         },
         {
@@ -210,8 +207,7 @@
           "isLocked": false,
           "isEmpty": false
         }
-      ],
-      "lastModifiedCellIndex": 1
+      ]
     },
     {
       "id": "91732a5f-abbb-41cd-84e8-5105e9fcc6ce",
