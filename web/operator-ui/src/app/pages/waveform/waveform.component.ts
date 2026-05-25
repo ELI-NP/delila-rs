@@ -160,6 +160,15 @@ interface ChannelChart {
                 ENABLE_ACQ
               </mat-slide-toggle>
             }
+            <mat-slide-toggle
+              class="amax-waveforms-enabled"
+              [checked]="amaxWaveformsEnabled()"
+              (change)="onAmaxWaveformsEnabledToggle($event.checked)"
+              color="primary"
+              matTooltip="Toggle OpenDPP waveform delivery for this digitizer. ON = events carry waveform samples (required for any probe display); OFF = energy/timestamp only. Sends a partial config update via tuneupApply, which hot-rebinds the FELib endpoint format while acquisition is stopped."
+            >
+              Waveforms
+            </mat-slide-toggle>
           }
 
           <mat-form-field appearance="outline" class="channel-select">
@@ -1127,6 +1136,17 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
    *  from / writes to `channel_defaults.amax.enable_acq`. */
   readonly amaxEnableAcq = signal(false);
 
+  /** Local mirror of `board.waveforms_enabled` — kept as a signal so the
+   *  Tune Up toolbar's "Waveforms" slide toggle can flip waveform
+   *  delivery without leaving Tune Up. Synced from `tuneUpConfig()` in
+   *  `loadTuneUpConfig`. Flipping here writes through `tuneupApply`,
+   *  which hot-rebinds the FELib OpenDPP endpoint format on the reader
+   *  side (see `configure_opendpp_endpoint` in read_loop_dig2.rs). The
+   *  FELib data-format JSON is locked at endpoint setup time, so this
+   *  toggle is the only way to switch waveform delivery on/off without
+   *  bouncing the reader process. */
+  readonly amaxWaveformsEnabled = signal(false);
+
   /** Live AMax board-level register values polled from the digitizer
    *  (via `GET /api/digitizers/:id/amax-board-registers`). Polled at
    *  1 Hz only while the AMax Tune Up debug sub-mode is active. Empty
@@ -1701,6 +1721,10 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.amaxEnableAcq.set(
       (config.channel_defaults?.amax?.enable_acq ?? 0) === 1,
     );
+    // Mirror `board.waveforms_enabled` for the Tune Up toolbar's
+    // "Waveforms" toggle. Defaults to false if absent — matches the
+    // backend's `unwrap_or(false)` in read_loop_dig2.rs.
+    this.amaxWaveformsEnabled.set(config.board?.waveforms_enabled === true);
   }
 
   /** Handle the ENABLE_ACQ slide toggle in the AMax debug Tune Up
@@ -1753,6 +1777,51 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
           this.amaxEnableAcq.set(!checked);
           const e = err as { error?: { message?: string }; message?: string };
           this.notify.error('ENABLE_ACQ toggle failed: ' + (e.error?.message ?? e.message ?? 'unknown'));
+        },
+      });
+  }
+
+  /** Handle the "Waveforms" slide toggle in the AMax Tune Up toolbar.
+   *  Sends a partial config update via `tuneupApply` so the operator
+   *  can flip OpenDPP waveform delivery without leaving Tune Up.
+   *
+   *  The FELib OpenDPP endpoint's data-format JSON is locked at
+   *  endpoint setup time, so changing `board.waveforms_enabled` alone
+   *  isn't enough — the reader's ApplyConfig handler also rebinds the
+   *  endpoint via `configure_opendpp_endpoint` while acquisition is
+   *  stopped (Tune Up Apply cycles Stop → Configured → Arm → Start). */
+  onAmaxWaveformsEnabledToggle(checked: boolean): void {
+    const config = this.tuneUpConfig();
+    if (!config || config.firmware !== 'AMax') return;
+    // Optimistic: update the local mirror immediately so the toggle
+    // doesn't snap back during the round-trip. Rolled back on failure.
+    this.amaxWaveformsEnabled.set(checked);
+
+    const updatedConfig: DigitizerConfig = {
+      ...config,
+      board: {
+        ...config.board,
+        waveforms_enabled: checked,
+      },
+    };
+
+    this.operatorService
+      .tuneupApply(config.digitizer_id, updatedConfig)
+      .subscribe({
+        next: (resp) => {
+          if (resp.success) {
+            this.tuneUpConfig.set(updatedConfig);
+            this.digitizerService.loadDigitizers();
+            this.notify.success(checked ? 'Waveforms ON' : 'Waveforms OFF');
+          } else {
+            this.amaxWaveformsEnabled.set(!checked);
+            this.notify.error('Waveforms toggle failed: ' + (resp.message ?? 'unknown'));
+          }
+        },
+        error: (err: unknown) => {
+          this.amaxWaveformsEnabled.set(!checked);
+          const e = err as { error?: { message?: string }; message?: string };
+          this.notify.error('Waveforms toggle failed: ' + (e.error?.message ?? e.message ?? 'unknown'));
         },
       });
   }

@@ -349,6 +349,32 @@ pub(crate) fn run(
                             // hot path picks up the new value on the next event.
                             conn.amax_enable_acq =
                                 crate::reader::amax_enable_acq_from_config(&dig_config);
+                            // Hot-swap OpenDPP waveform delivery when the user
+                            // toggles `waveforms_enabled` during Tune Up. The
+                            // FELib data format JSON is locked at endpoint
+                            // setup, so per-channel ApplyConfig alone cannot
+                            // change waveform inclusion — we must rebind the
+                            // active endpoint here while acquisition is stopped.
+                            let target_iw =
+                                dig_config.board.waveforms_enabled.unwrap_or(false);
+                            if target_iw != conn.include_waveform {
+                                match conn.handle.configure_opendpp_endpoint(target_iw) {
+                                    Ok(ep) => {
+                                        conn.endpoint = ep;
+                                        conn.include_waveform = target_iw;
+                                        info!(
+                                            include_waveform = target_iw,
+                                            "OpenDPP endpoint reconfigured during ApplyConfig"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            error = %e,
+                                            "Failed to reconfigure OpenDPP endpoint during Apply"
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                     let _ = response_tx.send(result);
