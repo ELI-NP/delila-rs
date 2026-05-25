@@ -254,36 +254,43 @@ import {
   AMAX_INPUT_PARAMS,
   AMAX_TRIGGER_PARAMS,
   AMAX_ENERGY_PARAMS,
-  AMAX_WAVEFORM_PARAMS,
-  AMAX_DEBUG_PARAMS,
+  AMAX_AMAX_PARAMS,
 } from './amax-generated';
 
 // AMax shares PSD2's per-channel `channelstriggermask` DevTree path
 // (see `FirmwareType::PSD2 | FirmwareType::AMax` branch in
-// src/config/digitizer.rs). The codegen output omits coincidence params,
-// so add the single relevant entry by hand here.
-const AMAX_COINCIDENCE_PARAMS: ChannelParamDef[] = [
-  { key: 'ch_trigger_mask', label: 'Ch Trigger Mask', type: 'ch-mask', bitWidth: 32, encoding: 'hex-string', setInRun: true },
-];
+// src/config/digitizer.rs). The codegen output doesn't emit a
+// coincidence category, so add the single relevant entry by hand.
+// Merged into AMax's Input tab below — operators tune polarity / DC
+// offset / pre-trigger / coincidence mask together so they live on
+// one tab.
+const AMAX_CH_TRIGGER_MASK: ChannelParamDef = {
+  key: 'ch_trigger_mask',
+  label: 'Ch Trigger Mask',
+  type: 'ch-mask',
+  bitWidth: 32,
+  encoding: 'hex-string',
+  setInRun: true,
+};
 
 // --- Category lookup ---------------------------------------------------------
 
 /** Channel-parameter categories surfaced in the Settings UI.
  *
  *  `input` / `trigger` / `energy` / `coincidence` / `waveform` are the core
- *  pipeline stages every CAEN firmware exposes. `debug` is AMax-only today
- *  (it carries the `delay_debug` register that shifts the debug-FW capture
- *  window — see `tools/amax_viewer/fw_params.json` for the canonical list);
- *  it's just another category name as far as the dispatch layer is
- *  concerned, so future firmwares that grow a `category=debug` field in
- *  their `fw_params.json` will round-trip through the same code path. */
+ *  pipeline stages every CAEN firmware exposes. `amax` is the AMax-only
+ *  HLS peak detector (+ its dedicated baseline filter) — a separate
+ *  signal path inside the FW with its own window / baseline params, so
+ *  it gets its own tab to keep the Energy tab focused on the trapezoidal
+ *  filter chain. New firmwares can grow new categories via
+ *  `tools/amax_viewer/fw_params.json` + a one-liner extension here. */
 export type ChannelCategory =
   | 'input'
   | 'trigger'
   | 'energy'
+  | 'amax'
   | 'coincidence'
-  | 'waveform'
-  | 'debug';
+  | 'waveform';
 
 /** Channel-param categories listed in the order operators expect to see
  *  them as Settings sub-tabs. The Settings component iterates this list
@@ -293,9 +300,9 @@ export const CHANNEL_CATEGORIES: readonly ChannelCategory[] = [
   'input',
   'trigger',
   'energy',
+  'amax',
   'coincidence',
   'waveform',
-  'debug',
 ];
 
 /** Human-facing label for each category (used as the `mat-tab label`). */
@@ -303,9 +310,9 @@ export const CHANNEL_CATEGORY_LABELS: Record<ChannelCategory, string> = {
   input: 'Input',
   trigger: 'Trigger',
   energy: 'Energy',
+  amax: 'AMax',
   coincidence: 'Coincidence',
   waveform: 'Waveform',
-  debug: 'Debug',
 };
 
 const CATEGORY_PARAMS: Record<FirmwareType, Partial<Record<ChannelCategory, ChannelParamDef[]>>> = {
@@ -345,17 +352,26 @@ const CATEGORY_PARAMS: Record<FirmwareType, Partial<Record<ChannelCategory, Chan
     input: X743STD_INPUT_PARAMS,
     trigger: X743STD_TRIGGER_PARAMS,
   },
-  // AMax custom MCA+AMax FW: shares PSD2's per-channel trigger mask. Energy
-  // tab packs trap + AMax HLS + baseline; Waveform tab carries pre-trigger;
-  // Debug tab exposes `delay_debug` for shifting the debug-FW capture
-  // window when ENABLE_ACQ=1.
+  // AMax custom MCA+AMax FW. 4-tab layout — separation reflects the FW's
+  // two distinct signal paths (trapezoidal energy filter vs HLS peak
+  // detector) rather than CAEN's nominal `category` field shape:
+  //   * Input    = setup + housekeeping (polarity, DC offset, run/acq
+  //                enables, pre-trigger, debug-window delay, per-ch
+  //                coincidence mask — operators tune them together)
+  //   * Trigger  = fast-trigger filter (THRS / TRIG_K / TRIG_M /
+  //                SHAP_TRIGG)
+  //   * Energy   = trapezoidal energy filter chain (TRAP_K/M /
+  //                DECONV_M / TRAP_GAIN + MCA baseline + sample
+  //                position + pipeline shaping delay)
+  //   * AMax     = HLS peak detector (AMAX window / length / max-window
+  //                + its dedicated baseline filter family)
+  // Codegen drives every entry except `ch_trigger_mask`, which is the
+  // PSD2-shared coincidence param (see `AMAX_CH_TRIGGER_MASK` above).
   AMax: {
-    input: AMAX_INPUT_PARAMS,
+    input: [...AMAX_INPUT_PARAMS, AMAX_CH_TRIGGER_MASK],
     trigger: AMAX_TRIGGER_PARAMS,
     energy: AMAX_ENERGY_PARAMS,
-    coincidence: AMAX_COINCIDENCE_PARAMS,
-    waveform: AMAX_WAVEFORM_PARAMS,
-    debug: AMAX_DEBUG_PARAMS,
+    amax: AMAX_AMAX_PARAMS,
   },
 };
 

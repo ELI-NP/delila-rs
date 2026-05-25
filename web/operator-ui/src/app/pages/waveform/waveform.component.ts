@@ -1264,15 +1264,22 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     CHANNEL_CATEGORIES.map(key => ({ key, label: CHANNEL_CATEGORY_LABELS[key] }));
 
   /** Categories the Tune Up panel actually surfaces, filtered to those
-   *  the current firmware exposes. Keeps `waveform` even when empty so
-   *  PSD1/PHA1 see their board-level waveform card; drops every other
-   *  category whose firmware doesn't ship params. */
+   *  the current firmware exposes. Keeps an empty `waveform` cell only
+   *  for PSD1/PHA1 (their Waveform sub-tab houses board-level Record
+   *  Length + virtual-probe selectors with no channel params). AMax /
+   *  PSD2 / PHA2 hide the tab outright when the category is empty. */
   readonly categoryGrid = computed(() => {
     const config = this.tuneUpConfig();
     if (!config) return [];
+    const keepEmptyWaveform =
+      config.firmware === 'PSD1' || config.firmware === 'PHA1';
     return this.allCategories
       .map(c => ({ ...c, params: getCategoryParams(config.firmware, c.key) }))
-      .filter(c => c.params.length > 0 || c.key === 'waveform');
+      .filter(c => {
+        if (c.params.length > 0) return true;
+        if (c.key === 'waveform' && keepEmptyWaveform) return true;
+        return false;
+      });
   });
 
   /** Same set as `categoryGrid` but exposes just the keys + labels, for

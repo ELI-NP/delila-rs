@@ -122,14 +122,15 @@ export const AMAX_PARAM_CATEGORIES: readonly string[] = [
   'input',
   'trigger',
   'energy',
-  'waveform',
-  'debug',
+  'amax',
 ];
 
 export const AMAX_INPUT_PARAMS: ChannelParamDef[] = [
+  { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_INPUT • word 0x00 (ch0 @ 0x800000)" },
   { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg POLARITY • word 0x01 (ch0 @ 0x800001)" },
   { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x02 (ch0 @ 0x800002)" },
   { key: 'amax.run_cfg', label: "Run Enable", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg RUN_CFG • word 0x0D (ch0 @ 0x80000D)" },
+  { key: 'amax.delay_debug', label: "Delay Debug", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg delay_debug • word 0x82 (ch0 @ 0x800082)" },
   { key: 'amax.enable_acq', label: "Enable Acquisition", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg ENABLE_ACQ • word 0x83 (ch0 @ 0x800083)" },
 ];
 
@@ -148,21 +149,16 @@ export const AMAX_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'amax.bl_len', label: "BL Length (MCA)", type: 'number', min: 0, max: 15, step: 1, tooltip: "FW reg BL_LEN • word 0x0A (ch0 @ 0x80000A)" },
   { key: 'amax.bl_inib', label: "BL Inhibit", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg BL_INIB • word 0x0B (ch0 @ 0x80000B)" },
   { key: 'amax.sample_pos', label: "Sample Pos", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg SAMPLE_POS • word 0x0C (ch0 @ 0x80000C)" },
+  { key: 'amax.delay_shaping', label: "Delay Shaping", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg DELAY_SHAPING • word 0x15 (ch0 @ 0x800015)" },
+];
+
+export const AMAX_AMAX_PARAMS: ChannelParamDef[] = [
   { key: 'amax.amax_window', label: "AMax Window", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg AMAX_window • word 0x0E (ch0 @ 0x80000E)" },
   { key: 'amax.window_maxim', label: "Max Window", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg WINDOW_MAXIM • word 0x0F (ch0 @ 0x80000F)" },
   { key: 'amax.amax_len', label: "AMax Length", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg AMAX_len • word 0x10 (ch0 @ 0x800010)" },
   { key: 'amax.baseline_delay', label: "BL Delay (AMax)", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg baseline_delay • word 0x11 (ch0 @ 0x800011)" },
   { key: 'amax.baseline_len', label: "BL Length (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_len • word 0x12 (ch0 @ 0x800012)" },
   { key: 'amax.baseline_offset', label: "BL Offset (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_offset • word 0x13 (ch0 @ 0x800013)" },
-  { key: 'amax.delay_shaping', label: "Delay Shaping", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg DELAY_SHAPING • word 0x15 (ch0 @ 0x800015)" },
-];
-
-export const AMAX_WAVEFORM_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_INPUT • word 0x00 (ch0 @ 0x800000)" },
-];
-
-export const AMAX_DEBUG_PARAMS: ChannelParamDef[] = [
-  { key: 'amax.delay_debug', label: "Delay Debug", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg delay_debug • word 0x82 (ch0 @ 0x800082)" },
 ];
 
 /** AMax board-level (global) writable register set —

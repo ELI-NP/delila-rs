@@ -313,6 +313,7 @@ fn category_label(cat: &str) -> String {
         "energy" => "Energy".to_string(),
         "waveform" => "Waveform".to_string(),
         "debug" => "Debug".to_string(),
+        "amax" => "AMax".to_string(),
         other => {
             let mut chars = other.chars();
             match chars.next() {
@@ -332,9 +333,13 @@ fn category_rank(cat: &str) -> u32 {
         "input" => 0,
         "trigger" => 1,
         "energy" => 2,
-        "waveform" => 3,
-        "coincidence" => 4,
-        "debug" => 5,
+        // AMax-specific HLS peak detector (+ its dedicated baseline filter)
+        // sits right after the energy / trap-filter family so the operator
+        // can see the two-stage signal path side-by-side.
+        "amax" => 3,
+        "waveform" => 4,
+        "coincidence" => 5,
+        "debug" => 6,
         _ => 1000,
     }
 }

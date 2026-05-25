@@ -603,8 +603,11 @@ import {
             </div>
           </mat-tab>
 
-          <!-- Tab 5: Coincidence (hidden for X743 — N/A in Standard mode) -->
-          @if (config.firmware !== 'X743Std') {
+          <!-- Tab 5: Coincidence — hidden for X743 (N/A in Standard mode)
+               and for any firmware whose CATEGORY_PARAMS dispatch yields
+               no coincidence entries (e.g. AMax, which moved its single
+               ch_trigger_mask widget into the Input tab). -->
+          @if (config.firmware !== 'X743Std' && coincidenceParams().length > 0) {
             <mat-tab label="Coincidence">
               <div class="tab-content">
                 <app-channel-table
@@ -620,7 +623,19 @@ import {
             </mat-tab>
           }
 
-          <!-- Tab 6: Waveform -->
+          <!-- Tab 6: Waveform — three rendering modes inside:
+               * X743Std: board-level SAM + software-CFD card
+               * waveformParams non-empty (PSD2 / PHA2): channel-table
+               * empty + PSD1/PHA1: board-level Record Length +
+                 Virtual Probe selectors
+               AMax has no waveform-category params (moved to Input)
+               and no board-level virtual probes — its waveforms_enabled
+               toggle lives in the Board tab, so the Waveform tab is
+               hidden entirely. -->
+          @if (config.firmware === 'X743Std'
+              || waveformParams().length > 0
+              || config.firmware === 'PSD1'
+              || config.firmware === 'PHA1') {
           <mat-tab label="Waveform">
             <div class="tab-content">
               @if (config.firmware === 'X743Std' && config.x743) {
@@ -792,16 +807,18 @@ import {
               }
             </div>
           </mat-tab>
+          }
 
-          <!-- Tab 7: Debug (only for firmwares that declare debug-category
-               params in fw_params.json — currently AMax delay_debug).
-               Hidden when the category is empty so existing FWs keep their
-               6-tab layout. -->
-          @if (debugParams().length > 0) {
-            <mat-tab label="Debug">
+          <!-- Tab 7: AMax (HLS peak detector + dedicated baseline filter).
+               Only surfaces for AMax firmware (other FWs return [] from
+               the amax category dispatch). Sits after Coincidence /
+               Waveform so the standard 6-tab layout is unchanged for
+               non-AMax setups. -->
+          @if (amaxParams().length > 0) {
+            <mat-tab label="AMax">
               <div class="tab-content">
                 <app-channel-table
-                  [params]="debugParams()"
+                  [params]="amaxParams()"
                   [numChannels]="config.num_channels"
                   [defaultValues]="defaultValues()"
                   [channelValues]="channelValues()"
@@ -1021,12 +1038,12 @@ export class DigitizerSettingsComponent {
     return config ? getCategoryParams(config.firmware, 'waveform') : [];
   });
 
-  /** Debug-category params, e.g. AMax's `delay_debug` window-shift register.
-   *  Empty for firmwares that don't expose any debug-category fields in
-   *  `fw_params.json` — the Debug tab hides itself in that case. */
-  readonly debugParams = computed(() => {
+  /** `amax` category — AMax HLS peak detector (+ its dedicated baseline
+   *  filter family). Empty for every firmware except AMax; the dedicated
+   *  AMax tab hides itself when the category is empty. */
+  readonly amaxParams = computed(() => {
     const config = this.selectedConfig();
-    return config ? getCategoryParams(config.firmware, 'debug') : [];
+    return config ? getCategoryParams(config.firmware, 'amax') : [];
   });
 
   /** Virtual Probe options per firmware (board-level, PSD1/PHA1 only) */
