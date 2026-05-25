@@ -1,0 +1,393 @@
+# Node Agent - Replay DAQ Stack
+#
+# Manages 17 processes for the .delila replay stack: 12 source replays,
+# merger, recorder, monitor, online EB, EB monitor stub, and Operator.
+# MongoDB is intentionally omitted from the Operator argv — Operator
+# detects the missing URI and runs without run-history persistence.
+#
+# Start: ./target/release/node_agent -f config/agent_eb_replay.toml --start-all
+# API:   http://localhost:9009/api/status
+#
+# IMPORTANT: edit the `args` entries for each replay-N below to point at
+# the actual `.delila` files you want to replay. The default points at one
+# small file from data/E9/ as a smoke-test starting point.
+
+[agent]
+name = "replay-stack"
+port = 9009
+log_buffer_lines = 2000
+
+# ── Layer 3 downstream consumers ───────────────────────────────────────
+
+[[process]]
+name = "monitor"
+command = "./target/release/monitor"
+args = ["--config", "config/config_eb_replay_stack.toml"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "recorder"
+command = "./target/release/recorder"
+args = ["--config", "config/config_eb_replay_stack.toml"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "online_event_builder"
+command = "./target/release/online_event_builder"
+args = ["--config", "config/config_eb_replay_stack.toml", "--run-id", "9999"]
+auto_restart = true
+restart_delay_secs = 3
+
+# EB Monitor stub — passive SUB-only observer, exits cleanly on EOS.
+[[process]]
+name = "eb_monitor_cli"
+command = "./target/release/eb_monitor_cli"
+args = ["--subscribe", "tcp://localhost:5610", "--interval-secs", "2"]
+auto_restart = false
+restart_delay_secs = 5
+
+# ── Layer 2 fan-in ─────────────────────────────────────────────────────
+
+[[process]]
+name = "merger"
+command = "./target/release/merger"
+args = ["--config", "config/config_eb_replay_stack.toml"]
+auto_restart = true
+restart_delay_secs = 3
+
+# ── Layer 1 file-replay sources (×12) ──────────────────────────────────
+
+[[process]]
+name = "replay-0"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "0",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-1"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "1",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-2"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "2",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-3"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "3",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-4"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "4",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-5"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "5",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-6"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "6",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-7"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "7",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-8"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "8",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-9"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "9",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-10"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "10",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+[[process]]
+name = "replay-11"
+command = "./target/release/delila_source_replay"
+args = ["--config", "config/config_eb_replay_stack.toml", "--source-id", "11",
+        "--input", "data/E9/run0382_0000_Fission2026.delila",
+        "data/E9/run0382_0001_Fission2026.delila",
+        "data/E9/run0382_0002_Fission2026.delila",
+        "data/E9/run0382_0003_Fission2026.delila",
+        "data/E9/run0382_0004_Fission2026.delila",
+        "data/E9/run0382_0005_Fission2026.delila",
+        "data/E9/run0382_0006_Fission2026.delila",
+        "data/E9/run0382_0007_Fission2026.delila",
+        "data/E9/run0382_0008_Fission2026.delila",
+        "data/E9/run0382_0009_Fission2026.delila",
+        "data/E9/run0382_0010_Fission2026.delila",
+        "data/E9/run0382_0011_Fission2026.delila",
+        "data/E9/run0382_0012_Fission2026.delila",
+        "data/E9/run0382_0013_Fission2026.delila",
+        "data/E9/run0382_0014_Fission2026.delila",
+        "data/E9/run0382_0015_Fission2026.delila",
+        "data/E9/run0382_0016_Fission2026.delila",
+        "data/E9/run0382_0017_Fission2026.delila",
+        "data/E9/run0382_0018_Fission2026.delila",
+        "data/E9/run0382_0019_Fission2026.delila"]
+auto_restart = true
+restart_delay_secs = 3
+
+# ── Control plane ──────────────────────────────────────────────────────
+
+[[process]]
+name = "operator"
+command = "./target/release/operator"
+args = ["--config", "config/config_eb_replay_stack.toml"]
+auto_restart = true
+restart_delay_secs = 5

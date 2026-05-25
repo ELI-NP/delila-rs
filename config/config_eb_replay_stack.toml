@@ -1,0 +1,135 @@
+# Production-like Replay DAQ Stack
+#
+# Stages the full Reader → Merger → Recorder/Monitor/EB pipeline with
+# .delila files standing in for the 12 CAEN digitizers. Designed to run
+# side-by-side with the live DAQ on port 5557; this stack lives on a
+# completely separate set of ports so the two never collide.
+#
+# Operator port 9099 (vs live 9090), Monitor 8181 (vs 8081), Merger PUB
+# 5567 (vs 5557). Sources use port_base_data=7200 / port_base_command=7300
+# (live uses 7000 / 7100).
+#
+# MongoDB is intentionally omitted — Operator runs without persistence
+# (see src/bin/operator.rs:347-385).
+
+[operator]
+experiment_name = "ReplayStack"
+port = 9099
+
+[network]
+cluster_name      = "replay"
+port_base_data    = 7200
+port_base_command = 7300
+
+# ── 12 replay sources (id 0..11) ─────────────────────────────────────────
+# `type = "emulator"` satisfies the SourceType schema; the actual binary
+# (delila_source_replay) handles all the data plumbing. is_digitizer()==
+# false on the Operator side keeps digitizer-specific code paths quiet.
+
+[[network.sources]]
+id = 0
+name = "replay-0"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 1
+name = "replay-1"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 2
+name = "replay-2"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 3
+name = "replay-3"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 4
+name = "replay-4"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 5
+name = "replay-5"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 6
+name = "replay-6"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 7
+name = "replay-7"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 8
+name = "replay-8"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 9
+name = "replay-9"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 10
+name = "replay-10"
+type = "emulator"
+pipeline_order = 1
+
+[[network.sources]]
+id = 11
+name = "replay-11"
+type = "emulator"
+pipeline_order = 1
+
+# ── Pipeline ────────────────────────────────────────────────────────────
+
+[network.merger]
+publish = "tcp://*:5567"
+command = "tcp://*:5577"
+pipeline_order = 2
+# subscribe list is auto-resolved from the source data_address() entries
+# above (port_base_data + id).
+
+[network.recorder]
+subscribe = "tcp://localhost:5567"
+command   = "tcp://*:5587"
+output_dir = "./data/replay"
+max_file_size_mb     = 256
+max_file_duration_sec = 600
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5567"
+command   = "tcp://*:5597"
+http_port = 8281
+pipeline_order = 3
+
+[network.event_builder]
+subscribe = "tcp://localhost:5567"
+command   = "tcp://*:5595"
+output_dir = "./data/replay/eb"
+coincidence_window_ns = 500.0
+slice_duration_ns     = 10000000.0
+buffer_delay_ns       = 1.0e9
+eb_config_file        = "./tmp/eb_config.json"
+ch_settings_file      = "./tmp/chSettings.json"
+time_calib_file       = "./tmp/timeSettings.json"
+zmq_pub_endpoint      = "tcp://*:5610"
+pipeline_order        = 3

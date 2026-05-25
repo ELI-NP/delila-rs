@@ -1,0 +1,68 @@
+# Replay DAQ Stack — Option B (1 Merger-impersonator process)
+#
+# The `.delila` file IS the persisted Merger PUB output, so we can skip
+# the demultiplex→remultiplex round-trip: one `delila_merger_replay`
+# process binds the port that Merger would normally PUB on (5567), and
+# Recorder/Monitor/EventBuilder SUB to it exactly as they would to a real
+# Merger. No `[network.merger]` section.
+#
+# Side-by-side with the live DAQ on port 5557 (operator 9090). Operator
+# runs without MongoDB.
+#
+# Pros vs. Option A (12 source procs + Merger):
+#   ✅ original timestamp order preserved (no inter-process drift)
+#   ✅ EB EOS handling stays sane (one logical "merger" stream)
+#   ✅ Merger RSS no longer balloons (no real Merger in the stack)
+# Cons:
+#   ❌ Merger code path not exercised (acceptable: same code is running
+#      under the live DAQ stack on 5557)
+#   ❌ Operator UI shows 1 source + 3 downstream = 4 components
+
+[operator]
+experiment_name = "ReplayStackB"
+port = 9099
+
+[network]
+cluster_name      = "replay-b"
+port_base_data    = 7200
+port_base_command = 7300
+
+# One source = the Merger-impersonator. Bound to 5567 so downstream
+# `subscribe = "tcp://localhost:5567"` lines up with the production
+# habit of pointing at the Merger PUB port.
+[[network.sources]]
+id = 0
+name = "merger-replay"
+type = "emulator"
+bind    = "tcp://*:5567"
+command = "tcp://*:5577"
+pipeline_order = 1
+
+# No [network.merger] — `delila_merger_replay` plays that role.
+
+[network.recorder]
+subscribe = "tcp://localhost:5567"
+command   = "tcp://*:5587"
+output_dir = "./data/replay"
+max_file_size_mb     = 256
+max_file_duration_sec = 600
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5567"
+command   = "tcp://*:5597"
+http_port = 8281
+pipeline_order = 3
+
+[network.event_builder]
+subscribe = "tcp://localhost:5567"
+command   = "tcp://*:5595"
+output_dir = "./data/replay/eb"
+coincidence_window_ns = 500.0
+slice_duration_ns     = 10000000.0
+buffer_delay_ns       = 1.0e9
+eb_config_file        = "./tmp/eb_config.json"
+ch_settings_file      = "./tmp/chSettings.json"
+time_calib_file       = "./tmp/timeSettings.json"
+zmq_pub_endpoint      = "tcp://*:5610"
+pipeline_order        = 3
