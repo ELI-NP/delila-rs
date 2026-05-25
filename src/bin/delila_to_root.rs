@@ -116,8 +116,8 @@ struct FileMeta {
 fn read_file_meta(path: &Path) -> Result<FileMeta, String> {
     let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
     let reader = BufReader::new(file);
-    let mut dfr = DataFileReader::new(reader)
-        .map_err(|e| format!("header {}: {:?}", path.display(), e))?;
+    let mut dfr =
+        DataFileReader::new(reader).map_err(|e| format!("header {}: {:?}", path.display(), e))?;
     let file_sequence = dfr
         .header()
         .map(|h| h.file_sequence)
@@ -139,8 +139,8 @@ fn read_file_meta(path: &Path) -> Result<FileMeta, String> {
 fn read_file_events(path: &Path) -> Result<Vec<EventData>, String> {
     let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
     let reader = BufReader::new(file);
-    let mut dfr = DataFileReader::new(reader)
-        .map_err(|e| format!("header {}: {:?}", path.display(), e))?;
+    let mut dfr =
+        DataFileReader::new(reader).map_err(|e| format!("header {}: {:?}", path.display(), e))?;
     let mut events = Vec::new();
     for batch_result in dfr.data_blocks() {
         match batch_result {
@@ -259,7 +259,11 @@ impl SortedFileStream {
         let mut events = match read_file_events(&path) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("  warn: failed reading {} ({}), skipping", path.display(), e);
+                eprintln!(
+                    "  warn: failed reading {} ({}), skipping",
+                    path.display(),
+                    e
+                );
                 self.next_idx += 1;
                 self.next_first_ts = self.files.get(self.next_idx).map(|f| f.first_event_ns);
                 return self.advance_to_next_file();
@@ -285,7 +289,8 @@ impl Iterator for SortedFileStream {
                 match self.next_first_ts {
                     Some(cutoff) if front.timestamp_ns >= cutoff => {
                         // Unsafe — defer until next file is merged in.
-                        self.carry_over.push(self.current_events.pop_front().unwrap());
+                        self.carry_over
+                            .push(self.current_events.pop_front().unwrap());
                         continue;
                     }
                     _ => return self.current_events.pop_front(),
@@ -763,8 +768,8 @@ mod tests {
         // Pass argv in alphabetical order, but file_sequence opposite.
         write_delila(&p1, 0, vec![ev(10.0, 1), ev(20.0, 2)]).unwrap(); // seq=0
         write_delila(&p2, 1, vec![ev(30.0, 3), ev(40.0, 4)]).unwrap(); // seq=1
-        // Pass argv as [p2, p1] (sequence 1, then 0). Stream should
-        // reorder to [p1, p2] internally (sequence 0, then 1).
+                                                                       // Pass argv as [p2, p1] (sequence 1, then 0). Stream should
+                                                                       // reorder to [p1, p2] internally (sequence 0, then 1).
         let stream = SortedFileStream::new(&[p2, p1]).unwrap();
         let ts: Vec<f64> = stream.map(|e| e.timestamp_ns).collect();
         assert_eq!(ts, vec![10.0, 20.0, 30.0, 40.0]);
@@ -783,12 +788,9 @@ mod tests {
         }));
         // Simulate oxyroot's row-major poll: branch 0 first (advances),
         // branches 1, 2 read the cached row.
-        let mut b0: BranchIter<u8, _> =
-            BranchIter::new(shared.clone(), 0, |e| e.module);
-        let mut b1: BranchIter<u8, _> =
-            BranchIter::new(shared.clone(), 1, |e| e.channel);
-        let mut b2: BranchIter<f64, _> =
-            BranchIter::new(shared.clone(), 2, |e| e.timestamp_ns);
+        let mut b0: BranchIter<u8, _> = BranchIter::new(shared.clone(), 0, |e| e.module);
+        let mut b1: BranchIter<u8, _> = BranchIter::new(shared.clone(), 1, |e| e.channel);
+        let mut b2: BranchIter<f64, _> = BranchIter::new(shared.clone(), 2, |e| e.timestamp_ns);
 
         // Row 0
         assert_eq!(b0.next(), Some(0));
@@ -817,10 +819,8 @@ mod tests {
             current_row: None,
             events_yielded: 0,
         }));
-        let mut b0: BranchIter<u8, _> =
-            BranchIter::new(shared.clone(), 0, |e| e.module);
-        let mut b1: BranchIter<u8, _> =
-            BranchIter::new(shared.clone(), 1, |e| e.channel);
+        let mut b0: BranchIter<u8, _> = BranchIter::new(shared.clone(), 0, |e| e.module);
+        let mut b1: BranchIter<u8, _> = BranchIter::new(shared.clone(), 1, |e| e.channel);
         // Pull 1 row
         assert!(b0.next().is_some());
         assert!(b1.next().is_some());
