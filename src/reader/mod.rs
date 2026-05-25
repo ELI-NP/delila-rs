@@ -428,23 +428,26 @@ const AMAX_FLAGS_A_SHIFT: u32 = 12;
 /// # AMax debug FW (2026-05-25)
 ///
 /// When `ENABLE_ACQ = 1` on the `AMAX_firmware32_channel_4input_caenlist`
-/// FW, ch0 events arrive with the WAVE payload packed as **4 interleaved
+/// 13may FW, events arrive with the WAVE payload packed as **4 interleaved
 /// 16-bit lanes** per source sample (raw / trap / triangle / digital).
-/// FELib's OpenDPP endpoint passes the packed u16 stream through as-is
-/// — the `WAVEFORM` field length is `4 × source_samples`, and the lane
-/// structure is recovered by the `enable_acq_debug && event.channel == 0`
-/// branch in this fn ([`unpack_amax_debug_waveform`]).
+/// `ENABLE_ACQ` lives on the per-channel page (`page_amax_energy_4_<N>`)
+/// but the operator UI flips it via the broadcast page (word 0x200), which
+/// fans out to all 32 channels — so when debug mode is on, *every* channel
+/// emits 4-lane payload. The lane structure is recovered by the
+/// `enable_acq_debug` branch in this fn (see [`unpack_amax_debug_waveform`]).
 ///
 /// Caller (`read_loop_dig2`) tracks `enable_acq_debug` on
 /// `DeviceConnection::amax_enable_acq`, refreshed from
 /// `channel_defaults.amax.enable_acq` after every successful Apply /
-/// auto-load. Non-ch0 events stay on the single-lane path even with
-/// `ENABLE_ACQ = 1` — the SE pin is hardwired to ch0 only
-/// (`FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U57).
+/// auto-load. (Earlier builds gated on `event.channel == 0` — that was
+/// only correct for the very first test FW shipped by Rebeca, which had
+/// the debug MUX wired to ch0 only. The 13may caenlist FW replicates the
+/// MUX per channel, so the gate has been removed.)
 ///
 /// Offline `.delila` replays (captured with `caen_simple_test`) take a
-/// different path through `AMaxDecoder::decode_event` which reads the
-/// raw u64 packed words directly.
+/// different path through `AMaxDecoder::decode_event`, which reads the
+/// raw u64 packed words directly and drives the 4-lane path off the
+/// per-event SE bit — same behavior, just a different signal carrier.
 pub(crate) fn opendpp_to_event_data(
     event: &OpenDppEvent,
     module_id: u8,
@@ -479,11 +482,21 @@ pub(crate) fn opendpp_to_event_data(
     }
 
     // Two waveform-format paths:
-    //   * `enable_acq_debug && event.channel == 0` → AMax debug FW 4-lane
-    //     interleaved unpack (raw / trap / triangle / digital).
+    //   * `enable_acq_debug` (and the sample buffer is a multiple of 4)
+    //     → AMax debug FW 4-lane interleaved unpack (raw / trap /
+    //     triangle / digital). Applies to *all* channels because the
+    //     broadcast ENABLE_ACQ write fans out across the 32-channel page
+    //     array — confirmed live on 2026-05-25: with ch0's ENABLE_ACQ on
+    //     via broadcast, ch4 also delivered 4-lane encoded payload.
     //   * everything else → legacy single-lane raw waveform.
+    //
+    // `samples.len() % 4 != 0` would indicate FW desync (single-lane
+    // payload arriving while we think we're in debug mode). Fall back
+    // to single-lane in that case to avoid panicking on
+    // `chunks_exact(4)` truncation — better to show partial data than
+    // crash the read loop.
     let waveform = event.waveform.as_ref().map(|samples| {
-        if enable_acq_debug && event.channel == 0 {
+        if enable_acq_debug && samples.len() % 4 == 0 {
             unpack_amax_debug_waveform(samples)
         } else {
             let analog_probe1 = samples.iter().map(|&v| (v & 0x3FFF) as i16).collect();

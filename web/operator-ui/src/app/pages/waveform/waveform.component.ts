@@ -1161,25 +1161,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
    *  view (see `amaxRegistersPollEffect` below). */
   private amaxRegPolling$ = Subscription.EMPTY;
 
-  /** When the operator switches into amax-debug view, lock the channel
-   *  selector to ch0 — that's the only channel the AMax debug FW
-   *  instruments (the SE pin is hardwired to U57 only, see
-   *  `decoder/amax.rs` spec ref). Without this, the operator could be
-   *  staring at ch5 wondering why no debug-mode events show up. */
-  private readonly amaxDebugCh0LockEffect = effect(() => {
-    if (this.tuneupView() !== 'amax-debug') return;
-    const channels = this.tuneUpChannels();
-    if (channels.length === 0) return;
-    const ch0 = channels.find((c) => c.channel_id === 0);
-    if (!ch0) return;
-    const ch0Key = `${ch0.module_id}:${ch0.channel_id}`;
-    untracked(() => {
-      const current = this.selectedChannels();
-      if (current.length !== 1 || current[0] !== ch0Key) {
-        this.selectedChannels.set([ch0Key]);
-      }
-    });
-  });
+  // Previously: `amaxDebugCh0LockEffect` snapped the channel selector
+  // back to ch0 in amax-debug view, on the (incorrect) assumption that
+  // the 13may caenlist FW's debug payload only fires on ch0. Live test
+  // 2026-05-25 confirmed: when ENABLE_ACQ is flipped on via the
+  // broadcast page (which is how the operator UI writes it), every
+  // channel emits the 4-lane encoded waveform — so the lock was hiding
+  // a real per-channel diagnostic from the operator. Removed.
 
   /** Start/stop the AMax board-register poll loop based on
    *  amax-debug sub-mode + active Tune Up. Reads at 1 Hz so the
