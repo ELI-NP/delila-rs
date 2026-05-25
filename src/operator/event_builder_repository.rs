@@ -320,7 +320,6 @@ mod tests {
 
     fn create_test_ch_settings() -> ChannelConfig {
         vec![vec![ChSettings {
-            id: 0,
             module: 0,
             channel: 0,
             detector_type: "HPGe".to_string(),

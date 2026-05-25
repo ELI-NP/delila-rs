@@ -23,10 +23,10 @@ pub enum ConfigError {
 
 /// Per-channel settings (ELIFANT-Event 互換)
 ///
-/// Pure hardware descriptor: detector ID, location, tags, and per-channel
-/// calibration. Trigger / AC / threshold logic now lives in
-/// `eb_config.json` (L1 / L2 named-ops, SPEC § 6 + § 7). Old chSettings.json
-/// files carrying `IsEventTrigger` / `HasAC` / `ACModule` / `ACChannel` /
+/// Pure hardware descriptor: location, tags, and per-channel calibration.
+/// Trigger / AC / threshold logic now lives in `eb_config.json` (L1 / L2
+/// named-ops, SPEC § 6 + § 7). Old chSettings.json files carrying
+/// `ID` / `IsEventTrigger` / `HasAC` / `ACModule` / `ACChannel` /
 /// `ThresholdADC` still parse — serde silently ignores unknown fields — but
 /// those fields are no longer wired to anything; users should migrate them
 /// into the L1 / L2 ops as documented in SPEC v0.5.1 § 4.2.
@@ -35,10 +35,6 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ChSettings {
-    /// Unique detector ID
-    #[serde(rename = "ID")]
-    pub id: i32,
-
     /// Module number
     pub module: u8,
 
@@ -53,13 +49,17 @@ pub struct ChSettings {
     pub tags: Vec<String>,
 
     /// Energy calibration coefficients `E = p0 + p1·ADC + p2·ADC² + p3·ADC³`.
-    #[serde(default)]
+    /// Explicit `rename` keeps them lowercase — ELIFANT-Event and every
+    /// existing chSettings.json uses `"p0".."p3"`. Without this the struct's
+    /// `rename_all = "PascalCase"` would expect `"P0"`, drop the lowercase
+    /// keys silently, and load zeros (regression caught 2026-05-21).
+    #[serde(rename = "p0", default)]
     pub p0: f64,
-    #[serde(default)]
+    #[serde(rename = "p1", default)]
     pub p1: f64,
-    #[serde(default)]
+    #[serde(rename = "p2", default)]
     pub p2: f64,
-    #[serde(default)]
+    #[serde(rename = "p3", default)]
     pub p3: f64,
 }
 
@@ -343,7 +343,6 @@ mod tests {
     #[test]
     fn test_ch_settings_channel_key() {
         let ch = ChSettings {
-            id: 0,
             module: 5,
             channel: 10,
             detector_type: "Si".to_string(),
@@ -362,7 +361,6 @@ mod tests {
     #[test]
     fn test_ch_settings_calibrate_energy() {
         let ch = ChSettings {
-            id: 0,
             module: 0,
             channel: 0,
             detector_type: "Si".to_string(),
@@ -393,7 +391,6 @@ mod tests {
     fn test_build_channel_map() {
         let config: ChannelConfig = vec![vec![
             ChSettings {
-                id: 0,
                 module: 0,
                 channel: 0,
                 detector_type: "Si".to_string(),
@@ -404,11 +401,10 @@ mod tests {
                 p3: 0.0,
             },
             ChSettings {
-                id: 1,
                 module: 0,
                 channel: 1,
                 detector_type: "Si".to_string(),
-                tags: vec![],
+                tags: vec!["dE".to_string()],
                 p0: 0.0,
                 p1: 1.0,
                 p2: 0.0,
@@ -419,8 +415,39 @@ mod tests {
         let map = build_channel_map(&config);
         assert_eq!(map.len(), 2);
         // Pure-descriptor checks (Phase J).
-        assert_eq!(map.get(&(0, 0)).unwrap().id, 0);
-        assert_eq!(map.get(&(0, 1)).unwrap().id, 1);
+        assert_eq!(map.get(&(0, 0)).unwrap().detector_type, "Si");
+        assert_eq!(map.get(&(0, 1)).unwrap().tags, vec!["dE"]);
+    }
+
+    #[test]
+    fn test_lowercase_p_fields_load_correctly() {
+        // ELIFANT-Event and every existing chSettings.json file uses lowercase
+        // `"p0".."p3"`. The struct's `rename_all = "PascalCase"` would
+        // otherwise demand `"P0"` and silently drop the data into defaults.
+        // This test guards against that regression.
+        let json = r#"[[
+            {"Module": 0, "Channel": 0, "DetectorType": "Si", "Tags": [],
+             "p0": 11.0, "p1": 0.5, "p2": 0.25, "p3": -0.125}
+        ]]"#;
+        let cfg: ChannelConfig = serde_json::from_str(json).unwrap();
+        let ch = &cfg[0][0];
+        assert_eq!(ch.p0, 11.0);
+        assert_eq!(ch.p1, 0.5);
+        assert_eq!(ch.p2, 0.25);
+        assert_eq!(ch.p3, -0.125);
+    }
+
+    #[test]
+    fn test_legacy_id_field_ignored() {
+        // chSettings.json files predating SPEC v0.7.1 carry an `"ID"` key.
+        // serde must drop it silently so old configs keep loading.
+        let json = r#"[[
+            {"ID": 7, "Module": 0, "Channel": 0, "DetectorType": "Si",
+             "Tags": ["dE"], "p0": 0.0, "p1": 1.0, "p2": 0.0, "p3": 0.0}
+        ]]"#;
+        let cfg: ChannelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg[0][0].module, 0);
+        assert_eq!(cfg[0][0].tags, vec!["dE"]);
     }
 
     // `test_get_trigger_channels` removed in Phase J — the helper was a

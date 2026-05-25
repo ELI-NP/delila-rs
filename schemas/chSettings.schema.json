@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/aogaki/delila-rs/schemas/chSettings.schema.json",
   "title": "DELILA-Rust channel descriptor (chSettings.json)",
-  "description": "Pure hardware descriptor: detector ID, tags, calibration polynomial. Phase J (SPEC v0.7) removed the legacy trigger/AC/threshold fields — those live in eb_config.json now. Format: array of modules, each module is an array of channels.",
+  "description": "Pure hardware descriptor: location, tags, calibration polynomial. Phase J (SPEC v0.7) removed the legacy trigger/AC/threshold fields; the unused `ID` was dropped in v0.7.1. EB lookup uses `(Module, Channel)` as the key. Format: array of modules, each module is an array of channels.",
   "type": "array",
   "items": {
     "type": "array",
@@ -13,13 +13,9 @@
     "ChSettings": {
       "type": "object",
       "description": "One channel descriptor. PascalCase keys for ELIFANT-Event compatibility.",
-      "required": ["ID", "Module", "Channel", "DetectorType"],
+      "required": ["Module", "Channel", "DetectorType"],
       "additionalProperties": true,
       "properties": {
-        "ID": {
-          "type": "integer",
-          "description": "Globally unique detector ID across all modules/channels."
-        },
         "Module": {
           "type": "integer",
           "minimum": 0,
