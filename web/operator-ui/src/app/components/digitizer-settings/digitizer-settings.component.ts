@@ -792,6 +792,26 @@ import {
               }
             </div>
           </mat-tab>
+
+          <!-- Tab 7: Debug (only for firmwares that declare debug-category
+               params in fw_params.json — currently AMax delay_debug).
+               Hidden when the category is empty so existing FWs keep their
+               6-tab layout. -->
+          @if (debugParams().length > 0) {
+            <mat-tab label="Debug">
+              <div class="tab-content">
+                <app-channel-table
+                  [params]="debugParams()"
+                  [numChannels]="config.num_channels"
+                  [defaultValues]="defaultValues()"
+                  [channelValues]="channelValues()"
+                  [disabledKeys]="disabledKeys()"
+                  (defaultChange)="onDefaultChange($event)"
+                  (channelChange)="onChannelChange($event)"
+                />
+              </div>
+            </mat-tab>
+          }
         </mat-tab-group>
       } @else {
         <mat-card class="no-selection">
@@ -999,6 +1019,14 @@ export class DigitizerSettingsComponent {
   readonly waveformParams = computed(() => {
     const config = this.selectedConfig();
     return config ? getCategoryParams(config.firmware, 'waveform') : [];
+  });
+
+  /** Debug-category params, e.g. AMax's `delay_debug` window-shift register.
+   *  Empty for firmwares that don't expose any debug-category fields in
+   *  `fw_params.json` — the Debug tab hides itself in that case. */
+  readonly debugParams = computed(() => {
+    const config = this.selectedConfig();
+    return config ? getCategoryParams(config.firmware, 'debug') : [];
   });
 
   /** Virtual Probe options per firmware (board-level, PSD1/PHA1 only) */

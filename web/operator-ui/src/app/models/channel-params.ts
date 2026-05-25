@@ -255,6 +255,7 @@ import {
   AMAX_TRIGGER_PARAMS,
   AMAX_ENERGY_PARAMS,
   AMAX_WAVEFORM_PARAMS,
+  AMAX_DEBUG_PARAMS,
 } from './amax-generated';
 
 // AMax shares PSD2's per-channel `channelstriggermask` DevTree path
@@ -267,9 +268,47 @@ const AMAX_COINCIDENCE_PARAMS: ChannelParamDef[] = [
 
 // --- Category lookup ---------------------------------------------------------
 
-export type ChannelCategory = 'input' | 'trigger' | 'energy' | 'coincidence' | 'waveform';
+/** Channel-parameter categories surfaced in the Settings UI.
+ *
+ *  `input` / `trigger` / `energy` / `coincidence` / `waveform` are the core
+ *  pipeline stages every CAEN firmware exposes. `debug` is AMax-only today
+ *  (it carries the `delay_debug` register that shifts the debug-FW capture
+ *  window — see `tools/amax_viewer/fw_params.json` for the canonical list);
+ *  it's just another category name as far as the dispatch layer is
+ *  concerned, so future firmwares that grow a `category=debug` field in
+ *  their `fw_params.json` will round-trip through the same code path. */
+export type ChannelCategory =
+  | 'input'
+  | 'trigger'
+  | 'energy'
+  | 'coincidence'
+  | 'waveform'
+  | 'debug';
 
-const CATEGORY_PARAMS: Record<FirmwareType, Record<ChannelCategory, ChannelParamDef[]>> = {
+/** Channel-param categories listed in the order operators expect to see
+ *  them as Settings sub-tabs. The Settings component iterates this list
+ *  so that a firmware which adds a new category (via codegen) only needs
+ *  this extension — no template changes per-tab. */
+export const CHANNEL_CATEGORIES: readonly ChannelCategory[] = [
+  'input',
+  'trigger',
+  'energy',
+  'coincidence',
+  'waveform',
+  'debug',
+];
+
+/** Human-facing label for each category (used as the `mat-tab label`). */
+export const CHANNEL_CATEGORY_LABELS: Record<ChannelCategory, string> = {
+  input: 'Input',
+  trigger: 'Trigger',
+  energy: 'Energy',
+  coincidence: 'Coincidence',
+  waveform: 'Waveform',
+  debug: 'Debug',
+};
+
+const CATEGORY_PARAMS: Record<FirmwareType, Partial<Record<ChannelCategory, ChannelParamDef[]>>> = {
   PSD2: {
     input: PSD2_INPUT_PARAMS,
     trigger: PSD2_TRIGGER_PARAMS,
@@ -305,23 +344,24 @@ const CATEGORY_PARAMS: Record<FirmwareType, Record<ChannelCategory, ChannelParam
   X743Std: {
     input: X743STD_INPUT_PARAMS,
     trigger: X743STD_TRIGGER_PARAMS,
-    energy: [],
-    coincidence: [],
-    waveform: [],
   },
   // AMax custom MCA+AMax FW: shares PSD2's per-channel trigger mask. Energy
-  // tab packs trap + AMax HLS + baseline; Waveform tab carries pre-trigger
-  // + selector.
+  // tab packs trap + AMax HLS + baseline; Waveform tab carries pre-trigger;
+  // Debug tab exposes `delay_debug` for shifting the debug-FW capture
+  // window when ENABLE_ACQ=1.
   AMax: {
     input: AMAX_INPUT_PARAMS,
     trigger: AMAX_TRIGGER_PARAMS,
     energy: AMAX_ENERGY_PARAMS,
     coincidence: AMAX_COINCIDENCE_PARAMS,
     waveform: AMAX_WAVEFORM_PARAMS,
+    debug: AMAX_DEBUG_PARAMS,
   },
 };
 
-/** Get channel params for a specific firmware and category */
+/** Get channel params for a specific firmware and category. Returns `[]`
+ *  when the firmware doesn't surface that category — the Settings tab
+ *  iterates `CHANNEL_CATEGORIES` and hides empty tabs. */
 export function getCategoryParams(fw: FirmwareType, category: ChannelCategory): ChannelParamDef[] {
   return CATEGORY_PARAMS[fw]?.[category] ?? [];
 }
@@ -330,7 +370,7 @@ export function getCategoryParams(fw: FirmwareType, category: ChannelCategory): 
 export function getAllChannelParams(fw: FirmwareType): ChannelParamDef[] {
   const cats = CATEGORY_PARAMS[fw];
   if (!cats) return [];
-  return [...cats.input, ...cats.trigger, ...cats.energy, ...cats.coincidence, ...cats.waveform];
+  return CHANNEL_CATEGORIES.flatMap((c) => cats[c] ?? []);
 }
 
 // =============================================================================

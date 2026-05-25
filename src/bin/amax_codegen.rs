@@ -301,15 +301,41 @@ fn snake_case(name: &str) -> String {
     name.to_lowercase()
 }
 
-fn category_label(cat: &str) -> &'static str {
-    // Stable ordering for emitted const arrays.
+fn category_label(cat: &str) -> String {
+    // Title-case the category name for use in TypeScript const identifiers
+    // (`AMAX_<LABEL>_PARAMS`). Well-known categories get their canonical
+    // capitalisation; anything else is passed through with the first letter
+    // upper-cased so a future `"housekeeping"` becomes `"Housekeeping"` →
+    // `AMAX_HOUSEKEEPING_PARAMS` without a codegen edit.
     match cat {
-        "input" => "Input",
-        "trigger" => "Trigger",
-        "energy" => "Energy",
-        "waveform" => "Waveform",
-        "debug" => "Debug",
-        _ => "Other",
+        "input" => "Input".to_string(),
+        "trigger" => "Trigger".to_string(),
+        "energy" => "Energy".to_string(),
+        "waveform" => "Waveform".to_string(),
+        "debug" => "Debug".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+/// Sort key for emitted category order. Well-known categories first (in
+/// signal-pipeline order: input → trigger → energy → waveform → coincidence
+/// → debug), then any new category alphabetically. Stable so generated
+/// output diffs cleanly across re-runs.
+fn category_rank(cat: &str) -> u32 {
+    match cat {
+        "input" => 0,
+        "trigger" => 1,
+        "energy" => 2,
+        "waveform" => 3,
+        "coincidence" => 4,
+        "debug" => 5,
+        _ => 1000,
     }
 }
 
@@ -780,14 +806,45 @@ fn emit_typescript(
     }
     out.push_str("];\n\n");
 
-    // Emit one const array per category, in stable order.
-    for cat in ["input", "trigger", "energy", "waveform"] {
+    // Emit one const array per category present in `fw_params.json`.
+    //
+    // Auto-discovery: collect every category appearing on a resolved register,
+    // sorted by `category_rank` (well-known ones first, in operator-pipeline
+    // order, then any new category alphabetically). This means a new FW that
+    // adds e.g. `"category": "coincidence"` to a param will start surfacing
+    // in the codegen output without a manual edit here.
+    let mut categories: Vec<String> = resolved
+        .iter()
+        .map(|r| r.category.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    categories.sort_by(|a, b| {
+        category_rank(a)
+            .cmp(&category_rank(b))
+            .then_with(|| a.cmp(b))
+    });
+
+    // Stable list of category names so the UI can iterate the available
+    // tabs without re-encoding the list on the TS side. Mirrors the
+    // const-array set emitted just below.
+    out.push_str("/** Channel-param categories declared by `fw_params.json`.\n");
+    out.push_str(" *  Mirrors the `AMAX_<CATEGORY>_PARAMS` arrays below; UI can\n");
+    out.push_str(" *  iterate this list to render any future debug / housekeeping\n");
+    out.push_str(" *  tabs without an additional codegen edit. */\n");
+    out.push_str("export const AMAX_PARAM_CATEGORIES: readonly string[] = [\n");
+    for cat in &categories {
+        out.push_str(&format!("  '{}',\n", cat));
+    }
+    out.push_str("];\n\n");
+
+    for cat in &categories {
         let const_name = format!("AMAX_{}_PARAMS", category_label(cat).to_uppercase());
         out.push_str(&format!(
             "export const {}: ChannelParamDef[] = [\n",
             const_name
         ));
-        for r in resolved.iter().filter(|r| r.category == cat) {
+        for r in resolved.iter().filter(|r| &r.category == cat) {
             // Hex address tooltip: original FW name + page-relative word offset
             // + canonical ch0 word address (0x800000-base, what amax_viewer uses).
             let ch0_word = 0x800000 + r.word_offset;

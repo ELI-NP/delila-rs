@@ -114,6 +114,18 @@ export const AMAX_DOTTED_KEYS: readonly string[] = [
   'amax.enable_acq',
 ];
 
+/** Channel-param categories declared by `fw_params.json`.
+ *  Mirrors the `AMAX_<CATEGORY>_PARAMS` arrays below; UI can
+ *  iterate this list to render any future debug / housekeeping
+ *  tabs without an additional codegen edit. */
+export const AMAX_PARAM_CATEGORIES: readonly string[] = [
+  'input',
+  'trigger',
+  'energy',
+  'waveform',
+  'debug',
+];
+
 export const AMAX_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg POLARITY • word 0x01 (ch0 @ 0x800001)" },
   { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x02 (ch0 @ 0x800002)" },
@@ -147,6 +159,10 @@ export const AMAX_ENERGY_PARAMS: ChannelParamDef[] = [
 
 export const AMAX_WAVEFORM_PARAMS: ChannelParamDef[] = [
   { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_INPUT • word 0x00 (ch0 @ 0x800000)" },
+];
+
+export const AMAX_DEBUG_PARAMS: ChannelParamDef[] = [
+  { key: 'amax.delay_debug', label: "Delay Debug", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg delay_debug • word 0x82 (ch0 @ 0x800082)" },
 ];
 
 /** AMax board-level (global) writable register set —

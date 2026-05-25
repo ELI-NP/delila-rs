@@ -79,78 +79,30 @@ pub fn channel_writes(
     config: &crate::config::digitizer::AMaxChannelConfig,
 ) -> Vec<(u32, u32, &'static str)> {
     let mut writes = Vec::new();
-    if let Some(v) = config.pretrigger_input {
-        writes.push((REG_PRETRIGGER_INPUT, v, "pretrigger_input"));
-    }
-    if let Some(v) = config.polarity {
-        writes.push((REG_POLARITY, v, "polarity"));
-    }
-    if let Some(v) = config.offset {
-        writes.push((REG_OFFSET, v, "offset"));
-    }
-    if let Some(v) = config.thrs {
-        writes.push((REG_THRS, v, "thrs"));
-    }
-    if let Some(v) = config.trig_k {
-        writes.push((REG_TRIG_K, v, "trig_k"));
-    }
-    if let Some(v) = config.trig_m {
-        writes.push((REG_TRIG_M, v, "trig_m"));
-    }
-    if let Some(v) = config.trap_k {
-        writes.push((REG_TRAP_K, v, "trap_k"));
-    }
-    if let Some(v) = config.trap_m {
-        writes.push((REG_TRAP_M, v, "trap_m"));
-    }
-    if let Some(v) = config.deconv_m {
-        writes.push((REG_DECONV_M, v, "deconv_m"));
-    }
-    if let Some(v) = config.trap_gain {
-        writes.push((REG_TRAP_GAIN, v, "trap_gain"));
-    }
-    if let Some(v) = config.bl_len {
-        writes.push((REG_BL_LEN, v, "bl_len"));
-    }
-    if let Some(v) = config.bl_inib {
-        writes.push((REG_BL_INIB, v, "bl_inib"));
-    }
-    if let Some(v) = config.sample_pos {
-        writes.push((REG_SAMPLE_POS, v, "sample_pos"));
-    }
-    if let Some(v) = config.run_cfg {
-        writes.push((REG_RUN_CFG, v, "run_cfg"));
-    }
-    if let Some(v) = config.amax_window {
-        writes.push((REG_AMAX_WINDOW, v, "amax_window"));
-    }
-    if let Some(v) = config.window_maxim {
-        writes.push((REG_WINDOW_MAXIM, v, "window_maxim"));
-    }
-    if let Some(v) = config.amax_len {
-        writes.push((REG_AMAX_LEN, v, "amax_len"));
-    }
-    if let Some(v) = config.baseline_delay {
-        writes.push((REG_BASELINE_DELAY, v, "baseline_delay"));
-    }
-    if let Some(v) = config.baseline_len {
-        writes.push((REG_BASELINE_LEN, v, "baseline_len"));
-    }
-    if let Some(v) = config.baseline_offset {
-        writes.push((REG_BASELINE_OFFSET, v, "baseline_offset"));
-    }
-    if let Some(v) = config.delay_shaping {
-        writes.push((REG_DELAY_SHAPING, v, "delay_shaping"));
-    }
-    if let Some(v) = config.shap_trigg {
-        writes.push((REG_SHAP_TRIGG, v, "shap_trigg"));
-    }
-    if let Some(v) = config.delay_debug {
-        writes.push((REG_DELAY_DEBUG, v, "delay_debug"));
-    }
-    if let Some(v) = config.enable_acq {
-        writes.push((REG_ENABLE_ACQ, v, "enable_acq"));
-    }
+    if let Some(v) = config.pretrigger_input { writes.push((REG_PRETRIGGER_INPUT, v, "pretrigger_input")); }
+    if let Some(v) = config.polarity { writes.push((REG_POLARITY, v, "polarity")); }
+    if let Some(v) = config.offset { writes.push((REG_OFFSET, v, "offset")); }
+    if let Some(v) = config.thrs { writes.push((REG_THRS, v, "thrs")); }
+    if let Some(v) = config.trig_k { writes.push((REG_TRIG_K, v, "trig_k")); }
+    if let Some(v) = config.trig_m { writes.push((REG_TRIG_M, v, "trig_m")); }
+    if let Some(v) = config.trap_k { writes.push((REG_TRAP_K, v, "trap_k")); }
+    if let Some(v) = config.trap_m { writes.push((REG_TRAP_M, v, "trap_m")); }
+    if let Some(v) = config.deconv_m { writes.push((REG_DECONV_M, v, "deconv_m")); }
+    if let Some(v) = config.trap_gain { writes.push((REG_TRAP_GAIN, v, "trap_gain")); }
+    if let Some(v) = config.bl_len { writes.push((REG_BL_LEN, v, "bl_len")); }
+    if let Some(v) = config.bl_inib { writes.push((REG_BL_INIB, v, "bl_inib")); }
+    if let Some(v) = config.sample_pos { writes.push((REG_SAMPLE_POS, v, "sample_pos")); }
+    if let Some(v) = config.run_cfg { writes.push((REG_RUN_CFG, v, "run_cfg")); }
+    if let Some(v) = config.amax_window { writes.push((REG_AMAX_WINDOW, v, "amax_window")); }
+    if let Some(v) = config.window_maxim { writes.push((REG_WINDOW_MAXIM, v, "window_maxim")); }
+    if let Some(v) = config.amax_len { writes.push((REG_AMAX_LEN, v, "amax_len")); }
+    if let Some(v) = config.baseline_delay { writes.push((REG_BASELINE_DELAY, v, "baseline_delay")); }
+    if let Some(v) = config.baseline_len { writes.push((REG_BASELINE_LEN, v, "baseline_len")); }
+    if let Some(v) = config.baseline_offset { writes.push((REG_BASELINE_OFFSET, v, "baseline_offset")); }
+    if let Some(v) = config.delay_shaping { writes.push((REG_DELAY_SHAPING, v, "delay_shaping")); }
+    if let Some(v) = config.shap_trigg { writes.push((REG_SHAP_TRIGG, v, "shap_trigg")); }
+    if let Some(v) = config.delay_debug { writes.push((REG_DELAY_DEBUG, v, "delay_debug")); }
+    if let Some(v) = config.enable_acq { writes.push((REG_ENABLE_ACQ, v, "enable_acq")); }
     writes
 }
 
@@ -174,7 +126,8 @@ pub fn board_writes(
 /// Empty when no board-level registers are declared.
 #[allow(dead_code)]
 pub fn all_board_registers() -> Vec<(u32, &'static str)> {
-    vec![]
+    vec![
+    ]
 }
 
 #[cfg(test)]
