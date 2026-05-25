@@ -12,17 +12,16 @@
     "test_pulse_width": 10,
     "test_pulse_low_level": 1000,
     "test_pulse_high_level": 3000,
-    "waveforms_enabled": true
+    "waveforms_enabled": false
   },
   "channel_defaults": {
     "enabled": "True",
     "dc_offset": 50.0,
     "amax": {
-      "selector_wave": 1,
       "pretrigger_input": 600,
       "polarity": 1,
       "offset": 5,
-      "thrs": 20,
+      "thrs": 2,
       "trig_k": 10,
       "trig_m": 12,
       "trap_k": 500,
@@ -39,11 +38,8 @@
       "baseline_delay": 200,
       "baseline_len": 6,
       "baseline_offset": 1000,
-      "pretrigger_trap": 600,
-      "pretrigger_amax": 600,
       "delay_shaping": 32,
-      "shap_trigg": 0,
-      "shap_bl_hold": 0
+      "shap_trigg": 0
     }
   }
 }

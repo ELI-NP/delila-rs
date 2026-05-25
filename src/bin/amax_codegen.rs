@@ -38,17 +38,30 @@ struct Cli {
     )]
     ts_out: PathBuf,
 
-    /// Channel-page base address (word units, ch0). Defaults to the new
-    /// `0x100000` 32-channel-FW layout — pass `0x800000` for the legacy
-    /// per-channel-paths firmware.
-    #[arg(long, default_value_t = 0x100000)]
+    /// Channel-page base address (word units, ch0). Defaults to the 13may
+    /// caenlist FW broadcast page at `0x200`. Pass `0x100000` for the older
+    /// 32-ch FW (single broadcast page, no slash), `0x800000` for the legacy
+    /// 2026-03 per-channel-paths firmware.
+    #[arg(long, default_value_t = 0x200)]
     page_base: u32,
 
-    /// Word stride between consecutive channel pages. The 32-channel
-    /// firmware exposes a single page that ch0 alone uses today, so the
-    /// default stride is `0`. Pass `0x40000` for the legacy firmware.
+    /// Word stride between consecutive channel pages. Broadcast-page FWs use
+    /// `0` (every channel iteration hits the same address). Pass `0x40000`
+    /// for the legacy 2026-03 firmware. The 13may FW also exposes 32
+    /// per-channel pages at stride `0x200`, but `apply_amax_channel_config`
+    /// still drives the broadcast page — a single write fans out to all
+    /// channels in hardware, so the channel loop is intentionally redundant.
     #[arg(long, default_value_t = 0)]
     page_stride: u32,
+
+    /// Pick the ch0 per-channel page instead of the broadcast page as the
+    /// canonical register set. Use when the broadcast slash form
+    /// (`page_amax_energy/<NAME>`) does NOT fan out to all channels in
+    /// hardware (observed on the 13may caenlist FW) and per-channel
+    /// pages (`page_amax_energy_4_<N>/<NAME>`) must be written individually.
+    /// Pair with `--page-base 0x4000 --page-stride 0x200`.
+    #[arg(long, default_value_t = false)]
+    prefer_per_channel: bool,
 }
 
 // ---- RegisterFile.json schema (subset) ----
@@ -81,13 +94,30 @@ impl Register {
     /// channel infix so old per-channel paths and new single-channel names
     /// land on the same key (e.g. `THRS`).
     ///
-    /// Three FW eras coexist in this strip chain:
+    /// Four FW eras coexist in this strip chain:
     ///   - 2026-03 era: `page_amax_energy_0/THRS` → `THRS` (slash separator)
     ///   - 2026-04 32-ch era: `page_amax_energy_THRS` → `THRS` (no index)
     ///   - 2026-05 16-ch era: `page_amax_energy_15_THRS` → `THRS`
     ///     (underscore-separated index, broadcast page also has bare form)
+    ///   - 2026-05 caenlist-13may era: broadcast `page_amax_energy/THRS`
+    ///     (slash form, no index), per-channel `page_amax_energy_4_<N>/THRS`
     fn fw_key(&self) -> Option<String> {
         let raw = self.path.as_deref().or(self.name.as_deref())?;
+        // 13may broadcast form: `page_amax_energy/<NAME>` — single broadcast
+        // page exposed with slash separator (no `_4_<N>/` infix).
+        if let Some(rest) = raw.strip_prefix("page_amax_energy/") {
+            return Some(rest.to_string());
+        }
+        // 13may per-channel form: `page_amax_energy_4_<N>/<NAME>` — strip the
+        // `_4_<N>/` chunk down to the bare register name.
+        if let Some(rest) = raw.strip_prefix("page_amax_energy_4_") {
+            if let Some(slash) = rest.find('/') {
+                let idx = &rest[..slash];
+                if idx.chars().all(|c| c.is_ascii_digit()) {
+                    return Some(rest[slash + 1..].to_string());
+                }
+            }
+        }
         let stripped = raw
             .strip_prefix("page_amax_energy_0/")
             .or_else(|| raw.strip_prefix("page_amax_energy_1/"))
@@ -106,10 +136,12 @@ impl Register {
     }
 
     /// True iff this register belongs to the per-channel `page_amax_energy_*`
-    /// family (the only set we surface in `AMaxChannelConfig`).
+    /// family (the only set we surface in `AMaxChannelConfig`). Also true for
+    /// the 13may era broadcast slash form `page_amax_energy/<NAME>` so the
+    /// canonical-filter and codegen treat broadcast + per-channel uniformly.
     fn is_per_channel(&self) -> bool {
         let raw = self.path.as_deref().or(self.name.as_deref()).unwrap_or("");
-        raw.starts_with("page_amax_energy_")
+        raw.starts_with("page_amax_energy_") || raw.starts_with("page_amax_energy/")
     }
 
     /// Returns the channel index when this register is one of the per-channel
@@ -125,6 +157,20 @@ impl Register {
     /// `apply_amax_channel_config` in `src/reader/caen/handle.rs`).
     fn channel_index(&self) -> Option<u32> {
         let raw = self.path.as_deref().or(self.name.as_deref())?;
+        // 13may broadcast (`page_amax_energy/<NAME>`) = canonical, no index.
+        if raw.starts_with("page_amax_energy/") {
+            return None;
+        }
+        // 13may per-channel form: `page_amax_energy_4_<N>/<NAME>` — the `_4_`
+        // prefix denotes a 4-input page, `<N>` is the channel index.
+        if let Some(rest) = raw.strip_prefix("page_amax_energy_4_") {
+            if let Some(slash) = rest.find('/') {
+                let idx = &rest[..slash];
+                if idx.chars().all(|c| c.is_ascii_digit()) {
+                    return idx.parse().ok();
+                }
+            }
+        }
         let body = raw.strip_prefix("page_amax_energy_")?;
         // 2026-03 slash form: "<N>/<NAME>"
         if let Some(slash) = body.find('/') {
@@ -170,9 +216,24 @@ impl Register {
 ///     wins, per-channel duplicates dropped (single write fans out to all
 ///     channels via hardware; see `apply_amax_channel_config`).
 fn select_canonical_per_channel(registers: &[Register]) -> Vec<&Register> {
+    select_canonical_per_channel_with(registers, false)
+}
+
+/// Same as `select_canonical_per_channel` but switchable: when
+/// `prefer_per_channel` is true, the ch0 per-channel page wins over the
+/// broadcast page. Use when the broadcast page does not fan out to all
+/// channels in hardware (observed on the 13may caenlist FW).
+fn select_canonical_per_channel_with(
+    registers: &[Register],
+    prefer_per_channel: bool,
+) -> Vec<&Register> {
     let has_broadcast = registers
         .iter()
         .any(|r| r.is_per_channel() && r.channel_index().is_none());
+    let has_ch0 = registers
+        .iter()
+        .any(|r| r.is_per_channel() && r.channel_index() == Some(0));
+    let use_per_channel = prefer_per_channel && has_ch0;
     registers
         .iter()
         .filter(|r| {
@@ -180,9 +241,9 @@ fn select_canonical_per_channel(registers: &[Register]) -> Vec<&Register> {
                 return false;
             }
             match r.channel_index() {
-                None => true,              // broadcast — preferred
-                Some(0) => !has_broadcast, // 2026-03 fallback
-                Some(_) => false,          // skip ch1+ duplicates
+                None => !use_per_channel && true, // broadcast — preferred unless we asked for per-channel
+                Some(0) => use_per_channel || !has_broadcast, // ch0 wins when asked or as 2026-03 fallback
+                Some(_) => false,                             // skip ch1+ duplicates
             }
         })
         .collect()
@@ -260,7 +321,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params_text = fs::read_to_string(&cli.params_file)?;
     let fw_params: FwParams = serde_json::from_str(&params_text)?;
 
-    let mut ch0: Vec<&Register> = select_canonical_per_channel(&register_file.registers);
+    let mut ch0: Vec<&Register> =
+        select_canonical_per_channel_with(&register_file.registers, cli.prefer_per_channel);
     ch0.sort_by_key(|r| r.address);
 
     // Resolve each writable register against fw_params.json.
@@ -565,6 +627,10 @@ fn emit_rust_registers(
     out.push_str("}\n");
 
     // ---- Board-level (global) register addresses + apply helper ----
+    //
+    // Always emit `board_writes` and `all_board_registers` (even when empty)
+    // so callers can iterate unconditionally. BOARD_REG_* constants only
+    // appear when `board_resolved` is non-empty.
     if !board_resolved.is_empty() {
         out.push_str("\n// ---- Board-level (global) register byte addresses ----\n//\n");
         out.push_str(
@@ -583,49 +649,47 @@ fn emit_rust_registers(
                 r.word_offset
             ));
         }
-
-        out.push_str(
-            "\n/// All writable board-level register fields, in stable order.\n\
-             /// Mirror of `channel_writes` for `AMaxBoardConfig`. Each tuple is\n\
-             /// (BOARD_REG byte address, value, field_name).\n\
-             #[allow(dead_code)]\n\
-             pub fn board_writes(\n\
-             \x20\x20\x20\x20config: &crate::config::digitizer::AMaxBoardConfig,\n\
-             ) -> Vec<(u32, u32, &'static str)> {\n\
-             \x20\x20\x20\x20let mut writes = Vec::new();\n",
-        );
-        for r in board_resolved {
-            out.push_str(&format!(
-                "    if let Some(v) = config.{f} {{ writes.push((BOARD_REG_{u}, v, \"{f}\")); }}\n",
-                f = r.field,
-                u = r.field.to_uppercase(),
-            ));
-        }
-        out.push_str("    writes\n}\n");
-
-        // Symmetric read-back helper for the Tune Up debug panel: returns
-        // every board-level register's (address, name) pair regardless of
-        // whether the config Option is Some. Adding a new board param to
-        // fw_params.json auto-extends this list — no inspector code change
-        // required.
-        out.push_str(
-            "\n/// All board-level register (byte_addr, name) pairs, in stable order.\n\
-             /// Used by the operator UI's Tune Up debug view to read live\n\
-             /// values back from the digitizer (see\n\
-             /// `ReadLoopRequest::ReadAmaxBoardRegisters` in `reader/mod.rs`).\n\
-             #[allow(dead_code)]\n\
-             pub fn all_board_registers() -> Vec<(u32, &'static str)> {\n\
-             \x20\x20\x20\x20vec![\n",
-        );
-        for r in board_resolved {
-            out.push_str(&format!(
-                "        (BOARD_REG_{u}, \"{f}\"),\n",
-                f = r.field,
-                u = r.field.to_uppercase(),
-            ));
-        }
-        out.push_str("    ]\n}\n");
     }
+
+    out.push_str(
+        "\n/// All writable board-level register fields, in stable order.\n\
+         /// Mirror of `channel_writes` for `AMaxBoardConfig`. Each tuple is\n\
+         /// (BOARD_REG byte address, value, field_name). Empty when no\n\
+         /// board-level (global) registers are declared in fw_params.json.\n\
+         #[allow(dead_code)]\n\
+         pub fn board_writes(\n\
+         \x20\x20\x20\x20_config: &crate::config::digitizer::AMaxBoardConfig,\n\
+         ) -> Vec<(u32, u32, &'static str)> {\n\
+         \x20\x20\x20\x20#[allow(unused_mut)]\n\
+         \x20\x20\x20\x20let mut writes = Vec::new();\n",
+    );
+    for r in board_resolved {
+        out.push_str(&format!(
+            "    if let Some(v) = _config.{f} {{ writes.push((BOARD_REG_{u}, v, \"{f}\")); }}\n",
+            f = r.field,
+            u = r.field.to_uppercase(),
+        ));
+    }
+    out.push_str("    writes\n}\n");
+
+    out.push_str(
+        "\n/// All board-level register (byte_addr, name) pairs, in stable order.\n\
+         /// Used by the operator UI's Tune Up debug view to read live\n\
+         /// values back from the digitizer (see\n\
+         /// `ReadLoopRequest::ReadAmaxBoardRegisters` in `reader/mod.rs`).\n\
+         /// Empty when no board-level registers are declared.\n\
+         #[allow(dead_code)]\n\
+         pub fn all_board_registers() -> Vec<(u32, &'static str)> {\n\
+         \x20\x20\x20\x20vec![\n",
+    );
+    for r in board_resolved {
+        out.push_str(&format!(
+            "        (BOARD_REG_{u}, \"{f}\"),\n",
+            f = r.field,
+            u = r.field.to_uppercase(),
+        ));
+    }
+    out.push_str("    ]\n}\n");
 
     // Lightweight test: every offset distinct, byte-addr math stays consistent.
     out.push_str(
@@ -830,6 +894,34 @@ mod tests {
     }
 
     #[test]
+    fn fw_key_handles_thirteen_may_era() {
+        // 13may broadcast slash form
+        assert_eq!(
+            reg("page_amax_energy/POLARITY").fw_key().as_deref(),
+            Some("POLARITY")
+        );
+        assert_eq!(
+            reg("page_amax_energy/baseline_delay").fw_key().as_deref(),
+            Some("baseline_delay")
+        );
+        // 13may per-channel slash form with `_4_<N>/` infix
+        assert_eq!(
+            reg("page_amax_energy_4_0/POLARITY").fw_key().as_deref(),
+            Some("POLARITY")
+        );
+        assert_eq!(
+            reg("page_amax_energy_4_31/THRS").fw_key().as_deref(),
+            Some("THRS")
+        );
+        assert_eq!(
+            reg("page_amax_energy_4_15/baseline_delay")
+                .fw_key()
+                .as_deref(),
+            Some("baseline_delay")
+        );
+    }
+
+    #[test]
     fn fw_key_handles_three_eras() {
         // 2026-03 era — slash separator after channel index
         assert_eq!(
@@ -882,6 +974,29 @@ mod tests {
             reg("page_amax_energy_baseline_delay").fw_key().as_deref(),
             Some("baseline_delay")
         );
+    }
+
+    #[test]
+    fn channel_index_handles_thirteen_may_era() {
+        // 13may broadcast slash form — canonical (no index)
+        assert_eq!(reg("page_amax_energy/POLARITY").channel_index(), None);
+        assert_eq!(reg("page_amax_energy/baseline_delay").channel_index(), None);
+        // 13may per-channel `_4_<N>/` form
+        assert_eq!(
+            reg("page_amax_energy_4_0/POLARITY").channel_index(),
+            Some(0)
+        );
+        assert_eq!(reg("page_amax_energy_4_15/THRS").channel_index(), Some(15));
+        assert_eq!(reg("page_amax_energy_4_31/THRS").channel_index(), Some(31));
+    }
+
+    #[test]
+    fn is_per_channel_recognises_broadcast_slash_form() {
+        // 13may broadcast slash form must be considered "per-channel" so the
+        // canonical filter picks it up as the broadcast (None index) entry.
+        assert!(reg("page_amax_energy/POLARITY").is_per_channel());
+        assert!(reg("page_amax_energy/baseline_delay").is_per_channel());
+        assert!(reg("page_amax_energy_4_0/POLARITY").is_per_channel());
     }
 
     #[test]
@@ -994,6 +1109,39 @@ mod tests {
                 (0x100006, "page_amax_energy_baseline_delay".to_string()),
             ],
             "2026-04 era: all bare-name broadcast entries kept"
+        );
+    }
+
+    #[test]
+    fn canonical_filter_2026_05_caenlist_13may_picks_broadcast_drops_per_channel() {
+        // 13may caenlist era: broadcast page lives at `page_amax_energy/<NAME>`
+        // (slash form, no channel index) and per-channel pages at
+        // `page_amax_energy_4_<N>/<NAME>`. Broadcast wins; the 32 per-channel
+        // duplicates must drop so codegen emits one REG_* per param.
+        let mut regs = vec![
+            reg_at(0x200, "page_amax_energy/POLARITY"),
+            reg_at(0x203, "page_amax_energy/THRS"),
+            reg_at(0x211, "page_amax_energy/baseline_delay"),
+        ];
+        for ch in 0..32u32 {
+            regs.push(reg_at(
+                0x4001 + ch * 0x200,
+                &format!("page_amax_energy_4_{ch}/POLARITY"),
+            ));
+            regs.push(reg_at(
+                0x4003 + ch * 0x200,
+                &format!("page_amax_energy_4_{ch}/THRS"),
+            ));
+        }
+        let picked = picked(&select_canonical_per_channel(&regs));
+        assert_eq!(
+            picked,
+            vec![
+                (0x200, "page_amax_energy/POLARITY".to_string()),
+                (0x203, "page_amax_energy/THRS".to_string()),
+                (0x211, "page_amax_energy/baseline_delay".to_string()),
+            ],
+            "13may era: 3 broadcast entries kept; 64 per-channel duplicates dropped"
         );
     }
 

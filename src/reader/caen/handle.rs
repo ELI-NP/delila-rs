@@ -845,9 +845,6 @@ impl CaenHandle {
                 .get(&ch)
                 .and_then(|c| c.amax.as_ref());
             let merged = AMaxChannelConfig {
-                selector_wave: override_amax
-                    .and_then(|c| c.selector_wave)
-                    .or_else(|| defaults_amax.and_then(|c| c.selector_wave)),
                 pretrigger_input: override_amax
                     .and_then(|c| c.pretrigger_input)
                     .or_else(|| defaults_amax.and_then(|c| c.pretrigger_input)),
@@ -908,21 +905,18 @@ impl CaenHandle {
                 baseline_offset: override_amax
                     .and_then(|c| c.baseline_offset)
                     .or_else(|| defaults_amax.and_then(|c| c.baseline_offset)),
-                pretrigger_trap: override_amax
-                    .and_then(|c| c.pretrigger_trap)
-                    .or_else(|| defaults_amax.and_then(|c| c.pretrigger_trap)),
-                pretrigger_amax: override_amax
-                    .and_then(|c| c.pretrigger_amax)
-                    .or_else(|| defaults_amax.and_then(|c| c.pretrigger_amax)),
                 delay_shaping: override_amax
                     .and_then(|c| c.delay_shaping)
                     .or_else(|| defaults_amax.and_then(|c| c.delay_shaping)),
                 shap_trigg: override_amax
                     .and_then(|c| c.shap_trigg)
                     .or_else(|| defaults_amax.and_then(|c| c.shap_trigg)),
-                shap_bl_hold: override_amax
-                    .and_then(|c| c.shap_bl_hold)
-                    .or_else(|| defaults_amax.and_then(|c| c.shap_bl_hold)),
+                delay_debug: override_amax
+                    .and_then(|c| c.delay_debug)
+                    .or_else(|| defaults_amax.and_then(|c| c.delay_debug)),
+                enable_acq: override_amax
+                    .and_then(|c| c.enable_acq)
+                    .or_else(|| defaults_amax.and_then(|c| c.enable_acq)),
             };
 
             for (offset, value, name) in r::channel_writes(&merged) {
@@ -936,6 +930,29 @@ impl CaenHandle {
                 );
                 self.set_user_register(byte_addr, value)?;
                 count += 1;
+            }
+
+            // 13may FW broadcast-page mirror write: ch0 of the per-channel
+            // `_4_<N>` pages observed not to drive a visible physical
+            // channel on the VX2730 caenlist firmware (31/32 channels fire,
+            // ch0 stays silent). The same defaults also live on the
+            // `page_amax_energy/<NAME>` broadcast page at word 0x200; writing
+            // them here ensures the missing channel picks up the same
+            // threshold/offset/polarity as the rest. Cheap (24 extra writes
+            // per Configure, run once outside the channel loop).
+            if ch == 0 {
+                const BROADCAST_BASE: u32 = 0x200;
+                for (offset, value, name) in r::channel_writes(&merged) {
+                    let byte_addr = (BROADCAST_BASE + offset) * 4;
+                    debug!(
+                        register = name,
+                        addr = format_args!("0x{:08X}", byte_addr),
+                        value,
+                        "[AMax] WriteUserRegister (broadcast page)"
+                    );
+                    self.set_user_register(byte_addr, value)?;
+                    count += 1;
+                }
             }
         }
 
