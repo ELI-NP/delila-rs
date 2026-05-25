@@ -1108,10 +1108,17 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
    *  for other firmwares (Round 2 plan I.1). */
   readonly tuneupView = signal<'standard' | 'amax-debug'>('standard');
 
-  /** Local mirror of `amax_board.enable_acq` — kept as a signal so the
-   *  Tune Up debug toolbar's slide toggle can flip it optimistically.
-   *  Synced from `tuneUpConfig()` via an effect; flipping here writes
-   *  through `tuneupApply` (see `onAmaxEnableAcqToggle`). */
+  /** Local mirror of `channel_defaults.amax.enable_acq` — kept as a
+   *  signal so the Tune Up debug toolbar's slide toggle can flip it
+   *  optimistically. Synced from `tuneUpConfig()` via an effect;
+   *  flipping here writes through `tuneupApply`
+   *  (see `onAmaxEnableAcqToggle`).
+   *
+   *  ENABLE_ACQ lived under `amax_board` (board-level register) in
+   *  older FW builds. The 13may caenlist FW moved it onto the
+   *  per-channel page as a broadcast write (page 0x200, single
+   *  write fans out to all channels), so the toggle now reads
+   *  from / writes to `channel_defaults.amax.enable_acq`. */
   readonly amaxEnableAcq = signal(false);
 
   /** Live AMax board-level register values polled from the digitizer
@@ -1666,15 +1673,26 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     this.channelValues.set(this.digitizerService.expandConfig(config));
     // Sync the AMax debug-mode mirror from the just-loaded config so the
     // sub-mode slide toggle reflects what the hardware actually has set.
-    this.amaxEnableAcq.set((config.amax_board?.enable_acq ?? 0) === 1);
+    // ENABLE_ACQ lives on the per-channel AMax page in the 13may caenlist
+    // FW (broadcast write), so read from `channel_defaults.amax`.
+    this.amaxEnableAcq.set(
+      (config.channel_defaults?.amax?.enable_acq ?? 0) === 1,
+    );
   }
 
   /** Handle the ENABLE_ACQ slide toggle in the AMax debug Tune Up
    *  toolbar. Sends a partial config update via `tuneupApply` so the
    *  operator can flip the FW's debug acquisition mode without
-   *  navigating to the Settings page. The board-level write goes
-   *  through `apply_amax_channel_config` on the backend (Round 1
-   *  commit `d336203`); per-channel parameters stay untouched. */
+   *  navigating to the Settings page.
+   *
+   *  ENABLE_ACQ moved off the board-level page onto the per-channel
+   *  broadcast page in the 13may caenlist FW
+   *  (`AMaxBoardConfig` is now empty; see
+   *  `tools/amax_viewer/fw_params.json` _board_params_doc). The
+   *  write goes through `apply_amax_channel_config` on the backend
+   *  reading `channel_defaults.amax.enable_acq` — a single broadcast
+   *  register write fans out to all channels in hardware, so the
+   *  global "debug ON/OFF" semantics are preserved. */
   onAmaxEnableAcqToggle(checked: boolean): void {
     const config = this.tuneUpConfig();
     if (!config || config.firmware !== 'AMax') return;
@@ -1685,7 +1703,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
 
     const updatedConfig: DigitizerConfig = {
       ...config,
-      amax_board: { ...(config.amax_board ?? {}), enable_acq: checked ? 1 : 0 },
+      channel_defaults: {
+        ...config.channel_defaults,
+        amax: {
+          ...(config.channel_defaults?.amax ?? {}),
+          enable_acq: checked ? 1 : 0,
+        },
+      },
     };
 
     this.operatorService
