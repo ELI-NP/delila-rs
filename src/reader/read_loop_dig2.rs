@@ -151,6 +151,13 @@ pub(crate) fn run(
                                     match apply_result {
                                         Ok(count) => {
                                             info!(count, "Digitizer configuration applied");
+                                            // Track ENABLE_ACQ so the OpenDPP read loop
+                                            // can dispatch the 4-lane debug-waveform
+                                            // unpack on ch0 events.
+                                            conn.amax_enable_acq =
+                                                crate::reader::amax_enable_acq_from_config(
+                                                    &dig_config,
+                                                );
                                         }
                                         Err(e) => {
                                             warn!(error = %e, "Auto-configure from JSON failed — \
@@ -231,7 +238,11 @@ pub(crate) fn run(
                     match drain {
                         Ok(Some(evt)) => {
                             drained += 1;
-                            let event_data = opendpp_to_event_data(&evt, config.module_id);
+                            let event_data = opendpp_to_event_data(
+                                &evt,
+                                config.module_id,
+                                conn.amax_enable_acq,
+                            );
                             let _ = tx.try_send(ReadLoopOutput::Decoded(Box::new(event_data)));
                         }
                         _ => break,
@@ -334,6 +345,10 @@ pub(crate) fn run(
                         if let Some(ref mut conn) = connection {
                             conn.auto_config_failed = false;
                             conn.enabled_channels = get_enabled_channels_from_config(&dig_config);
+                            // Refresh ENABLE_ACQ tracking so the OpenDPP read
+                            // hot path picks up the new value on the next event.
+                            conn.amax_enable_acq =
+                                crate::reader::amax_enable_acq_from_config(&dig_config);
                         }
                     }
                     let _ = response_tx.send(result);
@@ -425,7 +440,11 @@ pub(crate) fn run(
                         .fetch_add(event.event_size as u64, Ordering::Relaxed);
 
                     // Convert OpenDPP event to EventData
-                    let event_data = opendpp_to_event_data(&event, config.module_id);
+                    let event_data = opendpp_to_event_data(
+                        &event,
+                        config.module_id,
+                        conn.amax_enable_acq,
+                    );
                     let output = ReadLoopOutput::Decoded(Box::new(event_data));
 
                     // Update queue length metric

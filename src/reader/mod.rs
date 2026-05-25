@@ -425,27 +425,31 @@ const AMAX_FLAGS_A_SHIFT: u32 = 12;
 ///   because OpenDPP doesn't carry probe-type metadata on the wire (added
 ///   in Phase 4.5 for PHA2 only).
 ///
-/// # AMax debug FW caveat (2026-05-07)
+/// # AMax debug FW (2026-05-25)
 ///
-/// The new debug firmware (`AMAX_firmware32_channel_4input_caenlist`) raises
-/// a per-event `SE` (Special Event) bool on ch0 when its `ENABLE_ACQ`
-/// register = 1. The bit lives in the raw CAENList event header (Word 0
-/// bit 55) and changes the WAVE payload to a 4-lane debug bundle.
+/// When `ENABLE_ACQ = 1` on the `AMAX_firmware32_channel_4input_caenlist`
+/// FW, ch0 events arrive with the WAVE payload packed as **4 interleaved
+/// 16-bit lanes** per source sample (raw / trap / triangle / digital).
+/// FELib's OpenDPP endpoint passes the packed u16 stream through as-is
+/// — the `WAVEFORM` field length is `4 × source_samples`, and the lane
+/// structure is recovered by the `enable_acq_debug && event.channel == 0`
+/// branch in this fn ([`unpack_amax_debug_waveform`]).
 ///
-/// **The OpenDPP FFI used here does NOT currently surface SE.** The format
-/// JSON in `configure_opendpp_endpoint` (handle.rs:609) only requests
-/// CHANNEL/TIMESTAMP/.../WAVEFORM. To plumb SE through this path:
-/// 1. Add `{"name": "SPECIAL_EVENT", "type": "BOOL"}` to the format JSON
-///    (verify field name against CAEN FELib for the new FW).
-/// 2. Add `special_event: bool` to `OpenDppEvent` and the FFI read
-///    function (`handle.rs::read_opendpp_event*`).
-/// 3. In this fn, branch on `event.special_event` to call a new
-///    `opendpp_debug_to_event_data` that unpacks the 4-lane WAVE.
+/// Caller (`read_loop_dig2`) tracks `enable_acq_debug` on
+/// `DeviceConnection::amax_enable_acq`, refreshed from
+/// `channel_defaults.amax.enable_acq` after every successful Apply /
+/// auto-load. Non-ch0 events stay on the single-lane path even with
+/// `ENABLE_ACQ = 1` — the SE pin is hardwired to ch0 only
+/// (`FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U57).
 ///
-/// Until then, the offline raw-bytes decode path
-/// (`AMaxDecoder::decode_event`) handles SE correctly — debug-mode
-/// `.delila` files captured with `caen_simple_test` already work end-to-end.
-pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> decoder::EventData {
+/// Offline `.delila` replays (captured with `caen_simple_test`) take a
+/// different path through `AMaxDecoder::decode_event` which reads the
+/// raw u64 packed words directly.
+pub(crate) fn opendpp_to_event_data(
+    event: &OpenDppEvent,
+    module_id: u8,
+    enable_acq_debug: bool,
+) -> decoder::EventData {
     let coarse_time_ns = (event.timestamp as f64) * AMAX_TIME_STEP_NS;
     let fine_time_ns = (event.fine_timestamp as f64 / AMAX_FINE_TIME_SCALE) * AMAX_TIME_STEP_NS;
     let timestamp_ns = coarse_time_ns + fine_time_ns;
@@ -474,38 +478,44 @@ pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> deco
         }
     }
 
-    // AMax OpenDPP delivers a single u16 sample stream. Forward raw 14-bit
-    // values into analog_probe1 to stay 1:1 with amax_viewer.
+    // Two waveform-format paths:
+    //   * `enable_acq_debug && event.channel == 0` → AMax debug FW 4-lane
+    //     interleaved unpack (raw / trap / triangle / digital).
+    //   * everything else → legacy single-lane raw waveform.
     let waveform = event.waveform.as_ref().map(|samples| {
-        let analog_probe1 = samples.iter().map(|&v| (v & 0x3FFF) as i16).collect();
-        decoder::common::Waveform {
-            analog_probe1,
-            analog_probe2: Vec::new(),
-            analog_probe3: Vec::new(),
-            digital_probe1: Vec::new(),
-            digital_probe2: Vec::new(),
-            digital_probe3: Vec::new(),
-            digital_probe4: Vec::new(),
-            digital_probe5: Vec::new(),
-            digital_probe6: Vec::new(),
-            digital_probe7: Vec::new(),
-            digital_probe8: Vec::new(),
-            digital_probe9: Vec::new(),
-            digital_probe10: Vec::new(),
-            digital_probe11: Vec::new(),
-            digital_probe12: Vec::new(),
-            digital_probe13: Vec::new(),
-            digital_probe14: Vec::new(),
-            digital_probe15: Vec::new(),
-            digital_probe16: Vec::new(),
-            time_resolution: 0,
-            trigger_threshold: 0,
-            ns_per_sample: AMAX_TIME_STEP_NS,
-            analog_probe1_is_signed: false,
-            analog_probe2_is_signed: false,
-            analog_probe3_is_signed: false,
-            analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
-            digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 16],
+        if enable_acq_debug && event.channel == 0 {
+            unpack_amax_debug_waveform(samples)
+        } else {
+            let analog_probe1 = samples.iter().map(|&v| (v & 0x3FFF) as i16).collect();
+            decoder::common::Waveform {
+                analog_probe1,
+                analog_probe2: Vec::new(),
+                analog_probe3: Vec::new(),
+                digital_probe1: Vec::new(),
+                digital_probe2: Vec::new(),
+                digital_probe3: Vec::new(),
+                digital_probe4: Vec::new(),
+                digital_probe5: Vec::new(),
+                digital_probe6: Vec::new(),
+                digital_probe7: Vec::new(),
+                digital_probe8: Vec::new(),
+                digital_probe9: Vec::new(),
+                digital_probe10: Vec::new(),
+                digital_probe11: Vec::new(),
+                digital_probe12: Vec::new(),
+                digital_probe13: Vec::new(),
+                digital_probe14: Vec::new(),
+                digital_probe15: Vec::new(),
+                digital_probe16: Vec::new(),
+                time_resolution: 0,
+                trigger_threshold: 0,
+                ns_per_sample: AMAX_TIME_STEP_NS,
+                analog_probe1_is_signed: false,
+                analog_probe2_is_signed: false,
+                analog_probe3_is_signed: false,
+                analog_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 3],
+                digital_probe_type: [decoder::common::UNKNOWN_PROBE_TYPE; 16],
+            }
         }
     });
 
@@ -520,6 +530,132 @@ pub(crate) fn opendpp_to_event_data(event: &OpenDppEvent, module_id: u8) -> deco
         user_info,
         waveform,
     }
+}
+
+/// Unpack the AMax debug FW's 4-lane interleaved waveform payload.
+///
+/// FELib's OpenDPP endpoint passes the FW's u64-packed wire data through
+/// to the `WAVEFORM` u16 array without recognising the lane structure.
+/// Each source sample occupies 4 consecutive u16 slots:
+///
+/// | offset (mod 4) | lane | content                                | slot              |
+/// |----------------|------|----------------------------------------|-------------------|
+/// | 0              | 0    | raw waveform (signed 16-bit ADC)       | `analog_probe1`   |
+/// | 1              | 1    | trapezoidal filter (signed)            | `analog_probe2`   |
+/// | 2              | 2    | triangle filter (signed)               | `analog_probe3`   |
+/// | 3              | 3    | digital lane (16 wires; bits 11..15)   | `digital_probe1..5` |
+///
+/// Digital lane bit map (from FW SCH `OutputOrder = IN_0 LEFT (MSBs)`,
+/// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U75):
+///   * bit 15 = Trigger_out → `digital_probe1`
+///   * bit 14 = BL_Hold     → `digital_probe2`
+///   * bit 13 = Energy_Dv   → `digital_probe3`
+///   * bit 12 = shaping_dv  → `digital_probe4`
+///   * bit 11 = shaping_track → `digital_probe5`
+///   * bits 10..0 = constant 0 (padding for future wires)
+///
+/// Mirrors `AMaxDecoder::decode_debug_waveform` in
+/// [src/reader/decoder/amax.rs] (offline raw-bytes path) — keep them in
+/// sync if Rebeca's FW changes the lane layout.
+fn unpack_amax_debug_waveform(samples: &[u16]) -> decoder::common::Waveform {
+    use decoder::amax::amax_probe_types;
+    use decoder::common::{Waveform, UNKNOWN_PROBE_TYPE};
+
+    let n = samples.len() / 4;
+    let mut analog_probe1 = Vec::with_capacity(n);
+    let mut analog_probe2 = Vec::with_capacity(n);
+    let mut analog_probe3 = Vec::with_capacity(n);
+    let mut digital_probe1 = Vec::with_capacity(n);
+    let mut digital_probe2 = Vec::with_capacity(n);
+    let mut digital_probe3 = Vec::with_capacity(n);
+    let mut digital_probe4 = Vec::with_capacity(n);
+    let mut digital_probe5 = Vec::with_capacity(n);
+
+    for chunk in samples.chunks_exact(4) {
+        analog_probe1.push(chunk[0] as i16);
+        analog_probe2.push(chunk[1] as i16);
+        analog_probe3.push(chunk[2] as i16);
+        let dig = chunk[3];
+        digital_probe1.push(((dig >> 15) & 0x1) as u8);
+        digital_probe2.push(((dig >> 14) & 0x1) as u8);
+        digital_probe3.push(((dig >> 13) & 0x1) as u8);
+        digital_probe4.push(((dig >> 12) & 0x1) as u8);
+        digital_probe5.push(((dig >> 11) & 0x1) as u8);
+    }
+
+    Waveform {
+        analog_probe1,
+        analog_probe2,
+        analog_probe3,
+        digital_probe1,
+        digital_probe2,
+        digital_probe3,
+        digital_probe4,
+        digital_probe5,
+        // Slots 6..16 reserved for future digital-lane bit assignments
+        // (bits 10..0 are constant 0 in hardware today; see
+        // `decoder::common::amax_probe_types` for the reserved range).
+        digital_probe6: Vec::new(),
+        digital_probe7: Vec::new(),
+        digital_probe8: Vec::new(),
+        digital_probe9: Vec::new(),
+        digital_probe10: Vec::new(),
+        digital_probe11: Vec::new(),
+        digital_probe12: Vec::new(),
+        digital_probe13: Vec::new(),
+        digital_probe14: Vec::new(),
+        digital_probe15: Vec::new(),
+        digital_probe16: Vec::new(),
+        time_resolution: 0,
+        trigger_threshold: 0,
+        ns_per_sample: AMAX_TIME_STEP_NS,
+        // Debug-FW analog lanes are signed 16-bit per Rebeca's spec
+        // (raw / trap / triangle all swing around 0 after the TM packer).
+        analog_probe1_is_signed: true,
+        analog_probe2_is_signed: true,
+        analog_probe3_is_signed: true,
+        analog_probe_type: [
+            amax_probe_types::ANA_RAW,
+            amax_probe_types::ANA_TRAP,
+            amax_probe_types::ANA_TRIANGLE,
+        ],
+        digital_probe_type: [
+            amax_probe_types::DIG_TRIGGER_OUT,
+            amax_probe_types::DIG_BL_HOLD,
+            amax_probe_types::DIG_ENERGY_DV,
+            amax_probe_types::DIG_SHAPING_DV,
+            amax_probe_types::DIG_SHAPING_TRACK,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+            UNKNOWN_PROBE_TYPE,
+        ],
+    }
+}
+
+/// True when the AMax debug FW's `ENABLE_ACQ` register is set to 1 in the
+/// applied config. Used by the OpenDPP read loop to decide whether to
+/// unpack the 4-lane debug waveform on ch0.
+///
+/// Non-AMax firmwares always return false (the `amax` channel section is
+/// `None`).
+pub(crate) fn amax_enable_acq_from_config(
+    config: &crate::config::digitizer::DigitizerConfig,
+) -> bool {
+    config
+        .channel_defaults
+        .amax
+        .as_ref()
+        .and_then(|a| a.enable_acq)
+        .map(|v| v == 1)
+        .unwrap_or(false)
 }
 
 /// Enum-based decoder dispatch (KISS: PSD1/PSD2/PHA1/PHA2/AMax, no trait object needed)
@@ -952,6 +1088,12 @@ pub(crate) struct DeviceConnection {
     /// fields. Selects between `read_opendpp_event` and
     /// `read_opendpp_event_with_waveform` on the read hot path.
     pub(crate) include_waveform: bool,
+    /// Whether the most recently applied AMax config has `ENABLE_ACQ = 1`.
+    /// Drives the 4-lane debug-waveform unpack in
+    /// `opendpp_to_event_data`. Refreshed via
+    /// `amax_enable_acq_from_config` after every successful Apply /
+    /// auto-load. Always `false` for non-AMax firmwares.
+    pub(crate) amax_enable_acq: bool,
 }
 
 /// Verify the digitizer's reported firmware matches the config-declared
@@ -1023,6 +1165,7 @@ pub(crate) fn try_connect_raw(url: &str, include_n_events: bool) -> Option<Devic
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform: false, // RAW path doesn't use OpenDPP waveforms
+                    amax_enable_acq: false,
                 })
             }
             Err(e) => {
@@ -1070,6 +1213,7 @@ pub(crate) fn try_connect_opendpp(url: &str, include_waveform: bool) -> Option<D
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform,
+                    amax_enable_acq: false,
                 })
             }
             Err(e) => {
@@ -2881,7 +3025,7 @@ mod tests {
     #[test]
     fn opendpp_to_event_data_combines_flags_a_and_b() {
         let evt = make_opendpp_event(Vec::new());
-        let ed = opendpp_to_event_data(&evt, 1);
+        let ed = opendpp_to_event_data(&evt, 1, false);
         assert_eq!(ed.flags, (0xAB_u32 << 12) | 0x123_u32);
         assert_eq!(ed.module, 1);
         assert_eq!(ed.channel, 7);
@@ -2895,7 +3039,7 @@ mod tests {
     #[test]
     fn opendpp_to_event_data_timestamp_in_ns() {
         let evt = make_opendpp_event(Vec::new());
-        let ed = opendpp_to_event_data(&evt, 0);
+        let ed = opendpp_to_event_data(&evt, 0, false);
         // 1000 * 8 + 256 * (8/1024) = 8000 + 2.0 = 8002.0
         assert!((ed.timestamp_ns - 8002.0).abs() < 1e-9);
     }
@@ -2906,7 +3050,7 @@ mod tests {
     #[test]
     fn opendpp_to_event_data_truncates_user_info_to_four_slots() {
         let evt = make_opendpp_event(vec![1, 2, 3, 4, 5, 6]);
-        let ed = opendpp_to_event_data(&evt, 0);
+        let ed = opendpp_to_event_data(&evt, 0, false);
         assert_eq!(ed.user_info, [1, 2, 3, 4]);
     }
 
@@ -2914,8 +3058,121 @@ mod tests {
     #[test]
     fn opendpp_to_event_data_pads_short_user_info_with_zeros() {
         let evt = make_opendpp_event(vec![42, 99]);
-        let ed = opendpp_to_event_data(&evt, 0);
+        let ed = opendpp_to_event_data(&evt, 0, false);
         assert_eq!(ed.user_info, [42, 99, 0, 0]);
+    }
+
+    /// `enable_acq_debug=false` keeps the legacy single-lane path: the
+    /// whole u16 stream lands in `analog_probe1`, all other probes stay
+    /// empty. Regression for the non-debug AMax data path.
+    #[test]
+    fn opendpp_to_event_data_single_lane_when_debug_off() {
+        let mut evt = make_opendpp_event(Vec::new());
+        evt.channel = 0;
+        evt.waveform = Some(vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]);
+        let ed = opendpp_to_event_data(&evt, 0, false);
+        let wf = ed.waveform.expect("waveform should be present");
+        assert_eq!(wf.analog_probe1, vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]);
+        assert!(wf.analog_probe2.is_empty());
+        assert!(wf.analog_probe3.is_empty());
+        assert!(wf.digital_probe1.is_empty());
+        assert!(!wf.analog_probe1_is_signed);
+    }
+
+    /// `enable_acq_debug=true && channel==0` triggers the 4-lane interleaved
+    /// unpack: every 4 consecutive u16s become 1 sample of [raw, trap,
+    /// triangle, digital]. Lane 0/1/2 land in analog_probe1/2/3 as signed
+    /// 16-bit; lane 3 is bit-decomposed into digital_probe1..5.
+    #[test]
+    fn opendpp_to_event_data_unpacks_four_lanes_on_ch0_debug() {
+        let mut evt = make_opendpp_event(Vec::new());
+        evt.channel = 0;
+        // Two samples × 4 lanes interleaved:
+        //   sample 0: raw=10000, trap=-1, triangle=20000, digital=0xA800
+        //   sample 1: raw=10001, trap= 0, triangle=20001, digital=0x5000
+        // digital bit map: 15=trig_out, 14=bl_hold, 13=energy_dv,
+        //                  12=shaping_dv, 11=shaping_track
+        // 0xA800 = 0b1010_1000_0000_0000 → bits 15,13,11 = 1
+        // 0x5000 = 0b0101_0000_0000_0000 → bits 14,12 = 1
+        evt.waveform = Some(vec![
+            10000u16, (-1i16) as u16, 20000u16, 0xA800u16,
+            10001u16, 0u16,           20001u16, 0x5000u16,
+        ]);
+        let ed = opendpp_to_event_data(&evt, 0, true);
+        let wf = ed.waveform.expect("waveform should be present");
+        assert_eq!(wf.analog_probe1, vec![10000i16, 10001i16]);
+        assert_eq!(wf.analog_probe2, vec![-1i16, 0i16]);
+        assert_eq!(wf.analog_probe3, vec![20000i16, 20001i16]);
+        // Trigger_out (bit 15): 1, 0
+        assert_eq!(wf.digital_probe1, vec![1u8, 0u8]);
+        // BL_Hold (bit 14): 0, 1
+        assert_eq!(wf.digital_probe2, vec![0u8, 1u8]);
+        // Energy_Dv (bit 13): 1, 0
+        assert_eq!(wf.digital_probe3, vec![1u8, 0u8]);
+        // shaping_dv (bit 12): 0, 1
+        assert_eq!(wf.digital_probe4, vec![0u8, 1u8]);
+        // shaping_track (bit 11): 1, 0
+        assert_eq!(wf.digital_probe5, vec![1u8, 0u8]);
+        // Slots 6..16 stay empty in the current digital lane layout.
+        assert!(wf.digital_probe6.is_empty());
+        // Debug-FW analog lanes are signed.
+        assert!(wf.analog_probe1_is_signed);
+        assert!(wf.analog_probe2_is_signed);
+        assert!(wf.analog_probe3_is_signed);
+    }
+
+    /// `enable_acq_debug=true && channel!=0` keeps the single-lane path —
+    /// the SE pin is hardwired to ch0 only in the AMax debug FW, so other
+    /// channels never carry 4-lane payloads even when ENABLE_ACQ=1.
+    #[test]
+    fn opendpp_to_event_data_no_unpack_on_non_zero_channel() {
+        let mut evt = make_opendpp_event(Vec::new());
+        evt.channel = 3;
+        evt.waveform = Some(vec![1000u16, 2000u16, 3000u16, 4000u16]);
+        let ed = opendpp_to_event_data(&evt, 0, true);
+        let wf = ed.waveform.expect("waveform should be present");
+        assert_eq!(wf.analog_probe1, vec![1000i16, 2000i16, 3000i16, 4000i16]);
+        assert!(wf.analog_probe2.is_empty());
+        assert!(wf.digital_probe1.is_empty());
+    }
+
+    /// `amax_enable_acq_from_config`: reads `channel_defaults.amax.enable_acq`
+    /// and treats `Some(1)` as true, `Some(0)` / `None` / missing-amax-section
+    /// as false.
+    ///
+    /// Built via serde so the test doesn't need to spell every field of
+    /// `DigitizerConfig` — that struct grows over time and the literal
+    /// form rots quickly.
+    #[test]
+    fn amax_enable_acq_from_config_reads_channel_default() {
+        use crate::config::digitizer::DigitizerConfig;
+
+        let load = |amax_json: &str| -> DigitizerConfig {
+            let json = format!(
+                r#"{{
+                    "digitizer_id": 0,
+                    "name": "test",
+                    "firmware": "AMax",
+                    "board": {{}},
+                    "channel_defaults": {{ {amax} }}
+                }}"#,
+                amax = amax_json
+            );
+            serde_json::from_str(&json).expect("test JSON should deserialize")
+        };
+
+        // No amax section at all → false.
+        let cfg = load("");
+        assert!(!amax_enable_acq_from_config(&cfg));
+        // amax present, enable_acq missing → false.
+        let cfg = load(r#""amax": {}"#);
+        assert!(!amax_enable_acq_from_config(&cfg));
+        // enable_acq=0 → false.
+        let cfg = load(r#""amax": { "enable_acq": 0 }"#);
+        assert!(!amax_enable_acq_from_config(&cfg));
+        // enable_acq=1 → true.
+        let cfg = load(r#""amax": { "enable_acq": 1 }"#);
+        assert!(amax_enable_acq_from_config(&cfg));
     }
 
     #[cfg(feature = "x743")]
