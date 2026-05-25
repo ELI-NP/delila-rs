@@ -56,7 +56,15 @@ import {
   DefaultValueChange,
   ChannelValueChange,
 } from '../../components/channel-table/channel-table.component';
-import { getCategoryParams, getAllChannelParams, getProbeOptions, ChannelCategory, ProbeOption } from '../../models/channel-params';
+import {
+  getCategoryParams,
+  getAllChannelParams,
+  getProbeOptions,
+  ChannelCategory,
+  CHANNEL_CATEGORIES,
+  CHANNEL_CATEGORY_LABELS,
+  ProbeOption,
+} from '../../models/channel-params';
 import { HistogramChartComponent, RangeChangeEvent } from '../../components/histogram-chart/histogram-chart.component';
 import { HeatmapChartComponent } from '../../components/heatmap-chart/heatmap-chart.component';
 
@@ -355,11 +363,9 @@ interface ChannelChart {
                 (change)="onCategoryChange($event.value)"
               >
                 <mat-button-toggle value="all">All</mat-button-toggle>
-                <mat-button-toggle value="input">Input</mat-button-toggle>
-                <mat-button-toggle value="trigger">Trigger</mat-button-toggle>
-                <mat-button-toggle value="energy">Energy</mat-button-toggle>
-                <mat-button-toggle value="coincidence">Coincidence</mat-button-toggle>
-                <mat-button-toggle value="waveform">Waveform</mat-button-toggle>
+                @for (cat of availableCategories(); track cat.key) {
+                  <mat-button-toggle [value]="cat.key">{{ cat.label }}</mat-button-toggle>
+                }
               </mat-button-toggle-group>
               <span class="spacer"></span>
               <button mat-flat-button color="primary" (click)="onApplyTuneUp()" [disabled]="applyLoading()">
@@ -1249,15 +1255,18 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     return getCategoryParams(config.firmware, cat);
   });
 
-  /** All categories with their params (for grid layout) */
-  private readonly allCategories: { key: ChannelCategory; label: string }[] = [
-    { key: 'input', label: 'Input' },
-    { key: 'trigger', label: 'Trigger' },
-    { key: 'energy', label: 'Energy' },
-    { key: 'coincidence', label: 'Coincidence' },
-    { key: 'waveform', label: 'Waveform' },
-  ];
+  /** All channel-param categories in operator-pipeline order, driven by
+   *  the canonical list in channel-params.ts. New firmware categories
+   *  (e.g. AMax `debug`) show up automatically the moment the codegen
+   *  emits a non-empty `AMAX_<CAT>_PARAMS` for that firmware — no
+   *  hand-edit here. */
+  private readonly allCategories: { key: ChannelCategory; label: string }[] =
+    CHANNEL_CATEGORIES.map(key => ({ key, label: CHANNEL_CATEGORY_LABELS[key] }));
 
+  /** Categories the Tune Up panel actually surfaces, filtered to those
+   *  the current firmware exposes. Keeps `waveform` even when empty so
+   *  PSD1/PHA1 see their board-level waveform card; drops every other
+   *  category whose firmware doesn't ship params. */
   readonly categoryGrid = computed(() => {
     const config = this.tuneUpConfig();
     if (!config) return [];
@@ -1265,6 +1274,13 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       .map(c => ({ ...c, params: getCategoryParams(config.firmware, c.key) }))
       .filter(c => c.params.length > 0 || c.key === 'waveform');
   });
+
+  /** Same set as `categoryGrid` but exposes just the keys + labels, for
+   *  rendering the Tune Up sub-tab button-toggle group. The `"all"`
+   *  selector is rendered separately in the template. */
+  readonly availableCategories = computed(() =>
+    this.categoryGrid().map(c => ({ key: c.key, label: c.label })),
+  );
 
   /** Check if firmware uses board-level waveform settings */
   readonly isBoardLevelWaveform = computed(() => {
