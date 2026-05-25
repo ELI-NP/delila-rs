@@ -215,12 +215,13 @@ impl Register {
 ///     plus 16 per-channel pages `page_amax_energy_<N>_<NAME>` — broadcast
 ///     wins, per-channel duplicates dropped (single write fans out to all
 ///     channels via hardware; see `apply_amax_channel_config`).
+#[allow(dead_code)] // retained for unit-test ergonomics; production path uses `_with`
 fn select_canonical_per_channel(registers: &[Register]) -> Vec<&Register> {
     select_canonical_per_channel_with(registers, false)
 }
 
 /// Same as `select_canonical_per_channel` but switchable: when
-/// `prefer_per_channel` is true, the ch0 per-channel page wins over the
+/// `prefer_per_channel` is true the ch0 per-channel page wins over the
 /// broadcast page. Use when the broadcast page does not fan out to all
 /// channels in hardware (observed on the 13may caenlist FW).
 fn select_canonical_per_channel_with(
@@ -241,7 +242,7 @@ fn select_canonical_per_channel_with(
                 return false;
             }
             match r.channel_index() {
-                None => !use_per_channel && true, // broadcast — preferred unless we asked for per-channel
+                None => !use_per_channel, // broadcast — preferred unless we asked for per-channel
                 Some(0) => use_per_channel || !has_broadcast, // ch0 wins when asked or as 2026-03 fallback
                 Some(_) => false,                             // skip ch1+ duplicates
             }
