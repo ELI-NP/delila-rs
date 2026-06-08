@@ -575,17 +575,23 @@ impl FirmwareType {
     ///
     /// # Arguments
     /// * `firmware_type` — hardware string from `/par/FwType`
-    ///   (e.g. `"DPP-PSD"`, `"DPP-PHA"`, `"DPP_PSD"`, `"DPP_PHA"`, `"DPP_OPEN"`)
+    ///   (e.g. `"DPP-PSD"`, `"DPP-PHA"`, `"DPP_PSD"`, `"DPP_PHA"`,
+    ///   `"DPP_OPEN"`, `"DPP_OPEN_UDP"`)
     /// * `model` — hardware string from `/par/ModelName`, used as a
     ///   model-name fallback heuristic when `firmware_type` is unknown
     pub fn from_caen_device(firmware_type: &str, model: &str) -> Option<Self> {
         // DIG1 firmware strings use hyphens; DIG2 use underscores.
+        // AMax family: both `DPP_OPEN` (1Gb Ethernet, original) and
+        // `DPP_OPEN_UDP` (10Gb Ethernet, 2026-05-13 build) carry the
+        // same AMax payload — the suffix only names the transport.
+        // Match the family prefix so future transport variants don't
+        // re-trigger the silent miswire fallback to PSD2.
         match firmware_type {
             "DPP-PSD" => Some(FirmwareType::PSD1),
             "DPP-PHA" => Some(FirmwareType::PHA1),
             "DPP_PSD" => Some(FirmwareType::PSD2),
             "DPP_PHA" => Some(FirmwareType::PHA2),
-            "DPP_OPEN" => Some(FirmwareType::AMax),
+            s if s.starts_with("DPP_OPEN") => Some(FirmwareType::AMax),
             _ => {
                 // Fallback: use model name to guess generation when FW string
                 // is unrecognized. PHA1/PHA2/AMax always hit the explicit
@@ -1866,6 +1872,13 @@ mod tests {
         );
         assert_eq!(
             FirmwareType::from_caen_device("DPP_OPEN", "VX2730"),
+            Some(FirmwareType::AMax)
+        );
+        // 10Gb UDP variant of the AMax FW (2026-05-13 build) reports
+        // `DPP_OPEN_UDP` — same payload, different transport. Must
+        // route to AMax, not fall through to the PSD2 model fallback.
+        assert_eq!(
+            FirmwareType::from_caen_device("DPP_OPEN_UDP", "VX2730"),
             Some(FirmwareType::AMax)
         );
     }
