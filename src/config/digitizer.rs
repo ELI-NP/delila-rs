@@ -1628,8 +1628,17 @@ impl DigitizerConfig {
             }
         }
 
-        // Record length: PSD1/PHA1 = board-level (ns), PSD2 = per-channel (ns)
-        // DevTree expuom: -9 indicates ns unit for all firmware types
+        // Record length: PSD1/PHA1 = board-level (ns), PSD2/PHA2 = per-channel (ns).
+        // DevTree expuom: -9 indicates ns unit for all firmware types.
+        //
+        // AMax is deliberately excluded: the custom OpenDPP FW has a *fixed*
+        // record length baked into the bitstream — waveform-length control is
+        // not implementable in that FW (confirmed with the FW author, 2026-06).
+        // Pushing `/ch/0..N/par/chrecordlengths` to AMax only produced a
+        // perpetual CAEN error -6 on every Apply. The reader sizes its AMax
+        // waveform buffer to a fixed 8192 samples regardless (see
+        // read_loop_dig2.rs), so `board.record_length` stays config-only for
+        // AMax and is never sent to hardware.
         if let Some(v) = board.record_length {
             match self.firmware {
                 FirmwareType::PSD1 | FirmwareType::PHA1 => {
@@ -1638,13 +1647,16 @@ impl DigitizerConfig {
                         value: v.to_string(),
                     });
                 }
-                _ => {
-                    // PSD2/AMax: per-channel parameter
+                FirmwareType::PSD2 | FirmwareType::PHA2 => {
+                    // Per-channel parameter (DIG2 standard FW).
                     params.push(CaenParameter {
                         path: format!("/ch/0..{}/par/chrecordlengths", self.num_channels - 1),
                         value: v.to_string(),
                     });
                 }
+                // AMax: fixed in FW — do not push. X743: handled via
+                // CAENDigitizer Library in read_loop_x743_std, not here.
+                _ => {}
             }
         }
 
@@ -2474,6 +2486,45 @@ mod tests {
         assert!(params
             .iter()
             .any(|p| p.path == "/par/reclen" && p.value == "4000"));
+    }
+
+    #[test]
+    fn amax_does_not_push_record_length() {
+        // AMax (custom OpenDPP FW) has a FIXED record length baked into the
+        // bitstream — there is no settable record-length path, so pushing
+        // /ch/0..N/par/chrecordlengths only produces CAEN error -6 on every
+        // Apply (2026-06 FW author confirmation). board.record_length must
+        // stay config-only (reader buffer is fixed at 8192 samples).
+        let mut config = DigitizerConfig::new(0, "Test AMax", FirmwareType::AMax);
+        config.board.record_length = Some(2000);
+
+        let params = config.to_caen_parameters();
+
+        assert!(
+            !params.iter().any(|p| p.path.contains("chrecordlength")),
+            "AMax must NOT emit a chrecordlengths param (FW record length is fixed)"
+        );
+        assert!(
+            !params.iter().any(|p| p.path == "/par/reclen"),
+            "AMax must NOT emit the DIG1 /par/reclen path either"
+        );
+    }
+
+    #[test]
+    fn psd2_pushes_per_channel_record_length() {
+        // Guard the AMax exclusion didn't also drop PSD2's legitimate
+        // per-channel record-length push.
+        let mut config = DigitizerConfig::new(0, "Test PSD2", FirmwareType::PSD2);
+        config.board.record_length = Some(2048);
+
+        let params = config.to_caen_parameters();
+
+        assert!(
+            params
+                .iter()
+                .any(|p| p.path == "/ch/0..31/par/chrecordlengths" && p.value == "2048"),
+            "PSD2 must still push /ch/0..31/par/chrecordlengths"
+        );
     }
 
     #[test]
