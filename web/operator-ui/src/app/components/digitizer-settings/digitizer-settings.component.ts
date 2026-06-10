@@ -299,7 +299,7 @@ import {
                     <mat-form-field appearance="outline">
                       <mat-label>Start Source</mat-label>
                       <mat-select panelClass="fit-content-panel" [(value)]="config.board.start_source">
-                        @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
+                        @if (isDig2(config.firmware)) {
                           <mat-option value="SWcmd" matTooltip="SWcmd — software command from operator">Software</mat-option>
                           <mat-option value="SINedge" matTooltip="SINedge — leading edge of the S-IN front-panel input">S-IN (edge)</mat-option>
                           <mat-option value="SINlevel" matTooltip="SINlevel — held while S-IN front-panel input is high">S-IN (level)</mat-option>
@@ -314,7 +314,7 @@ import {
                       </mat-select>
                     </mat-form-field>
 
-                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
+                    @if (isDig2(config.firmware)) {
                       <mat-form-field appearance="outline">
                         <mat-label>Clock Source</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['clocksource']">
@@ -389,7 +389,7 @@ import {
                     <mat-form-field appearance="outline">
                       <mat-label>FPIO Type</mat-label>
                       <mat-select panelClass="fit-content-panel" [(value)]="config.board.io_level">
-                        @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
+                        @if (isDig2(config.firmware)) {
                           <mat-option value="NIM">NIM</mat-option>
                           <mat-option value="TTL">TTL</mat-option>
                         } @else {
@@ -399,7 +399,7 @@ import {
                       </mat-select>
                     </mat-form-field>
 
-                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
+                    @if (isDig2(config.firmware)) {
                       <mat-form-field appearance="outline">
                         <mat-label>GPO Mode</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.gpio_mode">
@@ -410,7 +410,7 @@ import {
                       </mat-form-field>
                     }
 
-                    @if (config.firmware === 'PSD2' || config.firmware === 'PHA2') {
+                    @if (isDig2(config.firmware)) {
                       <mat-form-field appearance="outline">
                         <mat-label>TRG OUT Mode</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra!['trgoutmode']">
@@ -488,7 +488,12 @@ import {
                       Enable Waveforms
                     </mat-slide-toggle>
 
-                    @if (config.firmware !== 'PSD2' && config.firmware !== 'PHA2') {
+                    @if (!isDig2(config.firmware)) {
+                      <!-- DIG1 (PSD1/PHA1) + X743 only. AMax is DIG2 and has
+                           no /par/extras path (verified against live DevTree
+                           2026-06-09) so exposing it here would push a value
+                           the AMax firmware rejects. Fine-TS for AMax comes
+                           from the OpenDPP fine timestamp, not this selector. -->
                       <mat-form-field appearance="outline">
                         <mat-label>Fine TS Mode</mat-label>
                         <mat-select panelClass="fit-content-panel" [(value)]="config.board.fine_ts_mode">
@@ -1151,10 +1156,40 @@ export class DigitizerSettingsComponent {
   // Board Tab Option Lists (FW-specific)
   // ===========================================================================
 
+  /** True for DIG2-generation FELib firmwares (VX2730 family): PSD2, PHA2,
+   *  and AMax (custom OpenDPP). These share the same board-folder parameter
+   *  namespace — `/par/gpiomode`, `/par/trgoutmode`, `/par/iolevel`,
+   *  `/par/startsource`, `/par/clocksource`, etc. — with short-name enums.
+   *  DIG1 firmwares (PSD1/PHA1) use the legacy `OUT_PROPAGATION_*` /
+   *  `FPIOTYPE_*` / `START_MODE_*` namespace instead.
+   *
+   *  AMax was previously misclassified as DIG1 here, so its GPO / TRG-OUT /
+   *  FPIO dropdowns offered DIG1 enum values that the DIG2 firmware rejected
+   *  with CAEN error -6 (and the per-path "TRG OUT Mode" field never showed
+   *  for AMax at all). Verified against the live AMax DevTree (2026-06-09,
+   *  VX2730 SN52622): gpiomode / trgoutmode / iolevel / startsource /
+   *  clocksource / enclockoutfp / syncoutmode / rundelay are all present. */
+  isDig2(fw: FirmwareType): boolean {
+    return fw === 'PSD2' || fw === 'PHA2' || fw === 'AMax';
+  }
+
+  // DIG2 board-I/O enums — exact `allowedvalues` from the live VX2730 DevTree
+  // (dumped 2026-06-09). Shared by PSD2 / PHA2 / AMax.
+  private readonly DIG2_GPIO_MODES = [
+    'Disabled', 'TrgIn', 'P0', 'SwTrg', 'Run', 'RefClk', 'TestPulse', 'Busy',
+    'UserGPO', 'Fixed0', 'Fixed1', 'SIN', 'LVDS', 'ITLA', 'ITLB',
+    'ITLA_AND_ITLB', 'ITLA_OR_ITLB', 'EncodedClkIn',
+  ];
+  private readonly DIG2_TRGOUT_MODES = [
+    'Disabled', 'TrgIn', 'AcceptTrg', 'SwTrg', 'Run', 'RefClk', 'TestPulse',
+    'Busy', 'UserTrgout', 'Fixed0', 'Fixed1', 'SyncIn', 'SIN', 'GPIO', 'LVDS',
+    'P0', 'ITLA', 'ITLB', 'ITLA_AND_ITLB', 'ITLA_OR_ITLB', 'EncodedClkIn',
+    'TrgClk', 'LBinClk',
+  ];
+
   gpoModeOptions(fw: FirmwareType): string[] {
-    if (fw === 'PSD2' || fw === 'PHA2') {
-      return ['Disabled', 'TrgIn', 'SwTrg', 'Run', 'RefClk', 'TestPulse', 'Busy',
-              'Fixed0', 'Fixed1', 'SyncIn', 'SIN', 'GPIO', 'AcceptTrg', 'EncodedClkIn'];
+    if (this.isDig2(fw)) {
+      return this.DIG2_GPIO_MODES;
     }
     return ['OUT_PROPAGATION_LEVEL0', 'OUT_PROPAGATION_LEVEL1', 'OUT_PROPAGATION_SYNCIN',
             'OUT_PROPAGATION_TRIGGER', 'OUT_PROPAGATION_RUN', 'OUT_PROPAGATION_DELAYED_RUN',
@@ -1163,10 +1198,7 @@ export class DigitizerSettingsComponent {
   }
 
   trgoutModeOptions(): string[] {
-    return ['Disabled', 'TrgIn', 'Run', 'RefClk', 'TestPulse', 'Busy', 'UserTrgout',
-            'Fixed0', 'Fixed1', 'SyncIn', 'SIN', 'GPIO', 'AcceptTrg', 'EncodedClkIn',
-            'ITLA', 'ITLB', 'ITLA_AND_ITLB', 'ITLA_OR_ITLB', 'LVDS',
-            'SwTrg', 'P0', 'UserTrgout2', 'UserTrgout3'];
+    return this.DIG2_TRGOUT_MODES;
   }
 
   outSelectionOptions(): string[] {
