@@ -1297,6 +1297,52 @@ pub(crate) fn try_connect_raw(url: &str, include_n_events: bool) -> Option<Devic
     }
 }
 
+/// Try to connect to a digitizer and configure the **RawUDP** endpoint
+/// (AMax / DPP_OPEN 10G firmware bulk raw readout). Returns None on failure
+/// (non-fatal — ReadLoop stays alive). Mirrors [`try_connect_raw`] but uses
+/// the `rawudp` endpoint that the open-DPP firmware exposes (the generic
+/// `RAW` endpoint does not exist on this firmware — see
+/// `configure_rawudp_endpoint`).
+pub(crate) fn try_connect_rawudp(url: &str) -> Option<DeviceConnection> {
+    match CaenHandle::open(url) {
+        Ok(h) => match h.configure_rawudp_endpoint() {
+            Ok(ep) => {
+                info!("Connected to digitizer (RawUDP endpoint)");
+                let param_cache = match h.build_param_cache() {
+                    Ok(cache) => {
+                        info!(params = cache.len(), "Parameter cache built");
+                        Some(cache)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to build param cache, validation disabled");
+                        None
+                    }
+                };
+                Some(DeviceConnection {
+                    handle: h,
+                    endpoint: ep,
+                    hw_configured: false,
+                    hw_armed: false,
+                    hw_running: false,
+                    auto_config_failed: false,
+                    param_cache,
+                    enabled_channels: Vec::new(),
+                    include_waveform: false, // RawUDP carries waveforms in the raw bytes
+                    amax_enable_acq: false,
+                })
+            }
+            Err(e) => {
+                error!(error = %e, "Connected but RawUDP endpoint configuration failed");
+                None // h drops here → CAEN_FELib_Close
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to connect to digitizer");
+            None
+        }
+    }
+}
+
 /// Try to connect to a digitizer and configure the OpenDPP endpoint.
 /// Returns None on failure (non-fatal — ReadLoop stays alive).
 ///

@@ -650,6 +650,92 @@ impl CaenHandle {
         })
     }
 
+    /// Configure the **RawUDP** endpoint for bulk raw readout (AMax / DPP_OPEN
+    /// 10G firmware).
+    ///
+    /// Unlike the generic `/endpoint/RAW` used by the scope firmwares
+    /// (PSD2/PHA2), the open-DPP 10G firmware exposes its raw event-aggregate
+    /// stream under `/endpoint/rawudp` with active-endpoint value `"RawUDP"`
+    /// (the only allowed values are `RawUDP` and `OpenDPP`; there is no `RAW`).
+    /// Verified from the live DevTree on 192.168.14.10 (2026-06-11) — using
+    /// the generic RAW path returns CAEN error -6 (COMMAND ERROR).
+    ///
+    /// The returned bytes are the same FW wire words the OpenDPP endpoint
+    /// decodes per-event; here we read whole buffers and let `AMaxDecoder`
+    /// parse them on the decode workers (big-endian word0/word1 + user words
+    /// + waveform). The FW always frames waveforms on the wire, so there is no
+    /// waveform toggle at this layer.
+    pub fn configure_rawudp_endpoint(&self) -> Result<EndpointHandle, CaenError> {
+        // Get endpoint handle
+        let ep_handle = self.get_handle("/endpoint/rawudp").map_err(|e| {
+            eprintln!("[rawudp] step1 get_handle(/endpoint/rawudp) failed: {}", e);
+            e
+        })?;
+
+        // Get parent (endpoint folder) handle
+        let ep_folder_handle = self.get_parent_handle(ep_handle).map_err(|e| {
+            eprintln!("[rawudp] step2 get_parent_handle failed: {}", e);
+            e
+        })?;
+
+        // Set active endpoint to RawUDP
+        self.set_value_with_handle(ep_folder_handle, devtree::par::ACTIVE_ENDPOINT, "RawUDP")
+            .map_err(|e| {
+                eprintln!("[rawudp] step3 set activeendpoint=RawUDP failed: {}", e);
+                e
+            })?;
+
+        // Get fresh handle for read operations
+        let read_data_handle = self.get_handle("/endpoint/rawudp").map_err(|e| {
+            eprintln!("[rawudp] step4 get_handle(read) failed: {}", e);
+            e
+        })?;
+
+        // Raw event-aggregate format. The generic FELib doc lists DATA/SIZE/
+        // N_EVENTS for the Raw endpoint, but the deployed 10G FW's `rawudp`
+        // rejects N_EVENTS with -2 (INVALID PARAMETER). DATA+SIZE alone is
+        // sufficient: `caen_read_data_raw` passes a (now unused) n_events
+        // pointer that CAEN_FELib_ReadData simply doesn't fill when the format
+        // omits it (same pattern as the DIG1 `include_n_events=false` path),
+        // and the AMax decoder walks the buffer word-by-word so it doesn't
+        // need the event count.
+        let candidates: [&str; 2] = [
+            r#"[
+            {"name": "DATA", "type": "U8", "dim": 1},
+            {"name": "SIZE", "type": "SIZE_T", "dim": 0},
+            {"name": "N_EVENTS", "type": "U32", "dim": 0}
+        ]"#,
+            r#"[
+            {"name": "DATA", "type": "U8", "dim": 1},
+            {"name": "SIZE", "type": "SIZE_T", "dim": 0}
+        ]"#,
+        ];
+
+        let mut last_ret = -2;
+        for (i, format_json) in candidates.iter().enumerate() {
+            let c_format = CString::new(*format_json).map_err(|_| CaenError {
+                code: -2,
+                name: "InvalidParam".to_string(),
+                description: "Format JSON contains null byte".to_string(),
+            })?;
+            let ret =
+                unsafe { ffi::CAEN_FELib_SetReadDataFormat(read_data_handle, c_format.as_ptr()) };
+            if ret == 0 {
+                tracing::info!(variant = i, "RawUDP read data format set");
+                return Ok(EndpointHandle {
+                    handle: read_data_handle,
+                });
+            }
+            eprintln!("[rawudp] SetReadDataFormat variant {} failed: ret={}", i, ret);
+            last_ret = ret;
+        }
+        CaenError::check(last_ret)?;
+
+        Ok(EndpointHandle {
+            handle: read_data_handle,
+        })
+    }
+
     /// Validate that config num_channels does not exceed hardware channel count.
     fn validate_num_channels(&self, config_num_ch: u8) -> Result<(), CaenError> {
         let hw_num_ch: u32 = self
