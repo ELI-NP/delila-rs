@@ -1,9 +1,10 @@
 //! ReadLoop for the **OpenDPP endpoint** (DIG2 / AMax firmware).
 //!
-//! Extracted from `reader/mod.rs` (R-D2, 2026-05-06) — pure mechanical move
-//! of `Reader::read_loop_opendpp`, no logic changes. Reads pre-decoded
-//! events from the FELib OpenDPP endpoint (so no software decoding step is
-//! needed) and forwards them as `ReadLoopOutput::Decoded`.
+//! Extracted from `reader/mod.rs` (R-D2, 2026-05-06). Reads events from the
+//! FELib OpenDPP endpoint and forwards them **untranslated** as
+//! `ReadLoopOutput::OpenDpp` — the CPU-heavy 4-lane debug unpack + EventData
+//! conversion runs on the decode workers, keeping this thread read-only
+//! (2026-06-11; it was the 103 kHz ceiling when done inline here).
 //!
 //! Currently used by AMax / DPP_OPEN firmware. Mirrors the connection +
 //! state-machine + back-pressure shape of [`super::read_loop_dig1`].
@@ -16,15 +17,15 @@ use tracing::{error, info, warn};
 
 use super::state::{next_reconnect_cooldown, state_rank, RECONNECT_INITIAL};
 use super::{
-    caen, check_firmware_match, devtree, get_enabled_channels_from_config, opendpp_to_event_data,
-    send_arm_command, send_start_command, try_connect_opendpp, FirmwareType, ReadLoopOutput,
-    ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
+    caen, check_firmware_match, devtree, get_enabled_channels_from_config, send_arm_command,
+    send_start_command, try_connect_opendpp, FirmwareType, ReadLoopOutput, ReadLoopRequest,
+    ReaderConfig, ReaderError, ReaderMetrics,
 };
 use crate::common::ComponentState;
 
 /// ReadLoop task for the OpenDPP endpoint (AMax) — runs in `spawn_blocking`.
-/// Each event is already decoded by the firmware, so we forward it as
-/// `Decoded` directly without going through the software decoder. Uses
+/// Events are framed by the firmware; we forward them untranslated as
+/// `OpenDpp` and the decode workers do the 4-lane unpack + conversion. Uses
 /// lazy connection: if the digitizer is not available at startup, the
 /// loop stays alive and retries on demand.
 #[allow(clippy::too_many_arguments)]
@@ -238,9 +239,10 @@ pub(crate) fn run(
                     match drain {
                         Ok(Some(evt)) => {
                             drained += 1;
-                            let event_data =
-                                opendpp_to_event_data(&evt, config.module_id, conn.amax_enable_acq);
-                            let _ = tx.try_send(ReadLoopOutput::Decoded(Box::new(event_data)));
+                            let _ = tx.try_send(ReadLoopOutput::OpenDpp {
+                                event: Box::new(evt),
+                                enable_acq: conn.amax_enable_acq,
+                            });
                         }
                         _ => break,
                     }
@@ -461,10 +463,13 @@ pub(crate) fn run(
                         .bytes_read
                         .fetch_add(event.event_size as u64, Ordering::Relaxed);
 
-                    // Convert OpenDPP event to EventData
-                    let event_data =
-                        opendpp_to_event_data(&event, config.module_id, conn.amax_enable_acq);
-                    let output = ReadLoopOutput::Decoded(Box::new(event_data));
+                    // Forward untranslated — the 4-lane unpack + EventData
+                    // conversion runs on the decode workers (keeps this
+                    // thread read-only; see ReadLoopOutput::OpenDpp).
+                    let output = ReadLoopOutput::OpenDpp {
+                        event: Box::new(event),
+                        enable_acq: conn.amax_enable_acq,
+                    };
 
                     // Update queue length metric
                     metrics.queue_length.fetch_add(1, Ordering::Relaxed);

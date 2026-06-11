@@ -47,7 +47,8 @@ use tracing::{error, info, warn};
 
 use super::decoder::{self, DataType};
 use super::{
-    convert_event_to_common, DecoderKind, ReadLoopOutput, ReaderConfig, ReaderMetrics, MAX_CHANNELS,
+    caen, convert_event_to_common, opendpp_to_event_data, DecoderKind, ReadLoopOutput,
+    ReaderConfig, ReaderMetrics, MAX_CHANNELS,
 };
 use crate::common::{EventDataBatch, Message};
 
@@ -109,8 +110,15 @@ enum WorkPayload {
         raw: decoder::RawData,
         btts: Option<Vec<u64>>,
     },
-    /// Pre-decoded events (OpenDPP AMax / x743) — convert + serialize only.
+    /// Pre-decoded events (x743) — convert + serialize only.
     Events(Vec<decoder::EventData>),
+    /// Untranslated OpenDPP events (AMax) — 4-lane unpack + convert +
+    /// serialize. All events in a batch share one `enable_acq` snapshot
+    /// (the dispatcher flushes early when the flag changes mid-stream).
+    OpenDpp {
+        events: Vec<caen::OpenDppEvent>,
+        enable_acq: bool,
+    },
 }
 
 /// Reorders out-of-order collector items back into dispatch order.
@@ -300,8 +308,8 @@ fn dispatcher_loop(
                 let mut events = Vec::with_capacity(COALESCE_MAX.min(64));
                 events.push(*event);
                 // Coalesce whatever is already queued (without blocking) so
-                // high-rate OpenDPP sources publish ~COALESCE_MAX-event
-                // batches instead of one ZMQ message per event.
+                // high-rate sources publish ~COALESCE_MAX-event batches
+                // instead of one ZMQ message per event.
                 while events.len() < COALESCE_MAX {
                     match rx.try_recv() {
                         Ok(ReadLoopOutput::Decoded(e)) => {
@@ -316,6 +324,32 @@ fn dispatcher_loop(
                     }
                 }
                 dispatch_work!(WorkPayload::Events(events));
+            }
+
+            ReadLoopOutput::OpenDpp { event, enable_acq } => {
+                metrics.queue_length.fetch_sub(1, Ordering::Relaxed);
+                let mut events = Vec::with_capacity(COALESCE_MAX.min(64));
+                events.push(*event);
+                // Same coalescing as Decoded, but a batch must hold a single
+                // enable_acq snapshot — flush early if the flag flips
+                // (Tune Up ENABLE_ACQ hot-swap mid-stream).
+                while events.len() < COALESCE_MAX {
+                    match rx.try_recv() {
+                        Ok(ReadLoopOutput::OpenDpp {
+                            event: e,
+                            enable_acq: ea,
+                        }) if ea == enable_acq => {
+                            metrics.queue_length.fetch_sub(1, Ordering::Relaxed);
+                            events.push(*e);
+                        }
+                        Ok(other) => {
+                            carry = Some(other);
+                            break;
+                        }
+                        Err(_) => break, // empty or disconnected — flush now
+                    }
+                }
+                dispatch_work!(WorkPayload::OpenDpp { events, enable_acq });
             }
 
             ReadLoopOutput::Start => {
@@ -414,8 +448,19 @@ fn process_item(
         }
         WorkPayload::Events(events) => {
             *events_buf = events;
-            // Parity with the old sequential OpenDPP path: no adc_min filter
-            // for pre-decoded events.
+            // Parity with the old sequential pre-decoded path: no adc_min
+            // filter for pre-decoded events.
+            (events_buf, false)
+        }
+        WorkPayload::OpenDpp { events, enable_acq } => {
+            // 4-lane debug unpack + EventData conversion — the CPU-heavy
+            // part deliberately moved off the ReadLoop thread.
+            events_buf.clear();
+            events_buf.extend(
+                events
+                    .iter()
+                    .map(|e| opendpp_to_event_data(e, config.module_id, enable_acq)),
+            );
             (events_buf, false)
         }
     };
@@ -706,6 +751,111 @@ mod tests {
             assert_eq!(*seq, expect as u64);
         }
         assert_eq!(metrics.events_decoded.load(Ordering::Relaxed), N);
+    }
+
+    fn opendpp_event(i: u64, waveform: Option<Vec<u16>>) -> caen::OpenDppEvent {
+        caen::OpenDppEvent {
+            channel: 0,
+            timestamp: i,
+            fine_timestamp: 0,
+            energy: (i % 1000) as u16,
+            flags_b: 0,
+            flags_a: 0,
+            psd: 0,
+            user_info: Vec::new(),
+            waveform,
+            event_size: 16,
+        }
+    }
+
+    /// OpenDpp path: untranslated events are unpacked/converted on workers,
+    /// counts and sequence order preserved, EOS after all batches.
+    #[tokio::test]
+    async fn pipeline_opendpp_preserves_count_and_order() {
+        let metrics = Arc::new(ReaderMetrics::default());
+        let (tx, rx) = mpsc::channel::<ReadLoopOutput>(1000);
+        let collector_rx = spawn_pipeline(&amax_config(4), rx, Arc::clone(&metrics));
+
+        const N: u64 = 300;
+        for i in 0..N {
+            tx.send(ReadLoopOutput::OpenDpp {
+                event: Box::new(opendpp_event(i, Some(vec![1, 2, 3, 4]))),
+                enable_acq: false,
+            })
+            .await
+            .expect("send");
+        }
+        tx.send(ReadLoopOutput::Stop).await.expect("send stop");
+        drop(tx);
+
+        let (batches, stops) = drain_pipeline(collector_rx).await;
+        assert_eq!(stops, 1);
+        let total: usize = batches.iter().map(|(_, n)| n).sum();
+        assert_eq!(total as u64, N);
+        for (expect, (seq, _)) in batches.iter().enumerate() {
+            assert_eq!(*seq, expect as u64);
+        }
+        assert_eq!(metrics.events_decoded.load(Ordering::Relaxed), N);
+    }
+
+    /// enable_acq=true → the worker performs the 4-lane debug unpack
+    /// (lane 0/1/2 → analog_probe1/2/3 as signed 16-bit).
+    #[tokio::test]
+    async fn pipeline_opendpp_unpacks_four_lanes_on_worker() {
+        let metrics = Arc::new(ReaderMetrics::default());
+        let (tx, rx) = mpsc::channel::<ReadLoopOutput>(1000);
+        let mut collector_rx = spawn_pipeline(&amax_config(2), rx, Arc::clone(&metrics));
+
+        tx.send(ReadLoopOutput::OpenDpp {
+            event: Box::new(opendpp_event(7, Some(vec![1000, 2000, 3000, 0xA800]))),
+            enable_acq: true,
+        })
+        .await
+        .expect("send");
+        drop(tx);
+
+        let mut wf_checked = false;
+        while let Some(item) = collector_rx.recv().await {
+            if let CollectorItem::Batch { bytes, .. } = item {
+                let Message::Data(batch) = Message::from_msgpack(&bytes).expect("valid msgpack")
+                else {
+                    panic!("expected Data");
+                };
+                let wf = batch.events[0].waveform.as_ref().expect("waveform present");
+                assert_eq!(wf.analog_probe1, vec![1000i16]);
+                assert_eq!(wf.analog_probe2, vec![2000i16]);
+                assert_eq!(wf.analog_probe3, vec![3000i16]);
+                // 0xA800 → digital bits 15 (trig_out), 13, 11 set
+                assert_eq!(wf.digital_probe1, vec![1u8]);
+                wf_checked = true;
+            }
+        }
+        assert!(wf_checked, "no batch reached the collector");
+    }
+
+    /// An enable_acq flip mid-stream must not lose events (the dispatcher
+    /// flushes the coalesce buffer at the boundary).
+    #[tokio::test]
+    async fn pipeline_opendpp_enable_acq_flip_no_loss() {
+        let metrics = Arc::new(ReaderMetrics::default());
+        let (tx, rx) = mpsc::channel::<ReadLoopOutput>(1000);
+        let collector_rx = spawn_pipeline(&amax_config(2), rx, Arc::clone(&metrics));
+
+        for i in 0..60u64 {
+            tx.send(ReadLoopOutput::OpenDpp {
+                event: Box::new(opendpp_event(i, Some(vec![1, 2, 3, 4]))),
+                enable_acq: i >= 30, // flips halfway
+            })
+            .await
+            .expect("send");
+        }
+        tx.send(ReadLoopOutput::Stop).await.expect("send stop");
+        drop(tx);
+
+        let (batches, stops) = drain_pipeline(collector_rx).await;
+        assert_eq!(stops, 1);
+        let total: usize = batches.iter().map(|(_, n)| n).sum();
+        assert_eq!(total, 60, "no event lost across the flag flip");
     }
 
     #[tokio::test]

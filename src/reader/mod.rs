@@ -381,10 +381,22 @@ pub enum ReaderError {
 /// 5-digital) `Waveform` inline; without the box clippy flags the variant size
 /// difference vs `Raw(decoder::RawData)`.
 pub(crate) enum ReadLoopOutput {
-    /// Raw data that needs decoding (PSD1/PSD2/PHA1)
+    /// Raw data that needs decoding (PSD1/PSD2/PHA1/PHA2)
     Raw(decoder::RawData),
-    /// Already decoded event from OpenDPP (AMax)
+    /// Already decoded event (x743 — CAENDigitizer's DecodeEvent needs the
+    /// handle and is not thread-safe, so x743 converts inside its ReadLoop).
+    /// Only the feature-gated x743 read loop constructs this variant.
+    #[cfg_attr(not(feature = "x743"), allow(dead_code))]
     Decoded(Box<decoder::EventData>),
+    /// Untranslated OpenDPP event (AMax). The 4-lane debug unpack +
+    /// EventData conversion is CPU-heavy (2000 samples → 8 probe Vecs), so
+    /// it runs on the decode workers — the ReadLoop stays read-only.
+    /// `enable_acq` snapshots the debug-FW flag at read time (it can change
+    /// mid-session via Tune Up hot-swap).
+    OpenDpp {
+        event: Box<caen::OpenDppEvent>,
+        enable_acq: bool,
+    },
     /// Start signal — triggers decoder state reset (RolloverTracker etc.)
     Start,
     /// Stop signal — triggers EOS publication in DecodeLoop
