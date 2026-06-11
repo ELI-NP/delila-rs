@@ -223,15 +223,14 @@ impl CommandHandlerExt for ReplayCommandExt {
 
 fn resolve_bind_addresses(args: &Args, config: &Config) -> (String, String) {
     let net = &config.network;
-    let bind = args.bind.clone().unwrap_or_else(|| {
-        format!("tcp://*:{}", net.port_base_data + args.source_id as u16)
-    });
-    let command = args.command.clone().unwrap_or_else(|| {
-        format!(
-            "tcp://*:{}",
-            net.port_base_command + args.source_id as u16
-        )
-    });
+    let bind = args
+        .bind
+        .clone()
+        .unwrap_or_else(|| format!("tcp://*:{}", net.port_base_data + args.source_id as u16));
+    let command = args
+        .command
+        .clone()
+        .unwrap_or_else(|| format!("tcp://*:{}", net.port_base_command + args.source_id as u16));
     (bind, command)
 }
 
@@ -266,21 +265,19 @@ async fn main() -> anyhow::Result<()> {
     let start_generation = Arc::new(AtomicU64::new(0));
     let pending_eos = Arc::new(AtomicBool::new(false));
 
-    let (shutdown_tx, mut shutdown_rx) =
-        tokio::sync::broadcast::channel::<()>(1);
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
 
     // Spawn ctrl-C / SIGTERM handler that broadcasts shutdown.
     let shutdown_tx_signal = shutdown_tx.clone();
     tokio::spawn(async move {
-        let mut sigterm = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to install SIGTERM handler");
-                return;
-            }
-        };
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "Failed to install SIGTERM handler");
+                    return;
+                }
+            };
         tokio::select! {
             _ = tokio::signal::ctrl_c() => info!("SIGINT received"),
             _ = sigterm.recv() => info!("SIGTERM received"),
@@ -348,11 +345,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // Capture run number + generation once per Start.
-        current_run_number = shared_state
-            .lock()
-            .await
-            .run_number()
-            .unwrap_or(0);
+        current_run_number = shared_state.lock().await.run_number().unwrap_or(0);
         next_seq = 0;
         last_start_gen = start_generation.load(Ordering::Acquire);
         info!(
@@ -410,15 +403,12 @@ async fn main() -> anyhow::Result<()> {
                             batch.sequence_number = next_seq;
                             next_seq += 1;
                             let nevents = batch.events.len() as u64;
-                            if let Err(e) =
-                                publish_data(&mut data_socket, &stats, batch).await
-                            {
+                            if let Err(e) = publish_data(&mut data_socket, &stats, batch).await {
                                 warn!(error = %e, "Publish failed; breaking replay loop");
                                 break 'replay;
                             }
                             if args.delay_ms > 0 {
-                                tokio::time::sleep(Duration::from_millis(args.delay_ms))
-                                    .await;
+                                tokio::time::sleep(Duration::from_millis(args.delay_ms)).await;
                             }
                             let _ = nevents; // covered by publish_data stats
                         }

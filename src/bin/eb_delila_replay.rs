@@ -80,7 +80,10 @@ async fn main() -> anyhow::Result<()> {
     info!(address = %args.publish, "ZMQ PUB bound (SNDHWM=0)");
 
     if args.warmup_ms > 0 {
-        info!(ms = args.warmup_ms, "Warmup: waiting for subscribers to connect");
+        info!(
+            ms = args.warmup_ms,
+            "Warmup: waiting for subscribers to connect"
+        );
         tokio::time::sleep(Duration::from_millis(args.warmup_ms)).await;
     }
 
@@ -106,8 +109,7 @@ async fn main() -> anyhow::Result<()> {
 
                     let msg = Message::data(batch);
                     let bytes = msg.to_msgpack()?;
-                    let zmq_msg: tmq::Multipart =
-                        vec![tmq::Message::from(bytes.as_slice())].into();
+                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
                     socket.send(zmq_msg).await?;
 
                     if args.delay_ms > 0 {
@@ -146,13 +148,15 @@ async fn main() -> anyhow::Result<()> {
             let bytes = eos.to_msgpack()?;
             let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
             socket.send(zmq_msg).await?;
-            info!(run_number = args.run_number, "Sent EOS (source_id=0, no data read)");
+            info!(
+                run_number = args.run_number,
+                "Sent EOS (source_id=0, no data read)"
+            );
         } else {
             for source_id in &source_ids {
                 let eos = Message::eos(*source_id, args.run_number);
                 let bytes = eos.to_msgpack()?;
-                let zmq_msg: tmq::Multipart =
-                    vec![tmq::Message::from(bytes.as_slice())].into();
+                let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
                 socket.send(zmq_msg).await?;
             }
             info!(

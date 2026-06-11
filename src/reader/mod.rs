@@ -9,6 +9,7 @@ pub mod caen;
 #[cfg(feature = "x743")]
 pub mod caen_legacy;
 pub mod decoder;
+mod parallel_decode;
 mod read_loop_dig1;
 mod read_loop_dig2;
 mod state;
@@ -338,8 +339,7 @@ pub use decoder::{
 
 use crate::common::{
     handle_command, pub_no_hwm, run_command_task, CommandHandlerExt, ComponentSharedState,
-    ComponentState, EventData as CommonEventData, EventDataBatch, Message,
-    Waveform as CommonWaveform,
+    ComponentState, EventData as CommonEventData, Message, Waveform as CommonWaveform,
 };
 use futures::SinkExt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -681,6 +681,66 @@ enum DecoderKind {
 }
 
 impl DecoderKind {
+    /// Build the decoder matching the reader's firmware type. Each
+    /// dispatcher/worker thread owns an independent instance.
+    fn for_config(config: &ReaderConfig) -> Self {
+        match config.firmware {
+            FirmwareType::PSD2 => {
+                let psd2_config = Psd2Config {
+                    time_step_ns: config.time_step_ns,
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 32,
+                };
+                DecoderKind::Psd2(Psd2Decoder::new(psd2_config))
+            }
+            FirmwareType::PSD1 => {
+                let psd1_config = Psd1Config {
+                    time_step_ns: config.time_step_ns,
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                };
+                DecoderKind::Psd1(Psd1Decoder::new(psd1_config))
+            }
+            FirmwareType::PHA1 => {
+                let pha1_config = Pha1Config {
+                    time_step_ns: config.time_step_ns,
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                };
+                DecoderKind::Pha1(Pha1Decoder::new(pha1_config))
+            }
+            FirmwareType::PHA2 => {
+                let pha2_config = Pha2Config {
+                    time_step_ns: config.time_step_ns,
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 32,
+                };
+                DecoderKind::Pha2(Pha2Decoder::new(pha2_config))
+            }
+            FirmwareType::AMax => {
+                let amax_config = AMaxConfig {
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 1, // AMax typically uses only ch0
+                };
+                DecoderKind::AMax(AMaxDecoder::new(amax_config))
+            }
+            FirmwareType::X743CI | FirmwareType::X743Std => {
+                // x743 only uses the Decoded path (no Raw data to decode).
+                // Create a dummy decoder that won't be called.
+                let psd2_config = Psd2Config {
+                    time_step_ns: 0.3125, // x743 TDC is 5ns but unused here
+                    module_id: config.module_id,
+                    dump_enabled: false,
+                    num_channels: 16,
+                };
+                DecoderKind::Psd2(Psd2Decoder::new(psd2_config))
+            }
+        }
+    }
+
     fn classify(&self, raw: &decoder::RawData) -> DataType {
         match self {
             Self::Psd2(d) => d.classify(raw),
@@ -715,6 +775,33 @@ impl DecoderKind {
             Self::Psd2(_) | Self::AMax(_) => {} // No run-level state to reset
         }
     }
+
+    /// DIG1 only: sequentially extend each board aggregate's 32-bit time tag
+    /// (rollover tracking) without decoding events. One entry per aggregate.
+    /// No-op for other firmware (their timestamps are self-contained).
+    fn scan_extended_btts(&mut self, raw: &decoder::RawData, out: &mut Vec<u64>) {
+        match self {
+            Self::Psd1(d) => d.scan_extended_btts(raw, out),
+            Self::Pha1(d) => d.scan_extended_btts(raw, out),
+            Self::Psd2(_) | Self::Pha2(_) | Self::AMax(_) => out.clear(),
+        }
+    }
+
+    /// Decode with pre-computed extended BTTs (DIG1 parallel path). For
+    /// firmware without sequential timestamp state, or when `btts` is
+    /// `None`, falls back to the plain stateful decode.
+    fn decode_into_with_btts(
+        &mut self,
+        raw: &decoder::RawData,
+        btts: Option<&[u64]>,
+        events: &mut Vec<decoder::EventData>,
+    ) {
+        match (&mut *self, btts) {
+            (Self::Psd1(d), Some(b)) => d.decode_into_with_btts(raw, b, events),
+            (Self::Pha1(d), Some(b)) => d.decode_into_with_btts(raw, b, events),
+            _ => self.decode_into(raw, events),
+        }
+    }
 }
 
 /// Reader configuration
@@ -745,6 +832,9 @@ pub struct ReaderConfig {
     /// Minimum ADC value filter. Events with energy < adc_min are discarded.
     /// 0 = no filtering (default).
     pub adc_min: u16,
+    /// Number of parallel decode worker threads. 0 = auto (half the logical
+    /// CPUs minus one, clamped to [1, 8]).
+    pub decode_workers: usize,
 }
 
 impl Default for ReaderConfig {
@@ -762,6 +852,7 @@ impl Default for ReaderConfig {
             time_step_ns: 2.0, // 500 MHz ADC = 2ns per sample
             config_file: None,
             adc_min: 0,
+            decode_workers: 0,
         }
     }
 }
@@ -811,6 +902,7 @@ impl ReaderConfig {
             time_step_ns: source.time_step_ns.unwrap_or(2.0),
             config_file: source.config_file.clone(),
             adc_min: source.adc_min,
+            decode_workers: source.decode_workers,
         })
     }
 }
@@ -1493,93 +1585,6 @@ impl Reader {
         &self.metrics
     }
 
-    /// Remap DIG1 (PSD1/PHA1) raw hardware flags to common flag constants.
-    ///
-    /// Raw decoder flags come from EXTRAS word bits[15:10] shifted to bits[5:0],
-    /// plus pileup at bit[15] from the charge/energy word.
-    fn remap_dig1_flags(raw: u32) -> u64 {
-        use crate::common::flags::*;
-        let mut out: u64 = 0;
-        if raw & (1 << 15) != 0 {
-            out |= FLAG_PILEUP;
-        } // Pileup from charge word
-        if raw & (1 << 5) != 0 {
-            out |= FLAG_TRIGGER_LOST;
-        } // EXTRAS bit[15]
-        if raw & (1 << 4) != 0 {
-            out |= FLAG_OVER_RANGE;
-        } // EXTRAS bit[14]
-        if raw & (1 << 3) != 0 {
-            out |= FLAG_1024_TRIGGER;
-        } // EXTRAS bit[13]
-        if raw & (1 << 2) != 0 {
-            out |= FLAG_N_LOST_TRIGGER;
-        } // EXTRAS bit[12]
-        out
-    }
-
-    /// Convert EventData to CommonEventData (consumes event, zero-copy for waveforms)
-    fn convert_event(event: EventData, firmware: FirmwareType) -> CommonEventData {
-        let flags = if firmware.is_dig1() {
-            Self::remap_dig1_flags(event.flags)
-        } else {
-            event.flags as u64
-        };
-
-        let mut common = if let Some(wf) = event.waveform {
-            CommonEventData::with_waveform(
-                event.module,
-                event.channel,
-                event.energy,
-                event.energy_short,
-                event.timestamp_ns,
-                flags,
-                CommonWaveform {
-                    analog_probe1: wf.analog_probe1,   // move, not clone
-                    analog_probe2: wf.analog_probe2,   // move
-                    analog_probe3: wf.analog_probe3,   // move (AMax debug FW)
-                    digital_probe1: wf.digital_probe1, // move
-                    digital_probe2: wf.digital_probe2, // move
-                    digital_probe3: wf.digital_probe3, // move
-                    digital_probe4: wf.digital_probe4, // move
-                    digital_probe5: wf.digital_probe5, // move (AMax debug FW)
-                    digital_probe6: wf.digital_probe6,
-                    digital_probe7: wf.digital_probe7,
-                    digital_probe8: wf.digital_probe8,
-                    digital_probe9: wf.digital_probe9,
-                    digital_probe10: wf.digital_probe10,
-                    digital_probe11: wf.digital_probe11,
-                    digital_probe12: wf.digital_probe12,
-                    digital_probe13: wf.digital_probe13,
-                    digital_probe14: wf.digital_probe14,
-                    digital_probe15: wf.digital_probe15,
-                    digital_probe16: wf.digital_probe16,
-                    time_resolution: wf.time_resolution,
-                    trigger_threshold: wf.trigger_threshold,
-                    ns_per_sample: wf.ns_per_sample,
-                    analog_probe1_is_signed: wf.analog_probe1_is_signed,
-                    analog_probe2_is_signed: wf.analog_probe2_is_signed,
-                    analog_probe3_is_signed: wf.analog_probe3_is_signed,
-                    analog_probe_type: wf.analog_probe_type,
-                    digital_probe_type: wf.digital_probe_type,
-                },
-            )
-        } else {
-            CommonEventData::new(
-                event.module,
-                event.channel,
-                event.energy,
-                event.energy_short,
-                event.timestamp_ns,
-                flags,
-            )
-        };
-        // Carry AMax user_info through to the wire format. Non-AMax firmwares
-        // leave [0;4] from the decoder, so this is effectively a no-op there.
-        common.user_info = event.user_info;
-        common
-    }
-
     /// Publish a message via ZMQ
     async fn publish_message(&mut self, message: &Message) -> Result<(), ReaderError> {
         let bytes = message.to_msgpack()?;
@@ -1611,7 +1616,98 @@ impl Reader {
 
         Ok(())
     }
+}
 
+/// Remap DIG1 (PSD1/PHA1) raw hardware flags to common flag constants.
+///
+/// Raw decoder flags come from EXTRAS word bits[15:10] shifted to bits[5:0],
+/// plus pileup at bit[15] from the charge/energy word.
+fn remap_dig1_flags(raw: u32) -> u64 {
+    use crate::common::flags::*;
+    let mut out: u64 = 0;
+    if raw & (1 << 15) != 0 {
+        out |= FLAG_PILEUP;
+    } // Pileup from charge word
+    if raw & (1 << 5) != 0 {
+        out |= FLAG_TRIGGER_LOST;
+    } // EXTRAS bit[15]
+    if raw & (1 << 4) != 0 {
+        out |= FLAG_OVER_RANGE;
+    } // EXTRAS bit[14]
+    if raw & (1 << 3) != 0 {
+        out |= FLAG_1024_TRIGGER;
+    } // EXTRAS bit[13]
+    if raw & (1 << 2) != 0 {
+        out |= FLAG_N_LOST_TRIGGER;
+    } // EXTRAS bit[12]
+    out
+}
+
+/// Convert EventData to CommonEventData (consumes event, zero-copy for
+/// waveforms). Free function so decode worker threads can call it without a
+/// `Reader` instance.
+pub(crate) fn convert_event_to_common(event: EventData, firmware: FirmwareType) -> CommonEventData {
+    let flags = if firmware.is_dig1() {
+        remap_dig1_flags(event.flags)
+    } else {
+        event.flags as u64
+    };
+
+    let mut common = if let Some(wf) = event.waveform {
+        CommonEventData::with_waveform(
+            event.module,
+            event.channel,
+            event.energy,
+            event.energy_short,
+            event.timestamp_ns,
+            flags,
+            CommonWaveform {
+                analog_probe1: wf.analog_probe1,   // move, not clone
+                analog_probe2: wf.analog_probe2,   // move
+                analog_probe3: wf.analog_probe3,   // move (AMax debug FW)
+                digital_probe1: wf.digital_probe1, // move
+                digital_probe2: wf.digital_probe2, // move
+                digital_probe3: wf.digital_probe3, // move
+                digital_probe4: wf.digital_probe4, // move
+                digital_probe5: wf.digital_probe5, // move (AMax debug FW)
+                digital_probe6: wf.digital_probe6,
+                digital_probe7: wf.digital_probe7,
+                digital_probe8: wf.digital_probe8,
+                digital_probe9: wf.digital_probe9,
+                digital_probe10: wf.digital_probe10,
+                digital_probe11: wf.digital_probe11,
+                digital_probe12: wf.digital_probe12,
+                digital_probe13: wf.digital_probe13,
+                digital_probe14: wf.digital_probe14,
+                digital_probe15: wf.digital_probe15,
+                digital_probe16: wf.digital_probe16,
+                time_resolution: wf.time_resolution,
+                trigger_threshold: wf.trigger_threshold,
+                ns_per_sample: wf.ns_per_sample,
+                analog_probe1_is_signed: wf.analog_probe1_is_signed,
+                analog_probe2_is_signed: wf.analog_probe2_is_signed,
+                analog_probe3_is_signed: wf.analog_probe3_is_signed,
+                analog_probe_type: wf.analog_probe_type,
+                digital_probe_type: wf.digital_probe_type,
+            },
+        )
+    } else {
+        CommonEventData::new(
+            event.module,
+            event.channel,
+            event.energy,
+            event.energy_short,
+            event.timestamp_ns,
+            flags,
+        )
+    };
+    // Carry AMax user_info through to the wire format. Non-AMax firmwares
+    // leave [0;4] from the decoder, so this is effectively a no-op there.
+    common.user_info = event.user_info;
+    common
+}
+
+impl Reader {
     /// Send EOS (End Of Stream) signal
     async fn send_eos(&mut self) -> Result<(), ReaderError> {
         let eos = Message::eos(self.config.source_id, 0);
@@ -2328,10 +2424,16 @@ impl Reader {
     // in Charge Mode, so physical timestamps cannot be recovered. Standard mode is
     // now the only supported V1743 path.
 
-    /// DecodeLoop task - decodes raw data and publishes via ZMQ
+    /// DecodeLoop task — collector side of the parallel decode pipeline.
+    ///
+    /// Decoding/serialization runs on dedicated worker threads (see
+    /// `parallel_decode`); this task reorders their output back into
+    /// dispatch order and owns the ZMQ PUB socket. Start/Stop markers flow
+    /// through the same ordered stream, so EOS is published only after every
+    /// preceding batch (Stop→EOS without backlog loss).
     async fn decode_loop(
         config: ReaderConfig,
-        mut rx: mpsc::Receiver<ReadLoopOutput>,
+        rx: mpsc::Receiver<ReadLoopOutput>,
         mut data_socket: publish::Publish,
         metrics: Arc<ReaderMetrics>,
         state_rx: watch::Receiver<ComponentState>,
@@ -2339,80 +2441,20 @@ impl Reader {
     ) -> Result<(), ReaderError> {
         info!("DecodeLoop starting");
 
-        let adc_min = config.adc_min;
-        if adc_min > 0 {
+        if config.adc_min > 0 {
             info!(
-                adc_min,
-                "ADC minimum filter enabled: events with energy < {} will be discarded", adc_min
+                adc_min = config.adc_min,
+                "ADC minimum filter enabled: events with energy < {} will be discarded",
+                config.adc_min
             );
         }
 
-        // Create decoder based on firmware type
-        let mut decoder = match config.firmware {
-            FirmwareType::PSD2 => {
-                let psd2_config = Psd2Config {
-                    time_step_ns: config.time_step_ns,
-                    module_id: config.module_id,
-                    dump_enabled: false,
-                    num_channels: 32,
-                };
-                DecoderKind::Psd2(Psd2Decoder::new(psd2_config))
-            }
-            FirmwareType::PSD1 => {
-                let psd1_config = Psd1Config {
-                    time_step_ns: config.time_step_ns,
-                    module_id: config.module_id,
-                    dump_enabled: false,
-                };
-                DecoderKind::Psd1(Psd1Decoder::new(psd1_config))
-            }
-            FirmwareType::PHA1 => {
-                let pha1_config = Pha1Config {
-                    time_step_ns: config.time_step_ns,
-                    module_id: config.module_id,
-                    dump_enabled: false,
-                };
-                DecoderKind::Pha1(Pha1Decoder::new(pha1_config))
-            }
-            FirmwareType::PHA2 => {
-                let pha2_config = Pha2Config {
-                    time_step_ns: config.time_step_ns,
-                    module_id: config.module_id,
-                    dump_enabled: false,
-                    num_channels: 32,
-                };
-                DecoderKind::Pha2(Pha2Decoder::new(pha2_config))
-            }
-            FirmwareType::AMax => {
-                let amax_config = AMaxConfig {
-                    module_id: config.module_id,
-                    dump_enabled: false,
-                    num_channels: 1, // AMax typically uses only ch0
-                };
-                DecoderKind::AMax(AMaxDecoder::new(amax_config))
-            }
-            FirmwareType::X743CI | FirmwareType::X743Std => {
-                // x743 only uses the Decoded path (no Raw data to decode).
-                // Create a dummy decoder that won't be called.
-                let psd2_config = Psd2Config {
-                    time_step_ns: 0.3125, // x743 TDC is 5ns but unused here
-                    module_id: config.module_id,
-                    dump_enabled: false,
-                    num_channels: 16,
-                };
-                DecoderKind::Psd2(Psd2Decoder::new(psd2_config))
-            }
-        };
+        let mut collector_rx = parallel_decode::spawn_pipeline(&config, rx, Arc::clone(&metrics));
+        let mut reorder = parallel_decode::ReorderBuffer::new();
+        let mut trigger_warner = parallel_decode::TriggerLossWarner::new();
 
-        let mut sequence_number: u64 = 0;
         let mut heartbeat_counter: u64 = 0;
-
-        // Reusable Vec for decoded events (avoids allocation per-batch)
-        let mut events_buffer: Vec<decoder::EventData> = Vec::with_capacity(1024);
-
-        // Rate-limited trigger loss warning (DIG1)
-        let mut last_trigger_loss_warn = Instant::now();
-        let mut last_trigger_loss_logged: u64 = 0;
+        let mut total_batches: u64 = 0;
 
         // Heartbeat ticker
         let use_heartbeat = config.heartbeat_interval_ms > 0;
@@ -2445,225 +2487,45 @@ impl Reader {
                     }
                 }
 
-                // Receive data from ReadLoop
-                output = rx.recv() => {
-                    match output {
-                        Some(ReadLoopOutput::Raw(raw_data)) => {
-                            // Update queue length metric
-                            metrics.queue_length.fetch_sub(1, Ordering::Relaxed);
-
-                            // Classify and decode
-                            let data_type = decoder.classify(&raw_data);
-                            match data_type {
-                                DataType::Event => {
-                                    // Decode events into reusable buffer
-                                    let raw_size = raw_data.size;
-                                    let raw_n_events = raw_data.n_events;
-                                    decoder.decode_into(&raw_data, &mut events_buffer);
-
-                                    if events_buffer.is_empty() {
-                                        warn!(raw_size, raw_n_events, "Decoded 0 events from raw data");
-                                        continue;
-                                    }
-
-                                    // Convert to EventDataBatch (draining events for zero-copy waveform move)
-                                    let n_events = events_buffer.len();
-                                    let mut batch = EventDataBatch::with_capacity(
-                                        config.source_id,
-                                        sequence_number,
-                                        n_events,
-                                    );
-
-                                    for event in events_buffer.drain(..) {
-                                        let common_event =
-                                            Self::convert_event(event, config.firmware);
-                                        // Count trigger loss flags (DIG1 only)
-                                        if config.firmware.is_dig1() {
-                                            if common_event.has_trigger_lost() {
-                                                metrics
-                                                    .trigger_lost_flag_events
-                                                    .fetch_add(1, Ordering::Relaxed);
-                                            }
-                                            if (common_event.flags
-                                                & crate::common::flags::FLAG_N_LOST_TRIGGER)
-                                                != 0
-                                            {
-                                                metrics
-                                                    .n_lost_trigger_flag_events
-                                                    .fetch_add(1, Ordering::Relaxed);
-                                                // Each N_LOST flag ≈ 1024 lost triggers
-                                                metrics
-                                                    .trigger_loss_count
-                                                    .fetch_add(1024, Ordering::Relaxed);
-                                            }
-                                        }
-                                        // ADC minimum filter
-                                        if adc_min > 0 && common_event.energy < adc_min {
-                                            metrics.filtered_events.fetch_add(1, Ordering::Relaxed);
-                                            continue;
-                                        }
-                                        // Per-channel count (after filter)
-                                        let ch = common_event.channel as usize;
-                                        if ch < MAX_CHANNELS {
-                                            metrics.per_channel_counts[ch].fetch_add(1, Ordering::Relaxed);
-                                        }
-                                        batch.push(common_event);
-                                    }
-
-                                    // Update metrics (n_events = pre-filter count)
-                                    metrics.events_decoded.fetch_add(n_events as u64, Ordering::Relaxed);
-
-                                    // Skip empty batches (all events filtered)
-                                    if batch.is_empty() {
-                                        continue;
-                                    }
-                                    let n_events = batch.len();
-
-                                    // Rate-limited trigger loss warning (DIG1)
-                                    if config.firmware.is_dig1() {
-                                        let lost = metrics.trigger_loss_count.load(Ordering::Relaxed);
-                                        if lost > last_trigger_loss_logged
-                                            && last_trigger_loss_warn.elapsed() >= Duration::from_secs(10)
-                                        {
-                                            let flag_events = metrics.trigger_lost_flag_events.load(Ordering::Relaxed);
-                                            let n_lost_events = metrics.n_lost_trigger_flag_events.load(Ordering::Relaxed);
-                                            warn!(
-                                                estimated_lost = lost,
-                                                trigger_lost_flags = flag_events,
-                                                n_lost_flags = n_lost_events,
-                                                "Trigger loss detected (DIG1 EXTRAS flags)"
-                                            );
-                                            last_trigger_loss_warn = Instant::now();
-                                            last_trigger_loss_logged = lost;
-                                        }
-                                    }
-
-                                    // Publish
-                                    let msg = Message::data(batch);
-                                    match msg.to_msgpack() {
-                                        Ok(bytes) => {
-                                            let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                                            if let Err(e) = data_socket.send(zmq_msg).await {
-                                                error!(error = %e, events = n_events, "Failed to send event batch via ZMQ");
-                                            } else {
-                                                sequence_number += 1;
-                                                metrics.batches_published.fetch_add(1, Ordering::Relaxed);
-                                                debug!(events = n_events, seq = sequence_number - 1, "Decoded and published batch");
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, events = n_events, "Failed to serialize event batch");
-                                        }
-                                    }
-                                }
-                                DataType::Start => {
-                                    info!("Received START signal from digitizer");
-                                    sequence_number = 0;
-                                    heartbeat_counter = 0;
-                                    decoder.reset_for_new_run();
-                                    info!("Sequence number and decoder state reset on Start");
-                                }
-                                DataType::Stop => {
-                                    info!("Received STOP signal from digitizer");
-                                    let eos = Message::eos(config.source_id, 0);
-                                    match eos.to_msgpack() {
-                                        Ok(bytes) => {
-                                            let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                                            if let Err(e) = data_socket.send(zmq_msg).await {
-                                                error!(error = %e, "Failed to send EOS via ZMQ");
-                                            } else {
-                                                info!(source_id = config.source_id, "Published EOS");
-                                            }
-                                        }
-                                        Err(e) => error!(error = %e, "Failed to serialize EOS"),
-                                    }
-                                }
-                                DataType::Unknown => {
-                                    warn!("Received unknown data type");
-                                }
+                item = collector_rx.recv() => {
+                    match item {
+                        Some(item) => {
+                            for ready in reorder.push(item) {
+                                total_batches += parallel_decode::publish_ready(
+                                    ready,
+                                    &config,
+                                    &mut data_socket,
+                                    &metrics,
+                                    &mut heartbeat_counter,
+                                    &mut trigger_warner,
+                                )
+                                .await;
                             }
                         }
-
-                        Some(ReadLoopOutput::Decoded(event_data)) => {
-                            // Pre-decoded event from OpenDPP (AMax)
-                            metrics.queue_length.fetch_sub(1, Ordering::Relaxed);
-
-                            // Create single-event batch
-                            let mut batch = EventDataBatch::with_capacity(
-                                config.source_id,
-                                sequence_number,
-                                1,
-                            );
-                            let common_event = Self::convert_event(*event_data, config.firmware);
-                            let ch = common_event.channel as usize;
-                            if ch < MAX_CHANNELS {
-                                metrics.per_channel_counts[ch].fetch_add(1, Ordering::Relaxed);
-                            }
-                            batch.push(common_event);
-
-                            // Update metrics
-                            metrics.events_decoded.fetch_add(1, Ordering::Relaxed);
-
-                            // Publish
-                            let msg = Message::data(batch);
-                            match msg.to_msgpack() {
-                                Ok(bytes) => {
-                                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                                    if let Err(e) = data_socket.send(zmq_msg).await {
-                                        error!(error = %e, "Failed to send event via ZMQ");
-                                    } else {
-                                        sequence_number += 1;
-                                        metrics.batches_published.fetch_add(1, Ordering::Relaxed);
-                                        debug!(seq = sequence_number - 1, "Published OpenDPP event");
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(error = %e, "Failed to serialize event");
-                                }
-                            }
-                        }
-
-                        Some(ReadLoopOutput::Start) => {
-                            info!("Received START signal from ReadLoop");
-                            sequence_number = 0;
-                            heartbeat_counter = 0;
-                            decoder.reset_for_new_run();
-                            info!("Sequence number and decoder state reset on Start");
-                        }
-
-                        Some(ReadLoopOutput::Stop) => {
-                            info!("Received STOP signal from ReadLoop");
-                            let eos = Message::eos(config.source_id, 0);
-                            match eos.to_msgpack() {
-                                Ok(bytes) => {
-                                    let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
-                                    if let Err(e) = data_socket.send(zmq_msg).await {
-                                        error!(error = %e, "Failed to send EOS via ZMQ");
-                                    } else {
-                                        info!(source_id = config.source_id, "Published EOS");
-                                    }
-                                }
-                                Err(e) => error!(error = %e, "Failed to serialize EOS"),
-                            }
-                        }
-
                         None => {
-                            info!("Data channel closed, stopping decode loop");
+                            // Pipeline threads exited (data channel closed).
+                            // Flush whatever is still ordered in the buffer.
+                            for ready in reorder.drain_remaining() {
+                                total_batches += parallel_decode::publish_ready(
+                                    ready,
+                                    &config,
+                                    &mut data_socket,
+                                    &metrics,
+                                    &mut heartbeat_counter,
+                                    &mut trigger_warner,
+                                )
+                                .await;
+                            }
+                            info!("Decode pipeline drained, stopping decode loop");
                             break;
                         }
                     }
-
-                    // Yield to tokio scheduler after processing each message.
-                    // Without this, the decode loop can monopolize the tokio worker
-                    // thread under high data rates (all futures resolve immediately),
-                    // starving command_task and causing Stop command timeouts.
-                    tokio::task::yield_now().await;
                 }
             }
         }
 
         info!(
-            total_batches = sequence_number,
+            total_batches,
             total_events = metrics.events_decoded.load(Ordering::Relaxed),
             "DecodeLoop stopped"
         );
@@ -2881,7 +2743,7 @@ mod tests {
             waveform: None,
         };
 
-        let minimal = Reader::convert_event(event, FirmwareType::PSD2);
+        let minimal = convert_event_to_common(event, FirmwareType::PSD2);
         // CommonEventData is packed, so we need to copy values before comparing
         let module = minimal.module;
         let channel = minimal.channel;
@@ -3006,7 +2868,7 @@ mod tests {
             waveform: Some(wf),
         };
 
-        let converted = Reader::convert_event(event, FirmwareType::PSD2);
+        let converted = convert_event_to_common(event, FirmwareType::PSD2);
         assert!(converted.waveform.is_some(), "Waveform should be preserved");
         let cwf = converted.waveform.unwrap();
         assert_eq!(cwf.analog_probe1, vec![100, 200, -300]);
@@ -3085,7 +2947,10 @@ mod tests {
         evt.waveform = Some(vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]);
         let ed = opendpp_to_event_data(&evt, 0, false);
         let wf = ed.waveform.expect("waveform should be present");
-        assert_eq!(wf.analog_probe1, vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]);
+        assert_eq!(
+            wf.analog_probe1,
+            vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]
+        );
         assert!(wf.analog_probe2.is_empty());
         assert!(wf.analog_probe3.is_empty());
         assert!(wf.digital_probe1.is_empty());
@@ -3108,8 +2973,14 @@ mod tests {
         // 0xA800 = 0b1010_1000_0000_0000 → bits 15,13,11 = 1
         // 0x5000 = 0b0101_0000_0000_0000 → bits 14,12 = 1
         evt.waveform = Some(vec![
-            10000u16, (-1i16) as u16, 20000u16, 0xA800u16,
-            10001u16, 0u16,           20001u16, 0x5000u16,
+            10000u16,
+            (-1i16) as u16,
+            20000u16,
+            0xA800u16,
+            10001u16,
+            0u16,
+            20001u16,
+            0x5000u16,
         ]);
         let ed = opendpp_to_event_data(&evt, 0, true);
         let wf = ed.waveform.expect("waveform should be present");
@@ -3134,19 +3005,25 @@ mod tests {
         assert!(wf.analog_probe3_is_signed);
     }
 
-    /// `enable_acq_debug=true && channel!=0` keeps the single-lane path —
-    /// the SE pin is hardwired to ch0 only in the AMax debug FW, so other
-    /// channels never carry 4-lane payloads even when ENABLE_ACQ=1.
+    /// `enable_acq_debug=true && channel!=0` also takes the 4-lane path:
+    /// the broadcast ENABLE_ACQ write fans out across the 32-channel page
+    /// array, so every channel emits 4-lane payload (confirmed live
+    /// 2026-05-25 — ch4 delivered 4-lane with only ch0's ENABLE_ACQ set;
+    /// see commit 37ce069).
     #[test]
-    fn opendpp_to_event_data_no_unpack_on_non_zero_channel() {
+    fn opendpp_to_event_data_unpacks_four_lanes_on_non_zero_channel() {
         let mut evt = make_opendpp_event(Vec::new());
         evt.channel = 3;
-        evt.waveform = Some(vec![1000u16, 2000u16, 3000u16, 4000u16]);
+        evt.waveform = Some(vec![1000u16, 2000u16, 3000u16, 0xA800u16]);
         let ed = opendpp_to_event_data(&evt, 0, true);
         let wf = ed.waveform.expect("waveform should be present");
-        assert_eq!(wf.analog_probe1, vec![1000i16, 2000i16, 3000i16, 4000i16]);
-        assert!(wf.analog_probe2.is_empty());
-        assert!(wf.digital_probe1.is_empty());
+        assert_eq!(wf.analog_probe1, vec![1000i16]);
+        assert_eq!(wf.analog_probe2, vec![2000i16]);
+        assert_eq!(wf.analog_probe3, vec![3000i16]);
+        // 0xA800 → bits 15 (trig_out), 13 (energy_dv), 11 (shaping_track)
+        assert_eq!(wf.digital_probe1, vec![1u8]);
+        assert_eq!(wf.digital_probe2, vec![0u8]);
+        assert_eq!(wf.digital_probe3, vec![1u8]);
     }
 
     /// `amax_enable_acq_from_config`: reads `channel_defaults.amax.enable_acq`
@@ -3369,6 +3246,7 @@ mod tests {
                 ttf_smoothing: Default::default(),
                 extra_registers: Vec::new(),
             }),
+            amax_board: None,
         };
         let p = X743DecodeParams::from_config(Some(&dc));
         assert!(p.channel_negative[0], "ch0 defaults to Negative");

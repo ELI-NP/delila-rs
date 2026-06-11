@@ -150,8 +150,8 @@ impl PipelineInputs {
             run_id,
             ..self.cfg_template.clone()
         };
-        let pipeline = EventBuilderPipeline::new(cfg, trigger, self.calibration.clone())
-            .with_l2_filter(l2);
+        let pipeline =
+            EventBuilderPipeline::new(cfg, trigger, self.calibration.clone()).with_l2_filter(l2);
         let source = ZmqHitSource::connect(&self.subscribe).map_err(|e| {
             anyhow::anyhow!("Failed to connect ZmqHitSource to {}: {e}", self.subscribe)
         })?;
@@ -341,15 +341,14 @@ async fn run_operator_managed(
     // SIGINT / SIGTERM handler.
     let shutdown_tx_signal = shutdown_tx.clone();
     tokio::spawn(async move {
-        let mut sigterm = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to install SIGTERM handler");
-                return;
-            }
-        };
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "Failed to install SIGTERM handler");
+                    return;
+                }
+            };
         tokio::select! {
             _ = tokio::signal::ctrl_c() => info!("SIGINT received"),
             _ = sigterm.recv() => info!("SIGTERM received"),

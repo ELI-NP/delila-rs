@@ -190,7 +190,9 @@ impl CommandHandlerExt for ReplayCommandExt {
 
     fn status_details(&self) -> Option<String> {
         let (events, batches, bytes) = self.stats.snapshot();
-        Some(format!("Events: {events}, Batches: {batches}, Bytes: {bytes}"))
+        Some(format!(
+            "Events: {events}, Batches: {batches}, Bytes: {bytes}"
+        ))
     }
 
     fn get_metrics(&self) -> Option<ComponentMetrics> {
@@ -214,10 +216,7 @@ fn resolve_bind_addresses(args: &Args, config: &Config) -> (String, String) {
     let net = &config.network;
     // Find the source entry matching --source-id (if any) to pick up its
     // `bind` / `command` overrides.
-    let source = net
-        .sources
-        .iter()
-        .find(|s| s.id == args.source_id);
+    let source = net.sources.iter().find(|s| s.id == args.source_id);
 
     let bind = args.bind.clone().unwrap_or_else(|| {
         source
@@ -227,9 +226,7 @@ fn resolve_bind_addresses(args: &Args, config: &Config) -> (String, String) {
     let command = args.command.clone().unwrap_or_else(|| {
         source
             .and_then(|s| s.command.clone())
-            .unwrap_or_else(|| {
-                format!("tcp://*:{}", net.port_base_command + args.source_id as u16)
-            })
+            .unwrap_or_else(|| format!("tcp://*:{}", net.port_base_command + args.source_id as u16))
     });
     (bind, command)
 }
@@ -264,20 +261,18 @@ async fn main() -> anyhow::Result<()> {
     let start_generation = Arc::new(AtomicU64::new(0));
     let pending_eos = Arc::new(AtomicBool::new(false));
 
-    let (shutdown_tx, mut shutdown_rx) =
-        tokio::sync::broadcast::channel::<()>(1);
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
 
     let shutdown_tx_signal = shutdown_tx.clone();
     tokio::spawn(async move {
-        let mut sigterm = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to install SIGTERM handler");
-                return;
-            }
-        };
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "Failed to install SIGTERM handler");
+                    return;
+                }
+            };
         tokio::select! {
             _ = tokio::signal::ctrl_c() => info!("SIGINT received"),
             _ = sigterm.recv() => info!("SIGTERM received"),
@@ -375,15 +370,12 @@ async fn main() -> anyhow::Result<()> {
                     match block_result {
                         Ok(batch) => {
                             source_ids_seen.insert(batch.source_id);
-                            if let Err(e) =
-                                publish_data(&mut data_socket, &stats, batch).await
-                            {
+                            if let Err(e) = publish_data(&mut data_socket, &stats, batch).await {
                                 warn!(error = %e, "Publish failed; breaking replay");
                                 break 'replay;
                             }
                             if args.delay_ms > 0 {
-                                tokio::time::sleep(Duration::from_millis(args.delay_ms))
-                                    .await;
+                                tokio::time::sleep(Duration::from_millis(args.delay_ms)).await;
                             }
                         }
                         Err(e) => {
@@ -397,8 +389,7 @@ async fn main() -> anyhow::Result<()> {
                 info!("End of input — looping (--loop-replay)");
                 continue 'replay;
             }
-            files_exhausted_while_running =
-                *state_rx.borrow() == ComponentState::Running;
+            files_exhausted_while_running = *state_rx.borrow() == ComponentState::Running;
             break 'replay;
         }
 
@@ -409,8 +400,13 @@ async fn main() -> anyhow::Result<()> {
                 sources = source_ids_seen.len(),
                 "Input exhausted while Running — emitting auto-EOS"
             );
-            emit_eos_for_each(&mut data_socket, &stats, &source_ids_seen, current_run_number)
-                .await;
+            emit_eos_for_each(
+                &mut data_socket,
+                &stats,
+                &source_ids_seen,
+                current_run_number,
+            )
+            .await;
             auto_eos_sent = true;
         }
 
@@ -425,8 +421,13 @@ async fn main() -> anyhow::Result<()> {
 
         pending_eos.store(false, Ordering::Release);
         if !auto_eos_sent {
-            emit_eos_for_each(&mut data_socket, &stats, &source_ids_seen, current_run_number)
-                .await;
+            emit_eos_for_each(
+                &mut data_socket,
+                &stats,
+                &source_ids_seen,
+                current_run_number,
+            )
+            .await;
         }
     }
 

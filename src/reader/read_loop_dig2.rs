@@ -238,11 +238,8 @@ pub(crate) fn run(
                     match drain {
                         Ok(Some(evt)) => {
                             drained += 1;
-                            let event_data = opendpp_to_event_data(
-                                &evt,
-                                config.module_id,
-                                conn.amax_enable_acq,
-                            );
+                            let event_data =
+                                opendpp_to_event_data(&evt, config.module_id, conn.amax_enable_acq);
                             let _ = tx.try_send(ReadLoopOutput::Decoded(Box::new(event_data)));
                         }
                         _ => break,
@@ -355,8 +352,7 @@ pub(crate) fn run(
                             // setup, so per-channel ApplyConfig alone cannot
                             // change waveform inclusion — we must rebind the
                             // active endpoint here while acquisition is stopped.
-                            let target_iw =
-                                dig_config.board.waveforms_enabled.unwrap_or(false);
+                            let target_iw = dig_config.board.waveforms_enabled.unwrap_or(false);
                             if target_iw != conn.include_waveform {
                                 match conn.handle.configure_opendpp_endpoint(target_iw) {
                                     Ok(ep) => {
@@ -466,11 +462,8 @@ pub(crate) fn run(
                         .fetch_add(event.event_size as u64, Ordering::Relaxed);
 
                     // Convert OpenDPP event to EventData
-                    let event_data = opendpp_to_event_data(
-                        &event,
-                        config.module_id,
-                        conn.amax_enable_acq,
-                    );
+                    let event_data =
+                        opendpp_to_event_data(&event, config.module_id, conn.amax_enable_acq);
                     let output = ReadLoopOutput::Decoded(Box::new(event_data));
 
                     // Update queue length metric

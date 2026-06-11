@@ -327,11 +327,17 @@ impl<V: Dig2Variant> Dig2Decoder<V> {
 
         let total_size = (header & aggregate_header::TOTAL_SIZE_MASK) as usize;
         let total_words = raw.data.len() / WORD_SIZE;
+        // Never scan past the bytes we actually received: a corrupt/truncated
+        // aggregate whose header claims more words than delivered would
+        // otherwise spin forever (decode_event returns None without advancing
+        // once past the real data). The `word_index != total_size` check
+        // below still surfaces the mismatch.
+        let scan_end = total_size.min(total_words);
         events.reserve(total_size / 2);
         let mut word_index = 1; // skip aggregate header
         let mut out_of_range_count = 0u32;
 
-        while word_index < total_size {
+        while word_index < scan_end {
             if let Some(event) = self.decode_event(&raw.data, &mut word_index) {
                 if event.channel >= self.config.num_channels {
                     out_of_range_count += 1;
@@ -573,11 +579,11 @@ impl<V: Dig2Variant> Dig2Decoder<V> {
 
         let total_size = (header & aggregate_header::TOTAL_SIZE_MASK) as usize;
         if total_size * WORD_SIZE != data_size {
-            debug!(
+            warn!(
                 fw = V::FW_NAME,
                 header_bytes = total_size * WORD_SIZE,
                 actual_bytes = data_size,
-                "aggregate size mismatch — using header value"
+                "aggregate size mismatch — scanning only delivered bytes"
             );
         }
 

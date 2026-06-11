@@ -385,6 +385,11 @@ pub struct SourceNetworkConfig {
     /// Default: 0 (no filtering). Applies to all firmware types.
     #[serde(default)]
     pub adc_min: u16,
+
+    /// Number of parallel decode worker threads for this Reader.
+    /// Default: 0 = auto (half the logical CPUs minus one, clamped to [1, 8]).
+    #[serde(default)]
+    pub decode_workers: usize,
 }
 
 fn default_source_pipeline_order() -> u32 {

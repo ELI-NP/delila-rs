@@ -1009,7 +1009,8 @@ mod tests {
         cfg.l1.trigger = "mult".into();
         let e = cfg.build_trigger_config().unwrap_err();
         assert!(
-            e.to_string().contains("expects a `channel` or `module` input"),
+            e.to_string()
+                .contains("expects a `channel` or `module` input"),
             "got {e}"
         );
     }
@@ -1107,10 +1108,7 @@ mod tests {
         });
         cfg.l1.trigger = "empty".into();
         let e = cfg.validate().unwrap_err();
-        assert!(
-            e.to_string().contains("`channels` must be >= 1"),
-            "got {e}"
-        );
+        assert!(e.to_string().contains("`channels` must be >= 1"), "got {e}");
     }
 
     #[test]

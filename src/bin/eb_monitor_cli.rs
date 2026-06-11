@@ -30,7 +30,11 @@ use delila_rs::event_builder::EbMessage;
 )]
 struct Args {
     /// ZMQ endpoint to subscribe to (Online EB PUB)
-    #[arg(short = 's', long = "subscribe", default_value = "tcp://localhost:5610")]
+    #[arg(
+        short = 's',
+        long = "subscribe",
+        default_value = "tcp://localhost:5610"
+    )]
     subscribe: String,
 
     /// Stats print interval in seconds
@@ -102,7 +106,10 @@ fn main() -> anyhow::Result<()> {
                         mult_hist[idx] += 1;
                     }
                 }
-                Ok(EbMessage::Heartbeat { run_number, counter }) => {
+                Ok(EbMessage::Heartbeat {
+                    run_number,
+                    counter,
+                }) => {
                     total_heartbeats += 1;
                     info!(run_number, counter, "heartbeat");
                 }

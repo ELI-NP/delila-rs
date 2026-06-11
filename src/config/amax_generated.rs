@@ -91,5 +91,4 @@ pub struct AMaxChannelConfig {
 /// AMax board-level (global) writable register set. Used for
 /// firmware-wide toggles like the debug-FW `ENABLE_ACQ` switch.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
-pub struct AMaxBoardConfig {
-}
+pub struct AMaxBoardConfig {}

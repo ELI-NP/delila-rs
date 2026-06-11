@@ -277,13 +277,7 @@ fn main() -> Result<()> {
                 root,
                 output,
             } => {
-                run_init_timesettings(
-                    config.as_deref(),
-                    modules,
-                    channels,
-                    &root,
-                    &output,
-                )?;
+                run_init_timesettings(config.as_deref(), modules, channels, &root, &output)?;
             }
         },
         Commands::TimeCalib {
@@ -537,8 +531,7 @@ fn run_init_chsettings(
     }
 
     let cfg = build_chsettings_skeleton(modules, channels, &overrides);
-    save_channel_config(&cfg, output)
-        .with_context(|| format!("writing {}", output.display()))?;
+    save_channel_config(&cfg, output).with_context(|| format!("writing {}", output.display()))?;
 
     println!(
         "[OK] Wrote chSettings.json skeleton: {} modules × {} channels = {} entries → {}",
@@ -589,9 +582,7 @@ fn run_init_timesettings(
         }
         None => {
             let m = modules.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "must supply either --config <chSettings.json> or --modules <N>"
-                )
+                anyhow::anyhow!("must supply either --config <chSettings.json> or --modules <N>")
             })?;
             if m == 0 || channels == 0 {
                 anyhow::bail!("--modules and --channels must be >= 1");
@@ -602,8 +593,7 @@ fn run_init_timesettings(
     };
 
     let file = build_timesettings_skeleton(&channel_list, root)?;
-    let json = serde_json::to_string_pretty(&file)
-        .context("serializing timeSettings.json")?;
+    let json = serde_json::to_string_pretty(&file).context("serializing timeSettings.json")?;
     std::fs::write(output, json).with_context(|| format!("writing {}", output.display()))?;
 
     println!(

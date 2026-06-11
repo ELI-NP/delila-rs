@@ -183,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
             time_step_ns: time_step_ns.unwrap_or(2.0),
             config_file: None, // No config file when using CLI directly
             adc_min: 0,
+            decode_workers: 0, // auto
         }
     };
 

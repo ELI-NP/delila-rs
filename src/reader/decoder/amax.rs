@@ -209,10 +209,19 @@ impl AMaxDecoder {
         let total_words = data.len() / constants::WORD_SIZE;
         let mut word_index = 0;
 
-        while word_index < total_words {
+        // `total_words - 1`: decode_event needs at least 2 words (header +
+        // data) and returns None *without advancing* when fewer remain — a
+        // trailing odd word would otherwise spin this loop forever.
+        while word_index + 1 < total_words {
             if let Some(event) = self.decode_event(data, &mut word_index) {
                 events.push(event);
             }
+        }
+        if word_index + 1 == total_words {
+            tracing::warn!(
+                total_words,
+                "AMax raw decode: trailing odd word ignored (truncated event?)"
+            );
         }
 
         if self.config.dump_enabled {

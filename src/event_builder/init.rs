@@ -6,8 +6,8 @@
 //! detector types, tags, and calibrations afterwards.
 
 use crate::event_builder::{
-    ChSettings, ChannelConfig,
     time_offsets::{ParentRef, TimeOffsetEntry, TimeOffsetsFile},
+    ChSettings, ChannelConfig,
 };
 use anyhow::{anyhow, Context, Result};
 
@@ -30,9 +30,9 @@ pub struct ModuleTypeOverride {
 pub fn parse_module_type_spec(s: &str) -> Result<ModuleTypeOverride> {
     let mut parts = s.splitn(3, ':');
     let module_s = parts.next().ok_or_else(|| anyhow!("empty spec"))?;
-    let detector_type = parts
-        .next()
-        .ok_or_else(|| anyhow!("missing DetectorType in '{s}' — expected 'M:DetectorType[:tag1,tag2,...]'"))?;
+    let detector_type = parts.next().ok_or_else(|| {
+        anyhow!("missing DetectorType in '{s}' — expected 'M:DetectorType[:tag1,tag2,...]'")
+    })?;
     let tags_s = parts.next().unwrap_or("");
 
     let module: u8 = module_s
@@ -219,11 +219,19 @@ mod tests {
         let file = build_timesettings_skeleton(&channels, (0, 0)).unwrap();
         assert_eq!(file.entries.len(), 4);
         // Root has no parent.
-        let root_entry = file.entries.iter().find(|e| (e.module, e.channel) == (0, 0)).unwrap();
+        let root_entry = file
+            .entries
+            .iter()
+            .find(|e| (e.module, e.channel) == (0, 0))
+            .unwrap();
         assert!(root_entry.parent.is_none());
         assert_eq!(root_entry.offset_ns, 0.0);
         // Non-root points at root.
-        let leaf = file.entries.iter().find(|e| (e.module, e.channel) == (1, 1)).unwrap();
+        let leaf = file
+            .entries
+            .iter()
+            .find(|e| (e.module, e.channel) == (1, 1))
+            .unwrap();
         let p = leaf.parent.unwrap();
         assert_eq!((p.module, p.channel), (0, 0));
         assert_eq!(leaf.offset_ns, 0.0);

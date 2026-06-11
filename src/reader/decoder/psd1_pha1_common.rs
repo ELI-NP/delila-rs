@@ -296,6 +296,66 @@ impl<V: Dig1Variant> Dig1Decoder<V> {
 
     /// Decode raw data into a reusable Vec (caller-allocated, cleared first).
     pub fn decode_into(&mut self, raw: &RawData, all_events: &mut Vec<EventData>) {
+        self.decode_into_impl(raw, None, all_events);
+    }
+
+    /// Decode using pre-computed extended board time tags (one per board
+    /// aggregate, produced by `scan_extended_btts` on a sequentially-owned
+    /// decoder). This makes the decode itself stateless w.r.t. rollover
+    /// tracking, so it can run on any worker thread in any order.
+    pub fn decode_into_with_btts(
+        &mut self,
+        raw: &RawData,
+        btts: &[u64],
+        all_events: &mut Vec<EventData>,
+    ) {
+        self.decode_into_impl(raw, Some(btts), all_events);
+    }
+
+    /// Walk board aggregate headers only (no event parsing) and extend each
+    /// 32-bit board_time_tag via the sequential rollover tracker. Pushes one
+    /// extended BTT per aggregate into `out` (cleared first). Must be called
+    /// on every Event batch in arrival order by a single owner (the
+    /// dispatcher) so the tracker sees a monotonic BTT stream.
+    pub fn scan_extended_btts(&mut self, raw: &RawData, out: &mut Vec<u64>) {
+        out.clear();
+        if self.classify(raw) != DataType::Event {
+            return;
+        }
+        let total_bytes = raw.size;
+        let mut offset: usize = 0;
+        while offset + board_header_bits::HEADER_SIZE_BYTES <= total_bytes {
+            let Ok(header) = decode_board_header(&raw.data, offset) else {
+                break;
+            };
+            let block_end = offset + (header.aggregate_size as usize) * WORD_SIZE;
+            if block_end > raw.data.len() {
+                break;
+            }
+            let prev_extended = self.extended_board_time;
+            self.extended_board_time = self
+                .tracker
+                .extend(header.board_time_tag as u64)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        fw = V::FW_NAME,
+                        btt = header.board_time_tag,
+                        error = ?e,
+                        "rollover tracker underflow (scan) — falling back to previous extended time"
+                    );
+                    prev_extended
+                });
+            out.push(self.extended_board_time);
+            offset = block_end;
+        }
+    }
+
+    fn decode_into_impl(
+        &mut self,
+        raw: &RawData,
+        btts: Option<&[u64]>,
+        all_events: &mut Vec<EventData>,
+    ) {
         all_events.clear();
 
         let data_type = self.classify(raw);
@@ -308,9 +368,21 @@ impl<V: Dig1Variant> Dig1Decoder<V> {
 
         let total_bytes = raw.size;
         let mut offset: usize = 0;
+        let mut aggregate_index: usize = 0;
 
         while offset + board_header_bits::HEADER_SIZE_BYTES <= total_bytes {
-            match self.decode_board_aggregate(&raw.data, &mut offset) {
+            // Pre-computed extended BTT for this aggregate (parallel path).
+            // The scan walks the same header chain, so indices line up; a
+            // missing entry means the scan bailed on a malformed header that
+            // decode would also reject — stop rather than guess.
+            let ext_override = match btts {
+                Some(list) => match list.get(aggregate_index) {
+                    Some(v) => Some(*v),
+                    None => break,
+                },
+                None => None,
+            };
+            match self.decode_board_aggregate(&raw.data, &mut offset, ext_override) {
                 Ok(mut events) => all_events.append(&mut events),
                 Err(msg) => {
                     if self.config.dump_enabled {
@@ -319,6 +391,7 @@ impl<V: Dig1Variant> Dig1Decoder<V> {
                     break;
                 }
             }
+            aggregate_index += 1;
         }
 
         all_events.sort_by(|a, b| {
@@ -336,6 +409,7 @@ impl<V: Dig1Variant> Dig1Decoder<V> {
         &mut self,
         data: &[u8],
         offset: &mut usize,
+        ext_override: Option<u64>,
     ) -> Result<Vec<EventData>, String> {
         let header = decode_board_header(data, *offset)?;
 
@@ -361,24 +435,30 @@ impl<V: Dig1Variant> Dig1Decoder<V> {
         }
         self.last_aggregate_counter = header.aggregate_counter;
 
-        // Extend the 32-bit board_time_tag to 64-bit ticks via pure modulo
-        // rollover tracking. On underflow (which shouldn't happen at
-        // production rates — would require a backward jump > half a period)
-        // fall back to the previous extended value rather than poisoning
-        // downstream sort invariants.
-        let prev_extended = self.extended_board_time;
-        self.extended_board_time = self
-            .tracker
-            .extend(header.board_time_tag as u64)
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    fw = V::FW_NAME,
-                    btt = header.board_time_tag,
-                    error = ?e,
-                    "rollover tracker underflow — falling back to previous extended time"
-                );
-                prev_extended
-            });
+        // Extend the 32-bit board_time_tag to 64-bit ticks. In the parallel
+        // path the dispatcher already ran the rollover tracker over the
+        // header chain (`scan_extended_btts`) and hands us the result; the
+        // sequential path extends in place. On underflow (which shouldn't
+        // happen at production rates — would require a backward jump > half
+        // a period) fall back to the previous extended value rather than
+        // poisoning downstream sort invariants.
+        self.extended_board_time = match ext_override {
+            Some(ext) => ext,
+            None => {
+                let prev_extended = self.extended_board_time;
+                self.tracker
+                    .extend(header.board_time_tag as u64)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            fw = V::FW_NAME,
+                            btt = header.board_time_tag,
+                            error = ?e,
+                            "rollover tracker underflow — falling back to previous extended time"
+                        );
+                        prev_extended
+                    })
+            }
+        };
 
         if header.board_fail && self.config.dump_enabled {
             println!("[{}] Board fail bit set!", V::FW_NAME);
@@ -1341,5 +1421,128 @@ mod tests {
         data[..4].copy_from_slice(&0xB000_0004u32.to_le_bytes());
         let events = dec.decode(&RawData::new(data));
         assert!(events.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Parallel-decode support: scan_extended_btts / decode_into_with_btts
+    // -----------------------------------------------------------------------
+
+    /// Board header with an explicit board_time_tag (w3) so tests can drive
+    /// the rollover tracker. Mirrors `make_board_header` otherwise.
+    fn make_board_header_btt(
+        aggregate_size: u32,
+        mask: u8,
+        board_id: u8,
+        counter: u32,
+        btt: u32,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        push_u32(&mut buf, (0xA << 28) | (aggregate_size & 0x0FFF_FFFF));
+        push_u32(&mut buf, ((board_id as u32) << 27) | (mask as u32));
+        push_u32(&mut buf, counter & 0x7F_FFFF);
+        push_u32(&mut buf, btt);
+        buf
+    }
+
+    /// One board aggregate with a single SW-fine-TS event (extra_option=5,
+    /// which makes the decoded timestamp depend on the extended BTT).
+    fn make_sw_fine_ts_aggregate(btt: u32, ttt: u32, counter: u32) -> Vec<u8> {
+        let ch_size = 2 + 3;
+        let total_size = 4 + ch_size;
+        let mut data = make_board_header_btt(total_size as u32, 0x01, 0, counter, btt);
+        data.extend(make_dual_channel_header(
+            ch_size as u32,
+            &ChFlags {
+                extra_option: 5,
+                ..ChFlags::default()
+            },
+        ));
+        push_u32(&mut data, make_time_word(ttt, false));
+        // SW fine TS extras word: bits[31:16]=before_zc, bits[15:0]=after_zc
+        push_u32(&mut data, (100u32 << 16) | 200u32);
+        push_u32(&mut data, make_physics_word(100, 50, false));
+        data
+    }
+
+    #[test]
+    fn scan_extended_btts_one_entry_per_aggregate() {
+        let mut dec = default_decoder();
+        let mut data = make_sw_fine_ts_aggregate(1_000, 900, 1);
+        data.extend(make_sw_fine_ts_aggregate(2_000, 1_900, 2));
+        data.extend(make_sw_fine_ts_aggregate(3_000, 2_900, 3));
+        let mut btts = Vec::new();
+        dec.scan_extended_btts(&RawData::new(data), &mut btts);
+        assert_eq!(btts, vec![1_000, 2_000, 3_000]);
+    }
+
+    #[test]
+    fn scan_extended_btts_tracks_rollover_across_batches() {
+        let mut dec = default_decoder();
+        let mut btts = Vec::new();
+
+        // Batch 1: near the top of the 32-bit counter.
+        let data = make_sw_fine_ts_aggregate(0xFFFF_FF00, 0x7FFF_FE00, 1);
+        dec.scan_extended_btts(&RawData::new(data), &mut btts);
+        assert_eq!(btts, vec![0xFFFF_FF00]);
+
+        // Batch 2: wrapped — extended value must cross 2^32.
+        let data = make_sw_fine_ts_aggregate(0x0000_0100, 0x0000_0080, 2);
+        dec.scan_extended_btts(&RawData::new(data), &mut btts);
+        assert_eq!(btts, vec![(1u64 << 32) + 0x100]);
+    }
+
+    /// The parallel path (sequential scan on one decoder + stateless decode
+    /// with pre-computed BTTs on fresh per-batch decoders) must produce
+    /// exactly the same events as the sequential stateful decode — including
+    /// across a 32-bit BTT rollover spanning multiple batches.
+    #[test]
+    fn parallel_btt_decode_matches_sequential_across_rollover() {
+        let batches: Vec<Vec<u8>> = vec![
+            {
+                let mut d = make_sw_fine_ts_aggregate(0x8000_0000, 0x7FFF_0000, 1);
+                d.extend(make_sw_fine_ts_aggregate(0xFFFF_FF00, 0x7FFF_FF00, 2));
+                d
+            },
+            // Rollover happens between these batches.
+            make_sw_fine_ts_aggregate(0x0000_2000, 0x0000_1000, 3),
+            make_sw_fine_ts_aggregate(0x4000_0000, 0x3FFF_F000, 4),
+        ];
+
+        // Reference: one stateful decoder over the whole stream.
+        let mut seq_dec = default_decoder();
+        let mut seq_events = Vec::new();
+        for b in &batches {
+            let mut ev = Vec::new();
+            seq_dec.decode_into(&RawData::new(b.clone()), &mut ev);
+            seq_events.append(&mut ev);
+        }
+        assert_eq!(seq_events.len(), 4);
+
+        // Parallel emulation: dispatcher-owned scanner + a *fresh* decoder
+        // per batch (workers never share rollover state).
+        let mut scanner = default_decoder();
+        let mut par_events = Vec::new();
+        for b in &batches {
+            let raw = RawData::new(b.clone());
+            let mut btts = Vec::new();
+            scanner.scan_extended_btts(&raw, &mut btts);
+            let mut worker = default_decoder();
+            let mut ev = Vec::new();
+            worker.decode_into_with_btts(&raw, &btts, &mut ev);
+            par_events.append(&mut ev);
+        }
+
+        assert_eq!(par_events.len(), seq_events.len());
+        for (p, s) in par_events.iter().zip(seq_events.iter()) {
+            assert_eq!(p.timestamp_ns, s.timestamp_ns, "timestamps must match");
+            assert_eq!(p.channel, s.channel);
+            assert_eq!(p.energy, s.energy);
+            assert_eq!(p.fine_time, s.fine_time);
+        }
+        // Sanity: timestamps strictly increase across the rollover (the whole
+        // point of the extended BTT).
+        for w in seq_events.windows(2) {
+            assert!(w[1].timestamp_ns > w[0].timestamp_ns);
+        }
     }
 }

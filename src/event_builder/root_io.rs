@@ -396,7 +396,6 @@ mod tests {
         assert!(path.metadata().unwrap().len() > 0);
     }
 
-
     #[test]
     fn test_write_events() {
         let dir = tempdir().unwrap();
@@ -438,8 +437,7 @@ mod tests {
 
         // Read back via oxyroot to verify the branches exist with the right
         // per-event values.
-        let mut file =
-            oxyroot::RootFile::open(path.to_str().unwrap()).expect("open ROOT file");
+        let mut file = oxyroot::RootFile::open(path.to_str().unwrap()).expect("open ROOT file");
         let tree = file.get_tree("events").expect("get events tree");
 
         let hpge: Vec<i64> = tree
@@ -471,8 +469,7 @@ mod tests {
         let counter_names = vec!["HPGe_count".to_string()];
         write_events_to_root(&path, "events", &[ev1], &counter_names).unwrap();
 
-        let mut file =
-            oxyroot::RootFile::open(path.to_str().unwrap()).expect("open ROOT file");
+        let mut file = oxyroot::RootFile::open(path.to_str().unwrap()).expect("open ROOT file");
         let tree = file.get_tree("events").expect("get events tree");
         let hpge: Vec<i64> = tree
             .branch("HPGe_count")

@@ -1,7 +1,28 @@
 # DecodeLoop 並列化 設計書
 
 **Date:** 2026-02-23
-**Status:** 実装中
+**Status:** ✅ 実装完了 (2026-06-11, `src/reader/parallel_decode.rs`)
+
+> **実装ノート (2026-06-11):** 2026-02 の実装は実験ブランチ止まりで master には
+> 未マージだった（`git log -S crossbeam -- src/reader/` ヒットなし）。AMax 10G の
+> 30 kHz 頭打ち調査（単スレッド波形 decode が原因と判明、waveform OFF で 208 kHz
+> 実証）を受けて本設計を全 FW 対象で再実装した。
+>
+> 設計からの主な差分:
+> - Dispatcher は std::thread（`blocking_recv`）、Worker→Collector は tokio mpsc の
+>   `blocking_send`（ブリッジスレッド不要に）
+> - **AMax/x743 (pre-decoded path) も並列化対象**: Dispatcher が最大 256 イベントを
+>   コアレスしてバッチ化（旧実装の「1 イベント = 1 ZMQ メッセージ」を解消）
+> - sequence_number は Dispatcher が事前割当（Start で 0 リセット）、worker が
+>   serialize 時に埋め込む。0 イベントバッチも publish して欠番を作らない
+> - Start/Stop は index 付きで ReorderBuffer を通る → **EOS は先行全バッチの後に
+>   順序保証付きで発行**（Stop→EOS バックログ問題の構造的解消）
+> - worker panic は catch_unwind → Skip(index) でパイプラインが詰まらない
+> - `decode_workers` を TOML (`[[network.sources]] decode_workers = N`) で設定可能。
+>   0/未指定 = auto（論理コア/2 − 1、[1,8] クランプ）
+> - DIG1 BTT 事前計算: `Dig1Decoder::scan_extended_btts` + `decode_into_with_btts`。
+>   等価性テスト `parallel_btt_decode_matches_sequential_across_rollover` で
+>   32-bit ロールオーバー跨ぎの逐次一致を検証済み
 
 ## 1. 問題の詳細
 

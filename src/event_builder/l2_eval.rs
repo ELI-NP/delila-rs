@@ -93,9 +93,7 @@ impl L2Filter {
                     // when validate-config or build is run on a file that
                     // bypassed the schema.
                     if !is_root_safe_branch_name(name) {
-                        return Err(L2FilterError::InvalidCounterName {
-                            name: name.clone(),
-                        });
+                        return Err(L2FilterError::InvalidCounterName { name: name.clone() });
                     }
                 }
                 L2Op::EnergyGate { .. } | L2Op::MinHits { .. } | L2Op::AcVeto { .. } => {
