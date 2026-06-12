@@ -272,6 +272,18 @@ pub(crate) fn run(
             // Stop needed? (target dropped below Running)
             if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
                 info!("Stopping digitizer acquisition");
+                // AMax 11june2026+ FW: close the acquisition gate first by
+                // dropping the START_DAQ register (CAEN-list Run port) — the
+                // mirror of the START_DAQ=1 write in `send_start_command`.
+                if config.firmware == FirmwareType::AMax {
+                    match conn
+                        .handle
+                        .set_user_register(super::AMAX_START_DAQ_BYTE_ADDR, 0)
+                    {
+                        Ok(()) => info!("AMax START_DAQ=0 written (acquisition gate closed)"),
+                        Err(e) => warn!(error = %e, "Failed to clear AMax START_DAQ register"),
+                    }
+                }
                 let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
                 // Drain remaining buffered events before clearing
                 let mut drained = 0u64;
