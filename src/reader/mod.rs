@@ -1297,6 +1297,52 @@ pub(crate) fn try_connect_raw(url: &str, include_n_events: bool) -> Option<Devic
     }
 }
 
+/// Try to connect to a digitizer and configure the **RawUDP** endpoint
+/// (AMax / DPP_OPEN 10G firmware bulk raw readout). Returns None on failure
+/// (non-fatal — ReadLoop stays alive). Mirrors [`try_connect_raw`] but uses
+/// the `rawudp` endpoint that the open-DPP firmware exposes (the generic
+/// `RAW` endpoint does not exist on this firmware — see
+/// `configure_rawudp_endpoint`).
+pub(crate) fn try_connect_rawudp(url: &str) -> Option<DeviceConnection> {
+    match CaenHandle::open(url) {
+        Ok(h) => match h.configure_rawudp_endpoint() {
+            Ok(ep) => {
+                info!("Connected to digitizer (RawUDP endpoint)");
+                let param_cache = match h.build_param_cache() {
+                    Ok(cache) => {
+                        info!(params = cache.len(), "Parameter cache built");
+                        Some(cache)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to build param cache, validation disabled");
+                        None
+                    }
+                };
+                Some(DeviceConnection {
+                    handle: h,
+                    endpoint: ep,
+                    hw_configured: false,
+                    hw_armed: false,
+                    hw_running: false,
+                    auto_config_failed: false,
+                    param_cache,
+                    enabled_channels: Vec::new(),
+                    include_waveform: false, // RawUDP carries waveforms in the raw bytes
+                    amax_enable_acq: false,
+                })
+            }
+            Err(e) => {
+                error!(error = %e, "Connected but RawUDP endpoint configuration failed");
+                None // h drops here → CAEN_FELib_Close
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to connect to digitizer");
+            None
+        }
+    }
+}
+
 /// Try to connect to a digitizer and configure the OpenDPP endpoint.
 /// Returns None on failure (non-fatal — ReadLoop stays alive).
 ///
@@ -1523,6 +1569,13 @@ pub(crate) fn send_arm_command(
 ///
 /// For DIG2 (PSD2), sends swstartacquisition.
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, sends armacquisition (arm=start).
+/// AMax 11june2026+ FW acquisition gate. The `START_DAQ` register (FW
+/// RegisterFile word address `0x8000`) is wired to the CAEN-list `Run` port
+/// — writing 1 enables acquisition, 0 stops it. `set_user_register` takes a
+/// byte address, and CAEN's convention is word×4, so `0x8000 * 4`. Verified
+/// live 2026-06-12 (run 9164 first light: timestamps advance in 8 ns steps).
+pub(crate) const AMAX_START_DAQ_BYTE_ADDR: u32 = 0x8000 * 4;
+
 pub(crate) fn send_start_command(
     handle: &CaenHandle,
     firmware: FirmwareType,
@@ -1540,6 +1593,18 @@ pub(crate) fn send_start_command(
     } else {
         info!("Starting digitizer acquisition (PSD2)");
         handle.send_command(devtree::cmd::SW_START_ACQUISITION)?;
+        // AMax 11june2026+ FW gates acquisition behind the global START_DAQ
+        // register (FW block diagram: START_DAQ → START_CAENLIST). Plain
+        // swstartacquisition arms the FELib endpoint but produces NO events
+        // until START_DAQ=1 is written. START_DAQ lives at word address
+        // 0x8000 → byte address 0x8000*4 (same word→byte ×4 ABI as the
+        // per-channel registers; see amax_registers::channel_register_byte_addr).
+        if firmware == FirmwareType::AMax {
+            match handle.set_user_register(AMAX_START_DAQ_BYTE_ADDR, 1) {
+                Ok(()) => info!("AMax START_DAQ=1 written (acquisition gate opened)"),
+                Err(e) => warn!(error = %e, "Failed to write AMax START_DAQ register"),
+            }
+        }
     }
     Ok(())
 }

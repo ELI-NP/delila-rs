@@ -17,9 +17,9 @@ use tracing::{error, info, warn};
 
 use super::state::{next_reconnect_cooldown, state_rank, RECONNECT_INITIAL};
 use super::{
-    caen, check_firmware_match, devtree, get_enabled_channels_from_config, send_arm_command,
-    send_start_command, try_connect_opendpp, FirmwareType, ReadLoopOutput, ReadLoopRequest,
-    ReaderConfig, ReaderError, ReaderMetrics,
+    caen, check_firmware_match, decoder, devtree, get_enabled_channels_from_config,
+    send_arm_command, send_start_command, try_connect_opendpp, try_connect_rawudp, FirmwareType,
+    ReadLoopOutput, ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
 };
 use crate::common::ComponentState;
 
@@ -39,12 +39,53 @@ pub(crate) fn run(
     request_rx: std::sync::mpsc::Receiver<ReadLoopRequest>,
     hw_state: Arc<Mutex<ComponentState>>,
 ) -> Result<(), ReaderError> {
-    info!(url = %config.url, "ReadLoop (OpenDPP) starting");
+    // EXPERIMENTAL (2026-06-11): route AMax through the bulk RAW endpoint
+    // instead of the per-event OpenDPP decoded endpoint. The OpenDPP path
+    // does one FELib `ReadData` call + one waveform heap alloc per event
+    // (the ~177 kHz decode ceiling). RAW reads whole event-aggregate
+    // buffers in one call and the parallel decode workers parse them with
+    // `AMaxDecoder` (big-endian word0/word1 + user words + waveform — the
+    // decode side already supports `DecoderKind::AMax`). Toggle with
+    // `DELILA_AMAX_RAW_READOUT=1` so we can A/B against OpenDPP live.
+    let raw_readout = std::env::var("DELILA_AMAX_RAW_READOUT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    info!(url = %config.url, raw_readout, "ReadLoop (OpenDPP/RAW) starting");
+
+    // Connect helper: RAW endpoint (bulk, DIG2 N_EVENTS format) when the
+    // experimental flag is set, else the OpenDPP decoded endpoint. AMax
+    // register programming is endpoint-independent, so the rest of the
+    // Configure path is unchanged.
+    let connect_dev = |url: &str| {
+        if raw_readout {
+            try_connect_rawudp(url)
+        } else {
+            try_connect_opendpp(url, false)
+        }
+    };
+
+    // Bulk read buffer for the RAW path (unused in OpenDPP mode). Sizing it
+    // controls decode parallelism: each `read_data` buffer becomes ONE work
+    // unit handled by ONE decode worker, so an oversized buffer (e.g. 4 MB ≈
+    // 600+ AMax events) serializes the whole chunk on a single worker while
+    // the others idle and the queue/memory balloon. A smaller buffer yields
+    // many small units that round-robin across all workers (mirrors the
+    // OpenDPP COALESCE_MAX=256 batch granularity). Tunable live via
+    // `DELILA_AMAX_RAW_BUF_KB` (default 512 KB ≈ ~120 events).
+    let raw_buf_kb: usize = std::env::var("DELILA_AMAX_RAW_BUF_KB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&kb| kb > 0)
+        .unwrap_or(512);
+    if raw_readout {
+        info!(raw_buf_kb, "RAW readout bulk buffer sized");
+    }
+    let mut read_buffer: Vec<u8> = Vec::with_capacity(raw_buf_kb * 1024);
 
     // Lazy connection: try initial connect (non-fatal). The endpoint
-    // gets reconfigured with the right waveform flag once we transition
-    // to Configured (see the `configure_opendpp_endpoint` call below).
-    let mut connection = try_connect_opendpp(&config.url, false);
+    // gets reconfigured with the right format once we transition to
+    // Configured (see the endpoint reconfigure in the Configure block).
+    let mut connection = connect_dev(&config.url);
     let mut last_connect_attempt = Instant::now();
     let mut reconnect_backoff = RECONNECT_INITIAL;
 
@@ -71,7 +112,7 @@ pub(crate) fn run(
             let (cooldown, next_base) = next_reconnect_cooldown(reconnect_backoff);
             if last_connect_attempt.elapsed() > cooldown {
                 last_connect_attempt = Instant::now();
-                connection = try_connect_opendpp(&config.url, false);
+                connection = connect_dev(&config.url);
                 if connection.is_some() {
                     info!("Reconnected successfully, resetting backoff");
                     reconnect_backoff = RECONNECT_INITIAL;
@@ -117,12 +158,20 @@ pub(crate) fn run(
                     .unwrap_or(false);
 
                 // Re-configure endpoint after reset (/cmd/reset invalidates
-                // activeendpoint and data format — read_data returns DISABLED without this)
-                match conn.handle.configure_opendpp_endpoint(include_waveform) {
+                // activeendpoint and data format — read_data returns DISABLED without this).
+                // RAW path: bulk endpoint (DIG2 N_EVENTS format); the FW always
+                // emits waveforms on the wire, so `include_waveform` is moot here
+                // (the AMax decoder reads the per-event WAVEFORM flag).
+                let ep_result = if raw_readout {
+                    conn.handle.configure_rawudp_endpoint()
+                } else {
+                    conn.handle.configure_opendpp_endpoint(include_waveform)
+                };
+                match ep_result {
                     Ok(ep) => {
                         conn.endpoint = ep;
                         conn.include_waveform = include_waveform;
-                        info!(include_waveform, "Endpoint reconfigured after reset");
+                        info!(include_waveform, raw_readout, "Endpoint reconfigured after reset");
                     }
                     Err(e) => error!(error = %e, "Failed to reconfigure endpoint after reset"),
                 }
@@ -223,28 +272,50 @@ pub(crate) fn run(
             // Stop needed? (target dropped below Running)
             if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
                 info!("Stopping digitizer acquisition");
+                // AMax 11june2026+ FW: close the acquisition gate first by
+                // dropping the START_DAQ register (CAEN-list Run port) — the
+                // mirror of the START_DAQ=1 write in `send_start_command`.
+                if config.firmware == FirmwareType::AMax {
+                    match conn
+                        .handle
+                        .set_user_register(super::AMAX_START_DAQ_BYTE_ADDR, 0)
+                    {
+                        Ok(()) => info!("AMax START_DAQ=0 written (acquisition gate closed)"),
+                        Err(e) => warn!(error = %e, "Failed to clear AMax START_DAQ register"),
+                    }
+                }
                 let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
                 // Drain remaining buffered events before clearing
                 let mut drained = 0u64;
-                loop {
-                    let drain = if conn.include_waveform {
-                        conn.endpoint.read_opendpp_event_with_waveform(
-                            100,
-                            &mut user_info_buffer,
-                            &mut waveform_buffer,
-                        )
-                    } else {
-                        conn.endpoint.read_opendpp_event(100, &mut user_info_buffer)
-                    };
-                    match drain {
-                        Ok(Some(evt)) => {
-                            drained += 1;
-                            let _ = tx.try_send(ReadLoopOutput::OpenDpp {
-                                event: Box::new(evt),
-                                enable_acq: conn.amax_enable_acq,
-                            });
+                if raw_readout {
+                    while let Ok(Some(raw)) = conn.endpoint.read_data(100, &mut read_buffer) {
+                        drained += 1;
+                        // Pair with the dispatcher's `fetch_sub` on Raw so the
+                        // queue-length counter stays balanced (no underflow).
+                        metrics.queue_length.fetch_add(1, Ordering::Relaxed);
+                        let _ = tx.try_send(ReadLoopOutput::Raw(decoder::RawData::from(raw)));
+                    }
+                } else {
+                    loop {
+                        let drain = if conn.include_waveform {
+                            conn.endpoint.read_opendpp_event_with_waveform(
+                                100,
+                                &mut user_info_buffer,
+                                &mut waveform_buffer,
+                            )
+                        } else {
+                            conn.endpoint.read_opendpp_event(100, &mut user_info_buffer)
+                        };
+                        match drain {
+                            Ok(Some(evt)) => {
+                                drained += 1;
+                                let _ = tx.try_send(ReadLoopOutput::OpenDpp {
+                                    event: Box::new(evt),
+                                    enable_acq: conn.amax_enable_acq,
+                                });
+                            }
+                            _ => break,
                         }
-                        _ => break,
                     }
                 }
                 if drained > 0 {
@@ -278,7 +349,7 @@ pub(crate) fn run(
                 ReadLoopRequest::Detect { response_tx } => {
                     // Try to connect on-demand for Detect
                     if connection.is_none() {
-                        connection = try_connect_opendpp(&config.url, false);
+                        connection = connect_dev(&config.url);
                         last_connect_attempt = Instant::now();
                     }
                     let result = match connection.as_ref() {
@@ -296,7 +367,7 @@ pub(crate) fn run(
                     response_tx,
                 } => {
                     if connection.is_none() {
-                        connection = try_connect_opendpp(&config.url, false);
+                        connection = connect_dev(&config.url);
                         last_connect_attempt = Instant::now();
                     }
                     let result = match connection.as_ref() {
@@ -354,8 +425,11 @@ pub(crate) fn run(
                             // setup, so per-channel ApplyConfig alone cannot
                             // change waveform inclusion — we must rebind the
                             // active endpoint here while acquisition is stopped.
+                            // RAW path carries waveforms in the raw bytes
+                            // regardless of `waveforms_enabled`, so there is no
+                            // endpoint to rebind on toggle — skip the hot-swap.
                             let target_iw = dig_config.board.waveforms_enabled.unwrap_or(false);
-                            if target_iw != conn.include_waveform {
+                            if !raw_readout && target_iw != conn.include_waveform {
                                 match conn.handle.configure_opendpp_endpoint(target_iw) {
                                     Ok(ep) => {
                                         conn.endpoint = ep;
@@ -441,35 +515,60 @@ pub(crate) fn run(
                 continue;
             }
 
-            let read_result = if conn.include_waveform {
-                conn.endpoint.read_opendpp_event_with_waveform(
-                    config.read_timeout_ms,
-                    &mut user_info_buffer,
-                    &mut waveform_buffer,
-                )
+            // Read one unit of work and fold it into a `ReadLoopOutput`:
+            //  - RAW path: a bulk event-aggregate buffer, decoded later by
+            //    `AMaxDecoder` on the workers (`ReadLoopOutput::Raw`).
+            //  - OpenDPP path: a single FELib-decoded event
+            //    (`ReadLoopOutput::OpenDpp`), unchanged behaviour.
+            // `bytes_read` is accumulated here in both cases; the send /
+            // error / retry handling below is shared.
+            let read_result = if raw_readout {
+                match conn.endpoint.read_data(config.read_timeout_ms, &mut read_buffer) {
+                    Ok(Some(raw)) => {
+                        metrics
+                            .bytes_read
+                            .fetch_add(raw.size as u64, Ordering::Relaxed);
+                        Ok(Some(ReadLoopOutput::Raw(decoder::RawData::from(raw))))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
             } else {
-                conn.endpoint
-                    .read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer)
+                let opendpp = if conn.include_waveform {
+                    conn.endpoint.read_opendpp_event_with_waveform(
+                        config.read_timeout_ms,
+                        &mut user_info_buffer,
+                        &mut waveform_buffer,
+                    )
+                } else {
+                    conn.endpoint
+                        .read_opendpp_event(config.read_timeout_ms, &mut user_info_buffer)
+                };
+                match opendpp {
+                    Ok(Some(event)) => {
+                        metrics
+                            .bytes_read
+                            .fetch_add(event.event_size as u64, Ordering::Relaxed);
+                        // Forward untranslated — the 4-lane unpack + EventData
+                        // conversion runs on the decode workers (keeps this
+                        // thread read-only; see ReadLoopOutput::OpenDpp).
+                        Ok(Some(ReadLoopOutput::OpenDpp {
+                            event: Box::new(event),
+                            enable_acq: conn.amax_enable_acq,
+                        }))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
             };
             match read_result {
-                Ok(Some(event)) => {
+                Ok(Some(output)) => {
                     if let Some(since) = read_error_since.take() {
                         info!(
                             elapsed_ms = since.elapsed().as_millis() as u64,
-                            "Read recovered (OpenDPP) after transient error"
+                            "Read recovered after transient error"
                         );
                     }
-                    metrics
-                        .bytes_read
-                        .fetch_add(event.event_size as u64, Ordering::Relaxed);
-
-                    // Forward untranslated — the 4-lane unpack + EventData
-                    // conversion runs on the decode workers (keeps this
-                    // thread read-only; see ReadLoopOutput::OpenDpp).
-                    let output = ReadLoopOutput::OpenDpp {
-                        event: Box::new(event),
-                        enable_acq: conn.amax_enable_acq,
-                    };
 
                     // Update queue length metric
                     metrics.queue_length.fetch_add(1, Ordering::Relaxed);

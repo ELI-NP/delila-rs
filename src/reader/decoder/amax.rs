@@ -301,7 +301,15 @@ impl AMaxDecoder {
         let mut user_info = [0u64; 4];
         let mut user_word_index = 0usize;
 
-        if !data_is_last && !has_waveform {
+        // User words (terminated by bit 63) ALWAYS precede the waveform block
+        // when the data word is not the last word — see the FW raw event
+        // layout (`open-dpp_single_event.png`): word0, word1, user_word#0..W-1
+        // (last has bit63=1), then the waveform header + samples. The previous
+        // `&& !has_waveform` guard skipped the user words on waveform events,
+        // so `decode_waveform` started reading at a user word and desynced the
+        // whole buffer (ch0 over-counted + trailing-odd-word warnings,
+        // 2026-06-11 RawUDP bring-up).
+        if !data_is_last {
             while *word_index < total_words {
                 let user_word = self.read_u64(data, *word_index);
                 *word_index += 1;
