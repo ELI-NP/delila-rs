@@ -185,5 +185,5 @@ total_time_ns = TDC * 5 (ns)                  // coarse, 40-bit @ 5ns
 - [docs/plans/x743_standard_mode_design.md](../docs/plans/x743_standard_mode_design.md) — 詳細設計
 - [docs/plans/x743_integration.md](../docs/plans/x743_integration.md) — 2026-02-19 の初期設計（DPP-CI 撤退部分は superseded）
 - [docs/x743_dpp_ci_parameters.md](../docs/x743_dpp_ci_parameters.md) — DPP-CI パラメータ（撤退、User Manual Fig 10.9 と矛盾）
-- [docs/Setting_CHARGE_MODE_for_the_x743_modules.pdf](../docs/Setting_CHARGE_MODE_for_the_x743_modules.pdf) — CAEN App Note（実装バグ発見の根拠）
+- `Setting_CHARGE_MODE_for_the_x743_modules` — CAEN App Note（実装バグ発見の根拠。CAEN 著作物のためリポジトリには非同梱、CAEN サイトから入手）
 - **[legacy/UM2750_V1743_User_Manual_rev5.pdf](../legacy/UM2750_V1743_User_Manual_rev5.pdf)** — **決定的権威ソース (Sec 10.10.2, 10.10.3, Fig 10.8-10.9)**
