@@ -23,6 +23,12 @@ legacy
 # Hardware dumps
 devtree.json
 
+# CAEN GPL-licensed headers — NOT vendored, resolved from the system install
+# (/usr/local/include) at build time so this repo can stay permissively licensed.
+# Install the CAEN Digitizer Library to build with `--features x743`.
+src/reader/caen_legacy/CAENDigitizer.h
+src/reader/caen_legacy/CAENDigitizerType.h
+
 # CAEN library archives
 external/*.tar
 external/*.tgz

@@ -57,12 +57,12 @@ fn main() {
     #[cfg(feature = "x743")]
     {
         println!("cargo:rerun-if-changed=src/reader/caen_legacy/wrapper.h");
-        println!("cargo:rerun-if-changed=src/reader/caen_legacy/CAENDigitizer.h");
-        println!("cargo:rerun-if-changed=src/reader/caen_legacy/CAENDigitizerType.h");
 
         let digitizer_bindings = bindgen::Builder::default()
             .header("src/reader/caen_legacy/wrapper.h")
-            .clang_arg("-Isrc/reader/caen_legacy")
+            // Resolve CAENDigitizer.h from the system install (same model as FELib above),
+            // not a vendored copy — keeps the repo free of CAEN's GPL-licensed headers.
+            .clang_arg("-I/usr/local/include")
             .allowlist_function("CAEN_DGTZ_.*")
             .allowlist_type("CAEN_DGTZ_.*")
             .allowlist_var("CAEN_DGTZ_.*")
