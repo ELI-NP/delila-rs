@@ -29,6 +29,12 @@ devtree.json
 src/reader/caen_legacy/CAENDigitizer.h
 src/reader/caen_legacy/CAENDigitizerType.h
 
+# Third-party CAEN copyrighted material — not redistributable, kept local only.
+# Obtain these from CAEN (www.caen.it) directly.
+docs/Setting_CHARGE_MODE_for_the_x743_modules.pdf
+tools/hv_calibration/caengeco2020.png
+external/27xx-digitizer-usb-driver/
+
 # CAEN library archives
 external/*.tar
 external/*.tgz

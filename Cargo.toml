@@ -3,7 +3,7 @@ name = "delila-rs"
 version = "0.1.0"
 edition = "2021"
 description = "High-performance DAQ system for nuclear physics experiments"
-license = "MIT"
+license = "BSD-3-Clause"
 
 [workspace]
 members = ["delila-derive"]
