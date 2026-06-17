@@ -781,8 +781,13 @@ mod tests {
             | ((3u64 & 0xFFFF) << 32)
             | ((2u64 & 0xFFFF) << 16)
             | (1u64 & 0xFFFF);
+        // User-word block: real events always emit a bit63-terminated user-word
+        // block between word1 and the waveform header, and the decoder reads it
+        // for any non-last data word (see the `!data_is_last` guard). A single
+        // terminated word here keeps the waveform aligned.
+        let user_word: u64 = (1u64 << constants::USER_LAST_WORD_SHIFT) | 0xABCD;
 
-        let bytes = pack_be(&[word0, word1, wave_hdr, wave_word]);
+        let bytes = pack_be(&[word0, word1, user_word, wave_hdr, wave_word]);
         let mut raw = RawData::new(bytes);
         raw.n_events = 1;
 
@@ -835,8 +840,10 @@ mod tests {
         // No last_word bit on wave words (it would alias into lane 3 bit 15).
         let wave_word: u64 =
             ((0xF800u64) << 48) | ((0x0506u64) << 32) | ((0x0304u64) << 16) | 0x0102u64;
+        // Bit63-terminated user-word block before the waveform (see test above).
+        let user_word: u64 = (1u64 << constants::USER_LAST_WORD_SHIFT) | 0xABCD;
 
-        let bytes = pack_be(&[word0, word1, wave_hdr, wave_word]);
+        let bytes = pack_be(&[word0, word1, user_word, wave_hdr, wave_word]);
         let mut raw = RawData::new(bytes);
         raw.n_events = 1;
 
@@ -912,7 +919,9 @@ mod tests {
             wave_words.push((dig & 0xFFFF) << 48);
         }
 
-        let mut all_words = vec![word0, word1, wave_hdr];
+        // Bit63-terminated user-word block before the waveform (see tests above).
+        let user_word: u64 = (1u64 << constants::USER_LAST_WORD_SHIFT) | 0xABCD;
+        let mut all_words = vec![word0, word1, user_word, wave_hdr];
         all_words.extend(wave_words);
         let bytes = pack_be(&all_words);
         let mut raw = RawData::new(bytes);
