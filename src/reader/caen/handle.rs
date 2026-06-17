@@ -1006,6 +1006,22 @@ impl CaenHandle {
                 enable_acq: override_amax
                     .and_then(|c| c.enable_acq)
                     .or_else(|| defaults_amax.and_then(|c| c.enable_acq)),
+                // 16June FW energy/AMax window gate (provisional widths).
+                sel_trigger: override_amax
+                    .and_then(|c| c.sel_trigger)
+                    .or_else(|| defaults_amax.and_then(|c| c.sel_trigger)),
+                min_energy: override_amax
+                    .and_then(|c| c.min_energy)
+                    .or_else(|| defaults_amax.and_then(|c| c.min_energy)),
+                max_energy: override_amax
+                    .and_then(|c| c.max_energy)
+                    .or_else(|| defaults_amax.and_then(|c| c.max_energy)),
+                min_amax: override_amax
+                    .and_then(|c| c.min_amax)
+                    .or_else(|| defaults_amax.and_then(|c| c.min_amax)),
+                max_amax: override_amax
+                    .and_then(|c| c.max_amax)
+                    .or_else(|| defaults_amax.and_then(|c| c.max_amax)),
             };
 
             for (offset, value, name) in r::channel_writes(&merged) {

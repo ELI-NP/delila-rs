@@ -86,6 +86,21 @@ pub struct AMaxChannelConfig {
     /// 1-bit Enable Acquisition (FW reg `ENABLE_ACQ`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_acq: Option<u32>,
+    /// 8-bit E-Gate Trigger Sel (FW reg `sel_trigger`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sel_trigger: Option<u32>,
+    /// 16-bit AMax Gate Min (FW reg `min_amax`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_amax: Option<u32>,
+    /// 16-bit Energy Gate Max (FW reg `max_energy`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_energy: Option<u32>,
+    /// 16-bit Energy Gate Min (FW reg `min_energy`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_energy: Option<u32>,
+    /// 16-bit AMax Gate Max (FW reg `max_amax`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_amax: Option<u32>,
 }
 
 /// AMax board-level (global) writable register set. Used for

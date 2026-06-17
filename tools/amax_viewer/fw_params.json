@@ -4,7 +4,7 @@
   "_usage_delila_rs": "cargo run --bin amax_codegen -- <RegisterFile.json>  (writes Rust + TS sources)",
   "_matching": "Keys are matched as substrings of register names (e.g. 'THRS' matches 'page_amax_energy_0_THRS').",
   "_ui_meta_fields": "label/category/type/options/ui_max/unit are consumed by amax_codegen only; amax_viewer ignores them.",
-  "_fw_target": "AMAX_firmware32_channel_4input_caenlist (2026-05-13 build, broadcast page at word 0x200, 32 ch via _4_<N>/ per-channel pages).",
+  "_fw_target": "AMAX_firmware32_channel_4input_caenlist (2026-06-16 build, broadcast page at word 0x8200, 32 ch via _4_<N>/ per-channel pages). Energy/AMax gate regs (sel_trigger/min_energy/max_energy/min_amax/max_amax) added 16June; widths provisional (bits used only for UI ui_max, not write masking) — confirm against FW spec.",
   "params": {
     "POLARITY":         { "bits": 1,  "default": 1,       "label": "Polarity",        "category": "input",    "type": "enum",   "options": ["0", "1"] },
     "OFFSET":           { "bits": 16, "default": 0,       "label": "DC Offset",       "category": "input",    "type": "number" },
@@ -29,7 +29,12 @@
     "SHAP_TRIGG":       { "bits": 32, "default": 700,     "label": "Shaping Trigger", "category": "trigger",  "type": "number", "unit": "samp", "ui_max": 1000000 },
     "PRETRIGGER_INPUT": { "bits": 32, "default": 1800,    "label": "Pretrig Input",   "category": "input",    "type": "number", "unit": "samp", "ui_max": 1000000 },
     "delay_debug":      { "bits": 32, "default": 0,       "label": "Delay Debug",     "category": "input",    "type": "number", "unit": "samp", "ui_max": 1000000 },
-    "ENABLE_ACQ":       { "bits": 1,  "default": 1,       "label": "Enable Acquisition","category": "input",  "type": "enum",   "options": ["0", "1"] }
+    "ENABLE_ACQ":       { "bits": 1,  "default": 1,       "label": "Enable Acquisition","category": "input",  "type": "enum",   "options": ["0", "1"] },
+    "sel_trigger":      { "bits": 8,  "default": 0,       "label": "E-Gate Trigger Sel","category": "energy", "type": "number", "ui_max": 255 },
+    "min_energy":       { "bits": 16, "default": 0,       "label": "Energy Gate Min",  "category": "energy",  "type": "number", "ui_max": 65535 },
+    "max_energy":       { "bits": 16, "default": 65535,   "label": "Energy Gate Max",  "category": "energy",  "type": "number", "ui_max": 65535 },
+    "min_amax":         { "bits": 16, "default": 0,       "label": "AMax Gate Min",    "category": "amax",    "type": "number", "ui_max": 65535 },
+    "max_amax":         { "bits": 16, "default": 65535,   "label": "AMax Gate Max",    "category": "amax",    "type": "number", "ui_max": 65535 }
   },
   "_board_params_doc": "Global (non-per-channel) writable registers. Empty in the 13may caenlist FW because ENABLE_ACQ moved onto the per-channel page; keep the section so future global toggles still flow through amax_codegen.",
   "board_params": {

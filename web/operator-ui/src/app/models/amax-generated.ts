@@ -55,6 +55,16 @@ export interface AMaxChannelConfig {
   delay_debug?: number;
   /** 1-bit Enable Acquisition */
   enable_acq?: number;
+  /** 8-bit E-Gate Trigger Sel */
+  sel_trigger?: number;
+  /** 16-bit AMax Gate Min */
+  min_amax?: number;
+  /** 16-bit Energy Gate Max */
+  max_energy?: number;
+  /** 16-bit Energy Gate Min */
+  min_energy?: number;
+  /** 16-bit AMax Gate Max */
+  max_amax?: number;
 }
 
 /** Per-key default values from `fw_params.json` (FW developer defaults). */
@@ -83,6 +93,11 @@ export const AMAX_DEFAULTS: Record<string, number> = {
   'amax.shap_trigg': 700,
   'amax.delay_debug': 0,
   'amax.enable_acq': 1,
+  'amax.sel_trigger': 0,
+  'amax.min_amax': 0,
+  'amax.max_energy': 65535,
+  'amax.min_energy': 0,
+  'amax.max_amax': 65535,
 };
 
 /** All AMax dotted-path keys (`amax.<field>`). Used by the
@@ -112,6 +127,11 @@ export const AMAX_DOTTED_KEYS: readonly string[] = [
   'amax.shap_trigg',
   'amax.delay_debug',
   'amax.enable_acq',
+  'amax.sel_trigger',
+  'amax.min_amax',
+  'amax.max_energy',
+  'amax.min_energy',
+  'amax.max_amax',
 ];
 
 /** Channel-param categories declared by `fw_params.json`.
@@ -150,6 +170,9 @@ export const AMAX_ENERGY_PARAMS: ChannelParamDef[] = [
   { key: 'amax.bl_inib', label: "BL Inhibit", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg BL_INIB • word 0x0B (ch0 @ 0x80000B)" },
   { key: 'amax.sample_pos', label: "Sample Pos", type: 'number', unit: "samp", min: 0, max: 65535, step: 1, tooltip: "FW reg SAMPLE_POS • word 0x0C (ch0 @ 0x80000C)" },
   { key: 'amax.delay_shaping', label: "Delay Shaping", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg DELAY_SHAPING • word 0x15 (ch0 @ 0x800015)" },
+  { key: 'amax.sel_trigger', label: "E-Gate Trigger Sel", type: 'number', min: 0, max: 255, step: 1, tooltip: "FW reg sel_trigger • word 0x100 (ch0 @ 0x800100)" },
+  { key: 'amax.max_energy', label: "Energy Gate Max", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg max_energy • word 0x102 (ch0 @ 0x800102)" },
+  { key: 'amax.min_energy', label: "Energy Gate Min", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg min_energy • word 0x103 (ch0 @ 0x800103)" },
 ];
 
 export const AMAX_AMAX_PARAMS: ChannelParamDef[] = [
@@ -159,6 +182,8 @@ export const AMAX_AMAX_PARAMS: ChannelParamDef[] = [
   { key: 'amax.baseline_delay', label: "BL Delay (AMax)", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg baseline_delay • word 0x11 (ch0 @ 0x800011)" },
   { key: 'amax.baseline_len', label: "BL Length (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_len • word 0x12 (ch0 @ 0x800012)" },
   { key: 'amax.baseline_offset', label: "BL Offset (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_offset • word 0x13 (ch0 @ 0x800013)" },
+  { key: 'amax.min_amax', label: "AMax Gate Min", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg min_amax • word 0x101 (ch0 @ 0x800101)" },
+  { key: 'amax.max_amax', label: "AMax Gate Max", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg max_amax • word 0x104 (ch0 @ 0x800104)" },
 ];
 
 /** AMax board-level (global) writable register set —

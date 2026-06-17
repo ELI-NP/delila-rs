@@ -64,6 +64,16 @@ pub const REG_SHAP_TRIGG: u32 = 0x16;
 pub const REG_DELAY_DEBUG: u32 = 0x18;
 /// 1-bit Enable Acquisition
 pub const REG_ENABLE_ACQ: u32 = 0x19;
+/// 8-bit E-Gate Trigger Sel
+pub const REG_SEL_TRIGGER: u32 = 0x100;
+/// 16-bit AMax Gate Min
+pub const REG_MIN_AMAX: u32 = 0x101;
+/// 16-bit Energy Gate Max
+pub const REG_MAX_ENERGY: u32 = 0x102;
+/// 16-bit Energy Gate Min
+pub const REG_MIN_ENERGY: u32 = 0x103;
+/// 16-bit AMax Gate Max
+pub const REG_MAX_AMAX: u32 = 0x104;
 
 /// Compute the FELib byte address for a per-channel register.
 #[inline]
@@ -151,6 +161,21 @@ pub fn channel_writes(
     if let Some(v) = config.enable_acq {
         writes.push((REG_ENABLE_ACQ, v, "enable_acq"));
     }
+    if let Some(v) = config.sel_trigger {
+        writes.push((REG_SEL_TRIGGER, v, "sel_trigger"));
+    }
+    if let Some(v) = config.min_amax {
+        writes.push((REG_MIN_AMAX, v, "min_amax"));
+    }
+    if let Some(v) = config.max_energy {
+        writes.push((REG_MAX_ENERGY, v, "max_energy"));
+    }
+    if let Some(v) = config.min_energy {
+        writes.push((REG_MIN_ENERGY, v, "min_energy"));
+    }
+    if let Some(v) = config.max_amax {
+        writes.push((REG_MAX_AMAX, v, "max_amax"));
+    }
     writes
 }
 
@@ -208,6 +233,11 @@ mod tests {
             REG_SHAP_TRIGG,
             REG_DELAY_DEBUG,
             REG_ENABLE_ACQ,
+            REG_SEL_TRIGGER,
+            REG_MIN_AMAX,
+            REG_MAX_ENERGY,
+            REG_MIN_ENERGY,
+            REG_MAX_AMAX,
         ];
         let mut sorted = offsets.to_vec();
         sorted.sort_unstable();
