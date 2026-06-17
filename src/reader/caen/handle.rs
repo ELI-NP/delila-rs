@@ -662,9 +662,9 @@ impl CaenHandle {
     ///
     /// The returned bytes are the same FW wire words the OpenDPP endpoint
     /// decodes per-event; here we read whole buffers and let `AMaxDecoder`
-    /// parse them on the decode workers (big-endian word0/word1 + user words
-    /// + waveform). The FW always frames waveforms on the wire, so there is no
-    /// waveform toggle at this layer.
+    /// parse them on the decode workers (big-endian word0/word1, user words
+    /// and waveform). The FW always frames waveforms on the wire, so there is
+    /// no waveform toggle at this layer.
     pub fn configure_rawudp_endpoint(&self) -> Result<EndpointHandle, CaenError> {
         // Get endpoint handle
         let ep_handle = self.get_handle("/endpoint/rawudp").map_err(|e| {
@@ -726,7 +726,10 @@ impl CaenHandle {
                     handle: read_data_handle,
                 });
             }
-            eprintln!("[rawudp] SetReadDataFormat variant {} failed: ret={}", i, ret);
+            eprintln!(
+                "[rawudp] SetReadDataFormat variant {} failed: ret={}",
+                i, ret
+            );
             last_ret = ret;
         }
         CaenError::check(last_ret)?;
@@ -1022,12 +1025,16 @@ impl CaenHandle {
             // `_4_<N>` pages observed not to drive a visible physical
             // channel on the VX2730 caenlist firmware (31/32 channels fire,
             // ch0 stays silent). The same defaults also live on the
-            // `page_amax_energy/<NAME>` broadcast page at word 0x200; writing
-            // them here ensures the missing channel picks up the same
+            // `page_amax_energy/<NAME>` broadcast page; writing them here
+            // ensures the missing channel picks up the same
             // threshold/offset/polarity as the rest. Cheap (24 extra writes
             // per Configure, run once outside the channel loop).
+            //
+            // 16June2026 FW: the broadcast `page_amax_energy/<NAME>` page
+            // relocated from word 0x200 to 0x8200 (per-channel `_4_<N>`
+            // pages unchanged at 0x4000 + ch*0x200).
             if ch == 0 {
-                const BROADCAST_BASE: u32 = 0x200;
+                const BROADCAST_BASE: u32 = 0x8200;
                 for (offset, value, name) in r::channel_writes(&merged) {
                     let byte_addr = (BROADCAST_BASE + offset) * 4;
                     debug!(

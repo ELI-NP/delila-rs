@@ -1569,13 +1569,15 @@ pub(crate) fn send_arm_command(
 ///
 /// For DIG2 (PSD2), sends swstartacquisition.
 /// For DIG1 (PSD1/PHA) with START_MODE_SW, sends armacquisition (arm=start).
-/// AMax 11june2026+ FW acquisition gate. The `START_DAQ` register (FW
-/// RegisterFile word address `0x8000`) is wired to the CAEN-list `Run` port
-/// — writing 1 enables acquisition, 0 stops it. `set_user_register` takes a
-/// byte address, and CAEN's convention is word×4, so `0x8000 * 4`. Verified
-/// live 2026-06-12 (run 9164 first light: timestamps advance in 8 ns steps).
-pub(crate) const AMAX_START_DAQ_BYTE_ADDR: u32 = 0x8000 * 4;
-
+///
+/// AMax acquisition gate history: the 11june2026 FW gated acquisition behind
+/// a global `START_DAQ` register (word `0x8000`) that had to be written 1 to
+/// emit events. The **16June2026 FW dropped `START_DAQ` entirely** (register
+/// removed from RegisterFile.json) — the only run-control registers left are
+/// the per-channel `RUN_CFG` (programmed at Configure) and `ENABLE_ACQ`, so
+/// `swstartacquisition` alone now drives the run. The explicit START_DAQ
+/// write was therefore removed (would hit a non-existent register → CAEN
+/// error). Pending live re-verification on gant with the 16June FW.
 pub(crate) fn send_start_command(
     handle: &CaenHandle,
     firmware: FirmwareType,
@@ -1593,18 +1595,6 @@ pub(crate) fn send_start_command(
     } else {
         info!("Starting digitizer acquisition (PSD2)");
         handle.send_command(devtree::cmd::SW_START_ACQUISITION)?;
-        // AMax 11june2026+ FW gates acquisition behind the global START_DAQ
-        // register (FW block diagram: START_DAQ → START_CAENLIST). Plain
-        // swstartacquisition arms the FELib endpoint but produces NO events
-        // until START_DAQ=1 is written. START_DAQ lives at word address
-        // 0x8000 → byte address 0x8000*4 (same word→byte ×4 ABI as the
-        // per-channel registers; see amax_registers::channel_register_byte_addr).
-        if firmware == FirmwareType::AMax {
-            match handle.set_user_register(AMAX_START_DAQ_BYTE_ADDR, 1) {
-                Ok(()) => info!("AMax START_DAQ=1 written (acquisition gate opened)"),
-                Err(e) => warn!(error = %e, "Failed to write AMax START_DAQ register"),
-            }
-        }
     }
     Ok(())
 }

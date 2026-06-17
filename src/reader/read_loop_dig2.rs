@@ -171,7 +171,10 @@ pub(crate) fn run(
                     Ok(ep) => {
                         conn.endpoint = ep;
                         conn.include_waveform = include_waveform;
-                        info!(include_waveform, raw_readout, "Endpoint reconfigured after reset");
+                        info!(
+                            include_waveform,
+                            raw_readout, "Endpoint reconfigured after reset"
+                        );
                     }
                     Err(e) => error!(error = %e, "Failed to reconfigure endpoint after reset"),
                 }
@@ -272,18 +275,9 @@ pub(crate) fn run(
             // Stop needed? (target dropped below Running)
             if target_rank < state_rank(ComponentState::Running) && conn.hw_running {
                 info!("Stopping digitizer acquisition");
-                // AMax 11june2026+ FW: close the acquisition gate first by
-                // dropping the START_DAQ register (CAEN-list Run port) — the
-                // mirror of the START_DAQ=1 write in `send_start_command`.
-                if config.firmware == FirmwareType::AMax {
-                    match conn
-                        .handle
-                        .set_user_register(super::AMAX_START_DAQ_BYTE_ADDR, 0)
-                    {
-                        Ok(()) => info!("AMax START_DAQ=0 written (acquisition gate closed)"),
-                        Err(e) => warn!(error = %e, "Failed to clear AMax START_DAQ register"),
-                    }
-                }
+                // AMax 16June2026 FW dropped the global START_DAQ register, so
+                // there is no separate acquisition gate to close — disarm alone
+                // stops the run (see `send_start_command` for the gate history).
                 let _ = conn.handle.send_command(devtree::cmd::DISARM_ACQUISITION);
                 // Drain remaining buffered events before clearing
                 let mut drained = 0u64;
@@ -523,7 +517,10 @@ pub(crate) fn run(
             // `bytes_read` is accumulated here in both cases; the send /
             // error / retry handling below is shared.
             let read_result = if raw_readout {
-                match conn.endpoint.read_data(config.read_timeout_ms, &mut read_buffer) {
+                match conn
+                    .endpoint
+                    .read_data(config.read_timeout_ms, &mut read_buffer)
+                {
                     Ok(Some(raw)) => {
                         metrics
                             .bytes_read
