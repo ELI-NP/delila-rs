@@ -1046,11 +1046,14 @@ impl CaenHandle {
             // threshold/offset/polarity as the rest. Cheap (24 extra writes
             // per Configure, run once outside the channel loop).
             //
-            // 16June2026 FW: the broadcast `page_amax_energy/<NAME>` page
-            // relocated from word 0x200 to 0x8200 (per-channel `_4_<N>`
-            // pages unchanged at 0x4000 + ch*0x200).
+            // 17June2026 FW (build 2026061752): the whole address map shifted
+            // again — per-channel `_4_<N>` pages moved 0x4000 → 0x8000
+            // (`amax_registers::PAGE_BASE`), and the broadcast
+            // `page_amax_energy/<NAME>` page moved back 0x8200 → 0x200.
+            // In-page offsets are unchanged. (16June had per-ch 0x4000 /
+            // broadcast 0x8200; this is NOT a revert — per-ch is now 0x8000.)
             if ch == 0 {
-                const BROADCAST_BASE: u32 = 0x8200;
+                const BROADCAST_BASE: u32 = 0x200;
                 for (offset, value, name) in r::channel_writes(&merged) {
                     let byte_addr = (BROADCAST_BASE + offset) * 4;
                     debug!(
