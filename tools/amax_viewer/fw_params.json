@@ -30,11 +30,11 @@
     "PRETRIGGER_INPUT": { "bits": 32, "default": 1800,    "label": "Pretrig Input",   "category": "input",    "type": "number", "unit": "samp", "ui_max": 1000000 },
     "delay_debug":      { "bits": 32, "default": 0,       "label": "Delay Debug",     "category": "input",    "type": "number", "unit": "samp", "ui_max": 1000000 },
     "ENABLE_ACQ":       { "bits": 1,  "default": 1,       "label": "Enable Acquisition","category": "input",  "type": "enum",   "options": ["0", "1"] },
-    "sel_trigger":      { "bits": 8,  "default": 0,       "label": "E-Gate Trigger Sel","category": "trigger", "type": "number", "ui_max": 255 },
-    "min_energy":       { "bits": 16, "default": 0,       "label": "Energy Gate Min",  "category": "trigger", "type": "number", "ui_max": 65535 },
-    "max_energy":       { "bits": 16, "default": 65535,   "label": "Energy Gate Max",  "category": "trigger", "type": "number", "ui_max": 65535 },
-    "min_amax":         { "bits": 16, "default": 0,       "label": "AMax Gate Min",    "category": "trigger", "type": "number", "ui_max": 65535 },
-    "max_amax":         { "bits": 16, "default": 65535,   "label": "AMax Gate Max",    "category": "trigger", "type": "number", "ui_max": 65535 }
+    "sel_trigger":      { "bits": 8,  "default": 0,       "label": "E-Gate Trigger Sel","category": "trigger", "type": "number", "ui_max": 255,   "ui_order": 256 },
+    "min_amax":         { "bits": 16, "default": 0,       "label": "AMax Gate Min",    "category": "trigger", "type": "number", "ui_max": 65535, "ui_order": 257 },
+    "max_amax":         { "bits": 16, "default": 65535,   "label": "AMax Gate Max",    "category": "trigger", "type": "number", "ui_max": 65535, "ui_order": 258 },
+    "min_energy":       { "bits": 16, "default": 0,       "label": "Energy Gate Min",  "category": "trigger", "type": "number", "ui_max": 65535, "ui_order": 259 },
+    "max_energy":       { "bits": 16, "default": 65535,   "label": "Energy Gate Max",  "category": "trigger", "type": "number", "ui_max": 65535, "ui_order": 260 }
   },
   "_board_params_doc": "Global (non-per-channel) writable registers. Empty in the 13may caenlist FW because ENABLE_ACQ moved onto the per-channel page; keep the section so future global toggles still flow through amax_codegen.",
   "board_params": {

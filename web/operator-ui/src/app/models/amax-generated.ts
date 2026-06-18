@@ -161,9 +161,9 @@ export const AMAX_TRIGGER_PARAMS: ChannelParamDef[] = [
   { key: 'amax.shap_trigg', label: "Shaping Trigger", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg SHAP_TRIGG • word 0x16 (ch0 @ 0x800016)" },
   { key: 'amax.sel_trigger', label: "E-Gate Trigger Sel", type: 'number', min: 0, max: 255, step: 1, tooltip: "FW reg sel_trigger • word 0x100 (ch0 @ 0x800100)" },
   { key: 'amax.min_amax', label: "AMax Gate Min", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg min_amax • word 0x101 (ch0 @ 0x800101)" },
-  { key: 'amax.max_energy', label: "Energy Gate Max", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg max_energy • word 0x102 (ch0 @ 0x800102)" },
-  { key: 'amax.min_energy', label: "Energy Gate Min", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg min_energy • word 0x103 (ch0 @ 0x800103)" },
   { key: 'amax.max_amax', label: "AMax Gate Max", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg max_amax • word 0x104 (ch0 @ 0x800104)" },
+  { key: 'amax.min_energy', label: "Energy Gate Min", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg min_energy • word 0x103 (ch0 @ 0x800103)" },
+  { key: 'amax.max_energy', label: "Energy Gate Max", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg max_energy • word 0x102 (ch0 @ 0x800102)" },
 ];
 
 export const AMAX_ENERGY_PARAMS: ChannelParamDef[] = [

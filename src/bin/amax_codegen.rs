@@ -276,6 +276,12 @@ struct FwParam {
     options: Option<Vec<String>>,
     ui_max: Option<u64>,
     unit: Option<String>,
+    /// Optional UI display-order key within a category. When set, overrides
+    /// the default address-order sort for the TypeScript `AMAX_<CAT>_PARAMS`
+    /// arrays only (Rust emission stays address-ordered). Registers without
+    /// `ui_order` keep sorting by `word_offset`, so a value just needs to be
+    /// chosen relative to the neighbours it should sit among.
+    ui_order: Option<i64>,
 }
 
 // ---- Resolved per-register info used by all three emitters ----
@@ -295,6 +301,8 @@ struct ResolvedReg {
     options: Vec<String>, // empty unless ty == "enum"
     ui_max: u64,
     unit: Option<String>,
+    /// Optional UI display-order override (TS arrays only); see `FwParam`.
+    ui_order: Option<i64>,
 }
 
 fn snake_case(name: &str) -> String {
@@ -397,6 +405,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             options: meta.options.clone().unwrap_or_default(),
             ui_max,
             unit: meta.unit.clone(),
+            ui_order: meta.ui_order,
             fw_name: name,
         });
     }
@@ -460,6 +469,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 options: meta.options.clone().unwrap_or_default(),
                 ui_max,
                 unit: meta.unit.clone(),
+                ui_order: meta.ui_order,
                 fw_name: name,
             });
         }
@@ -849,7 +859,14 @@ fn emit_typescript(
             "export const {}: ChannelParamDef[] = [\n",
             const_name
         ));
-        for r in resolved.iter().filter(|r| &r.category == cat) {
+        // Within a category, honour an explicit `ui_order` when present,
+        // otherwise fall back to address (word_offset) order. Registers
+        // without `ui_order` keep their address-based position, so an
+        // override value only needs to be picked relative to its neighbours.
+        let mut cat_regs: Vec<&ResolvedReg> =
+            resolved.iter().filter(|r| &r.category == cat).collect();
+        cat_regs.sort_by_key(|r| r.ui_order.unwrap_or(i64::from(r.word_offset)));
+        for r in cat_regs {
             // Hex address tooltip: original FW name + page-relative word offset
             // + canonical ch0 word address (0x800000-base, what amax_viewer uses).
             let ch0_word = 0x800000 + r.word_offset;
