@@ -27,6 +27,14 @@ fn main() {
         println!("cargo:rustc-link-lib=CAENDigitizer");
     }
 
+    // CAEN_FELib dlopen()s its dig1/dig2 backends and calls dlerror(); on
+    // glibc < 2.34 (e.g. Ubuntu 20.04) those symbols live in libdl, so link it
+    // explicitly or the binary dies with "undefined symbol: dlerror" at the
+    // first FELib call. Harmless on newer glibc (merged into libc). Linux-only:
+    // macOS provides them via libSystem.
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-lib=dl");
+
     // Bake an rpath so the binaries resolve the prefix's CAEN libs at runtime
     // without needing LD_LIBRARY_PATH — essential when `prefix` is not a
     // ldconfig search path (e.g. /opt/delila-caen). Harmless for the default
