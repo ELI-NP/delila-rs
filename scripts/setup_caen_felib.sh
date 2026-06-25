@@ -75,13 +75,17 @@ cp -a "$STAGE"/x/usr/local/lib/*.so* "$PREFIX/lib/"
 log "Installing dpp-digitizer XMLs -> $XMLDIR (hardcoded path)"
 cp -a "$STAGE"/x/usr/local/share/dpp-digitizer/*.xml "$XMLDIR/"
 
-# 4) dig2 backend (Gen2) — optional; build from submodule if present -------
+# 4) dig2 backend (Gen2) — optional; ELIADE is Gen1-only so a dig2 build
+#    failure must NOT abort the (already-successful) dig1 install. Fully
+#    non-fatal: the whole block runs in a subshell guarded with `|| true`.
 if [ -d "$DIG2_SRC" ] && [ -f "$DIG2_SRC/CMakeLists.txt" ]; then
-  log "Building + installing CAEN dig2 backend -> $PREFIX"
-  cmake -S "$DIG2_SRC" -B "$DIG2_SRC/build" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-        -DCMAKE_PREFIX_PATH="$PREFIX" >/dev/null
-  cmake --build "$DIG2_SRC/build" -j"$(nproc)" >/dev/null
-  cmake --install "$DIG2_SRC/build" >/dev/null || log "dig2 install skipped (non-fatal)"
+  log "Building + installing CAEN dig2 backend -> $PREFIX (optional)"
+  (
+    cmake -S "$DIG2_SRC" -B "$DIG2_SRC/build" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+          -DCMAKE_PREFIX_PATH="$PREFIX" >/dev/null &&
+    cmake --build "$DIG2_SRC/build" -j"$(nproc)" >/dev/null &&
+    cmake --install "$DIG2_SRC/build" >/dev/null
+  ) || log "dig2 backend skipped (non-fatal; not needed for Gen1/ELIADE)"
 fi
 
 log "Done. Installed under $PREFIX (libs) + $XMLDIR (dig1 XML)."
