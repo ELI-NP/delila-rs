@@ -28,12 +28,13 @@ fn main() {
     }
 
     // CAEN_FELib dlopen()s its dig1/dig2 backends and calls dlerror(); on
-    // glibc < 2.34 (e.g. Ubuntu 20.04) those symbols live in libdl, so link it
-    // explicitly or the binary dies with "undefined symbol: dlerror" at the
-    // first FELib call. Harmless on newer glibc (merged into libc). Linux-only:
-    // macOS provides them via libSystem.
+    // glibc < 2.34 (e.g. Ubuntu 20.04) those symbols live in libdl. The binary
+    // must keep libdl as a runtime dependency so FELib's dlerror resolves in
+    // the global scope — but delila-rs calls no libdl symbol itself, so a plain
+    // `-ldl` gets dropped by the linker's default --as-needed. Force it with
+    // --no-as-needed. Harmless on newer glibc (merged into libc); Linux-only.
     #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-lib=dl");
+    println!("cargo:rustc-link-arg=-Wl,--no-as-needed,-ldl,--as-needed");
 
     // Bake an rpath so the binaries resolve the prefix's CAEN libs at runtime
     // without needing LD_LIBRARY_PATH — essential when `prefix` is not a
