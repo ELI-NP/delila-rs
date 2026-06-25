@@ -4,8 +4,19 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    // Tell cargo to look for shared libraries in /usr/local/lib
-    println!("cargo:rustc-link-search=/usr/local/lib");
+    // CAEN FELib / Digitizer install prefix. Defaults to the standard
+    // `/usr/local`, but can be overridden with the `CAEN_PREFIX` env var to
+    // point at an isolated install (e.g. `/opt/delila-caen`). This is what
+    // lets delila-rs ship its own CAEN stack on a shared machine without
+    // touching the system libs other software (CoMPASS) depends on — see
+    // `scripts/setup_caen_felib.sh`.
+    let prefix = env::var("CAEN_PREFIX").unwrap_or_else(|_| "/usr/local".to_string());
+    let lib_dir = format!("{prefix}/lib");
+    let include_dir = format!("{prefix}/include");
+    let inc_arg = format!("-I{include_dir}");
+
+    // Tell cargo where to find the CAEN shared libraries.
+    println!("cargo:rustc-link-search={lib_dir}");
 
     // Tell cargo to link the CAEN_FELib library
     println!("cargo:rustc-link-lib=CAEN_FELib");
@@ -16,11 +27,14 @@ fn main() {
         println!("cargo:rustc-link-lib=CAENDigitizer");
     }
 
-    // macOS: Set rpath for runtime library loading
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/lib");
+    // Bake an rpath so the binaries resolve the prefix's CAEN libs at runtime
+    // without needing LD_LIBRARY_PATH — essential when `prefix` is not a
+    // ldconfig search path (e.g. /opt/delila-caen). Harmless for the default
+    // /usr/local (already a system path).
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{lib_dir}");
 
-    // Tell cargo to invalidate the built crate whenever the wrapper changes
+    // Rebuild if the prefix or the C wrapper changes.
+    println!("cargo:rerun-if-env-changed=CAEN_PREFIX");
     println!("cargo:rerun-if-changed=src/reader/caen/wrapper.h");
     println!("cargo:rerun-if-changed=src/reader/caen/wrapper.c");
 
@@ -28,7 +42,7 @@ fn main() {
     // Rust cannot directly call C variadic functions on all platforms (especially macOS ARM64)
     cc::Build::new()
         .file("src/reader/caen/wrapper.c")
-        .include("/usr/local/include")
+        .include(&include_dir)
         .compile("caen_wrapper");
 
     // Generate FELib bindings
@@ -36,7 +50,7 @@ fn main() {
 
     let felib_bindings = bindgen::Builder::default()
         .header("src/reader/caen/wrapper.h")
-        .clang_arg("-I/usr/local/include")
+        .clang_arg(&inc_arg)
         .allowlist_function("CAEN_FELib_.*")
         .allowlist_type("CAEN_FELib_.*")
         .allowlist_var("CAEN_FELIB_.*")
@@ -62,7 +76,7 @@ fn main() {
             .header("src/reader/caen_legacy/wrapper.h")
             // Resolve CAENDigitizer.h from the system install (same model as FELib above),
             // not a vendored copy — keeps the repo free of CAEN's GPL-licensed headers.
-            .clang_arg("-I/usr/local/include")
+            .clang_arg(&inc_arg)
             .allowlist_function("CAEN_DGTZ_.*")
             .allowlist_type("CAEN_DGTZ_.*")
             .allowlist_var("CAEN_DGTZ_.*")

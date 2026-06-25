@@ -35,10 +35,12 @@ docs/Setting_CHARGE_MODE_for_the_x743_modules.pdf
 tools/hv_calibration/caengeco2020.png
 external/27xx-digitizer-usb-driver/
 
-# CAEN library archives
+# CAEN library archives (proprietary — obtain from CAEN, never commit)
 external/*.tar
 external/*.tgz
 external/*.tar.gz
+external/*.gz
+external/CAEN_Toolbox*
 
 # Upstream A3818 driver source (unpatched). Patched version is the
 # caen-a3818-driver submodule.
