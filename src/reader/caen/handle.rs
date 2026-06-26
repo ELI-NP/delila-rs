@@ -933,96 +933,11 @@ impl CaenHandle {
                 .channel_overrides
                 .get(&ch)
                 .and_then(|c| c.amax.as_ref());
-            let merged = AMaxChannelConfig {
-                pretrigger_input: override_amax
-                    .and_then(|c| c.pretrigger_input)
-                    .or_else(|| defaults_amax.and_then(|c| c.pretrigger_input)),
-                polarity: override_amax
-                    .and_then(|c| c.polarity)
-                    .or_else(|| defaults_amax.and_then(|c| c.polarity)),
-                offset: override_amax
-                    .and_then(|c| c.offset)
-                    .or_else(|| defaults_amax.and_then(|c| c.offset)),
-                thrs: override_amax
-                    .and_then(|c| c.thrs)
-                    .or_else(|| defaults_amax.and_then(|c| c.thrs)),
-                trig_k: override_amax
-                    .and_then(|c| c.trig_k)
-                    .or_else(|| defaults_amax.and_then(|c| c.trig_k)),
-                trig_m: override_amax
-                    .and_then(|c| c.trig_m)
-                    .or_else(|| defaults_amax.and_then(|c| c.trig_m)),
-                trap_k: override_amax
-                    .and_then(|c| c.trap_k)
-                    .or_else(|| defaults_amax.and_then(|c| c.trap_k)),
-                trap_m: override_amax
-                    .and_then(|c| c.trap_m)
-                    .or_else(|| defaults_amax.and_then(|c| c.trap_m)),
-                deconv_m: override_amax
-                    .and_then(|c| c.deconv_m)
-                    .or_else(|| defaults_amax.and_then(|c| c.deconv_m)),
-                trap_gain: override_amax
-                    .and_then(|c| c.trap_gain)
-                    .or_else(|| defaults_amax.and_then(|c| c.trap_gain)),
-                bl_len: override_amax
-                    .and_then(|c| c.bl_len)
-                    .or_else(|| defaults_amax.and_then(|c| c.bl_len)),
-                bl_inib: override_amax
-                    .and_then(|c| c.bl_inib)
-                    .or_else(|| defaults_amax.and_then(|c| c.bl_inib)),
-                sample_pos: override_amax
-                    .and_then(|c| c.sample_pos)
-                    .or_else(|| defaults_amax.and_then(|c| c.sample_pos)),
-                run_cfg: override_amax
-                    .and_then(|c| c.run_cfg)
-                    .or_else(|| defaults_amax.and_then(|c| c.run_cfg)),
-                amax_window: override_amax
-                    .and_then(|c| c.amax_window)
-                    .or_else(|| defaults_amax.and_then(|c| c.amax_window)),
-                window_maxim: override_amax
-                    .and_then(|c| c.window_maxim)
-                    .or_else(|| defaults_amax.and_then(|c| c.window_maxim)),
-                amax_len: override_amax
-                    .and_then(|c| c.amax_len)
-                    .or_else(|| defaults_amax.and_then(|c| c.amax_len)),
-                baseline_delay: override_amax
-                    .and_then(|c| c.baseline_delay)
-                    .or_else(|| defaults_amax.and_then(|c| c.baseline_delay)),
-                baseline_len: override_amax
-                    .and_then(|c| c.baseline_len)
-                    .or_else(|| defaults_amax.and_then(|c| c.baseline_len)),
-                baseline_offset: override_amax
-                    .and_then(|c| c.baseline_offset)
-                    .or_else(|| defaults_amax.and_then(|c| c.baseline_offset)),
-                delay_shaping: override_amax
-                    .and_then(|c| c.delay_shaping)
-                    .or_else(|| defaults_amax.and_then(|c| c.delay_shaping)),
-                shap_trigg: override_amax
-                    .and_then(|c| c.shap_trigg)
-                    .or_else(|| defaults_amax.and_then(|c| c.shap_trigg)),
-                delay_debug: override_amax
-                    .and_then(|c| c.delay_debug)
-                    .or_else(|| defaults_amax.and_then(|c| c.delay_debug)),
-                enable_acq: override_amax
-                    .and_then(|c| c.enable_acq)
-                    .or_else(|| defaults_amax.and_then(|c| c.enable_acq)),
-                // 16June FW energy/AMax window gate (provisional widths).
-                sel_trigger: override_amax
-                    .and_then(|c| c.sel_trigger)
-                    .or_else(|| defaults_amax.and_then(|c| c.sel_trigger)),
-                min_energy: override_amax
-                    .and_then(|c| c.min_energy)
-                    .or_else(|| defaults_amax.and_then(|c| c.min_energy)),
-                max_energy: override_amax
-                    .and_then(|c| c.max_energy)
-                    .or_else(|| defaults_amax.and_then(|c| c.max_energy)),
-                min_amax: override_amax
-                    .and_then(|c| c.min_amax)
-                    .or_else(|| defaults_amax.and_then(|c| c.min_amax)),
-                max_amax: override_amax
-                    .and_then(|c| c.max_amax)
-                    .or_else(|| defaults_amax.and_then(|c| c.max_amax)),
-            };
+            // Override-over-default merge is codegen-generated (see
+            // `merge_amax_channel_config` in amax_registers_generated.rs) so the
+            // field set lives in ONE place. Adding/removing an AMax register is
+            // a `cargo run --bin amax_codegen` away — no edit here.
+            let merged = r::merge_amax_channel_config(override_amax, defaults_amax);
 
             for (offset, value, name) in r::channel_writes(&merged) {
                 let byte_addr = r::channel_register_byte_addr(ch, offset);
@@ -1046,16 +961,15 @@ impl CaenHandle {
             // threshold/offset/polarity as the rest. Cheap (24 extra writes
             // per Configure, run once outside the channel loop).
             //
-            // 17June2026 FW (build 2026061752): the whole address map shifted
-            // again — per-channel `_4_<N>` pages moved 0x4000 → 0x8000
-            // (`amax_registers::PAGE_BASE`), and the broadcast
-            // `page_amax_energy/<NAME>` page moved back 0x8200 → 0x200.
-            // In-page offsets are unchanged. (16June had per-ch 0x4000 /
-            // broadcast 0x8200; this is NOT a revert — per-ch is now 0x8000.)
+            // The broadcast-page base shifts on every FW rebuild (16June 0x8200
+            // → 17June 0x200, etc.), so it is no longer hardcoded here: it is
+            // auto-derived by `amax_codegen` from RegisterFile.json and emitted
+            // as `amax_registers::BROADCAST_BASE`. `broadcast_register_byte_addr`
+            // applies the same in-page offsets used for the per-channel writes
+            // (the two pages share an identical layout — codegen asserts this).
             if ch == 0 {
-                const BROADCAST_BASE: u32 = 0x200;
                 for (offset, value, name) in r::channel_writes(&merged) {
-                    let byte_addr = (BROADCAST_BASE + offset) * 4;
+                    let byte_addr = r::broadcast_register_byte_addr(offset);
                     debug!(
                         register = name,
                         addr = format_args!("0x{:08X}", byte_addr),

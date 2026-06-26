@@ -38,30 +38,44 @@ struct Cli {
     )]
     ts_out: PathBuf,
 
-    /// Channel-page base address (word units, ch0). Defaults to the 13may
-    /// caenlist FW broadcast page at `0x200`. Pass `0x100000` for the older
-    /// 32-ch FW (single broadcast page, no slash), `0x800000` for the legacy
-    /// 2026-03 per-channel-paths firmware.
-    #[arg(long, default_value_t = 0x200)]
-    page_base: u32,
+    /// Override the auto-derived channel-page base (word units, ch0). Normally
+    /// left unset — `derive_layout` computes it as the minimum address of the
+    /// canonical register group. Accepts decimal or `0x`-prefixed hex. Use
+    /// only to force a base the auto-derivation can't see (e.g. a stripped
+    /// RegisterFile.json).
+    #[arg(long, value_parser = parse_u32_auto)]
+    page_base: Option<u32>,
 
-    /// Word stride between consecutive channel pages. Broadcast-page FWs use
-    /// `0` (every channel iteration hits the same address). Pass `0x40000`
-    /// for the legacy 2026-03 firmware. The 13may FW also exposes 32
-    /// per-channel pages at stride `0x200`, but `apply_amax_channel_config`
-    /// still drives the broadcast page — a single write fans out to all
-    /// channels in hardware, so the channel loop is intentionally redundant.
-    #[arg(long, default_value_t = 0)]
-    page_stride: u32,
+    /// Override the auto-derived word stride between consecutive channel
+    /// pages. Normally derived from `addr(ch1) - addr(ch0)`. Accepts decimal
+    /// or hex. `0` means a single broadcast page (write fans out in hardware).
+    #[arg(long, value_parser = parse_u32_auto)]
+    page_stride: Option<u32>,
 
-    /// Pick the ch0 per-channel page instead of the broadcast page as the
-    /// canonical register set. Use when the broadcast slash form
-    /// (`page_amax_energy/<NAME>`) does NOT fan out to all channels in
-    /// hardware (observed on the 13may caenlist FW) and per-channel
-    /// pages (`page_amax_energy_4_<N>/<NAME>`) must be written individually.
-    /// Pair with `--page-base 0x4000 --page-stride 0x200`.
-    #[arg(long, default_value_t = false)]
-    prefer_per_channel: bool,
+    /// Override the auto-derived broadcast-page base (word units). Normally the
+    /// minimum address of the `page_amax_energy/<NAME>` broadcast group, or the
+    /// per-channel base when no broadcast group exists. Accepts decimal or hex.
+    #[arg(long, value_parser = parse_u32_auto)]
+    broadcast_base: Option<u32>,
+
+    /// Override the auto-derived canonical-group choice. When unset,
+    /// `derive_layout` prefers the per-channel ch0 page whenever one exists
+    /// (this reproduces the hardware-verified 17June output). Pass
+    /// `--prefer-per-channel false` to force the broadcast page as the
+    /// canonical `REG_*` source instead.
+    #[arg(long)]
+    prefer_per_channel: Option<bool>,
+}
+
+/// Parse a `u32` accepting either decimal or a `0x`/`0X`-prefixed hex literal.
+/// Register-map addresses are universally written in hex in CAEN tooling, so
+/// the historical `--page-base 0x8000` invocations need this.
+fn parse_u32_auto(s: &str) -> Result<u32, String> {
+    let s = s.trim();
+    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).map_err(|e| e.to_string()),
+        None => s.parse::<u32>().map_err(|e| e.to_string()),
+    }
 }
 
 // ---- RegisterFile.json schema (subset) ----
@@ -250,6 +264,152 @@ fn select_canonical_per_channel_with(
         .collect()
 }
 
+// ---- Address-map auto-derivation ----
+//
+// Every AMax FW rebuild shifts the register page addresses. Rather than make a
+// human hand-pick `--page-base` / `--page-stride` / `--prefer-per-channel`
+// (and separately hand-edit `BROADCAST_BASE` in handle.rs), we derive the whole
+// layout from RegisterFile.json. The three groups are classified by
+// `Register::channel_index()`:
+//   - `None`     → broadcast page (`page_amax_energy/<NAME>`)
+//   - `Some(0)`  → per-channel ch0 page (`page_amax_energy_4_0/<NAME>`)
+//   - `Some(n)`  → per-channel ch-n page (used only to measure the stride)
+
+/// Auto-derived register-page layout. All values are word units (the FELib
+/// byte address is `word * 4`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DerivedLayout {
+    /// Base of the canonical (per-channel ch0, or broadcast fallback) page.
+    page_base: u32,
+    /// Word stride between consecutive per-channel pages (`0` if none).
+    page_stride: u32,
+    /// Base of the broadcast page (`page_base` when no broadcast group exists).
+    broadcast_base: u32,
+    /// True when the per-channel ch0 page is the canonical `REG_*` source.
+    prefer_per_channel: bool,
+}
+
+/// Derive the page layout from the register list. `prefer_override` forces the
+/// canonical-group choice; when `None`, the per-channel ch0 page wins whenever
+/// one exists (this reproduces the hardware-verified 17June output).
+fn derive_layout(registers: &[Register], prefer_override: Option<bool>) -> DerivedLayout {
+    use std::collections::BTreeMap;
+
+    // Minimum address seen per per-channel index, and for the broadcast group.
+    let mut min_by_idx: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut broadcast_min: Option<u32> = None;
+    for r in registers {
+        if !r.is_per_channel() {
+            continue;
+        }
+        match r.channel_index() {
+            None => {
+                broadcast_min = Some(broadcast_min.map_or(r.address, |m| m.min(r.address)));
+            }
+            Some(idx) => {
+                let e = min_by_idx.entry(idx).or_insert(r.address);
+                *e = (*e).min(r.address);
+            }
+        }
+    }
+
+    let has_ch0 = min_by_idx.contains_key(&0);
+    let prefer_per_channel = prefer_override.unwrap_or(has_ch0);
+
+    // `page_base` is the base of whichever group is canonical.
+    let page_base = if prefer_per_channel && has_ch0 {
+        min_by_idx[&0]
+    } else if let Some(bc) = broadcast_min {
+        bc
+    } else if has_ch0 {
+        min_by_idx[&0]
+    } else {
+        0
+    };
+
+    // Stride = (addr(ch-k) - addr(ch0)) / k for the smallest k > 0, so a sparse
+    // index set (e.g. only ch0 + ch4 present) still yields the per-page stride.
+    let page_stride = match (min_by_idx.get(&0), min_by_idx.iter().find(|(k, _)| **k > 0)) {
+        (Some(&a0), Some((&k, &ak))) if k > 0 => {
+            let delta = ak.saturating_sub(a0);
+            if delta % k == 0 {
+                delta / k
+            } else {
+                delta // non-uniform spacing — fall back to the raw first step
+            }
+        }
+        _ => 0,
+    };
+
+    let broadcast_base = broadcast_min.unwrap_or(page_base);
+
+    DerivedLayout {
+        page_base,
+        page_stride,
+        broadcast_base,
+        prefer_per_channel,
+    }
+}
+
+/// FW-corruption guard: the broadcast page and the per-channel ch0 page must
+/// share an identical in-page offset layout, because `apply_amax_channel_config`
+/// reuses one `channel_writes()` offset list to drive BOTH pages. If a register
+/// sits at a different relative offset on the two pages, a write would land on
+/// the wrong register — and writing a stale/wrong AMax address can brick the
+/// firmware. We verify the invariant and fail codegen loudly if it breaks.
+fn assert_broadcast_layout_matches(
+    registers: &[Register],
+    page_base: u32,
+    broadcast_base: u32,
+) -> Result<(), String> {
+    use std::collections::HashMap;
+
+    // fw_key → ch0 address (first seen).
+    let mut ch0: HashMap<String, u32> = HashMap::new();
+    for r in registers {
+        if r.is_per_channel() && r.channel_index() == Some(0) {
+            if let Some(k) = r.fw_key() {
+                ch0.entry(k).or_insert(r.address);
+            }
+        }
+    }
+
+    for r in registers {
+        if !(r.is_per_channel() && r.channel_index().is_none()) {
+            continue;
+        }
+        let Some(k) = r.fw_key() else { continue };
+        let Some(&a0) = ch0.get(&k) else { continue };
+        let off_bc = i64::from(r.address) - i64::from(broadcast_base);
+        let off_ch0 = i64::from(a0) - i64::from(page_base);
+        if off_bc != off_ch0 {
+            return Err(format!(
+                "broadcast/per-channel layout mismatch for `{k}`: \
+                 broadcast offset 0x{off_bc:X} (addr 0x{:X} - base 0x{broadcast_base:X}) \
+                 != ch0 offset 0x{off_ch0:X} (addr 0x{a0:X} - base 0x{page_base:X}). \
+                 Writing this FW would corrupt registers — codegen aborted.",
+                r.address,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Scrape the `REG_<NAME>` constant names from an existing generated registers
+/// file so the change-summary can diff against the previous FW. Returns an
+/// empty list if the file is absent (first run).
+fn existing_reg_names(path: &std::path::Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix("pub const REG_")?;
+            Some(rest.split(':').next()?.trim().to_string())
+        })
+        .collect()
+}
+
 // ---- fw_params.json schema (extended with UI metadata) ----
 
 #[derive(Deserialize)]
@@ -361,8 +521,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params_text = fs::read_to_string(&cli.params_file)?;
     let fw_params: FwParams = serde_json::from_str(&params_text)?;
 
+    // Auto-derive the page layout, then apply any explicit overrides.
+    let layout = derive_layout(&register_file.registers, cli.prefer_per_channel);
+    let page_base = cli.page_base.unwrap_or(layout.page_base);
+    let page_stride = cli.page_stride.unwrap_or(layout.page_stride);
+    let broadcast_base = cli.broadcast_base.unwrap_or(layout.broadcast_base);
+    let prefer = layout.prefer_per_channel;
+
+    // FW-corruption guard before we emit anything (uses the effective bases).
+    if let Err(msg) =
+        assert_broadcast_layout_matches(&register_file.registers, page_base, broadcast_base)
+    {
+        return Err(msg.into());
+    }
+
+    // Snapshot the previous REG_* set so we can report what this FW adds/drops.
+    let rust_reg_path = cli.rust_out.join("reader/caen/amax_registers_generated.rs");
+    let prev_reg_names = existing_reg_names(&rust_reg_path);
+
     let mut ch0: Vec<&Register> =
-        select_canonical_per_channel_with(&register_file.registers, cli.prefer_per_channel);
+        select_canonical_per_channel_with(&register_file.registers, prefer);
     ch0.sort_by_key(|r| r.address);
 
     // Resolve each writable register against fw_params.json.
@@ -393,7 +571,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // raw address minus that base. SHAP_TRIGG / SHAP_BL_HOLD live on
         // a separate page (0x1C0000) but the byte-address math still works
         // because we encode the full distance from page_base.
-        let word_offset = r.address.saturating_sub(cli.page_base);
+        let word_offset = r.address.saturating_sub(page_base);
         resolved.push(ResolvedReg {
             field: snake_case(&name),
             word_offset,
@@ -476,6 +654,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         out
     };
 
+    // ---- Change summary (stderr) ----
+    let src = |o: Option<u32>| if o.is_some() { "override" } else { "auto" };
+    eprintln!(
+        "amax_codegen layout: PAGE_BASE=0x{:X} ({}), PAGE_STRIDE=0x{:X} ({}), \
+         BROADCAST_BASE=0x{:X} ({}), canonical={}",
+        page_base,
+        src(cli.page_base),
+        page_stride,
+        src(cli.page_stride),
+        broadcast_base,
+        src(cli.broadcast_base),
+        if prefer {
+            "per-channel ch0"
+        } else {
+            "broadcast"
+        },
+    );
+
+    // REG_* diff vs the previously generated file.
+    let new_reg_names: std::collections::BTreeSet<String> =
+        resolved.iter().map(|r| r.field.to_uppercase()).collect();
+    let prev_set: std::collections::BTreeSet<String> = prev_reg_names.into_iter().collect();
+    let added: Vec<&String> = new_reg_names.difference(&prev_set).collect();
+    let removed: Vec<&String> = prev_set.difference(&new_reg_names).collect();
+    if prev_set.is_empty() {
+        eprintln!(
+            "amax_codegen: first generation ({} registers)",
+            new_reg_names.len()
+        );
+    } else if added.is_empty() && removed.is_empty() {
+        eprintln!(
+            "amax_codegen: register set unchanged ({} registers)",
+            new_reg_names.len()
+        );
+    } else {
+        eprintln!(
+            "amax_codegen: register set changed — {} added, {} removed",
+            added.len(),
+            removed.len()
+        );
+        if !added.is_empty() {
+            eprintln!(
+                "  + {}",
+                added
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !removed.is_empty() {
+            eprintln!(
+                "  - {}",
+                removed
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
     eprintln!(
         "amax_codegen: {} per-channel writable, {} board-level, {} read-only skipped",
         resolved.len(),
@@ -484,7 +724,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let rust_struct_path = cli.rust_out.join("config/amax_generated.rs");
-    let rust_reg_path = cli.rust_out.join("reader/caen/amax_registers_generated.rs");
 
     fs::write(
         &rust_struct_path,
@@ -500,8 +739,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         emit_rust_registers(
             &resolved,
             &board_resolved,
-            cli.page_base,
-            cli.page_stride,
+            page_base,
+            page_stride,
+            broadcast_base,
             &cli.register_file,
         ),
     )?;
@@ -604,6 +844,7 @@ fn emit_rust_registers(
     board_resolved: &[ResolvedReg],
     page_base: u32,
     page_stride: u32,
+    broadcast_base: u32,
     register_file: &std::path::Path,
 ) -> String {
     let mut out = String::new();
@@ -624,8 +865,13 @@ fn emit_rust_registers(
          \n\
          /// Word stride between consecutive channel pages.\n\
          pub const PAGE_STRIDE: u32 = 0x{:X};\n\
+         \n\
+         /// Broadcast-page base in word units. A single write here fans out to\n\
+         /// every channel in hardware. Auto-derived from RegisterFile.json;\n\
+         /// `apply_amax_channel_config` mirrors the per-channel writes here.\n\
+         pub const BROADCAST_BASE: u32 = 0x{:X};\n\
          \n",
-        page_base, page_stride
+        page_base, page_stride, broadcast_base
     ));
     out.push_str(
         "// ---- Per-channel register offsets (word, relative to the channel page base) ----\n\n",
@@ -645,6 +891,13 @@ fn emit_rust_registers(
          pub fn channel_register_byte_addr(channel: u8, word_offset: u32) -> u32 {\n\
          \x20\x20\x20\x20let word_addr = PAGE_BASE + (channel as u32) * PAGE_STRIDE + word_offset;\n\
          \x20\x20\x20\x20word_addr * 4\n\
+         }\n\
+         \n\
+         /// Compute the FELib byte address for a broadcast-page register. A\n\
+         /// single write here fans out to all channels in hardware.\n\
+         #[inline]\n\
+         pub fn broadcast_register_byte_addr(word_offset: u32) -> u32 {\n\
+         \x20\x20\x20\x20(BROADCAST_BASE + word_offset) * 4\n\
          }\n",
     );
 
@@ -666,6 +919,30 @@ fn emit_rust_registers(
         ));
     }
     out.push_str("    writes\n");
+    out.push_str("}\n");
+
+    // Codegen-driven override/default merge. handle.rs used to hand-enumerate
+    // every field here, which broke the build whenever the FW added or dropped
+    // a register (a struct literal must list exactly the current fields). Emit
+    // the merge from the canonical list so `apply_amax_channel_config` calls one
+    // function and never touches the field set again.
+    out.push_str("\n/// Merge a per-channel `override` config over `defaults`, field by field.\n");
+    out.push_str(
+        "/// Codegen-driven so adding/removing an AMax register needs no handle.rs edit.\n",
+    );
+    out.push_str("#[allow(dead_code)]\n");
+    out.push_str("pub fn merge_amax_channel_config(\n");
+    out.push_str("    override_cfg: Option<&crate::config::digitizer::AMaxChannelConfig>,\n");
+    out.push_str("    defaults: Option<&crate::config::digitizer::AMaxChannelConfig>,\n");
+    out.push_str(") -> crate::config::digitizer::AMaxChannelConfig {\n");
+    out.push_str("    crate::config::digitizer::AMaxChannelConfig {\n");
+    for r in resolved {
+        out.push_str(&format!(
+            "        {f}: override_cfg.and_then(|c| c.{f}).or_else(|| defaults.and_then(|c| c.{f})),\n",
+            f = r.field,
+        ));
+    }
+    out.push_str("    }\n");
     out.push_str("}\n");
 
     // ---- Board-level (global) register addresses + apply helper ----
@@ -902,6 +1179,19 @@ fn emit_typescript(
         }
         out.push_str("];\n\n");
     }
+
+    // Category → params map so the operator UI can build its AMax tab set by
+    // iterating `AMAX_PARAM_CATEGORIES` instead of a hand-wired per-category
+    // switch. A new fw_params category surfaces a new tab with no TS edit.
+    out.push_str("/** Maps each AMax category name to its params array. The UI\n");
+    out.push_str(" *  iterates `AMAX_PARAM_CATEGORIES` over this map to render tabs,\n");
+    out.push_str(" *  so a new firmware category auto-appears with no hand-edit. */\n");
+    out.push_str("export const AMAX_PARAMS_BY_CATEGORY: Record<string, ChannelParamDef[]> = {\n");
+    for cat in &categories {
+        let const_name = format!("AMAX_{}_PARAMS", category_label(cat).to_uppercase());
+        out.push_str(&format!("  '{}': {},\n", cat, const_name));
+    }
+    out.push_str("};\n\n");
 
     // ---- Board-level (global) interface, defaults, and params ----
     out.push_str("/** AMax board-level (global) writable register set —\n");
@@ -1298,5 +1588,106 @@ mod tests {
         // entries — globals are picked up by the `is_board_level` path.
         let regs = vec![reg_at(0x80008, "ENABLE_ACQ"), reg_at(0x80007, "AMAX_gol")];
         assert!(select_canonical_per_channel(&regs).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Address-map auto-derivation (`derive_layout` + safety guard).
+    // -----------------------------------------------------------------------
+
+    /// Build a synthetic 13may/17june-shape register list: a broadcast page at
+    /// `bc_base` plus `nch` per-channel pages at `pc_base` (stride `stride`),
+    /// each page carrying the same two registers at in-page offsets 0 and 3.
+    fn thirteen_may_shape(bc_base: u32, pc_base: u32, stride: u32, nch: u32) -> Vec<Register> {
+        let mut regs = vec![
+            reg_at(bc_base, "page_amax_energy/POLARITY"),
+            reg_at(bc_base + 3, "page_amax_energy/THRS"),
+        ];
+        for ch in 0..nch {
+            regs.push(reg_at(
+                pc_base + ch * stride,
+                &format!("page_amax_energy_4_{ch}/POLARITY"),
+            ));
+            regs.push(reg_at(
+                pc_base + ch * stride + 3,
+                &format!("page_amax_energy_4_{ch}/THRS"),
+            ));
+        }
+        regs
+    }
+
+    #[test]
+    fn derive_layout_default_prefers_ch0_when_present() {
+        // 17June shape: broadcast @ 0x200, per-channel ch0 @ 0x8000 stride 0x200.
+        let regs = thirteen_may_shape(0x200, 0x8000, 0x200, 32);
+        let l = derive_layout(&regs, None);
+        assert_eq!(l.page_base, 0x8000, "ch0 page is canonical");
+        assert_eq!(l.page_stride, 0x200);
+        assert_eq!(l.broadcast_base, 0x200);
+        assert!(l.prefer_per_channel);
+    }
+
+    #[test]
+    fn derive_layout_override_forces_broadcast() {
+        let regs = thirteen_may_shape(0x200, 0x8000, 0x200, 4);
+        let l = derive_layout(&regs, Some(false));
+        assert!(!l.prefer_per_channel);
+        assert_eq!(
+            l.page_base, 0x200,
+            "broadcast page is canonical under override"
+        );
+        // Stride is still measured from the per-channel pages.
+        assert_eq!(l.page_stride, 0x200);
+        assert_eq!(l.broadcast_base, 0x200);
+    }
+
+    #[test]
+    fn derive_layout_broadcast_only_era() {
+        // 2026-04 32-ch era: single broadcast page, no per-channel pages.
+        let regs = vec![
+            reg_at(0x100002, "page_amax_energy_POLARITY"),
+            reg_at(0x100004, "page_amax_energy_THRS"),
+        ];
+        let l = derive_layout(&regs, None);
+        assert!(!l.prefer_per_channel, "no ch0 page → broadcast canonical");
+        assert_eq!(l.page_base, 0x100002);
+        assert_eq!(l.page_stride, 0, "no per-channel pages → stride 0");
+        assert_eq!(l.broadcast_base, 0x100002);
+    }
+
+    #[test]
+    fn safety_guard_passes_on_aligned_layout() {
+        let regs = thirteen_may_shape(0x200, 0x8000, 0x200, 32);
+        assert!(assert_broadcast_layout_matches(&regs, 0x8000, 0x200).is_ok());
+    }
+
+    #[test]
+    fn safety_guard_rejects_divergent_offsets() {
+        // THRS sits at broadcast offset 5 but ch0 offset 3 → corruption risk.
+        let regs = vec![
+            reg_at(0x200, "page_amax_energy/POLARITY"),
+            reg_at(0x8000, "page_amax_energy_4_0/POLARITY"),
+            reg_at(0x205, "page_amax_energy/THRS"),
+            reg_at(0x8003, "page_amax_energy_4_0/THRS"),
+        ];
+        let err = assert_broadcast_layout_matches(&regs, 0x8000, 0x200);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("THRS"));
+    }
+
+    #[test]
+    fn derive_layout_reproduces_17june_golden() {
+        // Strongest guarantee: the real, hardware-verified 17June RegisterFile
+        // must auto-derive to exactly the committed PAGE_BASE/STRIDE/BROADCAST.
+        let text = include_str!("../../FW/20260617/RegisterFile_17june.json");
+        let rf: RegisterFile = serde_json::from_str(text).expect("17June json parses");
+        let l = derive_layout(&rf.registers, None);
+        assert_eq!(l.page_base, 0x8000, "committed PAGE_BASE");
+        assert_eq!(l.page_stride, 0x200, "committed PAGE_STRIDE");
+        assert_eq!(l.broadcast_base, 0x200, "current handle.rs BROADCAST_BASE");
+        assert!(l.prefer_per_channel);
+        assert!(
+            assert_broadcast_layout_matches(&rf.registers, l.page_base, l.broadcast_base).is_ok(),
+            "17June broadcast/per-channel layout is consistent"
+        );
     }
 }

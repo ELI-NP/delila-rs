@@ -14,6 +14,11 @@ pub const PAGE_BASE: u32 = 0x8000;
 /// Word stride between consecutive channel pages.
 pub const PAGE_STRIDE: u32 = 0x200;
 
+/// Broadcast-page base in word units. A single write here fans out to
+/// every channel in hardware. Auto-derived from RegisterFile.json;
+/// `apply_amax_channel_config` mirrors the per-channel writes here.
+pub const BROADCAST_BASE: u32 = 0x200;
+
 // ---- Per-channel register offsets (word, relative to the channel page base) ----
 
 /// 32-bit Pretrig Input
@@ -80,6 +85,13 @@ pub const REG_MAX_AMAX: u32 = 0x104;
 pub fn channel_register_byte_addr(channel: u8, word_offset: u32) -> u32 {
     let word_addr = PAGE_BASE + (channel as u32) * PAGE_STRIDE + word_offset;
     word_addr * 4
+}
+
+/// Compute the FELib byte address for a broadcast-page register. A
+/// single write here fans out to all channels in hardware.
+#[inline]
+pub fn broadcast_register_byte_addr(word_offset: u32) -> u32 {
+    (BROADCAST_BASE + word_offset) * 4
 }
 
 /// All writable per-channel register fields, in stable order.
@@ -177,6 +189,104 @@ pub fn channel_writes(
         writes.push((REG_MAX_AMAX, v, "max_amax"));
     }
     writes
+}
+
+/// Merge a per-channel `override` config over `defaults`, field by field.
+/// Codegen-driven so adding/removing an AMax register needs no handle.rs edit.
+#[allow(dead_code)]
+pub fn merge_amax_channel_config(
+    override_cfg: Option<&crate::config::digitizer::AMaxChannelConfig>,
+    defaults: Option<&crate::config::digitizer::AMaxChannelConfig>,
+) -> crate::config::digitizer::AMaxChannelConfig {
+    crate::config::digitizer::AMaxChannelConfig {
+        pretrigger_input: override_cfg
+            .and_then(|c| c.pretrigger_input)
+            .or_else(|| defaults.and_then(|c| c.pretrigger_input)),
+        polarity: override_cfg
+            .and_then(|c| c.polarity)
+            .or_else(|| defaults.and_then(|c| c.polarity)),
+        offset: override_cfg
+            .and_then(|c| c.offset)
+            .or_else(|| defaults.and_then(|c| c.offset)),
+        thrs: override_cfg
+            .and_then(|c| c.thrs)
+            .or_else(|| defaults.and_then(|c| c.thrs)),
+        trig_k: override_cfg
+            .and_then(|c| c.trig_k)
+            .or_else(|| defaults.and_then(|c| c.trig_k)),
+        trig_m: override_cfg
+            .and_then(|c| c.trig_m)
+            .or_else(|| defaults.and_then(|c| c.trig_m)),
+        trap_k: override_cfg
+            .and_then(|c| c.trap_k)
+            .or_else(|| defaults.and_then(|c| c.trap_k)),
+        trap_m: override_cfg
+            .and_then(|c| c.trap_m)
+            .or_else(|| defaults.and_then(|c| c.trap_m)),
+        deconv_m: override_cfg
+            .and_then(|c| c.deconv_m)
+            .or_else(|| defaults.and_then(|c| c.deconv_m)),
+        trap_gain: override_cfg
+            .and_then(|c| c.trap_gain)
+            .or_else(|| defaults.and_then(|c| c.trap_gain)),
+        bl_len: override_cfg
+            .and_then(|c| c.bl_len)
+            .or_else(|| defaults.and_then(|c| c.bl_len)),
+        bl_inib: override_cfg
+            .and_then(|c| c.bl_inib)
+            .or_else(|| defaults.and_then(|c| c.bl_inib)),
+        sample_pos: override_cfg
+            .and_then(|c| c.sample_pos)
+            .or_else(|| defaults.and_then(|c| c.sample_pos)),
+        run_cfg: override_cfg
+            .and_then(|c| c.run_cfg)
+            .or_else(|| defaults.and_then(|c| c.run_cfg)),
+        amax_window: override_cfg
+            .and_then(|c| c.amax_window)
+            .or_else(|| defaults.and_then(|c| c.amax_window)),
+        window_maxim: override_cfg
+            .and_then(|c| c.window_maxim)
+            .or_else(|| defaults.and_then(|c| c.window_maxim)),
+        amax_len: override_cfg
+            .and_then(|c| c.amax_len)
+            .or_else(|| defaults.and_then(|c| c.amax_len)),
+        baseline_delay: override_cfg
+            .and_then(|c| c.baseline_delay)
+            .or_else(|| defaults.and_then(|c| c.baseline_delay)),
+        baseline_len: override_cfg
+            .and_then(|c| c.baseline_len)
+            .or_else(|| defaults.and_then(|c| c.baseline_len)),
+        baseline_offset: override_cfg
+            .and_then(|c| c.baseline_offset)
+            .or_else(|| defaults.and_then(|c| c.baseline_offset)),
+        delay_shaping: override_cfg
+            .and_then(|c| c.delay_shaping)
+            .or_else(|| defaults.and_then(|c| c.delay_shaping)),
+        shap_trigg: override_cfg
+            .and_then(|c| c.shap_trigg)
+            .or_else(|| defaults.and_then(|c| c.shap_trigg)),
+        delay_debug: override_cfg
+            .and_then(|c| c.delay_debug)
+            .or_else(|| defaults.and_then(|c| c.delay_debug)),
+        enable_acq: override_cfg
+            .and_then(|c| c.enable_acq)
+            .or_else(|| defaults.and_then(|c| c.enable_acq)),
+        sel_trigger: override_cfg
+            .and_then(|c| c.sel_trigger)
+            .or_else(|| defaults.and_then(|c| c.sel_trigger)),
+        min_amax: override_cfg
+            .and_then(|c| c.min_amax)
+            .or_else(|| defaults.and_then(|c| c.min_amax)),
+        max_energy: override_cfg
+            .and_then(|c| c.max_energy)
+            .or_else(|| defaults.and_then(|c| c.max_energy)),
+        min_energy: override_cfg
+            .and_then(|c| c.min_energy)
+            .or_else(|| defaults.and_then(|c| c.min_energy)),
+        max_amax: override_cfg
+            .and_then(|c| c.max_amax)
+            .or_else(|| defaults.and_then(|c| c.max_amax)),
+    }
 }
 
 /// All writable board-level register fields, in stable order.

@@ -186,6 +186,16 @@ export const AMAX_AMAX_PARAMS: ChannelParamDef[] = [
   { key: 'amax.baseline_offset', label: "BL Offset (AMax)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg baseline_offset • word 0x13 (ch0 @ 0x800013)" },
 ];
 
+/** Maps each AMax category name to its params array. The UI
+ *  iterates `AMAX_PARAM_CATEGORIES` over this map to render tabs,
+ *  so a new firmware category auto-appears with no hand-edit. */
+export const AMAX_PARAMS_BY_CATEGORY: Record<string, ChannelParamDef[]> = {
+  'input': AMAX_INPUT_PARAMS,
+  'trigger': AMAX_TRIGGER_PARAMS,
+  'energy': AMAX_ENERGY_PARAMS,
+  'amax': AMAX_AMAX_PARAMS,
+};
+
 /** AMax board-level (global) writable register set —
  *  firmware-wide toggles like the debug-FW `ENABLE_ACQ`. */
 export interface AMaxBoardConfig {

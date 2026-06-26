@@ -59,10 +59,10 @@ import {
 import {
   getCategoryParams,
   getAllChannelParams,
+  getFirmwareCategories,
+  channelCategoryLabel,
   getProbeOptions,
   ChannelCategory,
-  CHANNEL_CATEGORIES,
-  CHANNEL_CATEGORY_LABELS,
   ProbeOption,
 } from '../../models/channel-params';
 import { HistogramChartComponent, RangeChangeEvent } from '../../components/histogram-chart/histogram-chart.component';
@@ -1263,26 +1263,24 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
     return getCategoryParams(config.firmware, cat);
   });
 
-  /** All channel-param categories in operator-pipeline order, driven by
-   *  the canonical list in channel-params.ts. New firmware categories
-   *  (e.g. AMax `debug`) show up automatically the moment the codegen
-   *  emits a non-empty `AMAX_<CAT>_PARAMS` for that firmware — no
-   *  hand-edit here. */
-  private readonly allCategories: { key: ChannelCategory; label: string }[] =
-    CHANNEL_CATEGORIES.map(key => ({ key, label: CHANNEL_CATEGORY_LABELS[key] }));
-
-  /** Categories the Tune Up panel actually surfaces, filtered to those
-   *  the current firmware exposes. Keeps an empty `waveform` cell only
-   *  for PSD1/PHA1 (their Waveform sub-tab houses board-level Record
-   *  Length + virtual-probe selectors with no channel params). AMax /
-   *  PSD2 / PHA2 hide the tab outright when the category is empty. */
+  /** Categories the Tune Up panel actually surfaces, in operator-pipeline
+   *  order, driven per-firmware by `getFirmwareCategories`. A new firmware
+   *  category (e.g. AMax `debug` from codegen) shows up automatically — no
+   *  hand-edit here. Keeps an empty `waveform` cell only for PSD1/PHA1
+   *  (their Waveform sub-tab houses board-level Record Length + virtual-probe
+   *  selectors with no channel params). AMax / PSD2 / PHA2 hide the tab
+   *  outright when the category is empty. */
   readonly categoryGrid = computed(() => {
     const config = this.tuneUpConfig();
     if (!config) return [];
     const keepEmptyWaveform =
       config.firmware === 'PSD1' || config.firmware === 'PHA1';
-    return this.allCategories
-      .map(c => ({ ...c, params: getCategoryParams(config.firmware, c.key) }))
+    return getFirmwareCategories(config.firmware)
+      .map(key => ({
+        key,
+        label: channelCategoryLabel(key),
+        params: getCategoryParams(config.firmware, key),
+      }))
       .filter(c => {
         if (c.params.length > 0) return true;
         if (c.key === 'waveform' && keepEmptyWaveform) return true;

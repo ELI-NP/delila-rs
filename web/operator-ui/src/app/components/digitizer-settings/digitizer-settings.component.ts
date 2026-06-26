@@ -19,7 +19,14 @@ import { DigitizerService } from '../../services/digitizer.service';
 import { OperatorService } from '../../services/operator.service';
 import { NotificationService } from '../../services/notification.service';
 import { FirmwareType, RegisterWrite, X743Config } from '../../models/types';
-import { getCategoryParams, getAllChannelParams, getProbeOptions, ProbeOption } from '../../models/channel-params';
+import {
+  getCategoryParams,
+  getAllChannelParams,
+  getFirmwareCategories,
+  channelCategoryLabel,
+  getProbeOptions,
+  ProbeOption,
+} from '../../models/channel-params';
 import {
   AMAX_BOARD_DEFAULTS,
   AMAX_BOARD_DOTTED_KEYS,
@@ -834,6 +841,25 @@ import {
               </div>
             </mat-tab>
           }
+
+          <!-- Extra AMax categories (e.g. a future 'debug' tab) declared by
+               fw_params.json + codegen. Rendered generically so a new
+               category needs no template edit. -->
+          @for (cat of extraAmaxCategories(); track cat.key) {
+            <mat-tab [label]="cat.label">
+              <div class="tab-content">
+                <app-channel-table
+                  [params]="cat.params"
+                  [numChannels]="config.num_channels"
+                  [defaultValues]="defaultValues()"
+                  [channelValues]="channelValues()"
+                  [disabledKeys]="disabledKeys()"
+                  (defaultChange)="onDefaultChange($event)"
+                  (channelChange)="onChannelChange($event)"
+                />
+              </div>
+            </mat-tab>
+          }
         </mat-tab-group>
       } @else {
         <mat-card class="no-selection">
@@ -1049,6 +1075,23 @@ export class DigitizerSettingsComponent {
   readonly amaxParams = computed(() => {
     const config = this.selectedConfig();
     return config ? getCategoryParams(config.firmware, 'amax') : [];
+  });
+
+  /** AMax firmware categories beyond the bespoke tabs (input/trigger/energy/
+   *  amax/coincidence/waveform). A new category declared in fw_params.json +
+   *  codegen renders here as a generic param-table tab — no template edit. */
+  readonly extraAmaxCategories = computed(() => {
+    const config = this.selectedConfig();
+    if (!config) return [];
+    const bespoke = new Set(['input', 'trigger', 'energy', 'amax', 'coincidence', 'waveform']);
+    return getFirmwareCategories(config.firmware)
+      .filter((c) => !bespoke.has(c))
+      .map((key) => ({
+        key,
+        label: channelCategoryLabel(key),
+        params: getCategoryParams(config.firmware, key),
+      }))
+      .filter((c) => c.params.length > 0);
   });
 
   /** Virtual Probe options per firmware (board-level, PSD1/PHA1 only) */
