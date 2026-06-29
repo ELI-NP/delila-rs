@@ -103,50 +103,62 @@ struct Register {
     name: Option<String>,
 }
 
+/// Consume leading `<digits>_` tokens from an underscore-form page body and
+/// return `(channel, register_name)`. The channel is the LAST leading numeric
+/// token, which covers every underscore naming era at once:
+///   - bare:            `POLARITY`       → `(None, "POLARITY")`     broadcast page
+///   - 2026-05 16-ch:   `15_THRS`        → `(Some(15), "THRS")`     `<ch>_<NAME>`
+///   - 2026-06 custom:  `1_0_POLARITY`   → `(Some(0), "POLARITY")`  `<group>_<ch>_<NAME>`
+///
+/// Register names never start with a digit, so a leading `<digits>_` token is
+/// always a page-index component (group or channel), never part of the name.
+/// The custom-width FW (`page_amax_energy_1_<ch>_<NAME>`) prepends a group
+/// index before the channel; taking the *last* leading number yields the real
+/// channel in both the one-number and two-number forms.
+fn split_underscore_body(body: &str) -> (Option<u32>, &str) {
+    let mut rest = body;
+    let mut channel = None;
+    while let Some(us) = rest.find('_') {
+        let head = &rest[..us];
+        if head.is_empty() || !head.chars().all(|c| c.is_ascii_digit()) {
+            break;
+        }
+        channel = head.parse().ok();
+        rest = &rest[us + 1..];
+    }
+    (channel, rest)
+}
+
 impl Register {
-    /// Identifier used for matching against `fw_params.json`. Strips the
-    /// channel infix so old per-channel paths and new single-channel names
-    /// land on the same key (e.g. `THRS`).
+    /// Identifier used for matching against `fw_params.json`. Strips the page
+    /// prefix and any channel/group index so every era's per-channel name lands
+    /// on the same key (e.g. `THRS`).
     ///
-    /// Four FW eras coexist in this strip chain:
-    ///   - 2026-03 era: `page_amax_energy_0/THRS` → `THRS` (slash separator)
-    ///   - 2026-04 32-ch era: `page_amax_energy_THRS` → `THRS` (no index)
-    ///   - 2026-05 16-ch era: `page_amax_energy_15_THRS` → `THRS`
-    ///     (underscore-separated index, broadcast page also has bare form)
-    ///   - 2026-05 caenlist-13may era: broadcast `page_amax_energy/THRS`
-    ///     (slash form, no index), per-channel `page_amax_energy_4_<N>/THRS`
+    /// FW naming eras handled:
+    ///   - 2026-03:        `page_amax_energy_0/THRS`        (slash, channel)
+    ///   - 2026-04 32-ch:  `page_amax_energy_THRS`          (bare, no index)
+    ///   - 2026-05 16-ch:  `page_amax_energy_15_THRS`       (underscore, channel)
+    ///   - 2026-05 13may:  `page_amax_energy/THRS` (broadcast) +
+    ///                     `page_amax_energy_4_<N>/THRS`     (slash, group+channel)
+    ///   - 2026-06 custom: `page_amax_energy_1_<N>_THRS`    (underscore, group+channel)
     fn fw_key(&self) -> Option<String> {
         let raw = self.path.as_deref().or(self.name.as_deref())?;
-        // 13may broadcast form: `page_amax_energy/<NAME>` — single broadcast
-        // page exposed with slash separator (no `_4_<N>/` infix).
+        // 13may broadcast form: `page_amax_energy/<NAME>`.
         if let Some(rest) = raw.strip_prefix("page_amax_energy/") {
             return Some(rest.to_string());
         }
-        // 13may per-channel form: `page_amax_energy_4_<N>/<NAME>` — strip the
-        // `_4_<N>/` chunk down to the bare register name.
-        if let Some(rest) = raw.strip_prefix("page_amax_energy_4_") {
-            if let Some(slash) = rest.find('/') {
-                let idx = &rest[..slash];
-                if idx.chars().all(|c| c.is_ascii_digit()) {
-                    return Some(rest[slash + 1..].to_string());
-                }
-            }
-        }
-        let stripped = raw
-            .strip_prefix("page_amax_energy_0/")
-            .or_else(|| raw.strip_prefix("page_amax_energy_1/"))
-            .or_else(|| raw.strip_prefix("page_amax_energy_"))
-            .unwrap_or(raw);
-        // For the 2026-05 era we may still have a leading `<digits>_` from
-        // the per-channel page (e.g. "5_THRS"). Strip it so the key matches
-        // the bare register name in fw_params.json.
-        let trimmed = match stripped.find('_') {
-            Some(idx) if stripped[..idx].chars().all(|c| c.is_ascii_digit()) => {
-                &stripped[idx + 1..]
-            }
-            _ => stripped,
+        let Some(rest) = raw.strip_prefix("page_amax_energy_") else {
+            // Non-page (board-level) register — use the raw name as-is.
+            return Some(raw.to_string());
         };
-        Some(trimmed.to_string())
+        // Slash forms (`<N>/<NAME>` 2026-03, `4_<N>/<NAME>` 13may): the name is
+        // everything after the slash.
+        if let Some(slash) = rest.find('/') {
+            return Some(rest[slash + 1..].to_string());
+        }
+        // Underscore forms: drop the leading group/channel numeric tokens.
+        let (_, name) = split_underscore_body(rest);
+        Some(name.to_string())
     }
 
     /// True iff this register belongs to the per-channel `page_amax_energy_*`
@@ -175,29 +187,16 @@ impl Register {
         if raw.starts_with("page_amax_energy/") {
             return None;
         }
-        // 13may per-channel form: `page_amax_energy_4_<N>/<NAME>` — the `_4_`
-        // prefix denotes a 4-input page, `<N>` is the channel index.
-        if let Some(rest) = raw.strip_prefix("page_amax_energy_4_") {
-            if let Some(slash) = rest.find('/') {
-                let idx = &rest[..slash];
-                if idx.chars().all(|c| c.is_ascii_digit()) {
-                    return idx.parse().ok();
-                }
-            }
+        let rest = raw.strip_prefix("page_amax_energy_")?;
+        // Slash forms (`<N>/<NAME>` 2026-03, `4_<N>/<NAME>` 13may): the channel
+        // is the last numeric token before the slash (e.g. `4_0` → 0).
+        if let Some(slash) = rest.find('/') {
+            return rest[..slash].rsplit('_').next()?.parse().ok();
         }
-        let body = raw.strip_prefix("page_amax_energy_")?;
-        // 2026-03 slash form: "<N>/<NAME>"
-        if let Some(slash) = body.find('/') {
-            return body[..slash].parse().ok();
-        }
-        // 2026-05 underscore form: "<N>_<NAME>" — only when prefix is all digits.
-        if let Some(uscore) = body.find('_') {
-            let prefix = &body[..uscore];
-            if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
-                return prefix.parse().ok();
-            }
-        }
-        None // bare "<NAME>" = broadcast page
+        // Underscore forms: channel = last leading numeric token. Covers the
+        // 16-ch `<ch>_<NAME>` form and the custom-width `<group>_<ch>_<NAME>`
+        // form. Bare `<NAME>` (broadcast page) yields None.
+        split_underscore_body(rest).0
     }
 
     /// True iff this register's name matches a key in `fw_params.board_params`
@@ -1624,6 +1623,79 @@ mod tests {
         assert_eq!(l.page_stride, 0x200);
         assert_eq!(l.broadcast_base, 0x200);
         assert!(l.prefer_per_channel);
+    }
+
+    // -----------------------------------------------------------------------
+    // 2026-06 custom-width era: `page_amax_energy_<group>_<ch>_<NAME>` —
+    // underscore-separated, a group index (`1`) prepended before the channel,
+    // and NO broadcast page. Regression for the gant build failure where the
+    // group index was mistaken for the channel, dropping every register.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fw_key_handles_custom_width_era() {
+        assert_eq!(
+            reg("page_amax_energy_1_0_POLARITY").fw_key().as_deref(),
+            Some("POLARITY")
+        );
+        assert_eq!(
+            reg("page_amax_energy_1_3_THRS").fw_key().as_deref(),
+            Some("THRS")
+        );
+        // register name with its own underscores must survive intact
+        assert_eq!(
+            reg("page_amax_energy_1_2_baseline_delay").fw_key().as_deref(),
+            Some("baseline_delay")
+        );
+        assert_eq!(
+            reg("page_amax_energy_1_0_select_width").fw_key().as_deref(),
+            Some("select_width")
+        );
+    }
+
+    #[test]
+    fn channel_index_handles_custom_width_era() {
+        // The channel is the SECOND number (the `1` is the group prefix).
+        assert_eq!(reg("page_amax_energy_1_0_POLARITY").channel_index(), Some(0));
+        assert_eq!(reg("page_amax_energy_1_1_POLARITY").channel_index(), Some(1));
+        assert_eq!(reg("page_amax_energy_1_3_THRS").channel_index(), Some(3));
+        assert_eq!(
+            reg("page_amax_energy_1_2_baseline_delay").channel_index(),
+            Some(2)
+        );
+    }
+
+    /// 2026-06 custom-width shape: `page_amax_energy_1_<ch>_<NAME>`, channels
+    /// 0..nch, page base 0x100000, stride 0x40000, NO broadcast page.
+    fn custom_width_shape(nch: u32) -> Vec<Register> {
+        let mut regs = Vec::new();
+        for ch in 0..nch {
+            let base = 0x100000 + ch * 0x40000;
+            regs.push(reg_at(base, &format!("page_amax_energy_1_{ch}_PRETRIGGER_INPUT")));
+            regs.push(reg_at(base + 1, &format!("page_amax_energy_1_{ch}_POLARITY")));
+            regs.push(reg_at(base + 3, &format!("page_amax_energy_1_{ch}_THRS")));
+        }
+        regs
+    }
+
+    #[test]
+    fn derive_layout_custom_width_era() {
+        let regs = custom_width_shape(4);
+        let l = derive_layout(&regs, None);
+        assert!(l.prefer_per_channel, "ch0 page present → per-channel canonical");
+        assert_eq!(l.page_base, 0x100000, "ch0 base");
+        assert_eq!(l.page_stride, 0x40000, "ch1 - ch0");
+        assert_eq!(l.broadcast_base, 0x100000, "no broadcast page → falls back to page_base");
+    }
+
+    #[test]
+    fn canonical_filter_custom_width_keeps_ch0_only() {
+        // ch0 group kept, ch1..3 dropped, every fw_key appears exactly once.
+        let regs = custom_width_shape(4);
+        let canonical = select_canonical_per_channel(&regs);
+        let mut keys: Vec<String> = canonical.iter().filter_map(|r| r.fw_key()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["POLARITY", "PRETRIGGER_INPUT", "THRS"]);
     }
 
     #[test]
