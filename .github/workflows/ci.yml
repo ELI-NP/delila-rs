@@ -1,10 +1,22 @@
 name: CI
 
+# Manual-only: automatic CI on push / pull_request is DISABLED to avoid GitHub
+# Actions usage and any associated billing. Nothing runs on GitHub unless you
+# explicitly trigger it from the Actions tab ("Run workflow") or via
+# `gh workflow run ci.yml`.
+#
+# Run the equivalent checks locally instead:
+#   cargo fmt --all -- --check && cargo clippy --all-targets --all-features
+#   cargo test --all-features && cargo build --release
+#   (cd web/operator-ui && npm run lint && npm run build && npm test)
+#
+# To re-enable automatic CI, restore the push / pull_request triggers:
+#   push:
+#     branches: [master, main]
+#   pull_request:
+#     branches: [master, main]
 on:
-  push:
-    branches: [master, main]
-  pull_request:
-    branches: [master, main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
