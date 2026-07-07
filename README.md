@@ -117,8 +117,8 @@ scripts/        start_daq.sh / stop_daq.sh / daq_ctl.sh / update_amax_fw.sh …
 web/operator-ui/ Angular Operator UI (built bundle committed under dist/)
 docs/           Manuals, design docs and specifications (see index above)
 manual/         Config-file manual (JP/EN)
-shift_manual/   On-site shift manual (3MV)
-DELILA2/        C++ reference implementation (git submodule)
+external/       CAEN vendor libraries as git submodules (caen-felib, caen-dig2, caen-a3818-driver)
+delila-derive/  Procedural-macro crate
 ```
 
 ## Development
