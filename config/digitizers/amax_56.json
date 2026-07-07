@@ -21,7 +21,7 @@
       "pretrigger_input": 2500,
       "polarity": 1,
       "offset": 5,
-      "thrs": 20,
+      "thrs": 500,
       "trig_k": 10,
       "trig_m": 12,
       "trap_k": 500,

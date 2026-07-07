@@ -21,7 +21,7 @@
 - **Goal:** MVP of distributed DAQ system by **mid-March 2026**
 - **Hardware:** CAEN Digitizers (Optical Link/USB)
 - **Architecture:** ZeroMQ pipeline: Reader → Merger → Recorder/Monitor
-- **Reference:** C++ implementation in `DELILA2/` submodule
+- **Reference:** C++ implementation in `legacy/DELILA2/` (local-only, gitignored)
 
 ## Tech Stack (Strict)
 Rust 2021 + tokio + tmq (ZMQ) + serde/rmp-serde (MessagePack) + axum (REST) + Angular (Frontend) + bindgen (CAEN FFI)
@@ -72,6 +72,7 @@ Web UIs: Swagger http://localhost:8080/swagger-ui/ | Monitor http://localhost:80
 - `docs/control_system_design.md` - コントロールシステム設計
 - `docs/digitizer_system_spec.md` - デジタイザシステム仕様（DevTree, パラメーター等）
 - `docs/compass_devtree_mapping.md` - CoMPASS↔DevTreeパラメーター対応表（全FW確定済）
+- `docs/amax_fw_update_manual.md` - AMax FW 更新手順（`scripts/update_amax_fw.sh` 一発の codegen→build→UI→deploy）
 - `docs/devtree_examples/` - 実機から取得したDevTree JSON（パラメーター名の正確なリファレンス）
 - `legacy/CoMPASS/` - CoMPASS設定画面スクリーンショット（UI設計のリファレンス）
 

@@ -18,6 +18,8 @@
 # `tools/amax_viewer/fw_params.json` entry (label/category/type/...). The
 # codegen step warns about RegisterFile registers that lack one.
 #
+# Full manual: docs/amax_fw_update_manual.md
+#
 # Usage:
 #   scripts/update_amax_fw.sh <RegisterFile.json> [--with-viewer] [--no-ui]
 #
