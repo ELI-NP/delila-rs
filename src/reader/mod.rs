@@ -1802,8 +1802,11 @@ impl Reader {
 
         info!(source_id = config.source_id, "ReadLoop (x743) starting");
 
-        // Load digitizer config to get X743Config (connection params)
-        let dig_config = config.config_file.as_ref().and_then(|path| {
+        // Load digitizer config to get X743Config (connection params).
+        // Mutable: the ApplyConfig/ApplyConfigRunning handlers below refresh this
+        // to the last-applied config so the state-machine Configure path re-applies
+        // the current config instead of reverting to these startup values.
+        let mut dig_config = config.config_file.as_ref().and_then(|path| {
             crate::config::digitizer::DigitizerConfig::load(path)
                 .map_err(|e| warn!("Failed to load digitizer config: {}", e))
                 .ok()
@@ -2079,6 +2082,11 @@ impl Reader {
                             .map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
+                            // Refresh the cached config so the state-machine Configure
+                            // path (which re-applies `dig_config`) uses the latest values
+                            // instead of reverting to the startup config on the next
+                            // Reset -> Configure cycle.
+                            dig_config = Some((*new_config).clone());
                             hw_configured = true;
                             // Re-allocate buffers — config change may shift record_length
                             // / max_num_events_blt; buffer must match. See plan T7.
@@ -2122,6 +2130,8 @@ impl Reader {
                             .map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
+                            // Keep the cached config in sync (see ApplyConfig above).
+                            dig_config = Some((*new_config).clone());
                             // Re-allocate buffers (best-effort; running mode is rare)
                             readout_buf = None;
                             event_buf = None;

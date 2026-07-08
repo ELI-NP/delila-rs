@@ -122,6 +122,32 @@ pub(super) async fn configure(
 ) -> (StatusCode, Json<ApiResponse>) {
     let run_config: RunConfig = request.into();
     let run_number = run_config.run_number;
+
+    // Reset to Idle first (mirrors run_start Phase 0). Without this, a Configure
+    // issued while already in the Configured state is rejected by the state machine
+    // (Configured -> Configured is not a valid transition), which makes the aggregate
+    // response.success false and silently skips the disk reload + ApplyDigitizerConfig
+    // push below. Command::Reset is idempotent from any state.
+    match state
+        .client
+        .reset_all_sync(&state.components, state.config.reset_timeout_ms)
+        .await
+    {
+        Err(e) => {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(ApiResponse::error(format!("Reset phase failed: {}", e))),
+            );
+        }
+        Ok(results) if results.iter().any(|r| !r.success) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error("Reset phase failed").with_results(results)),
+            );
+        }
+        Ok(_) => {}
+    }
+
     let results = state
         .client
         .configure_all(&state.components, run_config)
@@ -140,6 +166,21 @@ pub(super) async fn configure(
                     if let Some(config) = state.digitizer_configs.get(&source_id) {
                         let cfg = config.value().clone();
                         drop(config);
+                        // X743Std: skip the redundant push — `configure_all` above already
+                        // applied this config via the Reader's Configure path (the Reader
+                        // keeps its `dig_config` in sync, so Configure re-applies the current
+                        // config). A second apply within ~2s destabilizes libCAENDigitizer
+                        // and can SIGSEGV after Start. Same guard as run_start Phase 1.5
+                        // (see TODO/48). Use POST /api/digitizers/{id}/apply to push a
+                        // direct on-disk edit to an X743 reader without a full reconfigure.
+                        if cfg.firmware == FirmwareType::X743Std {
+                            tracing::info!(
+                                source_id,
+                                name = %comp.name,
+                                "X743Std: skipping redundant Apply (configure_all already applied identical config)"
+                            );
+                            continue;
+                        }
                         tracing::info!(
                             source_id,
                             name = %comp.name,
