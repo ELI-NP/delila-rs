@@ -313,6 +313,12 @@ impl FileWriter {
             self.file_sequence,
         );
         header.comment = run_config.comment.clone();
+        // Self-describing event schema (format v3+) so external readers such as
+        // the C++ `TDelila` learn the exact wire layout from the file itself.
+        header.metadata.insert(
+            "event_schema".to_string(),
+            crate::common::delila_schema::schema_json(),
+        );
 
         let header_bytes = header
             .to_bytes()
