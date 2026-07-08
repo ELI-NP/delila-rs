@@ -2183,8 +2183,10 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
       yAxis: {
         type: 'value',
         name: 'ADC',
-        min: 0,
-        max: 30000,
+        // Auto-scale (incl. negative range) so signed firmwares like V1743
+        // Standard mode (12-bit signed, baseline ~-1500 ADC) are visible.
+        // A hardcoded [0, 30000] hid the whole trace below the axis.
+        scale: true,
         axisLabel: {
           formatter: (value: number) => {
             if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'k';
