@@ -1644,7 +1644,9 @@ mod tests {
         );
         // register name with its own underscores must survive intact
         assert_eq!(
-            reg("page_amax_energy_1_2_baseline_delay").fw_key().as_deref(),
+            reg("page_amax_energy_1_2_baseline_delay")
+                .fw_key()
+                .as_deref(),
             Some("baseline_delay")
         );
         assert_eq!(
@@ -1656,8 +1658,14 @@ mod tests {
     #[test]
     fn channel_index_handles_custom_width_era() {
         // The channel is the SECOND number (the `1` is the group prefix).
-        assert_eq!(reg("page_amax_energy_1_0_POLARITY").channel_index(), Some(0));
-        assert_eq!(reg("page_amax_energy_1_1_POLARITY").channel_index(), Some(1));
+        assert_eq!(
+            reg("page_amax_energy_1_0_POLARITY").channel_index(),
+            Some(0)
+        );
+        assert_eq!(
+            reg("page_amax_energy_1_1_POLARITY").channel_index(),
+            Some(1)
+        );
         assert_eq!(reg("page_amax_energy_1_3_THRS").channel_index(), Some(3));
         assert_eq!(
             reg("page_amax_energy_1_2_baseline_delay").channel_index(),
@@ -1671,8 +1679,14 @@ mod tests {
         let mut regs = Vec::new();
         for ch in 0..nch {
             let base = 0x100000 + ch * 0x40000;
-            regs.push(reg_at(base, &format!("page_amax_energy_1_{ch}_PRETRIGGER_INPUT")));
-            regs.push(reg_at(base + 1, &format!("page_amax_energy_1_{ch}_POLARITY")));
+            regs.push(reg_at(
+                base,
+                &format!("page_amax_energy_1_{ch}_PRETRIGGER_INPUT"),
+            ));
+            regs.push(reg_at(
+                base + 1,
+                &format!("page_amax_energy_1_{ch}_POLARITY"),
+            ));
             regs.push(reg_at(base + 3, &format!("page_amax_energy_1_{ch}_THRS")));
         }
         regs
@@ -1682,10 +1696,16 @@ mod tests {
     fn derive_layout_custom_width_era() {
         let regs = custom_width_shape(4);
         let l = derive_layout(&regs, None);
-        assert!(l.prefer_per_channel, "ch0 page present → per-channel canonical");
+        assert!(
+            l.prefer_per_channel,
+            "ch0 page present → per-channel canonical"
+        );
         assert_eq!(l.page_base, 0x100000, "ch0 base");
         assert_eq!(l.page_stride, 0x40000, "ch1 - ch0");
-        assert_eq!(l.broadcast_base, 0x100000, "no broadcast page → falls back to page_base");
+        assert_eq!(
+            l.broadcast_base, 0x100000,
+            "no broadcast page → falls back to page_base"
+        );
     }
 
     #[test]
