@@ -157,6 +157,12 @@ pub struct AppState {
     pub monitor_layout: RwLock<serde_json::Value>,
     /// Serializes tuneup_apply calls to prevent concurrent Stop→Apply→Start races
     pub tuneup_apply_lock: tokio::sync::Mutex<()>,
+    /// Serializes run-control handlers (configure/arm/start/stop/reset/run_start).
+    /// Every guard in those handlers is check-then-act; without this two
+    /// concurrent requests both pass their guards and interleave
+    /// Reset/Configure/Arm/Start across components (TODO 58 H14). Multi-client
+    /// operation is an explicit feature, so the race is realistic.
+    pub run_control_lock: tokio::sync::Mutex<()>,
 }
 
 /// Emulator runtime settings (API model)
@@ -499,6 +505,7 @@ impl RouterBuilder {
             tuneup: TuneupState::new(),
             monitor_layout: RwLock::new(monitor_layout),
             tuneup_apply_lock: tokio::sync::Mutex::new(()),
+            run_control_lock: tokio::sync::Mutex::new(()),
         });
 
         let cors = CorsLayer::new()

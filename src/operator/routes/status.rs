@@ -120,6 +120,8 @@ pub(super) async fn configure(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfigureRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control — all guards below are check-then-act (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     let run_config: RunConfig = request.into();
     let run_number = run_config.run_number;
 
@@ -223,6 +225,8 @@ pub(super) async fn configure(
     )
 )]
 pub(super) async fn arm(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     let results = state.client.arm_all(&state.components).await;
 
     let response = ApiResponse::success("Arm command sent").with_results(results);
@@ -255,6 +259,8 @@ pub(super) async fn start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<StartRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     // Guard: reject if Tune Up mode is active
     if state.tuneup.is_active() {
         return (
@@ -401,6 +407,8 @@ pub(super) async fn start(
     )
 )]
 pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     // Get current run info before stopping
     let current_run = state.current_run.read().await.clone();
 
@@ -416,18 +424,18 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
         let now_ms = chrono::Utc::now().timestamp_millis();
         run_info.elapsed_secs = (now_ms - run_info.start_time) / 1000;
 
-        // Get final stats from components
+        // Get final stats from components. Recorder is the authoritative source
+        // for recorded events/bytes (TODO 58 H12) — summing every component
+        // counts the same events ~4x (Reader+Merger+Recorder+Monitor) and that
+        // inflated number was persisted to MongoDB/ELOG. Mirrors get_status.
         let components = state.client.get_all_status(&state.components).await;
-        let total_events: i64 = components
+        let recorder_metrics = components
             .iter()
-            .filter_map(|c| c.metrics.as_ref())
-            .map(|m| m.events_processed as i64)
-            .sum();
-        let total_bytes: i64 = components
-            .iter()
-            .filter_map(|c| c.metrics.as_ref())
-            .map(|m| m.bytes_transferred as i64)
-            .sum();
+            .find(|c| c.name == "Recorder")
+            .and_then(|c| c.metrics.as_ref());
+        let (total_events, total_bytes) = recorder_metrics
+            .map(|m| (m.events_processed as i64, m.bytes_transferred as i64))
+            .unwrap_or((0, 0));
         let trigger_loss_count: i64 = components
             .iter()
             .filter(|c| c.role == "source")
@@ -503,6 +511,39 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
     )
 )]
 pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14). Reset itself stays unguarded by
+    // state on purpose — it is the operator's escape hatch (UI "Force Reset").
+    let _run_guard = state.run_control_lock.lock().await;
+
+    // If a run is active, close its record as Aborted BEFORE resetting —
+    // otherwise the MongoDB doc stays "running" forever and current_run
+    // leaks into the next session (TODO 58 H13).
+    let aborted_run = state.current_run.write().await.take();
+    if let (Some(ref repo), Some(mut run_info)) = (&state.run_repo, aborted_run) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        run_info.elapsed_secs = (now_ms - run_info.start_time) / 1000;
+        if let Err(e) = repo
+            .end_run(
+                run_info.run_number,
+                &run_info.exp_name,
+                RunStatus::Aborted,
+                run_info.stats.clone(),
+            )
+            .await
+        {
+            tracing::warn!(
+                run_number = run_info.run_number,
+                "Failed to record aborted run in MongoDB: {}",
+                e
+            );
+        } else {
+            tracing::info!(
+                run_number = run_info.run_number,
+                "Run aborted by reset — recorded as Aborted"
+            );
+        }
+    }
+
     let results = state.client.reset_all(&state.components).await;
 
     let response = ApiResponse::success("Reset command sent").with_results(results);
@@ -543,6 +584,8 @@ pub(super) async fn run_start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfigureRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     // Guard: reject if Tune Up mode is active
     if state.tuneup.is_active() {
         return (

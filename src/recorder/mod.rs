@@ -28,7 +28,7 @@ pub use format::{
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,7 +36,7 @@ use futures::StreamExt;
 use thiserror::Error;
 use tmq::{subscribe, Context};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::common::{
     handle_command, run_command_task, sub_no_hwm, CommandHandlerExt, ComponentSharedState,
@@ -98,6 +98,11 @@ struct AtomicStats {
     written_bytes: AtomicU64,
     files_written: AtomicU64,
     dropped_batches: AtomicU64,
+    /// Latched by the writer task when a file write/close fails (disk full,
+    /// I/O error). Surfaces as ComponentState::Error via effective_state so
+    /// the operator SEES the failure instead of the run silently discarding
+    /// the rest of its data (TODO 58 H7). Cleared on Configure/Reset.
+    write_failed: AtomicBool,
 }
 
 impl AtomicStats {
@@ -109,6 +114,7 @@ impl AtomicStats {
             written_bytes: AtomicU64::new(0),
             files_written: AtomicU64::new(0),
             dropped_batches: AtomicU64::new(0),
+            write_failed: AtomicBool::new(false),
         }
     }
 
@@ -532,10 +538,26 @@ impl CommandHandlerExt for RecorderCommandExt {
 
     fn status_details(&self) -> Option<String> {
         let stats = self.stats.snapshot();
+        let failed = self.stats.write_failed.load(Ordering::Relaxed);
         Some(format!(
-            "Received: {} events, Written: {} events, Files: {}, Dropped: {}",
-            stats.total_events, stats.written_events, stats.files_written, stats.dropped_batches
+            "Received: {} events, Written: {} events, Files: {}, Dropped: {}{}",
+            stats.total_events,
+            stats.written_events,
+            stats.files_written,
+            stats.dropped_batches,
+            if failed { ", WRITE FAILED" } else { "" }
         ))
+    }
+
+    /// Surface a latched file-write failure as Error so the operator sees it
+    /// (TODO 58 H7). Mirrors the Reader's hw_state pattern — the software
+    /// state machine says Running, but the component knows better.
+    fn effective_state(&self, software_state: ComponentState) -> ComponentState {
+        if self.stats.write_failed.load(Ordering::Relaxed) {
+            ComponentState::Error
+        } else {
+            software_state
+        }
     }
 
     fn get_metrics(&self) -> Option<crate::common::ComponentMetrics> {
@@ -894,6 +916,9 @@ impl Recorder {
         stats: Arc<AtomicStats>,
         state_rx: watch::Receiver<ComponentState>,
     ) {
+        // Kept for the write-failure latch: FileWriter takes ownership of the
+        // shared stats Arc below.
+        let stats_flag = Arc::clone(&stats);
         let mut writer = FileWriter::new(config, stats);
         let mut eos_received = false;
         let mut current_run_number: u32 = 0;
@@ -904,7 +929,11 @@ impl Recorder {
                 Ok(cmd) => match cmd {
                     WriterCommand::WriteRawBatch { data, event_count } => {
                         if let Err(e) = writer.write_raw_batch(&data, event_count) {
-                            warn!(error = %e, "Failed to write batch");
+                            // Disk full / I/O error: latch Error so the operator
+                            // sees it — otherwise the rest of the run is silently
+                            // discarded batch by batch (TODO 58 H7).
+                            error!(error = %e, "Failed to write batch — latching Error state");
+                            stats_flag.write_failed.store(true, Ordering::Relaxed);
                         }
                     }
                     WriterCommand::EndOfStream {
@@ -921,7 +950,10 @@ impl Recorder {
                         } else {
                             info!(source_id, run_number, "Writer received EOS - closing file");
                             if let Err(e) = writer.end_run() {
-                                warn!(error = %e, "Failed to close file on EOS");
+                                // A failed close can lose the footer/tail — latch
+                                // Error so it is visible (TODO 58 H7).
+                                error!(error = %e, "Failed to close file on EOS — latching Error state");
+                                stats_flag.write_failed.store(true, Ordering::Relaxed);
                             }
                             eos_received = true;
                         }
@@ -929,6 +961,9 @@ impl Recorder {
                     WriterCommand::NewRun(run_config) => {
                         writer.new_run(run_config);
                         eos_received = false;
+                        // A fresh Configure clears a latched write failure —
+                        // the operator has acknowledged/resolved it (H7).
+                        stats_flag.write_failed.store(false, Ordering::Relaxed);
                         info!("Writer configured for new run");
                     }
                     WriterCommand::DrainAndStart { run_number } => {
@@ -959,6 +994,8 @@ impl Recorder {
                         if let Err(e) = writer.end_run() {
                             warn!(error = %e, "Failed to close file");
                         }
+                        // CloseFile is sent by on_reset — Reset clears the latch (H7).
+                        stats_flag.write_failed.store(false, Ordering::Relaxed);
                     }
                     WriterCommand::Shutdown => {
                         if let Err(e) = writer.close_file() {
@@ -980,7 +1017,8 @@ impl Recorder {
                         {
                             info!("State changed to {} - closing file", current);
                             if let Err(e) = writer.end_run() {
-                                warn!(error = %e, "Failed to close file on state change");
+                                error!(error = %e, "Failed to close file on state change — latching Error state");
+                                stats_flag.write_failed.store(true, Ordering::Relaxed);
                             }
                         }
 
