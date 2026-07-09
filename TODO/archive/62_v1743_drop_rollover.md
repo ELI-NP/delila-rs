@@ -1,6 +1,6 @@
 # TODO 62 — V1743 decoder から rollover を撤去（生 TDC 直接化）
 
-**Status: ✅ COMPLETED (2026-07-09、commit `8ffb572`、branch `fix/v1743-drop-rollover`、未 push)**
+**Status: COMPLETED (2026-07-09、commit `40e87bf`、master merge + push 済)**
 
 ## 実装結果 (2026-07-09)
 

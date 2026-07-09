@@ -1,6 +1,6 @@
 # TODO 61: delila2root C++ 化 + 自己記述 `.delila` フォーマット (v3)
 
-**Status: 🚧 IN PROGRESS (2026-07-08)**
+**Status: COMPLETED (2026-07-08、commits `fdc0721` format v3 + `90cd4ea` C++ TDelila/delila2root、master push 済)**
 **Created:** 2026-07-08
 **Hardware:** N/A (offline tool)。ただし C++ ビルド/変換検証は ROOT のある実機 (Side3) で実施
 **Plan file:** `~/.claude/plans/ui-configure-bubbly-deer.md`
