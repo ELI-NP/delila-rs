@@ -166,6 +166,7 @@ fn three_config_files_drive_l1_l2_pipeline() {
 
     let chunk = SortedChunk {
         hits,
+        core_start: f64::NEG_INFINITY,
         core_end: 1.0e6, // Safe-horizon far in the future — process everything.
     };
 
@@ -259,6 +260,7 @@ fn multiplicity_trigger_drives_event_building() {
     ];
     let chunk = SortedChunk {
         hits,
+        core_start: f64::NEG_INFINITY,
         core_end: 1.0e6,
     };
     let events = build_events_from_chunk(&chunk, &tc);

@@ -501,6 +501,7 @@ fn print_run_summary(stats: &PipelineStats) {
     println!("  Events built:     {}", stats.events_built);
     println!("  Events kept (L2): {}", stats.events_kept);
     println!("  Files written:    {}", stats.files_written);
+    println!("  Write FAILURES:   {}", stats.write_failures);
     println!("  Batches published: {}", stats.batches_published);
     println!("========================================");
 }

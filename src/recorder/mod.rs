@@ -967,24 +967,12 @@ impl Recorder {
                         info!("Writer configured for new run");
                     }
                     WriterCommand::DrainAndStart { run_number } => {
-                        // Drain any stale batches from previous run
-                        let mut drained = 0u64;
-                        while let Ok(cmd) = rx.try_recv() {
-                            match cmd {
-                                WriterCommand::WriteRawBatch { .. } => drained += 1,
-                                WriterCommand::EndOfStream { .. } => { /* discard */ }
-                                other => {
-                                    warn!(
-                                        "Unexpected command during drain: {:?}",
-                                        std::mem::discriminant(&other)
-                                    );
-                                }
-                            }
-                        }
-                        if drained > 0 {
-                            info!(drained, "Drained stale batches from previous run");
-                        }
-
+                        // NO explicit drain (TODO 58 H8): stale batches queued
+                        // BEFORE this command are no-ops anyway (write_raw_batch
+                        // ignores them while run_active=false), while a try_recv
+                        // drain here raced AHEAD in the queue and could eat the
+                        // NEW run's first batches (receiver may already be
+                        // forwarding them once the state watch flips to Running).
                         current_run_number = run_number;
                         eos_received = false;
                         writer.start_run(run_number);

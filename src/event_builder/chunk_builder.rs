@@ -78,6 +78,11 @@ impl MultiplicityTrigger {
 pub struct SortedChunk {
     /// ソート済みヒット（timestamp_ns 昇順）
     pub hits: Vec<Hit>,
+    /// Emit floor [ns] (TODO 58 H10)。この時刻より前のトリガーは**前チャンクで
+    /// emit 済み** — このチャンクには backward coincidence window / multiplicity
+    /// lookback の文脈としてのみ含まれる（二重 emit 防止）。最初のチャンクは
+    /// `f64::NEG_INFINITY`。
+    pub core_start: f64,
     /// Core 領域の終端 [ns]
     /// この時刻以降のトリガーは次のチャンクで処理する。
     /// ただし coincidence window 内のヒットとして参照はされる。
@@ -173,6 +178,13 @@ pub fn build_events_from_chunk(chunk: &SortedChunk, config: &TriggerConfig) -> V
         }
         // Skip triggers in unsafe region (processed in next chunk)
         if hit.timestamp_ns >= chunk.core_end {
+            continue;
+        }
+        // Skip triggers already emitted by the PREVIOUS chunk — they are in
+        // this chunk only as lookback context for boundary coincidences
+        // (TODO 58 H10). Without this floor the retained overlap would fire
+        // the same trigger twice.
+        if hit.timestamp_ns < chunk.core_start {
             continue;
         }
 
@@ -272,6 +284,13 @@ struct MergedWindow {
 /// # Arguments
 /// * `buffer` - 未ソートのヒットバッファ（move される）
 /// * `safe_horizon_ns` - Safe Horizon [ns] (典型値: 50_000_000.0 = 50ms)
+/// * `lookback_ns` - 次チャンクに持ち越す遡り幅 [ns]。coincidence window と
+///   multiplicity window の最大値を渡す (TODO 58 H10)。core_end 直後のトリガーが
+///   backward window / multiplicity 判定で core_end 以前のヒットを参照できるように、
+///   retained を `core_end - lookback_ns` から持ち越す。
+/// * `core_start` - このチャンクの emit floor。前チャンクの `core_end`
+///   （最初は `f64::NEG_INFINITY`）。lookback で二重に持ち込まれたトリガーの
+///   二重 emit を防ぐ。
 ///
 /// # Returns
 /// * `Ok((chunk, retained))` - チャンクと次回に持ち越すヒット
@@ -279,6 +298,8 @@ struct MergedWindow {
 pub fn sort_and_split(
     mut buffer: Vec<Hit>,
     safe_horizon_ns: f64,
+    lookback_ns: f64,
+    core_start: f64,
 ) -> Result<(SortedChunk, Vec<Hit>), Vec<Hit>> {
     if buffer.is_empty() {
         return Err(buffer);
@@ -303,13 +324,17 @@ pub fn sort_and_split(
         return Err(buffer);
     }
 
-    // Split at core_end: retained = hits with ts >= core_end
-    let split_idx = buffer.partition_point(|h| h.timestamp_ns < core_end);
+    // Retained = hits with ts >= core_end - lookback (TODO 58 H10). The
+    // [core_end - lookback, core_end) overlap is carried purely as context:
+    // the next chunk's core_start == this core_end keeps those hits from
+    // triggering twice.
+    let split_idx = buffer.partition_point(|h| h.timestamp_ns < core_end - lookback_ns);
     let retained = buffer[split_idx..].to_vec();
 
     // The entire buffer becomes the chunk (O(1) — we already have it by value)
     let chunk = SortedChunk {
         hits: buffer,
+        core_start,
         core_end,
     };
 
@@ -319,7 +344,7 @@ pub fn sort_and_split(
 /// Flush: 全データをチャンクとして返す (EOS 時に使用)
 ///
 /// Safe Horizon を無視して全データを返す。core_end = f64::MAX で全トリガーを emit。
-pub fn sort_and_flush(mut buffer: Vec<Hit>) -> Option<SortedChunk> {
+pub fn sort_and_flush(mut buffer: Vec<Hit>, core_start: f64) -> Option<SortedChunk> {
     if buffer.is_empty() {
         return None;
     }
@@ -328,6 +353,9 @@ pub fn sort_and_flush(mut buffer: Vec<Hit>) -> Option<SortedChunk> {
 
     Some(SortedChunk {
         hits: buffer,
+        // Lookback hits carried into this final buffer were already emitted
+        // by the previous chunk — same double-emit floor as sort_and_split.
+        core_start,
         core_end: f64::MAX,
     })
 }
@@ -451,6 +479,7 @@ mod tests {
     fn test_empty_chunk() {
         let chunk = SortedChunk {
             hits: vec![],
+            core_start: f64::NEG_INFINITY,
             core_end: 1000.0,
         };
         let events = build_events_from_chunk(&chunk, &simple_config());
@@ -465,6 +494,7 @@ mod tests {
                 make_hit(1, 0, 100.0), // not trigger
                 make_hit(1, 1, 200.0), // not trigger
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 1000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -480,6 +510,7 @@ mod tests {
                 make_hit(1, 0, 1100.0), // coincident
                 make_hit(1, 1, 1200.0), // coincident
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -500,6 +531,7 @@ mod tests {
                 make_hit(1, 1, 5100.0),  // coincident with T2
                 make_hit(0, 0, 10000.0), // trigger 3
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 20000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -529,6 +561,7 @@ mod tests {
                 make_hit(1, 0, 1100.0), // coincident
                 make_hit(0, 1, 1200.0), // trigger 2 — within window, merged
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -560,6 +593,7 @@ mod tests {
                 make_hit(0, 1, 1400.0), // trigger 2: window extends to [500, 1900]
                 make_hit(1, 0, 1800.0), // this hit is beyond T1's window but within merged window
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -579,6 +613,7 @@ mod tests {
                 make_hit(0, 0, 800.0),  // T3: overlap with merged → extends to [−500, 1300]
                 make_hit(0, 0, 5000.0), // T4: separated → new event
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 10000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -611,6 +646,7 @@ mod tests {
                 make_hit(8, 6, 1250.0), // coincident with mod 8
                 make_hit(0, 0, 1100.0), // background detector
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -631,6 +667,7 @@ mod tests {
                 make_hit(0, 0, 1100.0), // trigger — after core_end (>= 1000, skip)
                 make_hit(1, 0, 1050.0), // coincident (can be referenced by core trigger)
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 1000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -652,6 +689,7 @@ mod tests {
                 make_hit(1, 2, 1500.0), // at window end (1000 + 500 = 1500)
                 make_hit(1, 3, 1501.0), // just outside window
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -671,6 +709,7 @@ mod tests {
                 make_hit(0, 0, 1000.0), // trigger + detector
                 make_hit(0, 1, 1050.0), // AC hit
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -703,6 +742,7 @@ mod tests {
                 make_hit(0, 0, 1000.0), // trigger + detector
                 make_hit(0, 1, 2000.0), // AC hit — too far away
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -726,6 +766,7 @@ mod tests {
                 make_hit(0, 0, 1000.0), // trigger (relative_time = 0)
                 make_hit(1, 1, 1150.0), // +150 ns relative
             ],
+            core_start: f64::NEG_INFINITY,
             core_end: 5000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -759,6 +800,7 @@ mod tests {
         let config = simple_config();
         let chunk = SortedChunk {
             hits: vec![make_hit(0, 0, 1000.0), make_hit(0, 0, 5000.0)],
+            core_start: f64::NEG_INFINITY,
             core_end: 10000.0,
         };
         let events = build_events_from_chunk(&chunk, &config);
@@ -773,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_sort_and_split_empty() {
-        let result = sort_and_split(vec![], 50_000_000.0);
+        let result = sort_and_split(vec![], 50_000_000.0, 0.0, f64::NEG_INFINITY);
         assert!(result.is_err());
     }
 
@@ -786,7 +828,7 @@ mod tests {
             make_hit(1, 0, 3000.0),
         ];
         // safe_horizon = 50ms = 50_000_000 ns, data span = 2000 ns
-        let result = sort_and_split(hits, 50_000_000.0);
+        let result = sort_and_split(hits, 50_000_000.0, 0.0, f64::NEG_INFINITY);
         assert!(result.is_err());
     }
 
@@ -798,7 +840,7 @@ mod tests {
             make_hit(1, 0, 200.0),
         ];
         // Use tiny safe_horizon to force split
-        let result = sort_and_split(hits, 50.0);
+        let result = sort_and_split(hits, 50.0, 0.0, f64::NEG_INFINITY);
         assert!(result.is_ok());
         let (chunk, _) = result.unwrap();
 
@@ -817,7 +859,7 @@ mod tests {
             make_hit(1, 0, 60_000_000.0),  // 60ms
             make_hit(1, 1, 100_000_000.0), // 100ms
         ];
-        let result = sort_and_split(hits, 50_000_000.0); // 50ms safe horizon
+        let result = sort_and_split(hits, 50_000_000.0, 0.0, f64::NEG_INFINITY); // 50ms safe horizon
         assert!(result.is_ok());
         let (chunk, retained) = result.unwrap();
 
@@ -839,7 +881,7 @@ mod tests {
             make_hit(0, 0, 0.0),
             make_hit(0, 1, 200_000_000.0), // 200ms
         ];
-        let result = sort_and_split(hits, 50_000_000.0);
+        let result = sort_and_split(hits, 50_000_000.0, 0.0, f64::NEG_INFINITY);
         assert!(result.is_ok());
         let (chunk, retained) = result.unwrap();
 
@@ -857,7 +899,7 @@ mod tests {
 
     #[test]
     fn test_sort_and_flush_empty() {
-        let result = sort_and_flush(vec![]);
+        let result = sort_and_flush(vec![], f64::NEG_INFINITY);
         assert!(result.is_none());
     }
 
@@ -868,7 +910,7 @@ mod tests {
             make_hit(0, 1, 100.0),
             make_hit(1, 0, 200.0),
         ];
-        let chunk = sort_and_flush(hits).unwrap();
+        let chunk = sort_and_flush(hits, f64::NEG_INFINITY).unwrap();
 
         assert_eq!(chunk.hits.len(), 3);
         assert_eq!(chunk.core_end, f64::MAX);
@@ -899,12 +941,13 @@ mod tests {
         let total_triggers = 20;
 
         // First split
-        let (chunk1, retained) = sort_and_split(hits, 50_000_000.0).unwrap();
+        let (chunk1, retained) =
+            sort_and_split(hits, 50_000_000.0, 0.0, f64::NEG_INFINITY).unwrap();
         let events1 = build_events_from_chunk(&chunk1, &config);
 
         // Simulate more data arriving (none in this test)
         // Flush the retained data
-        let chunk2 = sort_and_flush(retained).unwrap();
+        let chunk2 = sort_and_flush(retained, f64::NEG_INFINITY).unwrap();
         let events2 = build_events_from_chunk(&chunk2, &config);
 
         let total_events = events1.len() + events2.len();
@@ -1020,7 +1063,7 @@ mod tests {
         }
 
         // Flush remaining
-        if let Some(chunk) = sort_and_flush(buffer) {
+        if let Some(chunk) = sort_and_flush(buffer, f64::NEG_INFINITY) {
             let events = build_events_from_chunk(&chunk, &config);
             total_events += events.len();
             chunk_count += 1;
@@ -1064,7 +1107,8 @@ mod tests {
             make_hit(0, 0, 100_000_000.0), // far future (to set time range)
         ];
 
-        let (chunk, retained) = sort_and_split(hits.clone(), 50_000_000.0).unwrap();
+        let (chunk, retained) =
+            sort_and_split(hits.clone(), 50_000_000.0, 0.0, f64::NEG_INFINITY).unwrap();
         // core_end = 100ms - 50ms = 50ms
         let events1 = build_events_from_chunk(&chunk, &config);
 
@@ -1085,7 +1129,7 @@ mod tests {
         );
 
         // Flush retained — should contain the 50.001ms trigger
-        let chunk2 = sort_and_flush(retained).unwrap();
+        let chunk2 = sort_and_flush(retained, f64::NEG_INFINITY).unwrap();
         let events2 = build_events_from_chunk(&chunk2, &config);
         assert!(
             events2
@@ -1112,4 +1156,122 @@ mod tests {
     // `runtime_config.rs::tests::build_trigger_config_*` for the
     // replacement coverage and `tests/eb_integration.rs` for the
     // end-to-end exercise.
+
+    // ======================================================================
+    // Chunk-boundary regression tests (TODO 58 H10)
+    // ======================================================================
+
+    /// A trigger just AFTER core_end must still see its backward-window
+    /// partner from just BEFORE core_end in the next chunk. Before the
+    /// lookback fix, `retained` started at core_end, so the partner hit was
+    /// dropped and the built event silently lost hits at every boundary.
+    #[test]
+    fn test_boundary_backward_window_preserved_across_chunks() {
+        let config = simple_config(); // trigger=(0,0), window=500 ns
+        let lookback = config.coincidence_window_ns;
+
+        let hits = vec![
+            make_hit(0, 1, 1000.0),   // partner (non-trigger), before core_end
+            make_hit(0, 0, 1300.0),   // trigger, after core_end
+            make_hit(0, 2, 51_100.0), // tail fixing core_end = 51_100 - 50_000 = 1100
+        ];
+
+        let (chunk1, retained) =
+            sort_and_split(hits, 50_000.0, lookback, f64::NEG_INFINITY).unwrap();
+        assert!((chunk1.core_end - 1100.0).abs() < 1e-9);
+
+        // Chunk 1: the only trigger (1300) is in the unsafe region → no events.
+        let events1 = build_events_from_chunk(&chunk1, &config);
+        assert!(events1.is_empty(), "trigger at 1300 belongs to next chunk");
+
+        // Lookback retention must carry the partner at 1000 (>= 1100 - 500).
+        assert_eq!(retained.len(), 3, "partner+trigger+tail carried over");
+
+        // Chunk 2 (flush): trigger fires and must contain BOTH hits.
+        let chunk2 = sort_and_flush(retained, chunk1.core_end).unwrap();
+        let events2 = build_events_from_chunk(&chunk2, &config);
+        assert_eq!(events2.len(), 1);
+        assert_eq!(
+            events2[0].hits.len(),
+            2,
+            "backward-window partner at t=1000 must be in the event"
+        );
+        let rel_times: Vec<f64> = events2[0].hits.iter().map(|h| h.relative_time).collect();
+        assert!(
+            rel_times.iter().any(|&rt| (rt - (-300.0)).abs() < 1e-9),
+            "partner must sit at -300 ns relative to the trigger, got {rel_times:?}"
+        );
+    }
+
+    /// A trigger emitted by chunk N that is carried into chunk N+1 as
+    /// lookback context must NOT fire again (core_start emit floor).
+    #[test]
+    fn test_no_double_emission_across_chunk_boundary() {
+        let config = simple_config();
+        let lookback = config.coincidence_window_ns;
+
+        let hits = vec![
+            make_hit(0, 0, 1000.0),   // trigger, INSIDE core (core_end = 1050)
+            make_hit(0, 1, 1200.0),   // partner in forward window
+            make_hit(0, 2, 51_050.0), // tail fixing core_end = 1050
+        ];
+
+        let (chunk1, retained) =
+            sort_and_split(hits, 50_000.0, lookback, f64::NEG_INFINITY).unwrap();
+        let events1 = build_events_from_chunk(&chunk1, &config);
+        assert_eq!(events1.len(), 1, "trigger at 1000 fires in chunk 1");
+        assert_eq!(events1[0].hits.len(), 2);
+
+        // The already-fired trigger is inside the lookback overlap…
+        assert!(retained.iter().any(|h| h.timestamp_ns == 1000.0));
+
+        // …but must not fire again in chunk 2.
+        let chunk2 = sort_and_flush(retained, chunk1.core_end).unwrap();
+        let events2 = build_events_from_chunk(&chunk2, &config);
+        assert!(
+            events2.is_empty(),
+            "trigger at 1000 was already emitted by chunk 1, got {events2:?}"
+        );
+    }
+
+    /// A multiplicity trigger whose contributing hits straddle the boundary
+    /// (first hit before core_end, completing hit after) must fire in the
+    /// next chunk. Before the fix the whole coincidence vanished: the anchor
+    /// hit alone survived retention, never reaching the multiplicity minimum.
+    #[test]
+    fn test_multiplicity_spanning_chunk_boundary_fires() {
+        let mt = MultiplicityTrigger {
+            channels: HashSet::from([(0, 0), (0, 1)]),
+            min: 2,
+            window_ns: 500.0,
+        };
+        let config = TriggerConfig {
+            triggers: HashSet::new(), // multiplicity-only
+            priorities: HashMap::new(),
+            ac_pairs: HashMap::new(),
+            coincidence_window_ns: 500.0,
+            multiplicity_triggers: vec![mt],
+        };
+        let lookback = config.coincidence_window_ns.max(500.0);
+
+        let hits = vec![
+            make_hit(0, 0, 1000.0),   // 1st multiplicity member, before core_end
+            make_hit(0, 1, 1300.0),   // completes multiplicity, after core_end
+            make_hit(0, 2, 51_100.0), // tail fixing core_end = 1100
+        ];
+
+        let (chunk1, retained) =
+            sort_and_split(hits, 50_000.0, lookback, f64::NEG_INFINITY).unwrap();
+        let events1 = build_events_from_chunk(&chunk1, &config);
+        assert!(events1.is_empty(), "anchor at 1300 belongs to next chunk");
+
+        let chunk2 = sort_and_flush(retained, chunk1.core_end).unwrap();
+        let events2 = build_events_from_chunk(&chunk2, &config);
+        assert_eq!(
+            events2.len(),
+            1,
+            "boundary-spanning multiplicity must fire in chunk 2"
+        );
+        assert_eq!(events2[0].hits.len(), 2, "both members in the event");
+    }
 }
