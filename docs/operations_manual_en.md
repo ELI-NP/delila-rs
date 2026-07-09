@@ -195,6 +195,22 @@ Start, check the ADC spectrum and if it looks wrong, power-cycle the crate.
 
 ---
 
+## 9. Known behaviour / data caveats
+
+### V1743: "garbage events" right after run start
+
+The V1743 (x743std) can emit **a handful of events (measured ≈6) with a corrupt TDC within the first ~1 ms of a run**. The cause is the CAEN readout picking up a few uninitialised DMA-buffer slots at start-up, so the TDC carries a byte-repeat pattern (`0x1B1B1B1B`, `0x04040404` — i.e. uninitialised memory) and its timestamp becomes an outlier (`0`, or seconds‑to‑minutes).
+
+- **Every event after them is fully correct.** The decoder uses the raw TDC directly with no rollover extension, so a garbage value corrupts only its own event and self-heals on the next valid TDC (no persistent corruption — see [TODO 62](../TODO/62_v1743_drop_rollover.md)).
+- **Analysis side:** drop the first ~1 ms of the run, or cut timestamp outliers. They are ~1e-5 of the data and do not affect rate/spectrum.
+- **Count them:** the reader log line `V1743 TDC diag ... backward=true ... backward_total=N` gives the per-run garbage count N.
+
+### V1743: keep runs under 90 minutes
+
+The V1743 TDC is 40-bit (5 ns/tick) and **wraps at ~91.6 minutes**. The decoder deliberately does no rollover correction (raw TDC used directly — see [TODO 62](../TODO/62_v1743_drop_rollover.md)), so **keep every run under 90 minutes** (60 min is the recommended cadence). Beyond 90 min the timestamp wraps backwards once (shows up as `backward=true` in the reader log).
+
+---
+
 ## Quick reference
 
 ```bash
