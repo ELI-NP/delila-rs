@@ -441,8 +441,23 @@ impl Merger {
                 msg = socket.next() => {
                     match msg {
                         Some(Ok(multipart)) => {
-                            // Not running - discard data to prevent ZMQ buffer growth
+                            // Not running — discard to prevent ZMQ buffer growth.
+                            // Tail batches after Stop land here by design
+                            // (accepted loss — see CLAUDE.md データ保全 exception).
+                            // Count + log so the loss is observable, never silent
+                            // (TODO 58 C3): dropped growing while Running is a bug.
                             if !is_running {
+                                let n = ext_state
+                                    .atomic_stats
+                                    .dropped_batches
+                                    .fetch_add(1, Ordering::Relaxed)
+                                    + 1;
+                                if n == 1 || n.is_multiple_of(1000) {
+                                    info!(
+                                        discarded_total = n,
+                                        "Discarding batch while not Running (expected Stop tail)"
+                                    );
+                                }
                                 continue;
                             }
 
@@ -536,7 +551,20 @@ impl Merger {
                     match data {
                         Some(multipart) => {
                             if !is_running {
-                                continue; // discard stale data
+                                // Accepted Stop-tail loss — count + log, never
+                                // silent (TODO 58 C3; CLAUDE.md exception).
+                                let n = ext_state
+                                    .atomic_stats
+                                    .dropped_batches
+                                    .fetch_add(1, Ordering::Relaxed)
+                                    + 1;
+                                if n == 1 || n.is_multiple_of(1000) {
+                                    info!(
+                                        discarded_total = n,
+                                        "Sender discarding batch while not Running (expected Stop tail)"
+                                    );
+                                }
+                                continue;
                             }
                             // True zero-copy: forward original ZMQ Multipart directly
                             match socket.send(multipart).await {

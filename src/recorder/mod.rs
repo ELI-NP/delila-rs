@@ -811,8 +811,21 @@ impl Recorder {
                 msg = socket.next() => {
                     match msg {
                         Some(Ok(multipart)) => {
-                            // Not running - discard data to prevent ZMQ buffer growth
+                            // Not running — discard to prevent ZMQ buffer growth.
+                            // Tail batches after Stop land here by design
+                            // (accepted loss — see CLAUDE.md データ保全 exception).
+                            // Counted in dropped_batches (visible in Recording
+                            // progress logs) so the loss is observable, never
+                            // silent (TODO 58 C3): dropped growing while Running
+                            // is a bug.
                             if !is_running {
+                                let n = stats.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
+                                if n == 1 || n.is_multiple_of(1000) {
+                                    info!(
+                                        discarded_total = n,
+                                        "Discarding batch while not Running (expected Stop tail)"
+                                    );
+                                }
                                 continue;
                             }
 

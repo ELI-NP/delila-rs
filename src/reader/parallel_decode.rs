@@ -585,14 +585,18 @@ pub(crate) async fn publish_ready(
             0
         }
         CollectorItem::Stop { .. } => {
-            let eos = Message::eos(config.source_id, 0);
+            // Carry the current run number so the Recorder's stale-EOS filter
+            // matches (TODO 58 C1 — hardcoded 0 meant every real EOS of
+            // run_number >= 1 was discarded as stale).
+            let run_number = metrics.current_run.load(Ordering::Relaxed);
+            let eos = Message::eos(config.source_id, run_number);
             match eos.to_msgpack() {
                 Ok(bytes) => {
                     let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
                     if let Err(e) = data_socket.send(zmq_msg).await {
                         error!(error = %e, "Failed to send EOS via ZMQ");
                     } else {
-                        info!(source_id = config.source_id, "Published EOS");
+                        info!(source_id = config.source_id, run_number, "Published EOS");
                     }
                 }
                 Err(e) => error!(error = %e, "Failed to serialize EOS"),

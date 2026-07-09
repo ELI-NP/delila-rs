@@ -412,9 +412,7 @@ impl X743TdcDiag {
         //    under the <90 min run rule: it is either the run30-class glitch or a
         //    run that exceeded the 91 min wrap — both worth seeing.
         let startup = self.budget.get(g).is_some_and(|&b| b > 0);
-        let glitch = !startup
-            && backward
-            && self.backward_budget.get(g).is_some_and(|&b| b > 0);
+        let glitch = !startup && backward && self.backward_budget.get(g).is_some_and(|&b| b > 0);
         if !(startup || glitch) {
             return;
         }
@@ -454,7 +452,7 @@ use crate::common::{
     ComponentState, EventData as CommonEventData, Message, Waveform as CommonWaveform,
 };
 use futures::SinkExt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -1055,6 +1053,10 @@ pub struct ReaderMetrics {
     pub per_channel_counts: [AtomicU64; MAX_CHANNELS],
     /// Events filtered out by adc_min threshold
     pub filtered_events: AtomicU64,
+    /// Run number of the current run (set on Start). Threaded into EndOfStream
+    /// messages so the Recorder's stale-EOS filter matches instead of
+    /// discarding every real EOS (TODO 58 C1 — run_number was hardcoded 0).
+    pub current_run: AtomicU32,
 }
 
 impl Default for ReaderMetrics {
@@ -1069,6 +1071,7 @@ impl Default for ReaderMetrics {
             n_lost_trigger_flag_events: AtomicU64::new(0),
             per_channel_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             filtered_events: AtomicU64::new(0),
+            current_run: AtomicU32::new(0),
         }
     }
 }
@@ -1209,8 +1212,13 @@ impl CommandHandlerExt for ReaderCommandExt {
         effective_state_for(software_state, *self.hw_state.lock().unwrap())
     }
 
-    fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
+    fn on_start(&mut self, run_number: u32) -> Result<(), String> {
         self.rate_tracker.reset();
+        // Record the run number so EOS messages carry it (TODO 58 C1) —
+        // the Recorder discards EOS whose run_number mismatches the run.
+        self.metrics
+            .current_run
+            .store(run_number, Ordering::Relaxed);
         // Reset all metrics for new run
         self.metrics.events_decoded.store(0, Ordering::Relaxed);
         self.metrics.bytes_read.store(0, Ordering::Relaxed);
@@ -1889,7 +1897,10 @@ pub(crate) fn convert_event_to_common(event: EventData, firmware: FirmwareType) 
 impl Reader {
     /// Send EOS (End Of Stream) signal
     async fn send_eos(&mut self) -> Result<(), ReaderError> {
-        let eos = Message::eos(self.config.source_id, 0);
+        let eos = Message::eos(
+            self.config.source_id,
+            self.metrics.current_run.load(Ordering::Relaxed),
+        );
         self.publish_message(&eos).await
     }
 
@@ -3494,7 +3505,10 @@ mod tests {
 
         // First observe after rearm is never treated as backward.
         d.observe(0, 10);
-        assert_eq!(d.backward_count[0], 0, "first post-rearm observe is not backward");
+        assert_eq!(
+            d.backward_count[0], 0,
+            "first post-rearm observe is not backward"
+        );
     }
 
     #[cfg(feature = "x743")]

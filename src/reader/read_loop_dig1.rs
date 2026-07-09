@@ -197,7 +197,30 @@ pub(crate) fn run(
                 dig2_poll.reset();
                 // Signal decode_loop to reset decoder state (RolloverTracker etc.)
                 // DIG1 has no Start signal in the data stream, so we must send it here.
-                let _ = tx.try_send(ReadLoopOutput::Start);
+                // Retry on Full: a lost Start means the RolloverTracker carries the
+                // previous run's state → whole-run timestamp corruption (TODO 58 H2).
+                let start_deadline = Instant::now() + Duration::from_secs(3);
+                let mut start_signal = ReadLoopOutput::Start;
+                loop {
+                    match tx.try_send(start_signal) {
+                        Ok(()) => break,
+                        Err(mpsc::error::TrySendError::Full(returned)) => {
+                            if Instant::now() > start_deadline {
+                                error!(
+                                    "Failed to send Start signal: channel full for 3s — \
+                                     decoder state NOT reset, timestamps of this run may be corrupt"
+                                );
+                                break;
+                            }
+                            start_signal = returned;
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            warn!("Decode channel closed, Start signal not sent");
+                            break;
+                        }
+                    }
+                }
             }
 
             // Stop needed? (target dropped below Running)

@@ -315,7 +315,32 @@ pub(crate) fn run(
                 if drained > 0 {
                     info!(drained, "Drained remaining events after stop");
                 }
-                let _ = tx.try_send(ReadLoopOutput::Stop);
+                // Send Stop signal with retry to guarantee EOS delivery —
+                // a one-shot try_send on the bounded channel silently loses
+                // the Stop (and thus the EOS) when the decode queue is full
+                // (TODO 58 H1). Mirrors read_loop_dig1's retry loop.
+                let stop_deadline = Instant::now() + Duration::from_secs(3);
+                let mut stop_signal = ReadLoopOutput::Stop;
+                loop {
+                    match tx.try_send(stop_signal) {
+                        Ok(()) => {
+                            info!("Stop signal sent to decode pipeline");
+                            break;
+                        }
+                        Err(mpsc::error::TrySendError::Full(returned)) => {
+                            if Instant::now() > stop_deadline {
+                                error!("Failed to send Stop signal: channel full for 3s");
+                                break;
+                            }
+                            stop_signal = returned;
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            warn!("Decode channel closed, Stop signal not needed");
+                            break;
+                        }
+                    }
+                }
                 let _ = conn.handle.send_command(devtree::cmd::CLEAR_DATA);
                 conn.hw_armed = false;
                 conn.hw_running = false;
