@@ -452,6 +452,10 @@ fn worker_thread(
         // dropped (endpoint unconfigured) with zero overhead because
         // `pub_tx` is None in that case.
         if let Some(ref tx) = pub_tx {
+            // TODO 58 L5: batch_id is allocated per-worker from a shared atomic,
+            // so ids are UNIQUE but arrival order at the subscriber is NOT
+            // monotonic (workers race between fetch_add and send). Do not use
+            // batch_id for gap detection — it identifies batches, nothing more.
             let batch_id = next_batch_id.fetch_add(1, Ordering::Relaxed);
             let batch = BuiltEventBatch {
                 run_number: run_id,

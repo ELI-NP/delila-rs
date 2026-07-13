@@ -243,6 +243,37 @@ impl ProcessManager {
     }
 }
 
+/// Stop a child gracefully: SIGTERM → grace period → SIGKILL (TODO 58 M12).
+///
+/// An immediate `Child::kill()` (SIGKILL) gave Recorder/Reader no chance to
+/// flush BufWriters / write the `.delila` footer / release CAEN handles. All
+/// DELILA binaries handle SIGTERM since TODO 58 M8, so a polite stop now
+/// actually works. Falls back to SIGKILL after `grace` (or immediately on
+/// non-unix / missing pid).
+async fn graceful_stop(child: &mut tokio::process::Child, name: &str, grace: std::time::Duration) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // Safety: plain kill(2) on a pid we own; worst case ESRCH if already gone.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+        match tokio::time::timeout(grace, child.wait()).await {
+            Ok(_) => return, // exited within the grace period
+            Err(_) => {
+                warn!(
+                    name,
+                    grace_secs = grace.as_secs(),
+                    "Process ignored SIGTERM — escalating to SIGKILL"
+                );
+            }
+        }
+    }
+    if let Err(e) = child.kill().await {
+        warn!(name, error = %e, "Failed to kill process");
+    }
+    let _ = child.wait().await;
+}
+
 async fn spawn_child(
     config: &ProcessConfig,
     info: &Arc<RwLock<ProcessInfo>>,
@@ -337,11 +368,9 @@ async fn process_monitor(
                         // Cancel any pending restart
                         restart_at = None;
                         if let Some(ref mut c) = child {
-                            info!(name = config.name, "Stopping process");
-                            if let Err(e) = c.kill().await {
-                                warn!(name = config.name, error = %e, "Failed to kill process");
-                            }
-                            let _ = c.wait().await;
+                            info!(name = config.name, "Stopping process (SIGTERM, 5 s grace)");
+                            graceful_stop(c, &config.name, std::time::Duration::from_secs(5))
+                                .await;
                             child = None;
                         }
                         let mut w = info.write().await;

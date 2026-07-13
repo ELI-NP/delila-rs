@@ -74,6 +74,11 @@ rayon = "1.10"
 # MPMC channels for event builder pipeline
 crossbeam-channel = "0.5"
 
+# SIGTERM for graceful child stop in node_agent (TODO 58 M12) — already in the
+# tree transitively via zeromq-src.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 root = ["oxyroot"]
