@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-07-09 — TODO ディレクトリ掃除: 完了済 55/56/57/60/61/62 を archive へ移動、Active Tasks を未完了のみに整理。直近の完了 = TODO 62 (V1743 rollover 撤去・生TDC直接化, `40e87bf` push 済) + TODO 61 (delila2root C++ + .delila v3, `fdc0721`+`90cd4ea`)。次候補 = TODO 58 (code review CRITICAL 4件) / TODO 63 (CFD 探索窓) / TODO 52 Phase 3。
+**Updated:** 2026-07-13 — **TODO 58 全決着** (M/L 最終回 15 FIXED + 4 文書化 + 5 defer + 2 受け入れ、archive へ移動)。TODO 57 は完了済 (2026-05-15 archive 済)。次候補 = TODO 63 (CFD 探索窓) / TODO 59 (trap auto-tune、pha_trap_tune Phase 1 実装済) / TODO 52 Phase 3。
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,7 +15,6 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **0** | [58_code_review_2026-06-10.md](58_code_review_2026-06-10.md) | **📋 OPEN (トリアージ待ち、2026-06-10)** | 全コードベース精査 (4 並列レビュー)。**CRITICAL 4 件**: ① EOS run_number=0 ハードコード → Recorder stale フィルタが全 EOS 破棄 ② PSD2/PHA2 デコーダ無限ループ (truncated read で Reader フリーズ) ③ Stop フローにドレインバリアなし ④ マルチソースで first-EOS がファイル/EB を閉じる。HIGH 14 / MEDIUM 20 / LOW 11。推奨着手順: EOS run_number → デコーダループ → Stop フロー設計 → MsgPack 互換 |
 | **1** | [63_v1743_cfd_search_window.md](63_v1743_cfd_search_window.md) | **📋 OPEN (2026-07-09)** | 既存 x743 CFD テスト2件 fail (`cfd_valid=false`)。原因: `analyze()` の後方探索窓 `search_span=4·cfd_delay=16` が遅い立ち上がりパルスのゼロ交差を取り逃す (commit `e4ad305` から潜在)。修正前に実機パルスの rise/delay 比測定要。silent peak-fallback の可視化 (warn) も追加 |
 | **1** | [52_refactor_sprint_2026-q2.md](52_refactor_sprint_2026-q2.md) | **📋 Phase 3 待機 (Week 9〜)** | Phase 1+2 完了済 (23 項目、累計 -3716 行)。残 = Phase 3 Component Hardening: R-D3 (X743 read_loop split) / R-D5 (connection extract) / R-D11/D12 / R-P6 / R-P8 (ComponentRunner) / R-X3-post (ZMQ 境界 cost 再計測) |
 | **2** | [59_eliade_trap_autotune.md](59_eliade_trap_autotune.md) ([JA](59_eliade_trap_autotune_ja.md)) | **📋 PLANNING (2026-06-16)** | ELIADE Ge trap 補正 auto-tune。2026 = Ge 分解能チューン、beam 2027-01。8× clover HPGe / 4×V1725 PHA + V1730 PSD |
@@ -42,6 +41,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | File | Completed | Summary |
 |------|-----------|---------|
+| [58_code_review_2026-06-10.md](archive/58_code_review_2026-06-10.md) | 2026-07-13 | **全コードベース精査 — CRITICAL 4 + HIGH 14 + MEDIUM 20 + LOW 11 全決着**。C/H は 2026-07-09 (`563ab77` `61229b9` `7221c7d`)。M/L 最終回 (2026-07-13, `2af404a` `0f5907b` `539a2c7`): **FIXED 15** = M1/M2 (reader 状態の正直化: config ロード失敗→Arm ブロック、Arm/Start 失敗で Armed/Running を主張しない+5s backoff)、M3 (transmute UB→範囲ガード)、M5 (subcounter run 開始 underflow)、M8 (SIGTERM handler)、M9 (command_task rebind — socket エラーで永久制御不能だった)、M12 (node_agent SIGTERM→5s→SIGKILL)、M13 (Apply 拒否で configure=502 / run_start=Arm 前中断)、M14 (tuneup_apply id 一致検証)、M15 (configure/arm/stop に Tune Up ガード)、M16 (Mongo 失敗を HTTP response に)、M17 (start の current_run fallback 構造)、M18 (Merger gap/restart warn)、L3/L4/L6/L7/L9。**文書化 4** = L5 (batch_id 非単調)、L8 (CaenHandle コメント訂正)、L10/L11 (CLAUDE.md 例外明文化)。**defer 5** = M4/M7 (64ch ボード導入時)、M6 (serde_ignored 小タスク)、M10/M11 (perf、実測後)。**受け入れ 2** = M20 (Stop テール例外の範疇)、L1 (R-X1 監査済み)。681 tests pass |
 | [62_v1743_drop_rollover.md](archive/62_v1743_drop_rollover.md) | 2026-07-09 | **V1743 rollover 撤去・生 TDC 直接化** (`40e87bf` master push 済): run30 破損の真因 = 起動後 ~1ms の未初期化 DMA バッファ由来ゴミ TDC (~6件, `0x1B1B1B1B` バイト反復) を RolloverTracker 永続状態が恒久破損に増幅 → `timestamp_ns = (TDC&40bit)×5 + cfd` 直接化で自己回復 (run46 実機確認, dropped=0/1.19M)。運用ルール: ラン 90 分未満。診断 `X743TdcDiag` (後退ログ上限化)。ゴミ受け入れ方針を operations_manual §9 (JA/EN) に明記。敵対的レビュー 7 エージェント + 指摘 2 件反映 |
 | [61_delila2root_cpp.md](archive/61_delila2root_cpp.md) | 2026-07-08 | **delila2root C++ 化 + `.delila` format v3** (`fdc0721`+`90cd4ea`): 自己記述スキーマ埋込 + 依存ゼロ単一ヘッダ `TDelila.hpp` + ROOT ネイティブ ZSTD (4.3x)。v2 後方互換。Side3 実機 end-to-end (V1743 波形付き 108k events) 検証済。TODO 56/57 を置換 |
 | [60_amax_fw_selfconfig.md](archive/60_amax_fw_selfconfig.md) | 2026-06-26 | **AMax FW 自己設定化** (`9096c77`+`7656f0a`): codegen が page_base/stride/broadcast_base を RegisterFile から自動導出、`scripts/update_amax_fw.sh` 一発で codegen→build→UI→deploy。FW 更新毎の手動アドレス合わせを撤廃 |
