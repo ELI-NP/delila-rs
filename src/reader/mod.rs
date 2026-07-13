@@ -44,14 +44,21 @@ struct X743DecodeParams {
     ttf_smoothing_taps: usize,
     /// Per-channel polarity: `true` = negative pulse (pulse dips below baseline).
     channel_negative: [bool; caen_legacy::MAX_CHANNELS],
+    /// `true` when `energy_source = "soft"`: `energy` comes from the gated charge
+    /// integral instead of the pulse amplitude.
+    use_soft_charge: bool,
+    /// Long-gate opening offset (samples before the CFD anchor). Soft charge only.
+    charge_gate_pre_samples: usize,
+    /// Long-gate width in samples. Soft charge only.
+    charge_gate_samples: usize,
 }
 
 /// Result of the Rust-side V1743 waveform post-processor. See `analyze()`.
 #[cfg(feature = "x743")]
 #[derive(Debug, Clone, Copy)]
 struct X743WaveformStats {
-    /// Mean of the pre-trigger samples (ADC units). Kept for diagnostics/tests.
-    #[allow(dead_code)]
+    /// Mean of the pre-trigger samples (ADC units). Used as the pedestal for the
+    /// soft-charge integral and for diagnostics/tests.
     baseline: f32,
     /// Signed peak extremum (min for negative pulses, max for positive).
     /// Kept for diagnostics/tests.
@@ -199,6 +206,39 @@ impl X743WaveformStats {
     }
 }
 
+/// Soft-charge long-gate integral for V1743 Standard mode.
+///
+/// Integrates the baseline-subtracted, sign-corrected waveform over a gate of
+/// `gate_len` samples opening `gate_pre` samples before `anchor`. `anchor` is the
+/// integer sample index of the software-CFD crossing (or the peak sample when the
+/// CFD search failed) so the gate tracks the pulse rather than a fixed window.
+///
+/// The sum is sign-corrected (`baseline − s` for negative pulses, `s − baseline`
+/// for positive) so the returned charge is positive for a real pulse, matching
+/// the amplitude-path convention. Pedestal is removed by the baseline subtraction,
+/// so out-of-pulse samples contribute only zero-mean noise. Units are ADC·samples;
+/// caller applies `energy_scale`/`energy_offset`.
+#[cfg(feature = "x743")]
+fn x743_long_charge(
+    samples: &[f32],
+    baseline: f32,
+    anchor: usize,
+    gate_pre: usize,
+    gate_len: usize,
+    negative: bool,
+) -> f32 {
+    if gate_len == 0 || samples.is_empty() {
+        return 0.0;
+    }
+    let start = anchor.saturating_sub(gate_pre).min(samples.len());
+    let end = start.saturating_add(gate_len).min(samples.len());
+    let mut acc = 0.0f32;
+    for &s in &samples[start..end] {
+        acc += if negative { baseline - s } else { s - baseline };
+    }
+    acc
+}
+
 #[cfg(feature = "x743")]
 impl X743DecodeParams {
     /// Build from a loaded `DigitizerConfig`. Returns conservative defaults if
@@ -215,6 +255,9 @@ impl X743DecodeParams {
             cfd_fraction: 0.3,
             ttf_smoothing_taps: 0,
             channel_negative: [true; caen_legacy::MAX_CHANNELS],
+            use_soft_charge: false,
+            charge_gate_pre_samples: 8,
+            charge_gate_samples: 64,
         };
         let Some(dc) = dig_config else {
             return p;
@@ -245,10 +288,19 @@ impl X743DecodeParams {
                 "x743 energy_source=\"charge\" selected but the CAEN lib does not populate \
                  Charge in Standard mode; energy will be 0. Use \"amplitude\" (default) instead."
             );
-        } else if x743.energy_source.eq_ignore_ascii_case("soft") {
-            tracing::warn!(
-                "x743 energy_source=\"soft\" is reserved for a future step; \
-                 falling back to amplitude."
+        }
+        p.charge_gate_pre_samples = x743.charge_gate_pre_samples as usize;
+        p.charge_gate_samples = x743.charge_gate_samples as usize;
+        p.use_soft_charge = x743.energy_source.eq_ignore_ascii_case("soft");
+        if p.use_soft_charge {
+            tracing::info!(
+                "x743 energy_source=\"soft\": gated charge integral active \
+                 (gate anchored at CFD crossing, pre={} samples, width={} samples, \
+                 scale={}, offset={})",
+                p.charge_gate_pre_samples,
+                p.charge_gate_samples,
+                x743.energy_scale,
+                x743.energy_offset,
             );
         }
         p.energy_scale = x743.energy_scale;
@@ -2478,23 +2530,58 @@ impl Reader {
                     params.cfd_fraction,
                 );
 
-                let (timestamp_ns, amplitude, peak_index, cfd_valid, decode_ok) =
+                // `energy_metric` feeds `energy` (Charge Long); `short_metric`
+                // feeds `energy_short` (Charge Short). In "soft" mode Long is the
+                // CFD-anchored gated charge integral and Short is the pulse
+                // amplitude — the pair the user needs for integral-vs-height
+                // discrimination. In "amplitude" mode Long is the amplitude and
+                // Short is unused (0), preserving the previous behaviour.
+                let (timestamp_ns, energy_metric, short_metric, peak_index, cfd_valid, decode_ok) =
                     if let Some(s) = stats {
+                        let (long, short) = if params.use_soft_charge {
+                            // Anchor the gate at the CFD crossing sample; fall back
+                            // to the peak sample when the CFD search failed.
+                            let anchor = if s.cfd_valid {
+                                (s.cfd_time_ns / params.ns_per_sample).max(0.0) as usize
+                            } else {
+                                s.peak_index as usize
+                            };
+                            let charge = x743_long_charge(
+                                analyze_input,
+                                s.baseline,
+                                anchor,
+                                params.charge_gate_pre_samples,
+                                params.charge_gate_samples,
+                                negative,
+                            );
+                            (charge, s.amplitude)
+                        } else {
+                            (s.amplitude, 0.0)
+                        };
                         (
                             tdc_ns + s.cfd_time_ns,
-                            s.amplitude,
+                            long,
+                            short,
                             s.peak_index,
                             s.cfd_valid,
                             true,
                         )
                     } else {
-                        (tdc_ns, 0.0, 0, false, false)
+                        (tdc_ns, 0.0, 0.0, 0, false, false)
                     };
 
-                // Energy: amplitude → scale+offset → u16.
-                let energy_f = amplitude * params.energy_scale + params.energy_offset;
+                // Charge Long: metric (amplitude or charge) → scale+offset → u16.
+                let energy_f = energy_metric * params.energy_scale + params.energy_offset;
                 let energy = if energy_f.is_finite() {
                     energy_f.clamp(0.0, u16::MAX as f32) as u16
+                } else {
+                    0
+                };
+                // Charge Short: raw pulse amplitude (ADC units, unscaled) in "soft"
+                // mode, else 0. Kept unscaled so it stays a direct pulse height
+                // independent of the Long charge's energy_scale.
+                let energy_short = if short_metric.is_finite() {
+                    short_metric.clamp(0.0, u16::MAX as f32) as u16
                 } else {
                     0
                 };
@@ -2581,7 +2668,7 @@ impl Reader {
                     module: module_id,
                     channel,
                     energy,
-                    energy_short: 0,
+                    energy_short,
                     fine_time,
                     flags,
                     user_info: [0; 4],
@@ -3443,6 +3530,8 @@ mod tests {
                 baseline_samples: 32,
                 cfd_delay_samples: 4,
                 cfd_fraction: 0.3,
+                charge_gate_pre_samples: 8,
+                charge_gate_samples: 64,
                 ttf_smoothing: Default::default(),
                 extra_registers: Vec::new(),
             }),
@@ -3452,6 +3541,112 @@ mod tests {
         assert!(p.channel_negative[0], "ch0 defaults to Negative");
         assert!(!p.channel_negative[3], "ch3 overridden to Positive");
         assert!(p.channel_negative[15], "ch15 defaults to Negative");
+        // energy_source="amplitude" → soft charge disabled.
+        assert!(!p.use_soft_charge);
+    }
+
+    /// The gated charge integral: exact value over a known synthetic pulse,
+    /// polarity symmetry, and safe gate clamping at the buffer edge.
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_long_charge_negative_pulse() {
+        // baseline 64 @0, linear rise 32 to −1000, hold 32 @−1000, total 256.
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
+        // Gate exactly over rise+hold: anchor=64 (rise start), no pre, width 64.
+        let q = x743_long_charge(&wf, 0.0, 64, 0, 64, true);
+        // rise: Σ 1000·(i+1)/32 for i=0..31 = 1000·16.5 = 16500
+        // hold: 32 × 1000 = 32000
+        let expected = 16_500.0 + 32_000.0;
+        assert!(
+            (q - expected).abs() < 1e-1,
+            "charge={} expected={}",
+            q,
+            expected
+        );
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_long_charge_positive_matches_negative_magnitude() {
+        // Same pulse shape, positive polarity → same positive charge magnitude.
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, false);
+        let q = x743_long_charge(&wf, 0.0, 64, 0, 64, false);
+        assert!((q - 48_500.0).abs() < 1e-1, "charge={}", q);
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_long_charge_gate_clamps_to_buffer() {
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
+        // Anchor near the end with an oversized gate → clamps to buffer, no panic.
+        // The tail is all baseline, so the integral is ≈ 0.
+        let q = x743_long_charge(&wf, 0.0, 250, 4, 10_000, true);
+        assert!(
+            q.is_finite() && q.abs() < 1.0,
+            "tail charge should be ≈0: {}",
+            q
+        );
+        // Zero-width gate integrates nothing.
+        assert_eq!(x743_long_charge(&wf, 0.0, 64, 0, 0, true), 0.0);
+        // Anchor past the buffer end also stays safe.
+        assert_eq!(x743_long_charge(&wf, 0.0, 10_000, 0, 64, true), 0.0);
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_decode_params_soft_charge_enables() {
+        use crate::config::digitizer::{ChannelConfig, DigitizerConfig, FirmwareType, X743Config};
+        let dc = DigitizerConfig {
+            digitizer_id: 0,
+            name: "T".into(),
+            firmware: FirmwareType::X743Std,
+            serial_number: Some("0".into()),
+            model: Some("VX1743".into()),
+            num_channels: 16,
+            is_master: false,
+            board: Default::default(),
+            sync: None,
+            channel_defaults: ChannelConfig {
+                polarity: Some("Negative".to_string()),
+                ..Default::default()
+            },
+            channel_overrides: Default::default(),
+            channel_names: None,
+            x743: Some(X743Config {
+                link_type: "optical".into(),
+                link_num: 0,
+                conet_node: 0,
+                vme_base_address: 0,
+                sampling_frequency: "3.2ghz".into(),
+                correction_level: "all".into(),
+                record_length: 256,
+                post_trigger_size: 20,
+                max_num_events_blt: 1000,
+                io_level: "nim".into(),
+                trigger_source: "self".into(),
+                group_enable_mask: 1,
+                pulse_gen_enabled: false,
+                pulse_pattern: 0,
+                pulse_source: "continuous".into(),
+                fine_time_source: "cfd_soft".into(),
+                energy_source: "soft".into(),
+                energy_scale: 1.0,
+                energy_offset: 0.0,
+                save_waveform: false,
+                baseline_samples: 32,
+                cfd_delay_samples: 4,
+                cfd_fraction: 0.3,
+                charge_gate_pre_samples: 6,
+                charge_gate_samples: 48,
+                ttf_smoothing: Default::default(),
+                extra_registers: Vec::new(),
+            }),
+            amax_board: None,
+        };
+        let p = X743DecodeParams::from_config(Some(&dc));
+        assert!(p.use_soft_charge, "energy_source=\"soft\" enables charge");
+        assert_eq!(p.charge_gate_pre_samples, 6);
+        assert_eq!(p.charge_gate_samples, 48);
     }
 
     #[cfg(feature = "x743")]
