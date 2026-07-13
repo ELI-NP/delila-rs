@@ -760,7 +760,12 @@ impl X743Handle {
         // the caller ever invokes this without a Reset, stale enabled bits would
         // leak through (SetChannelSelfTrigger only writes the bits in the mask
         // for the chosen mode; bits not in the mask are unchanged).
-        let all_channels_mask: u32 = (1u32 << config.num_channels) - 1;
+        // TODO 58 L7: `1u32 << 32` is an overflow panic (debug) / UB-ish wrap
+        // (release) — num_channels == 32 boards need the checked form.
+        let all_channels_mask: u32 = match 1u32.checked_shl(u32::from(config.num_channels)) {
+            Some(bit) => bit - 1,
+            None => u32::MAX,
+        };
         self.set_channel_self_trigger(TriggerMode::Disabled, all_channels_mask)?;
         let mut count: usize = 1;
 

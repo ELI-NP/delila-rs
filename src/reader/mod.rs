@@ -1369,6 +1369,12 @@ pub(crate) struct DeviceConnection {
     pub(crate) hw_running: bool,
     /// Auto-configure from JSON file failed — block Arm until Operator sends valid config
     pub(crate) auto_config_failed: bool,
+    /// Backoff for failed Arm/Start hardware commands (TODO 58 M2). On failure
+    /// the state-sync loop must NOT claim `hw_armed`/`hw_running` (that would
+    /// show the operator a data-less "Armed"/"Running"), but the loop iterates
+    /// every ~10 ms, so an unconditional retry would flood the log. Attempts
+    /// are skipped until this instant.
+    pub(crate) hw_cmd_retry_after: Option<std::time::Instant>,
     /// Cached DevTree parameter metadata for validation (None if fetch failed)
     pub(crate) param_cache: Option<std::collections::HashMap<String, caen::handle::ParamInfo>>,
     /// Enabled channel indices (for DIG2 counter polling)
@@ -1451,6 +1457,7 @@ pub(crate) fn try_connect_raw(url: &str, include_n_events: bool) -> Option<Devic
                     hw_armed: false,
                     hw_running: false,
                     auto_config_failed: false,
+                    hw_cmd_retry_after: None,
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform: false, // RAW path doesn't use OpenDPP waveforms
@@ -1497,6 +1504,7 @@ pub(crate) fn try_connect_rawudp(url: &str) -> Option<DeviceConnection> {
                     hw_armed: false,
                     hw_running: false,
                     auto_config_failed: false,
+                    hw_cmd_retry_after: None,
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform: false, // RawUDP carries waveforms in the raw bytes
@@ -1545,6 +1553,7 @@ pub(crate) fn try_connect_opendpp(url: &str, include_waveform: bool) -> Option<D
                     hw_armed: false,
                     hw_running: false,
                     auto_config_failed: false,
+                    hw_cmd_retry_after: None,
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform,

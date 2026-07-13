@@ -348,7 +348,13 @@ fn sorter_thread(
                 info!(buffer_size = buffer.len(), "Sorter received EOS, flushing");
                 if let Some(chunk) = sort_and_flush(buffer, prev_core_end) {
                     chunks_processed.fetch_add(1, Ordering::Relaxed);
-                    let _ = chunk_tx.send(chunk);
+                    // TODO 58 L4: a lost final chunk is silent built-event loss.
+                    if let Err(e) = chunk_tx.send(chunk) {
+                        error!(
+                            hits = e.0.hits.len(),
+                            "Final EOS flush chunk dropped — worker channel closed early"
+                        );
+                    }
                 }
                 break;
             }
@@ -362,7 +368,13 @@ fn sorter_thread(
                 );
                 if let Some(chunk) = sort_and_flush(buffer, prev_core_end) {
                     chunks_processed.fetch_add(1, Ordering::Relaxed);
-                    let _ = chunk_tx.send(chunk);
+                    // TODO 58 L4: same visibility rule as the EOS flush above.
+                    if let Err(e) = chunk_tx.send(chunk) {
+                        error!(
+                            hits = e.0.hits.len(),
+                            "Final disconnect flush chunk dropped — worker channel closed early"
+                        );
+                    }
                 }
                 break;
             }

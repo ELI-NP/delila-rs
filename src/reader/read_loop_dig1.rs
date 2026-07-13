@@ -149,8 +149,12 @@ pub(crate) fn run(
                             }
                         }
                         Err(e) => {
-                            error!(error = %e, path = %config_path, "Failed to load config file");
-                            // Mark as configured anyway — digitizer keeps its current settings
+                            // TODO 58 M1: the /cmd/reset above already wiped the
+                            // digitizer to factory defaults, so "keeps its current
+                            // settings" would be a lie — block Arm until the
+                            // Operator supplies a valid config.
+                            error!(error = %e, path = %config_path, "Failed to load config file — blocking Arm (digitizer is at factory defaults after reset)");
+                            conn.auto_config_failed = true;
                         }
                     }
                 } else {
@@ -170,28 +174,51 @@ pub(crate) fn run(
                 *hw_state.lock().unwrap() = ComponentState::Configured;
             }
 
+            // Backoff gate shared by the Arm/Start attempts below (TODO 58 M2):
+            // the loop spins every ~10 ms, so failed attempts retry (and log)
+            // at most once per backoff period instead of flooding.
+            let hw_cmd_ready = conn.hw_cmd_retry_after.is_none_or(|t| Instant::now() >= t);
+
             // Arm needed?
-            if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed {
+            if target_rank >= state_rank(ComponentState::Armed) && !conn.hw_armed && hw_cmd_ready {
                 if conn.auto_config_failed {
                     warn!(
                         "Cannot arm: auto-configure from JSON failed and no valid \
                         config received from Operator. Run Detect or fix the JSON config."
                     );
+                    conn.hw_cmd_retry_after = Some(Instant::now() + Duration::from_secs(5));
                 } else {
-                    if let Err(e) = send_arm_command(&conn.handle, config.firmware) {
-                        error!(error = %e, "Failed to arm digitizer");
+                    // TODO 58 M2: only claim Armed when the hardware command
+                    // succeeded — a failed arm previously still reported Armed,
+                    // showing the operator a data-less "Running" run later.
+                    match send_arm_command(&conn.handle, config.firmware) {
+                        Ok(()) => {
+                            conn.hw_armed = true;
+                            conn.hw_cmd_retry_after = None;
+                            *hw_state.lock().unwrap() = ComponentState::Armed;
+                        }
+                        Err(e) => {
+                            error!(error = %e, "Failed to arm digitizer — staying un-armed, retrying in 5 s");
+                            conn.hw_cmd_retry_after = Some(Instant::now() + Duration::from_secs(5));
+                        }
                     }
-                    conn.hw_armed = true;
-                    *hw_state.lock().unwrap() = ComponentState::Armed;
                 }
             }
 
             // Start needed?
-            if target_rank >= state_rank(ComponentState::Running) && !conn.hw_running {
+            if target_rank >= state_rank(ComponentState::Running)
+                && !conn.hw_running
+                && hw_cmd_ready
+            {
+                // TODO 58 M2: same honesty rule as Arm — a failed start must not
+                // report Running.
                 if let Err(e) = send_start_command(&conn.handle, config.firmware) {
-                    error!(error = %e, "Failed to start acquisition");
+                    error!(error = %e, "Failed to start acquisition — staying stopped, retrying in 5 s");
+                    conn.hw_cmd_retry_after = Some(Instant::now() + Duration::from_secs(5));
+                    continue;
                 }
                 conn.hw_running = true;
+                conn.hw_cmd_retry_after = None;
                 *hw_state.lock().unwrap() = ComponentState::Running;
                 // Reset DIG2 poll state for new run
                 dig2_poll.reset();

@@ -235,11 +235,16 @@ impl Histogram2D {
 
         let x_range = self.x_config.max_value - self.x_config.min_value;
         let x_bin_width = x_range / self.x_config.num_bins as f32;
-        let x_bin = ((x - self.x_config.min_value) / x_bin_width) as usize;
+        // TODO 58 L3: clamp — f32 rounding can push a value just below max to
+        // bin == num_bins, which previously spilled into column 0 of the NEXT
+        // y-row via the flat index (silent mis-binning, not overflow).
+        let x_bin = (((x - self.x_config.min_value) / x_bin_width) as usize)
+            .min(self.x_config.num_bins as usize - 1);
 
         let y_range = self.y_config.max_value - self.y_config.min_value;
         let y_bin_width = y_range / self.y_config.num_bins as f32;
-        let y_bin = ((y - self.y_config.min_value) / y_bin_width) as usize;
+        let y_bin = (((y - self.y_config.min_value) / y_bin_width) as usize)
+            .min(self.y_config.num_bins as usize - 1);
 
         let idx = y_bin * self.x_config.num_bins as usize + x_bin;
         if idx < self.bins.len() {

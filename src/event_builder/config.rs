@@ -169,10 +169,23 @@ impl<'de> Deserialize<'de> for TimeCalibration {
         let mut offsets = HashMap::new();
         for (key, value) in json.offsets {
             let parts: Vec<&str> = key.split('_').collect();
+            let mut parsed = None;
             if parts.len() == 2 {
                 if let (Ok(m), Ok(c)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>()) {
-                    offsets.insert((m, c), value);
+                    parsed = Some((m, c));
                 }
+            }
+            match parsed {
+                Some(mc) => {
+                    offsets.insert(mc, value);
+                }
+                // TODO 58 L6: a typo'd key ("O_3", "0-3", "0_3_1", …) used to be
+                // skipped silently — the channel then ran with offset 0 and the
+                // calibration looked mysteriously ineffective.
+                None => tracing::warn!(
+                    key = %key,
+                    "Malformed time-calibration offset key (expected \"<module>_<channel>\") — entry ignored"
+                ),
             }
         }
 

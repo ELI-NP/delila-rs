@@ -77,28 +77,43 @@ pub struct SourceStats {
     pub total_gap_size: u64,
 }
 
+/// What `SourceStats::update` observed about a batch's sequence number
+/// (TODO 58 M18 — the call site must surface `Gap`/`Restart`, they mean
+/// batches were lost or a source restarted mid-run).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeqEvent {
+    /// Sequence advanced normally (or first batch from this source).
+    Ok,
+    /// `gap` batches are missing between the last and this sequence number.
+    Gap(u64),
+    /// Sequence number jumped far backwards — source restart.
+    Restart,
+}
+
 impl SourceStats {
-    fn update(&mut self, seq: u64) -> bool {
-        let restarted = if let Some(last) = self.last_sequence {
+    fn update(&mut self, seq: u64) -> SeqEvent {
+        let event = if let Some(last) = self.last_sequence {
             if seq < last.saturating_sub(100) {
                 self.restart_count += 1;
-                true
+                SeqEvent::Restart
             } else {
                 let expected = last + 1;
                 if seq > expected {
                     let gap = seq - expected;
                     self.gaps_detected += 1;
                     self.total_gap_size += gap;
+                    SeqEvent::Gap(gap)
+                } else {
+                    SeqEvent::Ok
                 }
-                false
             }
         } else {
-            false
+            SeqEvent::Ok
         };
 
         self.last_sequence = Some(seq);
         self.total_batches += 1;
-        restarted
+        event
     }
 }
 
@@ -466,10 +481,26 @@ impl Merger {
                                 match MessageHeader::parse(data) {
                                     Some(MessageHeader::Data { source_id, sequence_number }) => {
                                         ext_state.atomic_stats.record_received();
-                                        ext_state.source_stats
+                                        // TODO 58 M18: gaps/restarts were counted but
+                                        // never logged — data loss must be visible.
+                                        match ext_state.source_stats
                                             .entry(source_id)
                                             .or_default()
-                                            .update(sequence_number);
+                                            .update(sequence_number)
+                                        {
+                                            SeqEvent::Ok => {}
+                                            SeqEvent::Gap(gap) => warn!(
+                                                source = source_id,
+                                                seq = sequence_number,
+                                                missing_batches = gap,
+                                                "Sequence gap detected — upstream batches lost"
+                                            ),
+                                            SeqEvent::Restart => warn!(
+                                                source = source_id,
+                                                seq = sequence_number,
+                                                "Sequence jumped backwards — source restart detected"
+                                            ),
+                                        }
                                         trace!(source = source_id, seq = sequence_number, "Received data");
                                     }
                                     Some(MessageHeader::EndOfStream { source_id }) => {
@@ -621,20 +652,20 @@ mod tests {
     fn source_stats_update() {
         let mut stats = SourceStats::default();
 
-        assert!(!stats.update(0));
+        assert_eq!(stats.update(0), SeqEvent::Ok);
         assert_eq!(stats.total_batches, 1);
 
-        assert!(!stats.update(1));
+        assert_eq!(stats.update(1), SeqEvent::Ok);
         assert_eq!(stats.total_batches, 2);
 
         // Gap detection
-        assert!(!stats.update(200));
+        assert_eq!(stats.update(200), SeqEvent::Gap(198));
         assert_eq!(stats.total_batches, 3);
         assert_eq!(stats.gaps_detected, 1);
         assert_eq!(stats.total_gap_size, 198);
 
         // Restart detection
-        assert!(stats.update(0));
+        assert_eq!(stats.update(0), SeqEvent::Restart);
         assert_eq!(stats.restart_count, 1);
     }
 

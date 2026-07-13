@@ -35,8 +35,22 @@ impl CaenError {
         let mut name_buf = [0i8; 32];
         let mut desc_buf = [0i8; 256];
 
-        // Convert i32 to CAEN_FELib_ErrorCode enum
-        // Safety: The enum values match the i32 error codes from the C API
+        // Convert i32 to the rustified CAEN_FELib_ErrorCode enum.
+        //
+        // TODO 58 M3: an unguarded transmute here was UB for any code outside
+        // the declared variants — a future FELib version returning a new error
+        // code would invoke undefined behavior. Guard on the known range; every
+        // value in -15..=-1 is a declared variant (see caen_felib_bindings.rs).
+        if !(-15..=-1).contains(&code) {
+            return Some(Self {
+                code,
+                name: "UNKNOWN".to_string(),
+                description: format!(
+                    "Unrecognized CAEN FELib error code {code} (newer library version?)"
+                ),
+            });
+        }
+        // Safety: range-checked above — all values in -15..=-1 are valid variants.
         let error_code: ffi::CAEN_FELib_ErrorCode = unsafe { std::mem::transmute(code) };
 
         unsafe {

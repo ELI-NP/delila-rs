@@ -1,9 +1,15 @@
 //! Unified shutdown handling for DELILA components
 //!
 //! # Design Principles (KISS)
-//! - Single function to setup Ctrl+C handler with broadcast channel
+//! - Single function to setup signal handlers with broadcast channel
 //! - Returns (sender, receiver) for component use
 //! - Components call run(shutdown_rx) as before
+//!
+//! Handles **both SIGINT (Ctrl+C) and SIGTERM** (TODO 58 M8): `pkill`,
+//! `systemctl stop` and the stop scripts send SIGTERM, which previously
+//! killed components without flushing — losing up to a BufWriter's worth of
+//! recorder data plus the file footer. (Same failure class as the
+//! `sigterm_handler_required` memory for CAEN-handle binaries.)
 
 use tokio::signal;
 use tokio::sync::broadcast;
@@ -18,11 +24,39 @@ pub type ShutdownSender = broadcast::Sender<ShutdownSignal>;
 /// Shutdown channel receiver
 pub type ShutdownReceiver = broadcast::Receiver<ShutdownSignal>;
 
-/// Setup shutdown handling with Ctrl+C signal
+/// Wait for either SIGINT (Ctrl+C) or SIGTERM. Returns a short label naming
+/// the signal that fired. On non-unix targets only Ctrl+C is available.
+async fn wait_for_termination() -> &'static str {
+    #[cfg(unix)]
+    {
+        let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                // Registration can only realistically fail under exotic
+                // conditions; degrade to Ctrl+C-only rather than panicking.
+                tracing::warn!(error = %e, "Failed to register SIGTERM handler — Ctrl+C only");
+                signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+                return "Ctrl+C";
+            }
+        };
+        tokio::select! {
+            _ = signal::ctrl_c() => "Ctrl+C",
+            _ = sigterm.recv() => "SIGTERM",
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        "Ctrl+C"
+    }
+}
+
+/// Setup shutdown handling with Ctrl+C / SIGTERM
 ///
-/// Creates a broadcast channel and spawns a task that sends on Ctrl+C.
-/// Returns (sender, receiver) - caller uses receiver for their component,
-/// and can clone sender if needed for additional shutdown triggers.
+/// Creates a broadcast channel and spawns a task that sends on the first
+/// termination signal. Returns (sender, receiver) - caller uses receiver for
+/// their component, and can clone sender if needed for additional shutdown
+/// triggers.
 ///
 /// # Example
 /// ```ignore
@@ -34,8 +68,8 @@ pub fn setup_shutdown() -> (ShutdownSender, ShutdownReceiver) {
 
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
-        info!("Ctrl+C received, initiating shutdown");
+        let which = wait_for_termination().await;
+        info!("{which} received, initiating shutdown");
         let _ = tx_clone.send(());
     });
 
@@ -50,7 +84,7 @@ pub fn setup_shutdown_with_message(message: &'static str) -> (ShutdownSender, Sh
 
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        let _ = wait_for_termination().await;
         println!("\n{}", message);
         let _ = tx_clone.send(());
     });
