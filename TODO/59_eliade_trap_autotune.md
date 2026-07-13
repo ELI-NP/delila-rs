@@ -267,6 +267,36 @@ FWHM is decided more by stages **2 and 4** (baseline + energy window) than by th
 itself. The stage decomposition enables localization of the form "trapezoid matches probe2,
 but energy doesn't → it's stage 4's window".
 
+### 4.5 What the pulser can and cannot do (2026-07-13)
+
+**Constraint**: the ELIADE pulser is **directly connected to the digitizer, fixed amplitude,
+fixed rate** (no preamp test input available). This kills all preamp-side uses — ENC
+decomposition (electronic noise vs. charge collection), absolute sub-threshold trigger
+efficiency via amplitude sweeps, linearity calibration, rate/pileup studies.
+
+What survives:
+
+1. **Phase 1 validation accelerator**: identical repeated waveforms make the per-event
+   residual ±1 LSB criterion crisp (statistical spread vanishes; what remains is pure
+   implementation mismatch). The pulse shape differing from the preamp exponential does not
+   weaken the validation (it is an agreement check on the same samples with the same params).
+2. **Asynchronous phase scan (the one genuinely new item)**: the pulser is asynchronous to
+   the sampling clock, so every pulse lands at a different sub-sample phase = **a free phase
+   scan**. The spread of FW energy over identical-amplitude pulses = the filter's
+   sampling-phase sensitivity + trigger-jitter leakage into energy. **Measuring this spread
+   per flat-top candidate observes the §5.3 trap × trigger cross-term directly, without a
+   detector.**
+3. **Periodic TRG-IN trigger source** (a use that never feeds the pulser signal into a
+   channel): trigger output → TRG-IN forces recording on all channels → **unbiased pure
+   baseline samples** of the detector+preamp-connected channels = the mechanism for the
+   §6b.4 noise run.
+4. **Timing reference (§6b.3) and inter-board common anchor (§7) are unaffected** (both work
+   at fixed amplitude/rate).
+
+**ENC-decomposition substitute** (no pulser needed): plot FWHM² vs. E over several γ peaks
+within the capture run; the E→0 intercept ≈ electronic noise + quantization. Less rigorous,
+but sufficient for interpreting the tuning results.
+
 ---
 
 ## 5. Phase 2 — Offline optimization (grid is enough)
@@ -415,7 +445,8 @@ surface.
 
 - **Noise run** — random/software/pulser trigger, pure baseline → σ_TTF, false-rate.
   (Partly substitutable by the §6b.0 pre-trigger-region analysis, but a dedicated noise run
-  tightens the statistics.)
+  tightens the statistics. Mechanism: pulser trigger output → TRG-IN forced recording,
+  §4.5 item 3.)
 - **Source run** — γ source → efficiency on real pulses + energy distribution (**reuse the
   §3 capture run as-is** — its low-threshold superset already covers the full candidate
   threshold range).
@@ -472,7 +503,11 @@ floods us with noise" frustration — it tells you whether the fix is even in pa
 - [ ] **From-scratch, stage-separated SW trap** (§4.4): the public recursion + per-stage
       traces. No AMax core reuse (it does not exist).
 - [ ] **Phase 1 validation harness:** per-event residual + probe2 overlay + D1=Peaking window
-      match + FWHM_SW vs FWHM_FW.
+      match + FWHM_SW vs FWHM_FW. Feed a pulser run (identical waveforms) first to speed up
+      convergence (§4.5).
+- [ ] **Pulser phase scan:** per flat-top candidate, measure the FW-energy spread over
+      identical-amplitude pulses → detector-free direct observation of the trap × trigger
+      cross-term (§4.5 item 2).
 - [ ] **Phase 2 grid search + free-peak Gaussian fit** → per-channel config patch (deep on 2
       channels → narrow rollout, §5.3).
 - [ ] **Phase 3 HW verify** loop + lock-in.
