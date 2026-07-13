@@ -574,7 +574,41 @@ charge-collection shape (rise time).
 little); ③ train/operate run drift (pair with per-run recalibration); ④ can't burn into FW →
 positioning is "trapezoid = online, ML = offline precision layer".
 
-### 9.5 Literature anchors (scanned 2026-07-13)
+### 9.5 Pulse-shape discrimination axes — the HPGe translation of Si-style particle ID
+(added 2026-07-13)
+
+Si-style PSA (FAZIA-type rise-time vs E for Z/A identification) assumes charged particles
+enter from outside and stop in the active volume — that premise does not transfer to HPGe
+(endcap + dead layer stop external particles; clovers are unsegmented coax crystals with
+weak position sensitivity). **But HPGe has four discrimination axes of its own, and ② is
+ELI-NP-specific value:**
+
+1. **SSE/MSE → software Compton suppression**: the mainstream of HPGe PSD
+   (GERDA/Majorana A/E). Translated to γ spectroscopy = suppress the Compton continuum by
+   MSE-ness. ML demonstrations exist on BEGe (arXiv:2412.08750; CNN peak-to-Compton
+   0.238→0.547 = NIM A 2024, §9.6). Acts as a "second Compton suppressor" filling the solid-
+   angle gaps of the BGO shields. Caveat: coax crystals separate worse than point-contact.
+2. **Neutron-event tagging (ELI-NP-specific, the prize)**: γ-beam operation implies an
+   unavoidable (γ,n) neutron environment. Ge(n,n'γ) triangle peaks (596/692 keV sawtooth) +
+   recoil give a distinctive "ultra-local high-density deposit + de-excitation γ" signature
+   → waveform classification tags them → **in-beam background cleansing**. Training-label
+   design is the open problem (neutron-source vs γ-source run contrast, weak labels from the
+   triangle-peak region) — itself a research topic.
+3. **Slow-pulse (surface / n+ layer) rejection**: cleans the low-energy tail = effective
+   lineshape improvement. Same objective side as this TODO (resolution).
+4. **Microphonics / HV-transient anomaly detection** (autoencoder): operational janitor.
+
+**The one place Si-like physics survives**: in-crystal photonuclear reactions
+Ge(γ,p)/(γ,α). The produced charged particle deposits ultra-locally at high density, where
+the **plasma delay** known in Ge (heavy ions / fission fragments) shows up on the rising
+edge → "internal-reaction event vs normal γ" discrimination is a cousin of Si-style PSA.
+Niche, but a very ELI-NP-flavored internal-background study.
+
+Infrastructure is fully shared with §9.4 (same capture run, CNN stack,
+delila2root→PyTorch). 250 MS/s / 14-bit sampling is better than GERDA's PSD baseline
+(100 MS/s) — no data-quality obstacle.
+
+### 9.6 Literature anchors (scanned 2026-07-13)
 
 **NN pulse-height extraction vs shaping filters (directly relevant):**
 - Regadío et al., "Unfolding using deep learning and its application on pulse height
