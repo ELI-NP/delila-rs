@@ -461,6 +461,78 @@ CFD {delay, fraction, smoothing} + 共有 smoothing をオフラインで掃く 
 
 ---
 
+## 9. 研究的拡張（optional）— ベイズ / 機械学習の遊び場（2026-07-13 壁打ち）
+
+**前提: 本 TODO の成果物（grid + probe-overlay）はこれらに依存しない。** BO が不要という §1/§5
+の結論も不変（eval が ms なので）。以下は capture run のデータが**そのまま訓練/解析データセットに
+なる**ことを利用した、上流・下流の研究的拡張。優先度順:
+
+### 9.1 階層ベイズで 32 結晶を束ねる（工数 ~半日、§5.3 の原理的実装）
+
+「同型結晶なら最適点は近い」仮説はそのまま階層モデル:
+`ch ごとの最適 (rise, flat) ~ N(集団平均 μ, 結晶間分散 τ²)`。
+- partial pooling で統計の弱い ch が集団から強度を借りる（深掘り 2ch → 狭域展開の正当化）
+- **事後が集団から外れた結晶 = 異常検出が無料で付く**（preamp/結晶の個体異常の定量化）
+- PyMC/Stan、入力は grid 結果のみ
+
+### 9.2 Phase 3 の逐次ベイズ停止則（実ビームタイム節約 — ベイズが本来の仕事をする唯一の場所）
+
+オフラインは eval が安いが、**Phase 3 の実機 verify は再び acquisition 時間が高価**。低統計ピーク
+FWHM の事後分布を逐次更新し、「credible interval が SW 予測との一致/不一致を判定できた時点で
+ラン打ち切り」。10k カウントの代わりに数百カウントで判定できれば 32 結晶分の確認時間が数分の一。
+
+### 9.3 GP surrogate（工数 ~ゼロのおまけ）
+
+grid 結果に Gaussian Process → 不確かさ付き補間、最適点が尾根/境界にあるかの診断。
+
+### 9.4 DL: 台形フィルタそのものへの挑戦（本丸の遊び、2027 ビームに直結）
+
+台形は**線形フィルタの中で**最適に近いだけで、イベント毎の電荷収集形状（rise time）を捨てている。
+1. **BD 補正ネット**（小さく確実）: trap energy + rise-time 特徴 → 補正 energy の小 MLP。
+   古典 BD 補正の ML 版。**flat-top を短くできる → pileup 耐性 → ビームレート**に効く。
+2. **波形 → energy の end-to-end 回帰**: 教師の取り方が肝。「低レート trapezoid を教師」だと模倣で
+   頭打ち → **スペクトル鮮鋭度損失**（出力エネルギーのヒストグラムで既知ピーク幅を微分可能に損失化
+   + 線形性制約）なら教師 = 物理で、原理的に台形超えの余地。文献調査 (2026-07-13) では
+   HPGe でこの形の直接の先行例は見当たらず（隙間）。物理制約を教師にする枠組み自体は
+   arXiv:2606.29466 (2026) が近い。
+3. **Pileup 検出/分離 CNN**: FW pileup flag より精密。2027 レート対策。
+
+**罠**: ①パルサーで勝っても暗記（評価はソース + 別ラン hold-out 必須）②ベースラインは
+「BD 補正済み trapezoid」（素の台形に勝っても主張にならない）③訓練/運用ランのドリフト
+（per-run 再較正とセット）④FW に焼けない → 位置づけは「trapezoid = オンライン、ML = オフライン
+精密解析の上乗せ」。
+
+### 9.5 文献アンカー（2026-07-13 調査）
+
+**パルス波高抽出 NN vs 整形フィルタ（直接関連）:**
+- Regadío+, "Unfolding using deep learning and its application on pulse height analysis and
+  pile-up management", NIM A 1005 (2021) 165403 — **BD 対応の遅延出力損失**を導入した DNN unfolder
+- Regadío+, "Three topologies of deep neural networks for pulse height extraction",
+  arXiv:2401.05109 (2024) — U-Net/GRU/attention 比較、MMSE 損失で BD 対応（δ[n−k]）。
+  CNN=高ノイズ最強 / RNN=低ノイズ・少パラメータ / attention=1D では利得薄
+- "Trapezoidal pile-up nuclear pulse parameter identification method based on deep learning
+  transformer model", Radiat. Phys. Chem. (2022) — **波高相対誤差 ~0.64% = 台形整形比 27% 改善**
+- "Deep Learning Based Pile-Up Correction Algorithm for Spectrometric Data Under
+  High-Count-Rate Measurements", Sensors 25 (2025) 1464 — 2D attention U-Net でスペクトル回復
+- "FPGA implementation of a deep learning algorithm for real-time signal reconstruction in
+  radiation detectors under high pile-up conditions", arXiv:1903.02439 — エッジ推論の先行例
+
+**HPGe 波形 DL（PSD/弁別が主流、energy 回帰は薄い = 隙間）:**
+- Holl+, "Deep learning based pulse shape discrimination for germanium detectors",
+  Eur. Phys. J. C 79 (2019) 450 / arXiv:1903.01462 — GERDA、autoencoder+分類器
+- "A gamma-ray events discrimination method based on CNN in a HPGe spectrometer",
+  NIM A (2024) — peak-to-Compton 0.238→0.547
+- "Machine learning-assisted techniques for Compton-background discrimination in BEGe",
+  EPJ C (2025) / arXiv:2412.08750
+- "Efficient machine learning approach for optimizing the timing resolution of a HPGe
+  detector", NIM A (2020) — SOM クラスタリングで γ-γ timing 4.3 ns @511 keV
+
+**自己教師あり / 物理制約を教師に:**
+- "Self-Supervised Calibration of Scientific Instruments Using Physical Consistency
+  Constraints", arXiv:2606.29466 (2026) — §9.4-2 の鮮鋭度損失の思想的隣人
+
+---
+
 ## 参照
 
 - `legacy/UM4380_725-730_DPP_PSD_Registers_rev6.pdf` — レジスタマップ; Start Delay step = 16/32 ns

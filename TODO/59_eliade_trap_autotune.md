@@ -523,6 +523,93 @@ floods us with noise" frustration — it tells you whether the fix is even in pa
 
 ---
 
+## 9. Research extensions (optional) — Bayesian / ML playground (2026-07-13 discussion)
+
+**Premise: the deliverable of this TODO (grid + probe-overlay) does not depend on any of
+this.** The §1/§5 conclusion that BO is unnecessary is unchanged (ms evals). These extensions
+exploit the fact that the capture run **is already a training/analysis dataset**. In priority
+order:
+
+### 9.1 Hierarchical Bayes across the 32 crystals (~half a day; the principled form of §5.3)
+
+The "same-type crystals have nearby optima" hypothesis IS a hierarchical model:
+`per-channel optimum (rise, flat) ~ N(population mean μ, crystal-to-crystal variance τ²)`.
+- Partial pooling: channels with weak data borrow strength from the ensemble (justifies the
+  deep-2ch → narrow-rollout strategy)
+- **A crystal whose posterior falls outside the population = free anomaly detection**
+  (quantifies "this preamp/crystal is off")
+- PyMC/Stan; input is just the grid results
+
+### 9.2 Sequential Bayesian stopping rule for Phase 3 (saves real beam time — the one place
+where Bayes does its native job)
+
+Offline evals are cheap, but **Phase 3 hardware verification is acquisition-time-expensive
+again**. Update the posterior of the low-statistics peak FWHM sequentially and stop the run
+as soon as the credible interval decides agreement/disagreement with the SW prediction —
+hundreds of counts instead of 10k, ×32 crystals.
+
+### 9.3 GP surrogate (~zero effort garnish)
+
+Fit a Gaussian Process to the grid → uncertainty-aware interpolation, diagnoses whether the
+optimum sits on a ridge/boundary.
+
+### 9.4 DL: challenging the trapezoid itself (the real playground; feeds the 2027 beam)
+
+The trapezoid is only near-optimal **among linear filters** — it discards the per-event
+charge-collection shape (rise time).
+1. **Ballistic-deficit correction net** (small, safe): tiny MLP on (trap energy, rise-time
+   features) → corrected energy. ML version of classic BD correction. **Lets the flat top
+   shrink → pileup tolerance → beam rate.**
+2. **End-to-end waveform → energy regression**: the label is the crux. Training against
+   low-rate trapezoid energy caps you at imitation → a **spectral-sharpness loss**
+   (differentiable width of known peaks in the histogram of predicted energies + linearity
+   constraints) makes physics the teacher, with headroom beyond the trapezoid in principle.
+   Literature scan (2026-07-13): no direct prior art of this exact form for HPGe (a gap);
+   the physics-constraints-as-supervision framework of arXiv:2606.29466 (2026) is the
+   closest relative.
+3. **Pileup detection/unfolding CNN**: finer than the FW pileup flag; for 2027 rates.
+
+**Traps**: ① beating the pulser is memorization (evaluate on source data + held-out runs);
+② the baseline must be **BD-corrected trapezoid** (beating the plain trapezoid proves
+little); ③ train/operate run drift (pair with per-run recalibration); ④ can't burn into FW →
+positioning is "trapezoid = online, ML = offline precision layer".
+
+### 9.5 Literature anchors (scanned 2026-07-13)
+
+**NN pulse-height extraction vs shaping filters (directly relevant):**
+- Regadío et al., "Unfolding using deep learning and its application on pulse height
+  analysis and pile-up management", NIM A 1005 (2021) 165403 — DNN unfolder with a
+  **BD-aware delayed-output loss**
+- Regadío et al., "Three topologies of deep neural networks for pulse height extraction",
+  arXiv:2401.05109 (2024) — U-Net/GRU/attention compared; MMSE loss handles BD (δ[n−k]);
+  CNN best at high noise / RNN cheap at low noise / attention marginal for 1D
+- "Trapezoidal pile-up nuclear pulse parameter identification method based on deep learning
+  transformer model", Radiat. Phys. Chem. (2022) — **pulse-height rel. error ~0.64% = 27%
+  better than trapezoidal shaping**
+- "Deep Learning Based Pile-Up Correction Algorithm for Spectrometric Data Under
+  High-Count-Rate Measurements", Sensors 25 (2025) 1464 — 2D attention U-Net spectrum
+  recovery
+- "FPGA implementation of a deep learning algorithm for real-time signal reconstruction in
+  radiation detectors under high pile-up conditions", arXiv:1903.02439 — edge-inference
+  precedent
+
+**HPGe waveform DL (PSD/discrimination dominates; energy regression is thin = the gap):**
+- Holl et al., "Deep learning based pulse shape discrimination for germanium detectors",
+  Eur. Phys. J. C 79 (2019) 450 / arXiv:1903.01462 — GERDA; autoencoder + classifier
+- "A gamma-ray events discrimination method based on CNN in a HPGe spectrometer",
+  NIM A (2024) — peak-to-Compton 0.238 → 0.547
+- "Machine learning-assisted techniques for Compton-background discrimination in BEGe",
+  EPJ C (2025) / arXiv:2412.08750
+- "Efficient machine learning approach for optimizing the timing resolution of a HPGe
+  detector", NIM A (2020) — SOM waveform clustering, γ-γ timing 4.3 ns @ 511 keV
+
+**Self-supervised / physics constraints as the teacher:**
+- "Self-Supervised Calibration of Scientific Instruments Using Physical Consistency
+  Constraints", arXiv:2606.29466 (2026) — the conceptual neighbor of the §9.4-2 sharpness
+  loss
+
+---
+
 ## References
 
 - `legacy/UM4380_725-730_DPP_PSD_Registers_rev6.pdf` — register map; Start Delay step = 16/32 ns
