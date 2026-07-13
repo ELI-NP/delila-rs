@@ -67,9 +67,17 @@ if [ "$KILLED" = true ]; then
     sleep 0.5  # brief wait for kernel to release sockets after SIGKILL
 fi
 
-# MongoDB configuration
-MONGODB_URI="mongodb://delila:delila_pass@localhost:27017"
-MONGODB_DATABASE="delila"
+# MongoDB configuration.
+# Hosts with a local mongo (gant, .76 — Docker on localhost) use the defaults.
+# Hosts without one (e.g. es2) override MONGODB_URI/MONGODB_DATABASE to point at
+# a remote instance. Precedence: existing env var > scripts/mongodb.local.env
+# (git-ignored, per-host) > the localhost default below.
+if [ -f "$(dirname "$0")/mongodb.local.env" ]; then
+    # shellcheck disable=SC1091
+    . "$(dirname "$0")/mongodb.local.env"
+fi
+MONGODB_URI="${MONGODB_URI:-mongodb://delila:delila_pass@localhost:27017}"
+MONGODB_DATABASE="${MONGODB_DATABASE:-delila}"
 
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ]; then
