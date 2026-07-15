@@ -15,6 +15,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
+| **1** | [64_amax_opendpp_params.md](64_amax_opendpp_params.md) | **📋 PLANNING (2026-07-13)** | AMax UI に OpenDPP 標準 DevTree パラメータ設定を追加（FW 開発者要望）。実スコープ = **DC Offset 必須 + ゲインは nice-to-have**。バックエンド送信経路（PSD2_AMAX_PARAMS の DCOffset/ChGain）は既に生きており **ギャップは UI 露出のみ** → Phase 0 = ch_trigger_mask と同じ splice で最小実装。Phase A = DPP_OPEN DevTree ダンプ（ground truth 不在）。Phase D = DevTree 駆動 codegen で将来の柔軟性 |
 | **1** | [63_v1743_cfd_search_window.md](63_v1743_cfd_search_window.md) | **📋 OPEN (2026-07-09)** | 既存 x743 CFD テスト2件 fail (`cfd_valid=false`)。原因: `analyze()` の後方探索窓 `search_span=4·cfd_delay=16` が遅い立ち上がりパルスのゼロ交差を取り逃す (commit `e4ad305` から潜在)。修正前に実機パルスの rise/delay 比測定要。silent peak-fallback の可視化 (warn) も追加 |
 | **1** | [52_refactor_sprint_2026-q2.md](52_refactor_sprint_2026-q2.md) | **📋 Phase 3 待機 (Week 9〜)** | Phase 1+2 完了済 (23 項目、累計 -3716 行)。残 = Phase 3 Component Hardening: R-D3 (X743 read_loop split) / R-D5 (connection extract) / R-D11/D12 / R-P6 / R-P8 (ComponentRunner) / R-X3-post (ZMQ 境界 cost 再計測) |
 | **2** | [59_eliade_trap_autotune.md](59_eliade_trap_autotune.md) ([JA](59_eliade_trap_autotune_ja.md)) | **📋 PLANNING (2026-06-16)** | ELIADE Ge trap 補正 auto-tune。2026 = Ge 分解能チューン、beam 2027-01。8× clover HPGe / 4×V1725 PHA + V1730 PSD |
