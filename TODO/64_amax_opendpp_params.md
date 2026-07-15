@@ -44,11 +44,25 @@ AMax の設定は 3 系統。カバレッジ:
   パターンで、PSD2 の `dc_offset`（+ `vga_gain`）の ChannelParamDef を AMax の Input タブへ。
 - DigitizerService の flat-key map は `dc_offset` を既知キーとして持つはず（PSD2 と共有）→
   ほぼ UI 定義の追加だけで end-to-end が繋がる見込み。
-- **要確認**: AMax カスタムレジスタ `amax.offset`（FW の OFFSET レジスタ、Input タブ既存）と
-  DevTree `DCOffset`（アナログフロントエンド）の**関係を FW 開発者に確認**（二重に「オフセット」が
-  並ぶので UI ラベルで区別必須。例: "DC Offset (ADC)" vs "Offset (FW)"）。
-- **要確認**: VX2730 の DevTree に `ChGain` が実在するか（VGA は 2745 系の可能性）→ Phase A の
-  ダンプで確定。存在しなければゲインは対象外。
+- **✅ 確定（2026-07-13、x2730 Open DPP CUP doc 2025022602 + ユーザー確認）: 2つの「オフセット」は別物**。
+  - カスタムレジスタ `amax.offset`（FW の OFFSET、Input タブ既存）= **Trapezoid フィルタの
+    オフセット**（FW デジタル処理側）
+  - DevTree `DCOffset`（Input Signal Conditioning）= **入力信号の DC オフセット**
+    （アナログフロントエンド側）
+  - 両方が Input タブに並ぶので **UI ラベル/tooltip で明確に区別必須**。
+    例: "DC Offset (input, DevTree)" vs "Offset (trapezoid, FW)"。
+  - 同カテゴリに `SignalOffset` / `GainFactor` / `ADCToVolts`(RO) / `EnOffsetCalibration` も存在。
+- **✅ 確定: `ChGain` は x2730 Open DPP に実在**（"Sets the gain of the Variable Gain
+  Amplifiers (VGA)"、0–29 dB / 1 dB step / Set-in-Run 可）。実態は波高を変えるデジタルアンプ。
+  - **運用上の注意（PSD/チャージ積分の実績）**: チャージ積分では **0 dB 必須** — 上げると
+    高エネルギー側のエネルギー分解能が著しく劣化（ヘッドルーム喪失/クリップ + FW 内部演算の
+    飽和）。
+  - **未解決の物理問題**: Trapezoid フィルタ（AMax）でも同じ劣化が出るか。長いシェーピングは
+    広帯域ノイズを平均化するのでノイズ面の罰は短ゲート積分より軽いはずだが、**クリップ/飽和の
+    罰はフィルタで救えず同一**のはず。→ UI 露出後に実測で決着（既知ピークの FWHM を
+    ChGain 0/6/12 dB で比較）。**FW 開発者への確認事項: ChGain が AMax データパスのどこに
+    効くか + FW 内部ビット幅（trapezoid アキュムレータの飽和条件）**。
+  - デフォルトは **0 dB** とし、UI tooltip に「分光では 0 dB 推奨」を明記する。
 
 ### Phase A — ground truth: DPP_OPEN DevTree ダンプ【小・Phase 0 と並行可】
 
@@ -82,7 +96,10 @@ AMax の設定は 3 系統。カバレッジ:
 
 - [ ] Phase 0: AMax の Settings/Tune Up 両方の Input タブに DC Offset が出て、Apply で
       実機に反映される（gant 実機で確認）
-- [ ] Phase 0: `amax.offset` との UI 上の区別（ラベル/tooltip）
+- [ ] Phase 0: `amax.offset`（trapezoid オフセット）との UI 上の区別（ラベル/tooltip、§2 の確定
+      情報に従う）
+- [ ] Phase 0: ChGain も同時に露出（デフォルト 0 dB、「分光では 0 dB 推奨」tooltip 付き）
 - [ ] Phase A: DevTree ダンプを `docs/devtree_examples/` にコミット
-- [ ] （ゲイン: ChGain が DevTree に実在すれば同時に、無ければクローズ）
+- [ ] ChGain × trapezoid の分解能影響を実測（既知ピーク FWHM を 0/6/12 dB 比較）+
+      FW 開発者にデータパス位置/内部ビット幅を確認
 - [ ] Phase B/D は Phase A の結果と FW 開発者の追加要望を見て判断
