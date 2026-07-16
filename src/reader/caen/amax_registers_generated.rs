@@ -25,7 +25,7 @@ pub const BROADCAST_BASE: u32 = 0x200;
 pub const REG_PRETRIGGER_INPUT: u32 = 0x0;
 /// 1-bit Polarity
 pub const REG_POLARITY: u32 = 0x1;
-/// 16-bit DC Offset
+/// 16-bit Offset (Trapezoid)
 pub const REG_OFFSET: u32 = 0x2;
 /// 32-bit Threshold
 pub const REG_THRS: u32 = 0x3;

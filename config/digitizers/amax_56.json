@@ -17,6 +17,7 @@
   "channel_defaults": {
     "enabled": "True",
     "dc_offset": 50.0,
+    "vga_gain": 0,
     "amax": {
       "pretrigger_input": 2500,
       "polarity": 1,

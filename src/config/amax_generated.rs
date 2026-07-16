@@ -20,7 +20,7 @@ pub struct AMaxChannelConfig {
     /// 1-bit Polarity (FW reg `POLARITY`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub polarity: Option<u32>,
-    /// 16-bit DC Offset (FW reg `OFFSET`)
+    /// 16-bit Offset (Trapezoid) (FW reg `OFFSET`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
     /// 32-bit Threshold (FW reg `THRS`)

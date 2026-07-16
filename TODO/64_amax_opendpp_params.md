@@ -1,6 +1,6 @@
 # TODO 64 — AMax UI に OpenDPP（標準 DevTree）パラメータ設定を追加
 
-**Status: 📋 PLANNING (2026-07-13)**
+**Status: 🚧 Phase 0 実装済 / 実機検証待ち (2026-07-16)**
 **発端:** AMax FW 開発者からのリクエスト。「レジスタベースのパラメータセッター UI は素晴らしい。
 加えて **OpenDPP（DPP_OPEN 標準 DevTree）のパラメータも設定できるようにしたい」
 **実スコープ（開発者ヒアリング 2026-07-13）:** **必須 = DC Offset のみ。あれば嬉しい = ゲイン**。
@@ -39,6 +39,33 @@ AMax の設定は 3 系統。カバレッジ:
 ## 2. 実装フェーズ
 
 ### Phase 0 — 最小パス: DC Offset（+ ゲイン）を AMax タブに出す【本命・小】
+
+**✅ 実装済み（2026-07-16）:**
+
+- **FW レジスタ OFFSET のラベルリネーム（codegen）**: `tools/amax_viewer/fw_params.json` の
+  `"OFFSET"` を `"label": "DC Offset"` → `"label": "Offset (Trapezoid)"` に変更し
+  `amax_codegen -- FW/20260617/RegisterFile_17june.json` で再生成。3 つの生成ファイル
+  （`src/config/amax_generated.rs` / `src/reader/caen/amax_registers_generated.rs` /
+  `web/operator-ui/src/app/models/amax-generated.ts`）の差分は **ラベル/doc コメントのみ**
+  （アドレス・フィールド名 `offset` は不変）。
+- **UI splice**: `web/operator-ui/src/app/models/channel-params.ts` に `AMAX_CH_TRIGGER_MASK`
+  と同じパターンで `AMAX_DC_OFFSET`（key `dc_offset`, `%`, 0–100, tooltip でトラペゾイド
+  オフセットと区別）+ `AMAX_VGA_GAIN`（key `vga_gain`, dB, 0–29, 「分光では 0 dB」tooltip）を
+  追加し、AMax の Input タブへ splice（手動 splice が 3 件 = DC Offset / VGA Gain /
+  Ch Trigger Mask に増えたので周辺コメントも更新）。
+- **config デフォルト**: `config/digitizers/amax_56.json` の channel_defaults に `"vga_gain": 0`
+  を追加（`dc_offset: 50.0` の隣）。
+- **命名判断**: 「DC Offset」の名前は **DevTree 側（入力信号 DC オフセット）に残し**、FW レジスタ側を
+  「Offset (Trapezoid)」にリネームした。理由 = ① DevTree には別途 `SignalOffset` param が存在し
+  「DC Offset」は DevTree DCOffset を指すのが自然、② CoMPASS / 他 FW とのラベル一貫性
+  （どの FW でも「DC Offset」= 入力 DC オフセット）。
+- 品質ゲート: `npm run build`（dist コミット済）+ `cargo fmt && cargo clippy --tests -D warnings
+  && cargo test`（689 tests pass）通過。
+
+**残（実機検証・後続）:** gant 実機で Settings/Tune Up 両タブの Apply 反映確認、Phase A（DevTree
+ダンプ）、ChGain × trapezoid の FWHM 実測、FW 開発者への確認事項（下記）。
+
+---
 
 - `web/operator-ui/src/app/models/channel-params.ts`: `AMAX_CH_TRIGGER_MASK` と同じ splice
   パターンで、PSD2 の `dc_offset`（+ `vga_gain`）の ChannelParamDef を AMax の Input タブへ。
@@ -94,11 +121,12 @@ AMax の設定は 3 系統。カバレッジ:
 
 ## 4. 完了条件
 
-- [ ] Phase 0: AMax の Settings/Tune Up 両方の Input タブに DC Offset が出て、Apply で
-      実機に反映される（gant 実機で確認）
-- [ ] Phase 0: `amax.offset`（trapezoid オフセット）との UI 上の区別（ラベル/tooltip、§2 の確定
-      情報に従う）
-- [ ] Phase 0: ChGain も同時に露出（デフォルト 0 dB、「分光では 0 dB 推奨」tooltip 付き）
+- [x] Phase 0 (実装): AMax の Settings/Tune Up 両方の Input タブに DC Offset が出る
+      （`channel-params.ts` splice、`AMAX_DC_OFFSET`）
+- [ ] Phase 0 (実機検証): gant 実機で Settings/Tune Up の Apply が反映される
+- [x] Phase 0: `amax.offset` を "Offset (Trapezoid)" にリネームして DevTree DCOffset
+      （"DC Offset"）と UI 上で区別（ラベル/tooltip、§2 の確定情報に従う）
+- [x] Phase 0: ChGain も同時に露出（`vga_gain`、デフォルト 0 dB、「分光では 0 dB 推奨」tooltip 付き）
 - [ ] Phase A: DevTree ダンプを `docs/devtree_examples/` にコミット
 - [ ] ChGain × trapezoid の分解能影響を実測（既知ピーク FWHM を 0/6/12 dB 比較）+
       FW 開発者にデータパス位置/内部ビット幅を確認
