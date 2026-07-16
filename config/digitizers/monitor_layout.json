@@ -1,58 +1,13 @@
 {
   "setupConfig": {
     "name": "",
-    "gridRows": 4,
-    "gridCols": 4,
+    "gridRows": 2,
+    "gridCols": 2,
     "xAxisLabel": "Channel",
+    "histogramType": "energy",
+    "xAxis": "energy",
+    "yAxis": "psd",
     "cells": [
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
-      {
-        "sourceId": null,
-        "channelId": null
-      },
       {
         "sourceId": null,
         "channelId": null
@@ -73,11 +28,24 @@
   },
   "viewTabs": [
     {
-      "id": "1ff9716d-b9f5-4c9e-82ff-2395647d6ded",
-      "name": "AMax VX2730 @ 172.18.4.56 Ch0-15",
+      "id": "ef9c5e42-498f-4ea6-beac-abb5e10576ac",
+      "name": "2D master",
       "gridRows": 4,
       "gridCols": 4,
       "xAxisLabel": "Channel",
+      "histogramType": "2d",
+      "xAxis": "energy",
+      "yAxis": "user_info0",
+      "xView": {
+        "min": 0,
+        "max": 10000,
+        "bins": 1024
+      },
+      "yView": {
+        "min": 5000,
+        "max": 10000,
+        "bins": 42
+      },
       "cells": [
         {
           "sourceId": 0,
@@ -210,135 +178,148 @@
       ]
     },
     {
-      "id": "91732a5f-abbb-41cd-84e8-5105e9fcc6ce",
-      "name": "AMax VX2730 @ 172.18.4.56 Ch16-31",
+      "id": "72be30f0-9674-468c-85ba-4adb0799f539",
+      "name": "2D slave ",
       "gridRows": 4,
       "gridCols": 4,
       "xAxisLabel": "Channel",
+      "histogramType": "2d",
+      "xAxis": "energy",
+      "yAxis": "user_info0",
+      "xView": {
+        "min": 0,
+        "max": 10000,
+        "bins": 1024
+      },
+      "yView": {
+        "min": 5000,
+        "max": 10000,
+        "bins": 1024
+      },
       "cells": [
         {
-          "sourceId": 0,
-          "channelId": 16,
+          "sourceId": 1,
+          "channelId": 0,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 17,
+          "sourceId": 1,
+          "channelId": 1,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 18,
+          "sourceId": 1,
+          "channelId": 2,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 19,
+          "sourceId": 1,
+          "channelId": 3,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 20,
+          "sourceId": 1,
+          "channelId": 4,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 21,
+          "sourceId": 1,
+          "channelId": 15,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 22,
+          "sourceId": 1,
+          "channelId": 5,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 23,
+          "sourceId": 1,
+          "channelId": 6,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 24,
+          "sourceId": 1,
+          "channelId": 7,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 25,
+          "sourceId": 1,
+          "channelId": 8,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 26,
+          "sourceId": 1,
+          "channelId": 9,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 27,
+          "sourceId": 1,
+          "channelId": 10,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 28,
+          "sourceId": 1,
+          "channelId": 11,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 29,
+          "sourceId": 1,
+          "channelId": 12,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 30,
+          "sourceId": 1,
+          "channelId": 13,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 0,
-          "channelId": 31,
+          "sourceId": 1,
+          "channelId": 14,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
@@ -347,5 +328,5 @@
       ]
     }
   ],
-  "activeTabId": "1ff9716d-b9f5-4c9e-82ff-2395647d6ded"
+  "activeTabId": "72be30f0-9674-468c-85ba-4adb0799f539"
 }

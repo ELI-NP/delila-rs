@@ -3,6 +3,7 @@
   "name": "PSD2 Waveform Test - ch16 Positive 22kHz",
   "firmware": "PSD2",
   "num_channels": 32,
+  "is_master": false,
   "board": {
     "start_source": "SWcmd",
     "record_length": 4096,
@@ -10,24 +11,20 @@
   },
   "channel_defaults": {
     "enabled": "False",
-    "dc_offset": 50.0,
     "polarity": "Positive",
+    "dc_offset": 50.0,
     "trigger_threshold": 1000,
-    "gate_long_ns": 400,
-    "gate_short_ns": 100,
     "event_trigger_source": "Disabled",
-    "wave_trigger_source": "Disabled"
+    "wave_trigger_source": "Disabled",
+    "gate_long_ns": 400,
+    "gate_short_ns": 100
   },
   "channel_overrides": {
     "16": {
       "enabled": "True",
       "dc_offset": 20.0,
       "event_trigger_source": "ChSelfTrigger",
-      "wave_trigger_source": "ChSelfTrigger",
-      "extra": {
-        "WaveAnalogProbe0": "ADCInput",
-        "WaveAnalogProbe1": "CFDFilter"
-      }
+      "wave_trigger_source": "ChSelfTrigger"
     }
   }
 }

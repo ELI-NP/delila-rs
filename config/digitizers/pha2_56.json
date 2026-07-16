@@ -14,26 +14,27 @@
     "test_pulse_low_level": 0,
     "test_pulse_high_level": 6000,
     "global_trigger_source": "TestPulse",
+    "record_length": 2000,
     "waveforms_enabled": false,
     "extra": {
-      "clocksource": "Internal",
-      "enclockoutfp": "True",
-      "syncoutmode": "SyncIn",
-      "boardvetopolarity": "ActiveHigh",
       "iolevel": "NIM",
       "trgoutmode": "GPIO",
-      "boardvetosource": "Disabled"
+      "boardvetosource": "Disabled",
+      "syncoutmode": "SyncIn",
+      "enclockoutfp": "True",
+      "boardvetopolarity": "ActiveHigh",
+      "clocksource": "Internal"
     }
   },
   "channel_defaults": {
-    "enabled": "False",
-    "polarity": "Positive",
+    "enabled": "True",
+    "polarity": "Negative",
     "dc_offset": 10.0,
     "vga_gain": 0,
     "record_length_ns": 8192,
     "pre_trigger_ns": 1024,
     "wave_downsampling": "1",
-    "trigger_threshold": 10,
+    "trigger_threshold": 200,
     "trigger_holdoff_ns": 480,
     "event_trigger_source": "ChSelfTrigger",
     "wave_trigger_source": "ChSelfTrigger",
@@ -41,7 +42,7 @@
     "time_filter_retrigger_guard_ns": 0,
     "energy_filter_rise_time_ns": 4000,
     "energy_filter_flat_top_ns": 1000,
-    "energy_filter_pole_zero_ns": 50000,
+    "energy_filter_pole_zero_ns": 70,
     "energy_filter_peaking_position": 50,
     "energy_filter_peaking_avg": "LowAVG",
     "energy_filter_baseline_avg": "Medium",
@@ -57,10 +58,5 @@
     "digital_probe_1": "EnergyFilterPeaking",
     "digital_probe_2": "EnergyFilterPeakReady",
     "digital_probe_3": "EnergyFilterBaselineFreeze"
-  },
-  "channel_overrides": {
-    "0": {
-      "enabled": "True"
-    }
   }
 }

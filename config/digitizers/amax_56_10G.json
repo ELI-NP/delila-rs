@@ -1,0 +1,69 @@
+{
+  "digitizer_id": 0,
+  "name": "AMax VX2730 @ 192.168.14.10",
+  "firmware": "AMax",
+  "serial_number": "52622",
+  "model": "VX2730",
+  "num_channels": 32,
+  "is_master": true,
+  "board": {
+    "start_source": "SWcmd",
+    "gpio_mode": "UserGPO",
+    "test_pulse_period": 1000000,
+    "test_pulse_width": 10,
+    "test_pulse_low_level": 1000,
+    "test_pulse_high_level": 3000,
+    "record_length": 2000,
+    "waveforms_enabled": true,
+    "io_level": "NIM",
+    "extra": {
+      "clocksource": "Internal",
+      "enclockoutfp": "True",
+      "trgoutmode": "UserTrgout",
+      "syncoutmode": "Run"
+    }
+  },
+  "channel_defaults": {
+    "enabled": "True",
+    "dc_offset": 50.0,
+    "amax": {
+      "pretrigger_input": 2100,
+      "polarity": 1,
+      "offset": 0,
+      "thrs": 20,
+      "trig_k": 10,
+      "trig_m": 12,
+      "trap_k": 500,
+      "trap_m": 700,
+      "deconv_m": 570000,
+      "trap_gain": 3000,
+      "bl_len": 6,
+      "bl_inib": 5000,
+      "sample_pos": 550,
+      "run_cfg": 1,
+      "amax_window": 1000,
+      "window_maxim": 600,
+      "amax_len": 5,
+      "baseline_delay": 500,
+      "baseline_len": 6,
+      "baseline_offset": 30,
+      "delay_shaping": 31,
+      "shap_trigg": 860,
+      "enable_acq": 1,
+      "select_width": 1,
+      "maxim_pid": 1,
+      "valoare_minima_energy": 10,
+      "minim_pid": 1,
+      "valoare_maxim_energy": 1
+    }
+  },
+  "channel_overrides": {
+    "0": {
+      "amax": {
+        "select_width": 7000,
+        "maxim_pid": 9000,
+        "valoare_maxim_energy": 9000
+      }
+    }
+  }
+}

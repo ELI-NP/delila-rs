@@ -17,7 +17,8 @@ name = "psd2-57"
 type = "psd2"
 bind = "tcp://*:5555"
 command = "tcp://*:5560"
-digitizer_url = "dig2://172.18.4.57"
+#digitizer_url = "dig2://172.18.4.57"
+digitizer_url = "dig2://192.168.14.10"
 config_file = "config/digitizers/psd2_57.json"
 pipeline_order = 1
 
