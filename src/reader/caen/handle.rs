@@ -1741,8 +1741,14 @@ impl Drop for CaenHandle {
     }
 }
 
-// CaenHandle is NOT Send/Sync because CAEN_FELib_Open/Close are not thread-safe
-// according to the documentation. If thread safety is needed, wrap in Arc<Mutex<>>.
+// ⚠️ Thread-safety (TODO 58 L8): CaenHandle is technically Send + Sync — it is
+// just a `u64`, so the auto-traits derive. The FELib documentation, however,
+// says CAEN_FELib_Open/Close (and per-handle calls generally) are NOT
+// thread-safe. That constraint is enforced by **usage convention only**: each
+// handle is created and used inside a single read-loop thread. Do not share a
+// handle across threads; if that is ever needed, wrap it in Arc<Mutex<>> (or
+// add a `PhantomData<*mut ()>` field to make the type system enforce !Send —
+// deliberately not done yet to avoid churning every read-loop signature).
 
 #[cfg(test)]
 mod tests {

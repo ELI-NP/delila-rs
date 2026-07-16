@@ -434,7 +434,11 @@ fn process_item(
     let seq = item.seq;
     let is_dig1 = config.firmware.is_dig1();
 
-    let (events, apply_adc_filter): (&mut Vec<decoder::EventData>, bool) = match item.payload {
+    // The `adc_min` energy floor (config, default 0 = off) applies to every
+    // decoded event regardless of how it arrived — raw-decoded (DIG1),
+    // pre-decoded (V1743 / X743Std), or OpenDpp (AMax). It is gated purely on
+    // `config.adc_min > 0` in the drain loop below.
+    let events: &mut Vec<decoder::EventData> = match item.payload {
         WorkPayload::Raw { raw, btts } => {
             decoder.decode_into_with_btts(&raw, btts.as_deref(), events_buf);
             if events_buf.is_empty() {
@@ -444,13 +448,11 @@ fn process_item(
                     "Decoded 0 events from raw data"
                 );
             }
-            (events_buf, true)
+            events_buf
         }
         WorkPayload::Events(events) => {
             *events_buf = events;
-            // Parity with the old sequential pre-decoded path: no adc_min
-            // filter for pre-decoded events.
-            (events_buf, false)
+            events_buf
         }
         WorkPayload::OpenDpp { events, enable_acq } => {
             // 4-lane debug unpack + EventData conversion — the CPU-heavy
@@ -461,7 +463,7 @@ fn process_item(
                     .iter()
                     .map(|e| opendpp_to_event_data(e, config.module_id, enable_acq)),
             );
-            (events_buf, false)
+            events_buf
         }
     };
 
@@ -486,7 +488,7 @@ fn process_item(
                     .fetch_add(1024, Ordering::Relaxed);
             }
         }
-        if apply_adc_filter && config.adc_min > 0 && common_event.energy < config.adc_min {
+        if config.adc_min > 0 && common_event.energy < config.adc_min {
             metrics.filtered_events.fetch_add(1, Ordering::Relaxed);
             continue;
         }
@@ -583,14 +585,18 @@ pub(crate) async fn publish_ready(
             0
         }
         CollectorItem::Stop { .. } => {
-            let eos = Message::eos(config.source_id, 0);
+            // Carry the current run number so the Recorder's stale-EOS filter
+            // matches (TODO 58 C1 — hardcoded 0 meant every real EOS of
+            // run_number >= 1 was discarded as stale).
+            let run_number = metrics.current_run.load(Ordering::Relaxed);
+            let eos = Message::eos(config.source_id, run_number);
             match eos.to_msgpack() {
                 Ok(bytes) => {
                     let zmq_msg: tmq::Multipart = vec![tmq::Message::from(bytes.as_slice())].into();
                     if let Err(e) = data_socket.send(zmq_msg).await {
                         error!(error = %e, "Failed to send EOS via ZMQ");
                     } else {
-                        info!(source_id = config.source_id, "Published EOS");
+                        info!(source_id = config.source_id, run_number, "Published EOS");
                     }
                 }
                 Err(e) => error!(error = %e, "Failed to serialize EOS"),

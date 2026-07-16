@@ -139,7 +139,7 @@ impl Register {
     ///   - 2026-04 32-ch:  `page_amax_energy_THRS`          (bare, no index)
     ///   - 2026-05 16-ch:  `page_amax_energy_15_THRS`       (underscore, channel)
     ///   - 2026-05 13may:  `page_amax_energy/THRS` (broadcast) +
-    ///                     `page_amax_energy_4_<N>/THRS`     (slash, group+channel)
+    ///     `page_amax_energy_4_<N>/THRS` (slash, group+channel)
     ///   - 2026-06 custom: `page_amax_energy_1_<N>_THRS`    (underscore, group+channel)
     fn fw_key(&self) -> Option<String> {
         let raw = self.path.as_deref().or(self.name.as_deref())?;

@@ -19,7 +19,7 @@ use tokio::sync::{watch, Mutex};
 use tokio::time::interval;
 use tracing::{debug, info};
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::common::{
     flags, handle_command, pub_no_hwm, run_command_task, CommandHandlerExt, ComponentSharedState,
@@ -114,6 +114,9 @@ struct AtomicStats {
     events_generated: AtomicU64,
     batches_published: AtomicU64,
     bytes_sent: AtomicU64,
+    /// Run number of the current run (set on Start), carried in EOS messages
+    /// so the Recorder's stale-EOS filter matches (TODO 58 C1).
+    current_run: AtomicU32,
 }
 
 impl AtomicStats {
@@ -252,9 +255,11 @@ impl CommandHandlerExt for EmulatorCommandExt {
         "Emulator"
     }
 
-    fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
+    fn on_start(&mut self, run_number: u32) -> Result<(), String> {
         self.stats.reset();
         self.rate_tracker.reset();
+        // Record the run number so EOS carries it (TODO 58 C1).
+        self.stats.current_run.store(run_number, Ordering::Relaxed);
         Ok(())
     }
 
@@ -606,7 +611,10 @@ impl Emulator {
 
     /// Send EOS (End Of Stream) signal
     async fn send_eos(&mut self) -> Result<(), EmulatorError> {
-        let eos = Message::eos(self.config.source_id, 0);
+        let eos = Message::eos(
+            self.config.source_id,
+            self.stats.current_run.load(Ordering::Relaxed),
+        );
         self.publish_message(&eos).await
     }
 
@@ -673,6 +681,10 @@ impl Emulator {
 
         // Main data generation loop
         let mut state_rx = self.state_rx.clone();
+        // Tracks the Running→not-Running edge so Stop emits an EOS, matching
+        // the real Reader (TODO 58 M19 — without this, emulator-based
+        // integration tests never exercise the EOS-driven run close).
+        let mut was_running = false;
 
         loop {
             if use_ticker {
@@ -694,6 +706,12 @@ impl Emulator {
                             self.timestamp_ns = 0.0;
                             self.heartbeat_counter = 0;
                             info!("Sequence number reset to 0 on Start");
+                            was_running = true;
+                        } else if was_running {
+                            // Run stopped — emit EOS so downstream closes the
+                            // run, matching the real Reader (TODO 58 M19).
+                            was_running = false;
+                            self.send_eos().await?;
                         }
                     }
 
@@ -727,6 +745,12 @@ impl Emulator {
                             self.timestamp_ns = 0.0;
                             self.heartbeat_counter = 0;
                             info!("Sequence number reset to 0 on Start");
+                            was_running = true;
+                        } else if was_running {
+                            // Run stopped — emit EOS so downstream closes the
+                            // run, matching the real Reader (TODO 58 M19).
+                            was_running = false;
+                            self.send_eos().await?;
                         }
                         continue;
                     }

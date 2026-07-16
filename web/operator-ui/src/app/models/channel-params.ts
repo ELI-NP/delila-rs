@@ -268,6 +268,20 @@ const AMAX_CH_TRIGGER_MASK: ChannelParamDef = {
   setInRun: true,
 };
 
+// AMax shares PSD2's DevTree channel path (PSD2_AMAX_PARAMS) — DCOffset /
+// ChGain are standard OpenDPP input-conditioning params, distinct from the
+// FW register OFFSET (trapezoid filter offset, `amax.offset`).
+const AMAX_DC_OFFSET: ChannelParamDef = {
+  key: 'dc_offset', label: 'DC Offset', type: 'number', unit: '%',
+  min: 0, max: 100, step: 0.001, setInRun: true,
+  tooltip: 'DevTree DCOffset — input-signal DC offset (analog front end). Not the FW trapezoid offset.',
+};
+const AMAX_VGA_GAIN: ChannelParamDef = {
+  key: 'vga_gain', label: 'VGA Gain', type: 'number', unit: 'dB',
+  min: 0, max: 29, step: 1, setInRun: true,
+  tooltip: 'DevTree ChGain — VGA 0–29 dB. Spectroscopy: keep 0 dB (clipping/headroom loss degrades resolution).',
+};
+
 // --- Category lookup ---------------------------------------------------------
 
 /** Channel-parameter categories surfaced in the Settings UI.
@@ -373,11 +387,15 @@ const CATEGORY_PARAMS: Record<FirmwareType, Partial<Record<ChannelCategory, Chan
   //                + its dedicated baseline filter family)
   // Built dynamically from the codegen `AMAX_PARAMS_BY_CATEGORY` map so a new
   // firmware category (added in fw_params.json) surfaces automatically with no
-  // edit here. The only hand-wired bit is `ch_trigger_mask`, the PSD2-shared
-  // coincidence param (see `AMAX_CH_TRIGGER_MASK` above), spliced into Input.
+  // edit here. Three hand-wired entries are spliced into Input, all PSD2-shared
+  // DevTree params the register codegen doesn't emit: `dc_offset` (input DC
+  // offset, distinct from the FW trapezoid `amax.offset`) and `vga_gain` (VGA
+  // gain) from `PSD2_AMAX_PARAMS`, plus `ch_trigger_mask` (coincidence mask).
+  // See `AMAX_DC_OFFSET` / `AMAX_VGA_GAIN` / `AMAX_CH_TRIGGER_MASK` above.
   AMax: {
     ...AMAX_PARAMS_BY_CATEGORY,
-    input: [...(AMAX_PARAMS_BY_CATEGORY['input'] ?? []), AMAX_CH_TRIGGER_MASK],
+    input: [...(AMAX_PARAMS_BY_CATEGORY['input'] ?? []),
+            AMAX_DC_OFFSET, AMAX_VGA_GAIN, AMAX_CH_TRIGGER_MASK],
   },
 };
 

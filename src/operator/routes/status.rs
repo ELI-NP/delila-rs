@@ -120,50 +120,133 @@ pub(super) async fn configure(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfigureRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control — all guards below are check-then-act (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
+    // Guard: reject if Tune Up mode is active (TODO 58 M15 — configuring under
+    // an active tuneup re-resets the digitizer mid-stream and strands the
+    // tuneup flag).
+    if state.tuneup.is_active() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "Cannot configure while Tune Up mode is active. Stop Tune Up first.",
+            )),
+        );
+    }
     let run_config: RunConfig = request.into();
     let run_number = run_config.run_number;
+
+    // Reset to Idle first (mirrors run_start Phase 0). Without this, a Configure
+    // issued while already in the Configured state is rejected by the state machine
+    // (Configured -> Configured is not a valid transition), which makes the aggregate
+    // response.success false and silently skips the disk reload + ApplyDigitizerConfig
+    // push below. Command::Reset is idempotent from any state.
+    match state
+        .client
+        .reset_all_sync(&state.components, state.config.reset_timeout_ms)
+        .await
+    {
+        Err(e) => {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(ApiResponse::error(format!("Reset phase failed: {}", e))),
+            );
+        }
+        Ok(results) if results.iter().any(|r| !r.success) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error("Reset phase failed").with_results(results)),
+            );
+        }
+        Ok(_) => {}
+    }
+
     let results = state
         .client
         .configure_all(&state.components, run_config)
         .await;
 
-    let response = ApiResponse::success(format!("Configure command sent for run {}", run_number))
-        .with_results(results);
+    let mut response =
+        ApiResponse::success(format!("Configure command sent for run {}", run_number))
+            .with_results(results);
 
     let status = if response.success {
         // Reload configs from disk so edits since Operator start take effect
         state.reload_digitizer_configs();
-        // Push digitizer configs to remote Readers
+        // Push digitizer configs to remote Readers. TODO 58 M13: a Reader/FW
+        // rejection here used to be warn-only + HTTP 200 — completely silent
+        // in the UI while the digitizer ran with the wrong settings.
+        let mut apply_failures: Vec<String> = Vec::new();
         for comp in &state.components {
             if comp.is_digitizer {
                 if let Some(source_id) = comp.source_id {
-                    if let Some(config) = state.digitizer_configs.get(&source_id) {
-                        let cfg = config.value().clone();
-                        drop(config);
+                    let Some(config) = state.digitizer_configs.get(&source_id) else {
+                        // TODO 58 M13: this skip was silent.
+                        tracing::warn!(
+                            source_id,
+                            name = %comp.name,
+                            "No digitizer config loaded for this source — Apply skipped"
+                        );
+                        continue;
+                    };
+                    let cfg = config.value().clone();
+                    drop(config);
+                    // X743Std: skip the redundant push — `configure_all` above already
+                    // applied this config via the Reader's Configure path (the Reader
+                    // keeps its `dig_config` in sync, so Configure re-applies the current
+                    // config). A second apply within ~2s destabilizes libCAENDigitizer
+                    // and can SIGSEGV after Start. Same guard as run_start Phase 1.5
+                    // (see TODO/48). Use POST /api/digitizers/{id}/apply to push a
+                    // direct on-disk edit to an X743 reader without a full reconfigure.
+                    if cfg.firmware == FirmwareType::X743Std {
                         tracing::info!(
                             source_id,
                             name = %comp.name,
-                            "Pushing digitizer config to Reader"
+                            "X743Std: skipping redundant Apply (configure_all already applied identical config)"
                         );
-                        if let Err(e) = state
-                            .client
-                            .send_command(
-                                &comp.address,
-                                &Command::ApplyDigitizerConfig(Box::new(cfg)),
-                            )
-                            .await
-                        {
-                            tracing::warn!(
+                        continue;
+                    }
+                    tracing::info!(
+                        source_id,
+                        name = %comp.name,
+                        "Pushing digitizer config to Reader"
+                    );
+                    match state
+                        .client
+                        .send_command(&comp.address, &Command::ApplyDigitizerConfig(Box::new(cfg)))
+                        .await
+                    {
+                        Ok(resp) if resp.success => {}
+                        Ok(resp) => {
+                            tracing::error!(
+                                source_id,
+                                error = %resp.message,
+                                "Reader rejected digitizer config"
+                            );
+                            apply_failures.push(format!("{}: {}", comp.name, resp.message));
+                        }
+                        Err(e) => {
+                            tracing::error!(
                                 source_id,
                                 error = %e,
                                 "Failed to send ApplyDigitizerConfig command"
                             );
+                            apply_failures.push(format!("{}: {}", comp.name, e));
                         }
                     }
                 }
             }
         }
-        StatusCode::OK
+        if apply_failures.is_empty() {
+            StatusCode::OK
+        } else {
+            response.success = false;
+            response.message = format!(
+                "Configure succeeded but digitizer config apply FAILED: {}",
+                apply_failures.join("; ")
+            );
+            StatusCode::BAD_GATEWAY
+        }
     } else {
         StatusCode::BAD_REQUEST
     };
@@ -182,6 +265,17 @@ pub(super) async fn configure(
     )
 )]
 pub(super) async fn arm(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
+    // Guard: reject if Tune Up mode is active (TODO 58 M15).
+    if state.tuneup.is_active() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "Cannot arm while Tune Up mode is active. Stop Tune Up first.",
+            )),
+        );
+    }
     let results = state.client.arm_all(&state.components).await;
 
     let response = ApiResponse::success("Arm command sent").with_results(results);
@@ -214,6 +308,8 @@ pub(super) async fn start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<StartRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     // Guard: reject if Tune Up mode is active
     if state.tuneup.is_active() {
         return (
@@ -263,7 +359,7 @@ pub(super) async fn start(
         .start_all_sync(&state.components, run_number, state.config.start_timeout_ms)
         .await;
 
-    let response = match start_result {
+    let mut response = match start_result {
         Ok(results) => ApiResponse::success(format!("Start command sent for run {}", run_number))
             .with_results(results),
         Err(e) => {
@@ -276,6 +372,10 @@ pub(super) async fn start(
 
     let status = if response.success {
         let exp_name = &state.config.experiment_name;
+        // TODO 58 M16: MongoDB persistence failures were warn-only + HTTP 200 —
+        // run-history gaps were invisible to the operator. The run itself still
+        // starts (DAQ > bookkeeping), but the response must say so.
+        let mut mongo_warnings: Vec<String> = Vec::new();
 
         // Record run start in MongoDB and update current_run
         if let Some(ref repo) = state.run_repo {
@@ -290,7 +390,8 @@ pub(super) async fn start(
                     *state.current_run.write().await = Some(info);
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to record run start in MongoDB: {}", e);
+                    tracing::error!("Failed to record run start in MongoDB: {}", e);
+                    mongo_warnings.push(format!("run start not persisted: {}", e));
                     // Still set current_run for in-memory tracking
                     *state.current_run.write().await = Some(CurrentRunInfo {
                         run_number: run_number as i32,
@@ -304,6 +405,21 @@ pub(super) async fn start(
                     });
                 }
             }
+        } else {
+            // TODO 58 M17: without MongoDB the in-memory current_run tracking
+            // used to hang off the digitizer_repo branch below — with run
+            // history disabled but a digitizer repo present, current_run was
+            // never set and the UI showed no active run. Mirror run_start.
+            *state.current_run.write().await = Some(CurrentRunInfo {
+                run_number: run_number as i32,
+                exp_name: exp_name.clone(),
+                comment: comment.clone(),
+                start_time: chrono::Utc::now().timestamp_millis(),
+                elapsed_secs: 0,
+                status: RunStatus::Running,
+                stats: RunStats::default(),
+                notes: Vec::new(),
+            });
         }
 
         // Create digitizer config snapshot for this run
@@ -318,7 +434,8 @@ pub(super) async fn start(
                     .create_run_snapshot(run_number as i32, exp_name, configs)
                     .await
                 {
-                    tracing::warn!("Failed to create config snapshot: {}", e);
+                    tracing::error!("Failed to create config snapshot: {}", e);
+                    mongo_warnings.push(format!("config snapshot not persisted: {}", e));
                 }
             } else {
                 tracing::warn!(
@@ -328,18 +445,14 @@ pub(super) async fn start(
                      operator is started from the project root."
                 );
             }
-        } else {
-            // No MongoDB, just track in memory
-            *state.current_run.write().await = Some(CurrentRunInfo {
-                run_number: run_number as i32,
-                exp_name: exp_name.clone(),
-                comment,
-                start_time: chrono::Utc::now().timestamp_millis(),
-                elapsed_secs: 0,
-                status: RunStatus::Running,
-                stats: RunStats::default(),
-                notes: Vec::new(),
-            });
+        }
+        // TODO 58 M16: surface persistence failures in the HTTP response.
+        if !mongo_warnings.is_empty() {
+            response.message = format!(
+                "{} — WARNING, run history incomplete: {}",
+                response.message,
+                mongo_warnings.join("; ")
+            );
         }
         StatusCode::OK
     } else {
@@ -360,12 +473,24 @@ pub(super) async fn start(
     )
 )]
 pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
+    // Guard: reject if Tune Up mode is active (TODO 58 M15 — /api/stop during a
+    // tuneup used to strand the tuneup flag, deadlocking later starts on 409).
+    if state.tuneup.is_active() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "Tune Up mode is active — use the Tune Up stop endpoint instead of /api/stop.",
+            )),
+        );
+    }
     // Get current run info before stopping
     let current_run = state.current_run.read().await.clone();
 
     let results = state.client.stop_all(&state.components).await;
 
-    let response = ApiResponse::success("Stop command sent").with_results(results);
+    let mut response = ApiResponse::success("Stop command sent").with_results(results);
 
     // Always record run end and clear current_run, even if some components
     // failed to stop. Stop is best-effort — partial failure must not leave
@@ -375,18 +500,18 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
         let now_ms = chrono::Utc::now().timestamp_millis();
         run_info.elapsed_secs = (now_ms - run_info.start_time) / 1000;
 
-        // Get final stats from components
+        // Get final stats from components. Recorder is the authoritative source
+        // for recorded events/bytes (TODO 58 H12) — summing every component
+        // counts the same events ~4x (Reader+Merger+Recorder+Monitor) and that
+        // inflated number was persisted to MongoDB/ELOG. Mirrors get_status.
         let components = state.client.get_all_status(&state.components).await;
-        let total_events: i64 = components
+        let recorder_metrics = components
             .iter()
-            .filter_map(|c| c.metrics.as_ref())
-            .map(|m| m.events_processed as i64)
-            .sum();
-        let total_bytes: i64 = components
-            .iter()
-            .filter_map(|c| c.metrics.as_ref())
-            .map(|m| m.bytes_transferred as i64)
-            .sum();
+            .find(|c| c.name == "Recorder")
+            .and_then(|c| c.metrics.as_ref());
+        let (total_events, total_bytes) = recorder_metrics
+            .map(|m| (m.events_processed as i64, m.bytes_transferred as i64))
+            .unwrap_or((0, 0));
         let trigger_loss_count: i64 = components
             .iter()
             .filter(|c| c.role == "source")
@@ -406,16 +531,30 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             trigger_loss_count,
         };
 
+        // TODO 58 L9: a partial stop failure used to be recorded as Completed —
+        // record Error so the run history reflects the abnormal end.
+        let final_status = if response.success {
+            RunStatus::Completed
+        } else {
+            RunStatus::Error
+        };
+
         if let Err(e) = repo
             .end_run(
                 run_info.run_number,
                 &run_info.exp_name,
-                RunStatus::Completed,
+                final_status,
                 stats.clone(),
             )
             .await
         {
-            tracing::warn!("Failed to record run end in MongoDB: {}", e);
+            // TODO 58 M16: persistence failure must reach the operator, not
+            // just the log.
+            tracing::error!("Failed to record run end in MongoDB: {}", e);
+            response.message = format!(
+                "{} — WARNING, run history incomplete: run end not persisted: {}",
+                response.message, e
+            );
         }
 
         // Post to ELOG (fire-and-forget, must not block stop)
@@ -462,6 +601,39 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
     )
 )]
 pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14). Reset itself stays unguarded by
+    // state on purpose — it is the operator's escape hatch (UI "Force Reset").
+    let _run_guard = state.run_control_lock.lock().await;
+
+    // If a run is active, close its record as Aborted BEFORE resetting —
+    // otherwise the MongoDB doc stays "running" forever and current_run
+    // leaks into the next session (TODO 58 H13).
+    let aborted_run = state.current_run.write().await.take();
+    if let (Some(ref repo), Some(mut run_info)) = (&state.run_repo, aborted_run) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        run_info.elapsed_secs = (now_ms - run_info.start_time) / 1000;
+        if let Err(e) = repo
+            .end_run(
+                run_info.run_number,
+                &run_info.exp_name,
+                RunStatus::Aborted,
+                run_info.stats.clone(),
+            )
+            .await
+        {
+            tracing::warn!(
+                run_number = run_info.run_number,
+                "Failed to record aborted run in MongoDB: {}",
+                e
+            );
+        } else {
+            tracing::info!(
+                run_number = run_info.run_number,
+                "Run aborted by reset — recorded as Aborted"
+            );
+        }
+    }
+
     let results = state.client.reset_all(&state.components).await;
 
     let response = ApiResponse::success("Reset command sent").with_results(results);
@@ -502,6 +674,8 @@ pub(super) async fn run_start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfigureRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // Serialize run control (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
     // Guard: reject if Tune Up mode is active
     if state.tuneup.is_active() {
         return (
@@ -602,7 +776,15 @@ pub(super) async fn run_start(
                         .map(|r| r.value().clone())
                     {
                         Some(c) => c,
-                        None => continue,
+                        None => {
+                            // TODO 58 M13: this skip was silent.
+                            tracing::warn!(
+                                source_id,
+                                name = %comp.name,
+                                "No digitizer config loaded for this source — Phase 1.5 Apply skipped"
+                            );
+                            continue;
+                        }
                     };
                     if config.firmware == FirmwareType::X743Std {
                         tracing::info!(
@@ -632,18 +814,38 @@ pub(super) async fn run_start(
                                 "Digitizer config applied successfully"
                             );
                         }
+                        // TODO 58 M13: an FW rejection here was warn-only and
+                        // the sequence continued into Arm/Start — the run then
+                        // took data with the wrong (post-reset) settings.
+                        // Abort before Arm instead.
                         Ok(resp) => {
-                            tracing::warn!(
+                            tracing::error!(
                                 source_id,
                                 error = %resp.message,
-                                "Failed to apply digitizer config"
+                                "Reader rejected digitizer config — aborting run start"
+                            );
+                            return (
+                                StatusCode::BAD_GATEWAY,
+                                Json(ApiResponse::error(format!(
+                                    "{} rejected its digitizer config: {} — run start aborted \
+                                     before Arm. Fix the config and retry.",
+                                    comp.name, resp.message
+                                ))),
                             );
                         }
                         Err(e) => {
-                            tracing::warn!(
+                            tracing::error!(
                                 source_id,
                                 error = %e,
-                                "Failed to send ApplyDigitizerConfig command"
+                                "Failed to send ApplyDigitizerConfig command — aborting run start"
+                            );
+                            return (
+                                StatusCode::BAD_GATEWAY,
+                                Json(ApiResponse::error(format!(
+                                    "Failed to push digitizer config to {}: {} — run start \
+                                     aborted before Arm.",
+                                    comp.name, e
+                                ))),
                             );
                         }
                     }
@@ -698,6 +900,8 @@ pub(super) async fn run_start(
         ),
         Ok(results) => {
             let exp_name = &state.config.experiment_name;
+            // TODO 58 M16: persistence failures must reach the response.
+            let mut mongo_warnings: Vec<String> = Vec::new();
 
             // Record run start in MongoDB and update current_run
             if let Some(ref repo) = state.run_repo {
@@ -710,7 +914,8 @@ pub(super) async fn run_start(
                         *state.current_run.write().await = Some(info);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to record run start in MongoDB: {}", e);
+                        tracing::error!("Failed to record run start in MongoDB: {}", e);
+                        mongo_warnings.push(format!("run start not persisted: {}", e));
                         *state.current_run.write().await = Some(CurrentRunInfo {
                             run_number: run_number as i32,
                             exp_name: exp_name.clone(),
@@ -748,7 +953,8 @@ pub(super) async fn run_start(
                         .create_run_snapshot(run_number as i32, exp_name, configs)
                         .await
                     {
-                        tracing::warn!("Failed to create config snapshot: {}", e);
+                        tracing::error!("Failed to create config snapshot: {}", e);
+                        mongo_warnings.push(format!("config snapshot not persisted: {}", e));
                     }
                 } else {
                     tracing::warn!(
@@ -760,15 +966,21 @@ pub(super) async fn run_start(
                 }
             }
 
+            let mut message = format!(
+                "Run {} started successfully (all components synchronized)",
+                run_number
+            );
+            // TODO 58 M16: surface persistence failures in the HTTP response.
+            if !mongo_warnings.is_empty() {
+                message = format!(
+                    "{} — WARNING, run history incomplete: {}",
+                    message,
+                    mongo_warnings.join("; ")
+                );
+            }
             (
                 StatusCode::OK,
-                Json(
-                    ApiResponse::success(format!(
-                        "Run {} started successfully (all components synchronized)",
-                        run_number
-                    ))
-                    .with_results(results),
-                ),
+                Json(ApiResponse::success(message).with_results(results)),
             )
         }
     }

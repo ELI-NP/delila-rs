@@ -7,7 +7,7 @@
   "_fw_target": "AMAX_firmware32_channel_4input_caenlist (2026-06-16 build, broadcast page at word 0x8200, 32 ch via _4_<N>/ per-channel pages). Energy/AMax gate regs (sel_trigger/min_energy/max_energy/min_amax/max_amax) added 16June; widths provisional (bits used only for UI ui_max, not write masking) — confirm against FW spec.",
   "params": {
     "POLARITY":         { "bits": 1,  "default": 1,       "label": "Polarity",        "category": "input",    "type": "enum",   "options": ["0", "1"] },
-    "OFFSET":           { "bits": 16, "default": 0,       "label": "DC Offset",       "category": "input",    "type": "number" },
+    "OFFSET":           { "bits": 16, "default": 0,       "label": "Offset (Trapezoid)", "category": "input",    "type": "number" },
     "THRS":             { "bits": 32, "default": 20,      "label": "Threshold",       "category": "trigger",  "type": "number", "ui_max": 1000000 },
     "TRIG_K":           { "bits": 16, "default": 10,      "label": "Fast Trig Rise",  "category": "trigger",  "type": "number", "unit": "samp" },
     "TRIG_M":           { "bits": 16, "default": 12,      "label": "Fast Trig Decay", "category": "trigger",  "type": "number", "unit": "samp" },

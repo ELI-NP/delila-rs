@@ -25,8 +25,13 @@ use xxhash_rust::xxh64::xxh64;
 /// Magic bytes for DELILA data files
 pub const FILE_MAGIC: [u8; 8] = *b"DELILA02";
 
-/// Current file format version
-pub const FORMAT_VERSION: u32 = 2;
+/// Current file format version.
+///
+/// v3 (2026-07): `EventData.waveform` is always serialized (nil when absent) so
+/// every event is a fixed-length array, and the header carries a self-describing
+/// event schema in `metadata["event_schema"]` (see `common::delila_schema`).
+/// The container magic is unchanged; readers key behavior off this version field.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Footer magic bytes (different from header to detect truncation)
 pub const FOOTER_MAGIC: [u8; 8] = *b"DLEND002";

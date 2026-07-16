@@ -164,7 +164,13 @@ impl RolloverTracker {
         let hi = extended & !sub_mask;
         let candidate = hi | sub;
         if candidate > extended {
-            candidate.wrapping_sub(1u64 << sub_bits)
+            // TODO 58 M5: during the first sub-counter period of a run
+            // (`extended` < 2^sub_bits, so `hi` = 0) a future-looking candidate
+            // has no previous epoch to land in — a wrapping subtraction here
+            // produced ~1.8e19 (u64 underflow) timestamps. Keep the candidate
+            // instead; the sub-counter is simply slightly ahead of the wider
+            // counter's latch.
+            candidate.checked_sub(1u64 << sub_bits).unwrap_or(candidate)
         } else {
             candidate
         }
@@ -389,11 +395,27 @@ mod tests {
         // slightly above the BoardAgg value must roll back by 2^31 so it lands
         // before `extended`.
         let t = RolloverTracker::new(32);
-        let ext: u64 = 0x1000_0000; // small BoardAgg (epoch 0)
-        let event_ttt: u64 = 0x7FFF_0000; // large 31-bit (~ 2 s ago at 2 ns)
+        let ext: u64 = 0x9000_0000; // BoardAgg in epoch 1 (> 2^31)
+        let event_ttt: u64 = 0x7FFF_0000; // 31-bit reading near the top of an epoch
         let r = t.reconstruct_subcounter(ext, event_ttt, 31);
-        // Naive hi|sub = 0x7FFF_0000 would be > ext → subtract 2^31.
-        assert_eq!(r as i64, 0x7FFF_0000_i64 - (1i64 << 31));
+        // hi = 0x8000_0000, hi|sub = 0xFFFF_0000 > ext → subtract 2^31 →
+        // lands in epoch 0, before `extended`.
+        assert_eq!(r, 0xFFFF_0000_u64 - (1u64 << 31));
+        assert!(r <= ext);
+    }
+
+    #[test]
+    fn subcounter_run_start_does_not_underflow() {
+        // TODO 58 M5: during the first sub-counter period of a run (`extended`
+        // < 2^sub_bits) there is no previous epoch — the old wrapping
+        // subtraction produced ~1.8e19 (u64 underflow). The candidate must be
+        // kept instead.
+        let t = RolloverTracker::new(32);
+        let ext: u64 = 0x1000_0000; // BoardAgg still in epoch 0 (< 2^31)
+        let event_ttt: u64 = 0x7FFF_0000; // sub-counter ahead of the latch
+        let r = t.reconstruct_subcounter(ext, event_ttt, 31);
+        assert_eq!(r, event_ttt, "candidate must be preserved, not underflowed");
+        assert!(r < (1u64 << 31), "result stays inside epoch 0");
     }
 
     #[test]
@@ -454,7 +476,10 @@ mod tests {
             }
 
             /// reconstruct_subcounter never returns a value strictly greater
-            /// than the `extended` reference (that's its whole contract).
+            /// than the `extended` reference — EXCEPT in the run-start corner
+            /// (`extended` < 2^sub_bits, TODO 58 M5) where no previous epoch
+            /// exists: there the candidate is kept, which is still bounded by
+            /// the sub-counter width (never the old ~1.8e19 underflow).
             #[test]
             fn subcounter_never_exceeds_extended(
                 bits in 8u8..=48,
@@ -465,7 +490,12 @@ mod tests {
                 prop_assume!(sub_bits <= bits);
                 let tracker = RolloverTracker::new(bits);
                 let r = tracker.reconstruct_subcounter(extended, sub_raw, sub_bits);
-                prop_assert!(r <= extended);
+                let epoch = 1u64 << sub_bits;
+                if extended < epoch {
+                    prop_assert!(r < epoch);
+                } else {
+                    prop_assert!(r <= extended);
+                }
             }
 
             /// After `reset`, the first `extend` must always succeed and equal

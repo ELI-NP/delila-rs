@@ -76,6 +76,11 @@ pub struct PipelineStats {
     /// Events that survived L2 (== events_built when no L2 filter is set).
     pub events_kept: u64,
     pub files_written: u64,
+    /// ROOT file writes that FAILED (disk full / I/O error). Each failure
+    /// discards one buffer of built events — derived data only (the raw
+    /// stream is still recorded by the Recorder), but it must be visible,
+    /// never silent (TODO 58 H9).
+    pub write_failures: u64,
     /// Number of [`EbMessage::Events`] batches successfully published on
     /// the ZMQ PUB endpoint (0 when no endpoint is configured).
     pub batches_published: u64,
@@ -131,6 +136,7 @@ impl EventBuilderPipeline {
         let events_built = Arc::new(AtomicU64::new(0));
         let events_kept = Arc::new(AtomicU64::new(0));
         let files_written = Arc::new(AtomicU64::new(0));
+        let write_failures = Arc::new(AtomicU64::new(0));
         let batches_published = Arc::new(AtomicU64::new(0));
         let next_event_id = Arc::new(AtomicU64::new(0));
         let next_batch_id = Arc::new(AtomicU64::new(0));
@@ -175,11 +181,22 @@ impl EventBuilderPipeline {
             let epf = config.events_per_file;
             let fi = file_index.clone();
             let fw = files_written.clone();
+            let wfail = write_failures.clone();
             let run_id = config.run_id;
             let tree_name = config.output_tree.clone();
             let counter_names = counter_names.clone();
             writer_handles.push(std::thread::spawn(move || {
-                writer_thread(rx, dir, epf, fi, fw, run_id, &tree_name, &counter_names);
+                writer_thread(
+                    rx,
+                    dir,
+                    epf,
+                    fi,
+                    fw,
+                    wfail,
+                    run_id,
+                    &tree_name,
+                    &counter_names,
+                );
             }));
         }
         drop(writer_rx); // Close our copy so writers detect close when all senders drop
@@ -226,11 +243,23 @@ impl EventBuilderPipeline {
         drop(writer_tx); // Close our copy so writers detect close when all workers drop
         drop(pub_tx_for_workers); // Close our copy so PUB detects close when all workers drop
 
+        // Lookback carried across chunk boundaries so a trigger just after
+        // core_end still sees its backward-coincidence / multiplicity context
+        // (TODO 58 H10): the largest window the builder can look back over.
+        let lookback_ns = self.trigger_config.coincidence_window_ns.max(
+            self.trigger_config
+                .multiplicity_triggers
+                .iter()
+                .map(|m| m.window_ns)
+                .fold(0.0_f64, f64::max),
+        );
+
         // Run sorter on this thread (blocking)
         sorter_thread(
             source,
             chunk_tx,
             config.safe_horizon_ns,
+            lookback_ns,
             config.sorter_threshold,
             config.sorter_timeout,
             chunks_processed.clone(),
@@ -260,6 +289,7 @@ impl EventBuilderPipeline {
             events_built: events_built.load(Ordering::Relaxed),
             events_kept: events_kept.load(Ordering::Relaxed),
             files_written: files_written.load(Ordering::Relaxed),
+            write_failures: write_failures.load(Ordering::Relaxed),
             batches_published: batches_published.load(Ordering::Relaxed),
         };
 
@@ -270,6 +300,7 @@ impl EventBuilderPipeline {
             events_built = stats.events_built,
             events_kept = stats.events_kept,
             files = stats.files_written,
+            write_failures = stats.write_failures,
             batches_published = stats.batches_published,
             "EventBuilderPipeline finished"
         );
@@ -284,6 +315,7 @@ fn sorter_thread(
     mut source: impl HitSource,
     chunk_tx: crossbeam::Sender<super::chunk_builder::SortedChunk>,
     safe_horizon_ns: f64,
+    lookback_ns: f64,
     threshold: usize,
     timeout: Duration,
     chunks_processed: Arc<AtomicU64>,
@@ -294,6 +326,8 @@ fn sorter_thread(
     let mut buffer: Vec<super::hit::Hit> = Vec::with_capacity(threshold * 2);
     let mut last_flush = Instant::now();
     let poll_interval = Duration::from_millis(100);
+    // Emit floor for the next chunk == previous chunk's core_end (TODO 58 H10).
+    let mut prev_core_end = f64::NEG_INFINITY;
 
     loop {
         // Poll the source
@@ -312,9 +346,15 @@ fn sorter_thread(
             Ok(HitBatch::Eos) => {
                 // End of stream: flush remaining and exit
                 info!(buffer_size = buffer.len(), "Sorter received EOS, flushing");
-                if let Some(chunk) = sort_and_flush(buffer) {
+                if let Some(chunk) = sort_and_flush(buffer, prev_core_end) {
                     chunks_processed.fetch_add(1, Ordering::Relaxed);
-                    let _ = chunk_tx.send(chunk);
+                    // TODO 58 L4: a lost final chunk is silent built-event loss.
+                    if let Err(e) = chunk_tx.send(chunk) {
+                        error!(
+                            hits = e.0.hits.len(),
+                            "Final EOS flush chunk dropped — worker channel closed early"
+                        );
+                    }
                 }
                 break;
             }
@@ -326,9 +366,15 @@ fn sorter_thread(
                     buffer_size = buffer.len(),
                     "Sorter source disconnected, flushing"
                 );
-                if let Some(chunk) = sort_and_flush(buffer) {
+                if let Some(chunk) = sort_and_flush(buffer, prev_core_end) {
                     chunks_processed.fetch_add(1, Ordering::Relaxed);
-                    let _ = chunk_tx.send(chunk);
+                    // TODO 58 L4: same visibility rule as the EOS flush above.
+                    if let Err(e) = chunk_tx.send(chunk) {
+                        error!(
+                            hits = e.0.hits.len(),
+                            "Final disconnect flush chunk dropped — worker channel closed early"
+                        );
+                    }
                 }
                 break;
             }
@@ -336,9 +382,10 @@ fn sorter_thread(
 
         // Try to produce a chunk if we have enough data or timeout
         if buffer.len() >= threshold || (!buffer.is_empty() && last_flush.elapsed() >= timeout) {
-            match sort_and_split(buffer, safe_horizon_ns) {
+            match sort_and_split(buffer, safe_horizon_ns, lookback_ns, prev_core_end) {
                 Ok((chunk, retained)) => {
                     chunks_processed.fetch_add(1, Ordering::Relaxed);
+                    prev_core_end = chunk.core_end;
                     if chunk_tx.send(chunk).is_err() {
                         error!("Failed to send chunk to workers (channel closed)");
                         break;
@@ -405,6 +452,10 @@ fn worker_thread(
         // dropped (endpoint unconfigured) with zero overhead because
         // `pub_tx` is None in that case.
         if let Some(ref tx) = pub_tx {
+            // TODO 58 L5: batch_id is allocated per-worker from a shared atomic,
+            // so ids are UNIQUE but arrival order at the subscriber is NOT
+            // monotonic (workers race between fetch_add and send). Do not use
+            // batch_id for gap detection — it identifies batches, nothing more.
             let batch_id = next_batch_id.fetch_add(1, Ordering::Relaxed);
             let batch = BuiltEventBatch {
                 run_number: run_id,
@@ -604,6 +655,7 @@ fn writer_thread(
     events_per_file: usize,
     file_index: Arc<AtomicU32>,
     files_written: Arc<AtomicU64>,
+    write_failures: Arc<AtomicU64>,
     run_id: u32,
     tree_name: &str,
     counter_names: &[String],
@@ -621,6 +673,7 @@ fn writer_thread(
                 tree_name,
                 &file_index,
                 &files_written,
+                &write_failures,
                 counter_names,
             );
         }
@@ -635,6 +688,7 @@ fn writer_thread(
             tree_name,
             &file_index,
             &files_written,
+            &write_failures,
             counter_names,
         );
     }
@@ -649,6 +703,7 @@ fn write_buffer_to_root(
     tree_name: &str,
     file_index: &AtomicU32,
     files_written: &AtomicU64,
+    write_failures: &AtomicU64,
     counter_names: &[String],
 ) {
     use super::root_io::write_events_to_root;
@@ -668,7 +723,17 @@ fn write_buffer_to_root(
             );
         }
         Err(e) => {
-            error!(error = %e, file = %file_path.display(), "Failed to write ROOT file");
+            // Count the failure so it reaches PipelineStats / logs — the
+            // buffer below is discarded (derived data; raw stream is still
+            // on disk via the Recorder). Never silent (TODO 58 H9).
+            write_failures.fetch_add(1, Ordering::Relaxed);
+            error!(
+                error = %e,
+                file = %file_path.display(),
+                discarded_events = buffer.len(),
+                total_failures = write_failures.load(Ordering::Relaxed),
+                "Failed to write ROOT file — discarding buffer"
+            );
         }
     }
     buffer.clear();
@@ -683,6 +748,7 @@ fn writer_thread(
     _events_per_file: usize,
     _file_index: Arc<AtomicU32>,
     _files_written: Arc<AtomicU64>,
+    _write_failures: Arc<AtomicU64>,
     _run_id: u32,
     _tree_name: &str,
     _counter_names: &[String],

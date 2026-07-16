@@ -1,7 +1,7 @@
 # AMax 10G FW Round 2 — 16 ch + 16-bit digital probes + Tune Up sub-mode
 
 **作成日:** 2026-05-07
-**ステータス:** ✅ **コード作業完了 (2026-05-08)** — Phase G/H/I 全項目 + UX polish + 統合テスト + register inspector + 状態更新まで landed (commits `8786008` + 本コミット)。残り: 月曜 (5/11) の **172.18.6.114 実機検証** (Phase J.2/J.3 hardware-only項目)。
+**ステータス:** ✅ **COMPLETED (2026-07-09 クローズ)** — コード作業完了 (2026-05-08、commits `8786008` + `1984bd3`、master push 済)。残っていた J2/J3 (5/11 実機検証) は**対象 FW (20260507) が 6月の 11june/17june FW に置換されたため陳腐化**。後継 FW は first-light + 実機検証済 ([TODO 60](60_amax_fw_selfconfig.md) の self-config workflow で完結)。Round 2 のコード (16ch/16 digital probes/Tune Up sub-mode/register inspector) はその後の FW サイクルで実運用済み。
 **プランファイル:** [/Users/aogaki/.claude/plans/lazy-herding-naur.md](../../.claude/plans/lazy-herding-naur.md) Round 2 セクション (Phase G–J)
 **前提:** Round 1 完了 (commits `d336203` + `b1e9aa3`、master push 済)
 **FW ソース:** `FW/20260507/RegisterFile.json` + `V2730-OpenDPP10GUDP-AMAXfirmware32channel4inputcaenlist-2026050752.cup`

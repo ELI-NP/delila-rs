@@ -252,6 +252,15 @@ interface ChannelChart {
             }
           </div>
 
+          <mat-button-toggle-group
+            [value]="yAxisMode()"
+            (change)="onYAxisModeChange($event.value)"
+            class="y-axis-toggle"
+          >
+            <mat-button-toggle value="auto">Auto Y</mat-button-toggle>
+            <mat-button-toggle value="fixed">Fixed Y</mat-button-toggle>
+          </mat-button-toggle-group>
+
           <span class="spacer"></span>
 
           <button mat-stroked-button color="warn" (click)="onStopTuneUp()" [disabled]="tuneUpLoading()">
@@ -1536,6 +1545,12 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
 
   onYAxisModeChange(mode: 'auto' | 'fixed'): void {
     this.yAxisMode.set(mode);
+    // Live-apply to the Tune Up chart without resetting series/zoom.
+    // (Gallery view rebuilds its options reactively; Tune Up re-inits only on
+    //  channel change, so it needs an explicit merge here.)
+    if (this.isTuneUp() && this.tuneUpWfChart) {
+      this.tuneUpWfChart.setOption({ yAxis: this.buildTuneUpYAxis() });
+    }
   }
 
   onRefresh(): void {
@@ -2180,18 +2195,7 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         nameGap: 25,
         min: 0,
       },
-      yAxis: {
-        type: 'value',
-        name: 'ADC',
-        min: 0,
-        max: 30000,
-        axisLabel: {
-          formatter: (value: number) => {
-            if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'k';
-            return value.toString();
-          },
-        },
-      },
+      yAxis: this.buildTuneUpYAxis(),
       dataZoom: [
         { type: 'inside', xAxisIndex: 0, yAxisIndex: [], zoomOnMouseWheel: 'shift', moveOnMouseMove: true, filterMode: 'none' },
         { type: 'inside', xAxisIndex: [], yAxisIndex: 0, zoomOnMouseWheel: 'ctrl', moveOnMouseMove: false, filterMode: 'none' },
@@ -2199,6 +2203,30 @@ export class WaveformPageComponent implements OnInit, OnDestroy {
         { type: 'slider', yAxisIndex: 0, width: 20, right: 5, filterMode: 'none' },
       ],
       series: [],
+    };
+  }
+
+  /**
+   * Tune Up waveform yAxis config.
+   * - auto : `scale: true` — auto-scale incl. negative range so signed firmwares
+   *          like V1743 Standard mode (baseline ~-1500 ADC) stay visible.
+   * - fixed: hard [-30000, 30000] range (agreed default, shared with gallery view).
+   * Read untracked so the `tuneUpWfOptions` computed only re-inits on channel
+   * change; live toggle is applied via `onYAxisModeChange` setOption merge.
+   */
+  private buildTuneUpYAxis(): Record<string, unknown> {
+    const fixed = untracked(() => this.yAxisMode()) === 'fixed';
+    return {
+      type: 'value',
+      name: 'ADC',
+      // min/max: null explicitly clears any previously-set fixed range on merge.
+      ...(fixed ? { min: -30000, max: 30000 } : { min: null, max: null, scale: true }),
+      axisLabel: {
+        formatter: (value: number) => {
+          if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'k';
+          return value.toString();
+        },
+      },
     };
   }
 

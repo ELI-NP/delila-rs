@@ -257,7 +257,14 @@ pub struct X743Config {
     /// Energy source:
     /// - "amplitude" (default) — `|peak − baseline|` from the Rust post-processor.
     /// - "charge" — CAEN-lib `Charge` field (always 0 in Standard mode; don't use).
-    /// - "soft" — reserved for a future proper charge-integration implementation.
+    /// - "soft" — Rust-side gated charge integral. The long gate is anchored at
+    ///   the software-CFD crossing (`charge_gate_pre_samples` / `charge_gate_samples`).
+    ///   `energy` (Charge Long) = Σ(baseline − sample) over the gate (sign-corrected),
+    ///   then `× energy_scale + energy_offset`; `energy_short` (Charge Short) = the
+    ///   pulse amplitude `|peak − baseline|`, unscaled (raw ADC), for integral-vs-
+    ///   height discrimination. Note charge integrals are ~gate-width larger than
+    ///   amplitude, so set `energy_scale` well below 1.0 to avoid the u16 clamp on
+    ///   Long (e.g. 1/gate_len as a starting point).
     #[serde(default = "X743Config::default_energy_source")]
     pub energy_source: String,
 
@@ -287,6 +294,18 @@ pub struct X743Config {
     /// Software-CFD fraction. Typical range 0.2–0.5; `0.3` works well for PMTs.
     #[serde(default = "X743Config::default_cfd_fraction")]
     pub cfd_fraction: f32,
+
+    /// Soft-charge long gate: samples the integration window opens *before* the
+    /// CFD crossing anchor. Covers the pulse onset that precedes the CFD trigger
+    /// point on the leading edge. Only used when `energy_source = "soft"`.
+    #[serde(default = "X743Config::default_charge_gate_pre_samples")]
+    pub charge_gate_pre_samples: u32,
+
+    /// Soft-charge long gate width in samples (total integration length starting
+    /// from `anchor − charge_gate_pre_samples`). At 3.2 GSa/s, `64` ≈ 20 ns.
+    /// Only used when `energy_source = "soft"`.
+    #[serde(default = "X743Config::default_charge_gate_samples")]
+    pub charge_gate_samples: u32,
 
     /// TTF (Trigger and Timing Filter) smoothing — N-tap moving average applied
     /// to the raw waveform *before* baseline / software CFD computation. Mirrors
@@ -467,6 +486,12 @@ impl X743Config {
     }
     fn default_cfd_fraction() -> f32 {
         0.3
+    }
+    fn default_charge_gate_pre_samples() -> u32 {
+        8
+    }
+    fn default_charge_gate_samples() -> u32 {
+        64
     }
 }
 

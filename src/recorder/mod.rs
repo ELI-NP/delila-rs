@@ -28,7 +28,7 @@ pub use format::{
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,7 +36,7 @@ use futures::StreamExt;
 use thiserror::Error;
 use tmq::{subscribe, Context};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::common::{
     handle_command, run_command_task, sub_no_hwm, CommandHandlerExt, ComponentSharedState,
@@ -98,6 +98,11 @@ struct AtomicStats {
     written_bytes: AtomicU64,
     files_written: AtomicU64,
     dropped_batches: AtomicU64,
+    /// Latched by the writer task when a file write/close fails (disk full,
+    /// I/O error). Surfaces as ComponentState::Error via effective_state so
+    /// the operator SEES the failure instead of the run silently discarding
+    /// the rest of its data (TODO 58 H7). Cleared on Configure/Reset.
+    write_failed: AtomicBool,
 }
 
 impl AtomicStats {
@@ -109,6 +114,7 @@ impl AtomicStats {
             written_bytes: AtomicU64::new(0),
             files_written: AtomicU64::new(0),
             dropped_batches: AtomicU64::new(0),
+            write_failed: AtomicBool::new(false),
         }
     }
 
@@ -313,6 +319,12 @@ impl FileWriter {
             self.file_sequence,
         );
         header.comment = run_config.comment.clone();
+        // Self-describing event schema (format v3+) so external readers such as
+        // the C++ `TDelila` learn the exact wire layout from the file itself.
+        header.metadata.insert(
+            "event_schema".to_string(),
+            crate::common::delila_schema::schema_json(),
+        );
 
         let header_bytes = header
             .to_bytes()
@@ -526,10 +538,26 @@ impl CommandHandlerExt for RecorderCommandExt {
 
     fn status_details(&self) -> Option<String> {
         let stats = self.stats.snapshot();
+        let failed = self.stats.write_failed.load(Ordering::Relaxed);
         Some(format!(
-            "Received: {} events, Written: {} events, Files: {}, Dropped: {}",
-            stats.total_events, stats.written_events, stats.files_written, stats.dropped_batches
+            "Received: {} events, Written: {} events, Files: {}, Dropped: {}{}",
+            stats.total_events,
+            stats.written_events,
+            stats.files_written,
+            stats.dropped_batches,
+            if failed { ", WRITE FAILED" } else { "" }
         ))
+    }
+
+    /// Surface a latched file-write failure as Error so the operator sees it
+    /// (TODO 58 H7). Mirrors the Reader's hw_state pattern — the software
+    /// state machine says Running, but the component knows better.
+    fn effective_state(&self, software_state: ComponentState) -> ComponentState {
+        if self.stats.write_failed.load(Ordering::Relaxed) {
+            ComponentState::Error
+        } else {
+            software_state
+        }
     }
 
     fn get_metrics(&self) -> Option<crate::common::ComponentMetrics> {
@@ -805,8 +833,21 @@ impl Recorder {
                 msg = socket.next() => {
                     match msg {
                         Some(Ok(multipart)) => {
-                            // Not running - discard data to prevent ZMQ buffer growth
+                            // Not running — discard to prevent ZMQ buffer growth.
+                            // Tail batches after Stop land here by design
+                            // (accepted loss — see CLAUDE.md データ保全 exception).
+                            // Counted in dropped_batches (visible in Recording
+                            // progress logs) so the loss is observable, never
+                            // silent (TODO 58 C3): dropped growing while Running
+                            // is a bug.
                             if !is_running {
+                                let n = stats.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
+                                if n == 1 || n.is_multiple_of(1000) {
+                                    info!(
+                                        discarded_total = n,
+                                        "Discarding batch while not Running (expected Stop tail)"
+                                    );
+                                }
                                 continue;
                             }
 
@@ -875,6 +916,9 @@ impl Recorder {
         stats: Arc<AtomicStats>,
         state_rx: watch::Receiver<ComponentState>,
     ) {
+        // Kept for the write-failure latch: FileWriter takes ownership of the
+        // shared stats Arc below.
+        let stats_flag = Arc::clone(&stats);
         let mut writer = FileWriter::new(config, stats);
         let mut eos_received = false;
         let mut current_run_number: u32 = 0;
@@ -885,7 +929,11 @@ impl Recorder {
                 Ok(cmd) => match cmd {
                     WriterCommand::WriteRawBatch { data, event_count } => {
                         if let Err(e) = writer.write_raw_batch(&data, event_count) {
-                            warn!(error = %e, "Failed to write batch");
+                            // Disk full / I/O error: latch Error so the operator
+                            // sees it — otherwise the rest of the run is silently
+                            // discarded batch by batch (TODO 58 H7).
+                            error!(error = %e, "Failed to write batch — latching Error state");
+                            stats_flag.write_failed.store(true, Ordering::Relaxed);
                         }
                     }
                     WriterCommand::EndOfStream {
@@ -902,7 +950,10 @@ impl Recorder {
                         } else {
                             info!(source_id, run_number, "Writer received EOS - closing file");
                             if let Err(e) = writer.end_run() {
-                                warn!(error = %e, "Failed to close file on EOS");
+                                // A failed close can lose the footer/tail — latch
+                                // Error so it is visible (TODO 58 H7).
+                                error!(error = %e, "Failed to close file on EOS — latching Error state");
+                                stats_flag.write_failed.store(true, Ordering::Relaxed);
                             }
                             eos_received = true;
                         }
@@ -910,27 +961,18 @@ impl Recorder {
                     WriterCommand::NewRun(run_config) => {
                         writer.new_run(run_config);
                         eos_received = false;
+                        // A fresh Configure clears a latched write failure —
+                        // the operator has acknowledged/resolved it (H7).
+                        stats_flag.write_failed.store(false, Ordering::Relaxed);
                         info!("Writer configured for new run");
                     }
                     WriterCommand::DrainAndStart { run_number } => {
-                        // Drain any stale batches from previous run
-                        let mut drained = 0u64;
-                        while let Ok(cmd) = rx.try_recv() {
-                            match cmd {
-                                WriterCommand::WriteRawBatch { .. } => drained += 1,
-                                WriterCommand::EndOfStream { .. } => { /* discard */ }
-                                other => {
-                                    warn!(
-                                        "Unexpected command during drain: {:?}",
-                                        std::mem::discriminant(&other)
-                                    );
-                                }
-                            }
-                        }
-                        if drained > 0 {
-                            info!(drained, "Drained stale batches from previous run");
-                        }
-
+                        // NO explicit drain (TODO 58 H8): stale batches queued
+                        // BEFORE this command are no-ops anyway (write_raw_batch
+                        // ignores them while run_active=false), while a try_recv
+                        // drain here raced AHEAD in the queue and could eat the
+                        // NEW run's first batches (receiver may already be
+                        // forwarding them once the state watch flips to Running).
                         current_run_number = run_number;
                         eos_received = false;
                         writer.start_run(run_number);
@@ -940,6 +982,8 @@ impl Recorder {
                         if let Err(e) = writer.end_run() {
                             warn!(error = %e, "Failed to close file");
                         }
+                        // CloseFile is sent by on_reset — Reset clears the latch (H7).
+                        stats_flag.write_failed.store(false, Ordering::Relaxed);
                     }
                     WriterCommand::Shutdown => {
                         if let Err(e) = writer.close_file() {
@@ -961,7 +1005,8 @@ impl Recorder {
                         {
                             info!("State changed to {} - closing file", current);
                             if let Err(e) = writer.end_run() {
-                                warn!(error = %e, "Failed to close file on state change");
+                                error!(error = %e, "Failed to close file on state change — latching Error state");
+                                stats_flag.write_failed.store(true, Ordering::Relaxed);
                             }
                         }
 

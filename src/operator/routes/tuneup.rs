@@ -330,11 +330,25 @@ pub(super) async fn tuneup_apply(
     Path(id): Path<u32>,
     Json(config): Json<DigitizerConfig>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    // Guard: must be in tune up mode
-    if !state.tuneup.is_active() {
+    // Guard: must be in tune up mode, and the path id must match the digitizer
+    // the tuneup was started for. TODO 58 M14: without the id check, an apply
+    // to a DIFFERENT id overwrote that idle digitizer's config/JSON on disk and
+    // stopped the live tuneup's Merger/Monitor mid-stream.
+    let (active, active_id) = state.tuneup.snapshot();
+    if !active {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse::error("Not in Tune Up mode")),
+        );
+    }
+    if active_id != Some(id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(format!(
+                "Tune Up is active for digitizer {}, not {} — apply refused",
+                active_id.map_or_else(|| "?".to_string(), |v| v.to_string()),
+                id
+            ))),
         );
     }
 

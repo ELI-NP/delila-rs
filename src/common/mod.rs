@@ -43,6 +43,8 @@ pub use shutdown::{setup_shutdown, setup_shutdown_with_message, ShutdownReceiver
 pub mod zmq_helper;
 pub use zmq_helper::{pub_no_hwm, sub_no_hwm};
 
+pub mod delila_schema;
+
 /// Heartbeat message for liveness detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Heartbeat {
@@ -134,15 +136,15 @@ pub struct Waveform {
     /// older `.delila` readers happy.
     #[serde(default)]
     pub analog_probe3: Vec<i16>,
-    /// Digital probe 1 samples (1-bit per sample, packed)
+    /// Digital probe 1 samples (one u8 = 0 or 1 per sample; NOT bit-packed)
     pub digital_probe1: Vec<u8>,
-    /// Digital probe 2 samples (1-bit per sample, packed)
+    /// Digital probe 2 samples (one u8 = 0 or 1 per sample; NOT bit-packed)
     pub digital_probe2: Vec<u8>,
-    /// Digital probe 3 samples (1-bit per sample, packed)
+    /// Digital probe 3 samples (one u8 = 0 or 1 per sample; NOT bit-packed)
     pub digital_probe3: Vec<u8>,
-    /// Digital probe 4 samples (1-bit per sample, packed)
+    /// Digital probe 4 samples (one u8 = 0 or 1 per sample; NOT bit-packed)
     pub digital_probe4: Vec<u8>,
-    /// Digital probe 5 samples (1-bit per sample, packed) — AMax debug FW
+    /// Digital probe 5 samples (one u8 = 0 or 1 per sample; NOT bit-packed) — AMax debug FW
     /// shaping_track. Empty Vec for FW that emits ≤ 4 digital probes.
     #[serde(default)]
     pub digital_probe5: Vec<u8>,
@@ -275,8 +277,13 @@ pub struct EventData {
     /// that pre-date the AMax integration.
     #[serde(default)]
     pub user_info: [u64; 4],
-    /// Optional waveform data (skipped in serialization when None)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    /// Optional waveform data. Always serialized (as MessagePack `nil` when
+    /// absent) so every `EventData` record is a fixed 8-element array — this
+    /// keeps the self-describing wire layout uniform for the C++ `TDelila`
+    /// reader (format v3+). `#[serde(default)]` keeps legacy v2 files (which
+    /// omitted the field entirely) readable: the missing trailing field
+    /// deserializes to `None`.
+    #[serde(default)]
     pub waveform: Option<Waveform>,
 }
 

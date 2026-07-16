@@ -44,14 +44,21 @@ struct X743DecodeParams {
     ttf_smoothing_taps: usize,
     /// Per-channel polarity: `true` = negative pulse (pulse dips below baseline).
     channel_negative: [bool; caen_legacy::MAX_CHANNELS],
+    /// `true` when `energy_source = "soft"`: `energy` comes from the gated charge
+    /// integral instead of the pulse amplitude.
+    use_soft_charge: bool,
+    /// Long-gate opening offset (samples before the CFD anchor). Soft charge only.
+    charge_gate_pre_samples: usize,
+    /// Long-gate width in samples. Soft charge only.
+    charge_gate_samples: usize,
 }
 
 /// Result of the Rust-side V1743 waveform post-processor. See `analyze()`.
 #[cfg(feature = "x743")]
 #[derive(Debug, Clone, Copy)]
 struct X743WaveformStats {
-    /// Mean of the pre-trigger samples (ADC units). Kept for diagnostics/tests.
-    #[allow(dead_code)]
+    /// Mean of the pre-trigger samples (ADC units). Used as the pedestal for the
+    /// soft-charge integral and for diagnostics/tests.
     baseline: f32,
     /// Signed peak extremum (min for negative pulses, max for positive).
     /// Kept for diagnostics/tests.
@@ -199,6 +206,39 @@ impl X743WaveformStats {
     }
 }
 
+/// Soft-charge long-gate integral for V1743 Standard mode.
+///
+/// Integrates the baseline-subtracted, sign-corrected waveform over a gate of
+/// `gate_len` samples opening `gate_pre` samples before `anchor`. `anchor` is the
+/// integer sample index of the software-CFD crossing (or the peak sample when the
+/// CFD search failed) so the gate tracks the pulse rather than a fixed window.
+///
+/// The sum is sign-corrected (`baseline − s` for negative pulses, `s − baseline`
+/// for positive) so the returned charge is positive for a real pulse, matching
+/// the amplitude-path convention. Pedestal is removed by the baseline subtraction,
+/// so out-of-pulse samples contribute only zero-mean noise. Units are ADC·samples;
+/// caller applies `energy_scale`/`energy_offset`.
+#[cfg(feature = "x743")]
+fn x743_long_charge(
+    samples: &[f32],
+    baseline: f32,
+    anchor: usize,
+    gate_pre: usize,
+    gate_len: usize,
+    negative: bool,
+) -> f32 {
+    if gate_len == 0 || samples.is_empty() {
+        return 0.0;
+    }
+    let start = anchor.saturating_sub(gate_pre).min(samples.len());
+    let end = start.saturating_add(gate_len).min(samples.len());
+    let mut acc = 0.0f32;
+    for &s in &samples[start..end] {
+        acc += if negative { baseline - s } else { s - baseline };
+    }
+    acc
+}
+
 #[cfg(feature = "x743")]
 impl X743DecodeParams {
     /// Build from a loaded `DigitizerConfig`. Returns conservative defaults if
@@ -215,6 +255,9 @@ impl X743DecodeParams {
             cfd_fraction: 0.3,
             ttf_smoothing_taps: 0,
             channel_negative: [true; caen_legacy::MAX_CHANNELS],
+            use_soft_charge: false,
+            charge_gate_pre_samples: 8,
+            charge_gate_samples: 64,
         };
         let Some(dc) = dig_config else {
             return p;
@@ -245,10 +288,19 @@ impl X743DecodeParams {
                 "x743 energy_source=\"charge\" selected but the CAEN lib does not populate \
                  Charge in Standard mode; energy will be 0. Use \"amplitude\" (default) instead."
             );
-        } else if x743.energy_source.eq_ignore_ascii_case("soft") {
-            tracing::warn!(
-                "x743 energy_source=\"soft\" is reserved for a future step; \
-                 falling back to amplitude."
+        }
+        p.charge_gate_pre_samples = x743.charge_gate_pre_samples as usize;
+        p.charge_gate_samples = x743.charge_gate_samples as usize;
+        p.use_soft_charge = x743.energy_source.eq_ignore_ascii_case("soft");
+        if p.use_soft_charge {
+            tracing::info!(
+                "x743 energy_source=\"soft\": gated charge integral active \
+                 (gate anchored at CFD crossing, pre={} samples, width={} samples, \
+                 scale={}, offset={})",
+                p.charge_gate_pre_samples,
+                p.charge_gate_samples,
+                x743.energy_scale,
+                x743.energy_offset,
             );
         }
         p.energy_scale = x743.energy_scale;
@@ -327,6 +379,116 @@ impl X743Scratch {
     }
 }
 
+/// Diagnostic-only observer for the raw V1743 TDC stream (TODO 62).
+///
+/// The V1743 decoder uses the raw 40-bit TDC directly as coarse time — there is
+/// **no** rollover extension, so a momentary garbage/out-of-order TDC corrupts
+/// only its own event and self-heals on the next (no persistent state to
+/// poison; the run30 failure mode is structurally impossible). Operationally
+/// runs are kept < 90 min so the counter (wrap ~91.6 min) never wraps.
+///
+/// This struct exists purely to keep that decision *observable* (CLAUDE.md
+/// "silent failure を作らない"): it logs the first `PER_RUN` events per group
+/// after each run and any **backward** raw-TDC step (a non-monotonic value — the
+/// glitch we still want to catch red-handed). It never influences the emitted
+/// timestamp, so a glitch it sees cannot alter data.
+#[cfg(feature = "x743")]
+struct X743TdcDiag {
+    /// Startup log budget per group (any-direction), decremented per event.
+    budget: Vec<u32>,
+    /// Separate, small budget for backward-step logs per group, so a glitch
+    /// STORM cannot turn into per-event synchronous logging on the hot path.
+    backward_budget: Vec<u32>,
+    /// Total backward steps seen per group this run (counted even when the log
+    /// budget is exhausted, so the running total stays visible).
+    backward_count: Vec<u64>,
+    /// Last masked raw TDC seen per group (for backward detection only).
+    last_raw: Vec<Option<u64>>,
+}
+
+#[cfg(feature = "x743")]
+impl X743TdcDiag {
+    /// Startup events logged per group at the start of each run (any direction).
+    const STARTUP_PER_RUN: u32 = 200;
+    /// Cap on backward-step logs per group per run. Bounds hot-path logging in
+    /// the glitch-storm case (the run30 failure mode) — the total is still
+    /// tracked in `backward_count` and surfaced in every log line.
+    const BACKWARD_PER_RUN: u32 = 50;
+
+    fn new(groups: usize) -> Self {
+        Self {
+            budget: vec![Self::STARTUP_PER_RUN; groups],
+            backward_budget: vec![Self::BACKWARD_PER_RUN; groups],
+            backward_count: vec![0; groups],
+            last_raw: vec![None; groups],
+        }
+    }
+
+    /// Re-arm at run start (SWStartAcquisition): fresh budgets, forget last raw.
+    fn rearm(&mut self) {
+        for b in &mut self.budget {
+            *b = Self::STARTUP_PER_RUN;
+        }
+        for b in &mut self.backward_budget {
+            *b = Self::BACKWARD_PER_RUN;
+        }
+        for c in &mut self.backward_count {
+            *c = 0;
+        }
+        for l in &mut self.last_raw {
+            *l = None;
+        }
+    }
+
+    /// Observe the masked 40-bit raw TDC for group `g`. Logs the first
+    /// `STARTUP_PER_RUN` events of the run and up to `BACKWARD_PER_RUN` backward
+    /// steps; always updates `last_raw` and the backward counter. Purely
+    /// observational — never affects the emitted timestamp.
+    fn observe(&mut self, g: usize, raw: u64) {
+        let prev = self.last_raw.get(g).copied().flatten();
+        if let Some(l) = self.last_raw.get_mut(g) {
+            *l = Some(raw);
+        }
+        let backward = prev.is_some_and(|p| raw < p);
+        if backward {
+            if let Some(c) = self.backward_count.get_mut(g) {
+                *c += 1;
+            }
+        }
+
+        // Two independent, BOUNDED reasons to log — never per-event-forever:
+        //  * startup: first STARTUP_PER_RUN events of the run (any direction)
+        //  * glitch:  a backward raw-TDC step, capped at BACKWARD_PER_RUN so a
+        //    storm (exactly when the hot path is most stressed) cannot become
+        //    synchronous per-event logging + allocation. `backward` is unexpected
+        //    under the <90 min run rule: it is either the run30-class glitch or a
+        //    run that exceeded the 91 min wrap — both worth seeing.
+        let startup = self.budget.get(g).is_some_and(|&b| b > 0);
+        let glitch = !startup && backward && self.backward_budget.get(g).is_some_and(|&b| b > 0);
+        if !(startup || glitch) {
+            return;
+        }
+        if startup {
+            if let Some(b) = self.budget.get_mut(g) {
+                *b = b.saturating_sub(1);
+            }
+        } else if let Some(b) = self.backward_budget.get_mut(g) {
+            *b = b.saturating_sub(1);
+        }
+        let raw_hex = format!("0x{raw:010X}");
+        let prev_hex = prev.map(|p| format!("0x{p:010X}"));
+        info!(
+            group = g,
+            raw = %raw_hex,
+            prev = ?prev_hex,
+            backward = backward,
+            backward_total = self.backward_count.get(g).copied().unwrap_or(0),
+            ts_ns = raw as f64 * 5.0,
+            "V1743 TDC diag"
+        );
+    }
+}
+
 // Re-exports
 pub use crate::config::FirmwareType;
 
@@ -342,7 +504,7 @@ use crate::common::{
     ComponentState, EventData as CommonEventData, Message, Waveform as CommonWaveform,
 };
 use futures::SinkExt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -943,6 +1105,10 @@ pub struct ReaderMetrics {
     pub per_channel_counts: [AtomicU64; MAX_CHANNELS],
     /// Events filtered out by adc_min threshold
     pub filtered_events: AtomicU64,
+    /// Run number of the current run (set on Start). Threaded into EndOfStream
+    /// messages so the Recorder's stale-EOS filter matches instead of
+    /// discarding every real EOS (TODO 58 C1 — run_number was hardcoded 0).
+    pub current_run: AtomicU32,
 }
 
 impl Default for ReaderMetrics {
@@ -957,6 +1123,7 @@ impl Default for ReaderMetrics {
             n_lost_trigger_flag_events: AtomicU64::new(0),
             per_channel_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             filtered_events: AtomicU64::new(0),
+            current_run: AtomicU32::new(0),
         }
     }
 }
@@ -1097,8 +1264,13 @@ impl CommandHandlerExt for ReaderCommandExt {
         effective_state_for(software_state, *self.hw_state.lock().unwrap())
     }
 
-    fn on_start(&mut self, _run_number: u32) -> Result<(), String> {
+    fn on_start(&mut self, run_number: u32) -> Result<(), String> {
         self.rate_tracker.reset();
+        // Record the run number so EOS messages carry it (TODO 58 C1) —
+        // the Recorder discards EOS whose run_number mismatches the run.
+        self.metrics
+            .current_run
+            .store(run_number, Ordering::Relaxed);
         // Reset all metrics for new run
         self.metrics.events_decoded.store(0, Ordering::Relaxed);
         self.metrics.bytes_read.store(0, Ordering::Relaxed);
@@ -1197,6 +1369,12 @@ pub(crate) struct DeviceConnection {
     pub(crate) hw_running: bool,
     /// Auto-configure from JSON file failed — block Arm until Operator sends valid config
     pub(crate) auto_config_failed: bool,
+    /// Backoff for failed Arm/Start hardware commands (TODO 58 M2). On failure
+    /// the state-sync loop must NOT claim `hw_armed`/`hw_running` (that would
+    /// show the operator a data-less "Armed"/"Running"), but the loop iterates
+    /// every ~10 ms, so an unconditional retry would flood the log. Attempts
+    /// are skipped until this instant.
+    pub(crate) hw_cmd_retry_after: Option<std::time::Instant>,
     /// Cached DevTree parameter metadata for validation (None if fetch failed)
     pub(crate) param_cache: Option<std::collections::HashMap<String, caen::handle::ParamInfo>>,
     /// Enabled channel indices (for DIG2 counter polling)
@@ -1279,6 +1457,7 @@ pub(crate) fn try_connect_raw(url: &str, include_n_events: bool) -> Option<Devic
                     hw_armed: false,
                     hw_running: false,
                     auto_config_failed: false,
+                    hw_cmd_retry_after: None,
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform: false, // RAW path doesn't use OpenDPP waveforms
@@ -1325,6 +1504,7 @@ pub(crate) fn try_connect_rawudp(url: &str) -> Option<DeviceConnection> {
                     hw_armed: false,
                     hw_running: false,
                     auto_config_failed: false,
+                    hw_cmd_retry_after: None,
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform: false, // RawUDP carries waveforms in the raw bytes
@@ -1373,6 +1553,7 @@ pub(crate) fn try_connect_opendpp(url: &str, include_waveform: bool) -> Option<D
                     hw_armed: false,
                     hw_running: false,
                     auto_config_failed: false,
+                    hw_cmd_retry_after: None,
                     param_cache,
                     enabled_channels: Vec::new(),
                     include_waveform,
@@ -1777,7 +1958,10 @@ pub(crate) fn convert_event_to_common(event: EventData, firmware: FirmwareType) 
 impl Reader {
     /// Send EOS (End Of Stream) signal
     async fn send_eos(&mut self) -> Result<(), ReaderError> {
-        let eos = Message::eos(self.config.source_id, 0);
+        let eos = Message::eos(
+            self.config.source_id,
+            self.metrics.current_run.load(Ordering::Relaxed),
+        );
         self.publish_message(&eos).await
     }
 
@@ -1802,8 +1986,11 @@ impl Reader {
 
         info!(source_id = config.source_id, "ReadLoop (x743) starting");
 
-        // Load digitizer config to get X743Config (connection params)
-        let dig_config = config.config_file.as_ref().and_then(|path| {
+        // Load digitizer config to get X743Config (connection params).
+        // Mutable: the ApplyConfig/ApplyConfigRunning handlers below refresh this
+        // to the last-applied config so the state-machine Configure path re-applies
+        // the current config instead of reverting to these startup values.
+        let mut dig_config = config.config_file.as_ref().and_then(|path| {
             crate::config::digitizer::DigitizerConfig::load(path)
                 .map_err(|e| warn!("Failed to load digitizer config: {}", e))
                 .ok()
@@ -1820,13 +2007,11 @@ impl Reader {
             decode_params.ns_per_sample,
         );
 
-        // Per-group TDC rollover trackers. V1743 TDC is 40-bit @ 5 ns (rollover
-        // ~91 min). Each SAMLONG group has its own FIFO and may re-order
-        // slightly around the wrap boundary, so we track each of the 8 possible
-        // groups independently — cheap and removes a failure mode.
-        let mut tdc_trackers: Vec<decoder::RolloverTracker> = (0..caen_legacy::MAX_GROUPS)
-            .map(|_| decoder::RolloverTracker::new(40))
-            .collect();
+        // Raw-TDC diagnostic observer (TODO 62). The V1743 decoder uses the raw
+        // 40-bit TDC directly (no rollover extension), which self-heals momentary
+        // glitches; this only *observes* the stream to keep that visible. Re-armed
+        // on every SWStartAcquisition.
+        let mut tdc_diag = X743TdcDiag::new(caen_legacy::MAX_GROUPS);
 
         // Reusable per-event scratch buffers (raw + smoothed waveform).
         // Eliminates one Vec<f32> alloc per channel per event.
@@ -1982,12 +2167,9 @@ impl Reader {
                 match h.sw_start_acquisition() {
                     Ok(()) => {
                         info!("V1743 acquisition started");
-                        // Reset TDC rollover trackers — hardware TDC zeroes on
-                        // SWStartAcquisition, so any prior run's rollover_count
-                        // must be cleared before the first event comes in.
-                        for t in tdc_trackers.iter_mut() {
-                            t.reset();
-                        }
+                        // Re-arm the raw-TDC diagnostic for this run. No rollover
+                        // state to reset — the decoder uses raw TDC directly (TODO 62).
+                        tdc_diag.rearm();
                         hw_running = true;
                         *hw_state.lock().unwrap() = ComponentState::Running;
                     }
@@ -2021,8 +2203,8 @@ impl Reader {
                                                     &info,
                                                     config.module_id,
                                                     &decode_params,
-                                                    &mut tdc_trackers,
                                                     &mut x743_scratch,
+                                                    &mut tdc_diag,
                                                 );
                                                 for event in events {
                                                     let _ = tx.blocking_send(
@@ -2079,6 +2261,11 @@ impl Reader {
                             .map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
+                            // Refresh the cached config so the state-machine Configure
+                            // path (which re-applies `dig_config`) uses the latest values
+                            // instead of reverting to the startup config on the next
+                            // Reset -> Configure cycle.
+                            dig_config = Some((*new_config).clone());
                             hw_configured = true;
                             // Re-allocate buffers — config change may shift record_length
                             // / max_num_events_blt; buffer must match. See plan T7.
@@ -2122,6 +2309,8 @@ impl Reader {
                             .map_err(|e| e.to_string());
                         if result.is_ok() {
                             decode_params = X743DecodeParams::from_config(Some(&new_config));
+                            // Keep the cached config in sync (see ApplyConfig above).
+                            dig_config = Some((*new_config).clone());
                             // Re-allocate buffers (best-effort; running mode is rare)
                             readout_buf = None;
                             event_buf = None;
@@ -2224,8 +2413,8 @@ impl Reader {
                                 &info,
                                 config.module_id,
                                 &decode_params,
-                                &mut tdc_trackers,
                                 &mut x743_scratch,
+                                &mut tdc_diag,
                             );
 
                             for event in events {
@@ -2268,11 +2457,17 @@ impl Reader {
     ///
     /// Time model:
     /// ```text
-    ///   timestamp_ns = TDC * 5  +  cfd_time_ns
+    ///   timestamp_ns = (raw 40-bit TDC) * 5  +  cfd_time_ns
     /// ```
     /// where `cfd_time_ns` is the sub-sample position of the CFD zero-crossing
     /// inside the waveform, in ns from sample 0. A constant offset (trigger
     /// position inside the window) drops out of cross-event Δt measurements.
+    ///
+    /// The TDC is used **raw** (masked to 40 bits), with no rollover extension
+    /// (TODO 62). Runs are kept < 90 min so the counter (wrap ~91.6 min) never
+    /// wraps; in exchange a momentary garbage/out-of-order TDC corrupts only its
+    /// own event and self-heals on the next, rather than poisoning persistent
+    /// per-group rollover state (the run30 failure mode).
     ///
     /// `flags` layout:
     /// - bits 0..16: `peak_index` (sample count)
@@ -2284,40 +2479,42 @@ impl Reader {
         _info: &crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t,
         module_id: u8,
         params: &X743DecodeParams,
-        tdc_trackers: &mut [decoder::RolloverTracker],
         scratch: &mut X743Scratch,
+        tdc_diag: &mut X743TdcDiag,
     ) -> Vec<decoder::EventData> {
         const TDC_NS: f64 = 5.0;
+        // 40-bit TDC mask. The counter is 40 bits @ 5 ns (wrap ~91.6 min);
+        // masking defensively strips any garbage upper u64 bits the CAEN lib
+        // might leave set.
+        const TDC_MASK: u64 = 0xFF_FFFF_FFFF;
         const FLAG_CFD_VALID: u32 = 1 << 24;
         const FLAG_WF_DECODE_FAIL: u32 = 1 << 25;
-        const FLAG_TDC_UNDERFLOW: u32 = 1 << 26;
 
         let mut events = Vec::new();
 
-        for (g, tracker) in tdc_trackers
-            .iter_mut()
-            .enumerate()
-            .take(caen_legacy::MAX_GROUPS)
-        {
+        for g in 0..caen_legacy::MAX_GROUPS {
             if event.GrPresent[g] == 0 {
                 continue;
             }
             let group = &event.DataGroup[g];
 
-            // Coarse time: 40-bit TDC @ 5 ns, extended to 64-bit ticks by the
-            // per-group rollover tracker (handles the ~91 min wrap and
-            // tolerates slight out-of-order delivery around the boundary).
-            // If the tracker refuses the value (shouldn't happen post-reset —
-            // first event is always accepted), fall back to the masked raw
-            // value so timestamps stay bounded and flag the event.
-            let (tdc_ticks, tdc_underflow) = match tracker.extend(group.TDC) {
-                Ok(t) => (t, false),
-                Err(e) => {
-                    warn!(group = g, error = ?e, "V1743 TDC rollover underflow (fallback to masked raw)");
-                    (group.TDC & 0xFF_FFFF_FFFF, true)
-                }
-            };
+            // Coarse time: raw 40-bit TDC @ 5 ns used DIRECTLY — no rollover
+            // extension (TODO 62). Operational rule keeps runs < 90 min so the
+            // counter never wraps. A momentary garbage/out-of-order TDC therefore
+            // corrupts only its own event and self-heals on the next, instead of
+            // poisoning persistent rollover state (the run30 failure mode).
+            //
+            // KNOWN: the V1743 emits ~6 garbage-TDC events in the first ~1 ms of a
+            // run (CAEN reads a few uninitialised DMA slots — TDC shows byte-repeat
+            // patterns like 0x1B1B1B1B). They are accepted (self-healed) and cut
+            // offline; see docs/operations_manual.md §9. Count via "V1743 TDC diag
+            // backward=true" in the reader log.
+            let tdc_ticks = group.TDC & TDC_MASK;
             let tdc_ns = tdc_ticks as f64 * TDC_NS;
+
+            // Observe the raw stream for glitch visibility only (never affects
+            // the timestamp above).
+            tdc_diag.observe(g, tdc_ticks);
 
             for ch_in_group in 0..caen_legacy::CHANNELS_PER_GROUP {
                 let channel = (g * caen_legacy::CHANNELS_PER_GROUP + ch_in_group) as u8;
@@ -2342,23 +2539,58 @@ impl Reader {
                     params.cfd_fraction,
                 );
 
-                let (timestamp_ns, amplitude, peak_index, cfd_valid, decode_ok) =
+                // `energy_metric` feeds `energy` (Charge Long); `short_metric`
+                // feeds `energy_short` (Charge Short). In "soft" mode Long is the
+                // CFD-anchored gated charge integral and Short is the pulse
+                // amplitude — the pair the user needs for integral-vs-height
+                // discrimination. In "amplitude" mode Long is the amplitude and
+                // Short is unused (0), preserving the previous behaviour.
+                let (timestamp_ns, energy_metric, short_metric, peak_index, cfd_valid, decode_ok) =
                     if let Some(s) = stats {
+                        let (long, short) = if params.use_soft_charge {
+                            // Anchor the gate at the CFD crossing sample; fall back
+                            // to the peak sample when the CFD search failed.
+                            let anchor = if s.cfd_valid {
+                                (s.cfd_time_ns / params.ns_per_sample).max(0.0) as usize
+                            } else {
+                                s.peak_index as usize
+                            };
+                            let charge = x743_long_charge(
+                                analyze_input,
+                                s.baseline,
+                                anchor,
+                                params.charge_gate_pre_samples,
+                                params.charge_gate_samples,
+                                negative,
+                            );
+                            (charge, s.amplitude)
+                        } else {
+                            (s.amplitude, 0.0)
+                        };
                         (
                             tdc_ns + s.cfd_time_ns,
-                            s.amplitude,
+                            long,
+                            short,
                             s.peak_index,
                             s.cfd_valid,
                             true,
                         )
                     } else {
-                        (tdc_ns, 0.0, 0, false, false)
+                        (tdc_ns, 0.0, 0.0, 0, false, false)
                     };
 
-                // Energy: amplitude → scale+offset → u16.
-                let energy_f = amplitude * params.energy_scale + params.energy_offset;
+                // Charge Long: metric (amplitude or charge) → scale+offset → u16.
+                let energy_f = energy_metric * params.energy_scale + params.energy_offset;
                 let energy = if energy_f.is_finite() {
                     energy_f.clamp(0.0, u16::MAX as f32) as u16
+                } else {
+                    0
+                };
+                // Charge Short: raw pulse amplitude (ADC units, unscaled) in "soft"
+                // mode, else 0. Kept unscaled so it stays a direct pulse height
+                // independent of the Long charge's energy_scale.
+                let energy_short = if short_metric.is_finite() {
+                    short_metric.clamp(0.0, u16::MAX as f32) as u16
                 } else {
                     0
                 };
@@ -2375,9 +2607,6 @@ impl Reader {
                 }
                 if !decode_ok {
                     flags |= FLAG_WF_DECODE_FAIL;
-                }
-                if tdc_underflow {
-                    flags |= FLAG_TDC_UNDERFLOW;
                 }
 
                 // DEBUG (one-shot): confirm waveform emission path is taken.
@@ -2448,7 +2677,7 @@ impl Reader {
                     module: module_id,
                     channel,
                     energy,
-                    energy_short: 0,
+                    energy_short,
                     fine_time,
                     flags,
                     user_info: [0; 4],
@@ -3310,6 +3539,8 @@ mod tests {
                 baseline_samples: 32,
                 cfd_delay_samples: 4,
                 cfd_fraction: 0.3,
+                charge_gate_pre_samples: 8,
+                charge_gate_samples: 64,
                 ttf_smoothing: Default::default(),
                 extra_registers: Vec::new(),
             }),
@@ -3319,13 +3550,169 @@ mod tests {
         assert!(p.channel_negative[0], "ch0 defaults to Negative");
         assert!(!p.channel_negative[3], "ch3 overridden to Positive");
         assert!(p.channel_negative[15], "ch15 defaults to Negative");
+        // energy_source="amplitude" → soft charge disabled.
+        assert!(!p.use_soft_charge);
+    }
+
+    /// The gated charge integral: exact value over a known synthetic pulse,
+    /// polarity symmetry, and safe gate clamping at the buffer edge.
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_long_charge_negative_pulse() {
+        // baseline 64 @0, linear rise 32 to −1000, hold 32 @−1000, total 256.
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
+        // Gate exactly over rise+hold: anchor=64 (rise start), no pre, width 64.
+        let q = x743_long_charge(&wf, 0.0, 64, 0, 64, true);
+        // rise: Σ 1000·(i+1)/32 for i=0..31 = 1000·16.5 = 16500
+        // hold: 32 × 1000 = 32000
+        let expected = 16_500.0 + 32_000.0;
+        assert!(
+            (q - expected).abs() < 1e-1,
+            "charge={} expected={}",
+            q,
+            expected
+        );
     }
 
     #[cfg(feature = "x743")]
-    fn fresh_x743_trackers() -> Vec<decoder::RolloverTracker> {
-        (0..caen_legacy::MAX_GROUPS)
-            .map(|_| decoder::RolloverTracker::new(40))
-            .collect()
+    #[test]
+    fn test_x743_long_charge_positive_matches_negative_magnitude() {
+        // Same pulse shape, positive polarity → same positive charge magnitude.
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, false);
+        let q = x743_long_charge(&wf, 0.0, 64, 0, 64, false);
+        assert!((q - 48_500.0).abs() < 1e-1, "charge={}", q);
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_long_charge_gate_clamps_to_buffer() {
+        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
+        // Anchor near the end with an oversized gate → clamps to buffer, no panic.
+        // The tail is all baseline, so the integral is ≈ 0.
+        let q = x743_long_charge(&wf, 0.0, 250, 4, 10_000, true);
+        assert!(
+            q.is_finite() && q.abs() < 1.0,
+            "tail charge should be ≈0: {}",
+            q
+        );
+        // Zero-width gate integrates nothing.
+        assert_eq!(x743_long_charge(&wf, 0.0, 64, 0, 0, true), 0.0);
+        // Anchor past the buffer end also stays safe.
+        assert_eq!(x743_long_charge(&wf, 0.0, 10_000, 0, 64, true), 0.0);
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_decode_params_soft_charge_enables() {
+        use crate::config::digitizer::{ChannelConfig, DigitizerConfig, FirmwareType, X743Config};
+        let dc = DigitizerConfig {
+            digitizer_id: 0,
+            name: "T".into(),
+            firmware: FirmwareType::X743Std,
+            serial_number: Some("0".into()),
+            model: Some("VX1743".into()),
+            num_channels: 16,
+            is_master: false,
+            board: Default::default(),
+            sync: None,
+            channel_defaults: ChannelConfig {
+                polarity: Some("Negative".to_string()),
+                ..Default::default()
+            },
+            channel_overrides: Default::default(),
+            channel_names: None,
+            x743: Some(X743Config {
+                link_type: "optical".into(),
+                link_num: 0,
+                conet_node: 0,
+                vme_base_address: 0,
+                sampling_frequency: "3.2ghz".into(),
+                correction_level: "all".into(),
+                record_length: 256,
+                post_trigger_size: 20,
+                max_num_events_blt: 1000,
+                io_level: "nim".into(),
+                trigger_source: "self".into(),
+                group_enable_mask: 1,
+                pulse_gen_enabled: false,
+                pulse_pattern: 0,
+                pulse_source: "continuous".into(),
+                fine_time_source: "cfd_soft".into(),
+                energy_source: "soft".into(),
+                energy_scale: 1.0,
+                energy_offset: 0.0,
+                save_waveform: false,
+                baseline_samples: 32,
+                cfd_delay_samples: 4,
+                cfd_fraction: 0.3,
+                charge_gate_pre_samples: 6,
+                charge_gate_samples: 48,
+                ttf_smoothing: Default::default(),
+                extra_registers: Vec::new(),
+            }),
+            amax_board: None,
+        };
+        let p = X743DecodeParams::from_config(Some(&dc));
+        assert!(p.use_soft_charge, "energy_source=\"soft\" enables charge");
+        assert_eq!(p.charge_gate_pre_samples, 6);
+        assert_eq!(p.charge_gate_samples, 48);
+    }
+
+    #[cfg(feature = "x743")]
+    fn fresh_x743_diag() -> X743TdcDiag {
+        X743TdcDiag::new(caen_legacy::MAX_GROUPS)
+    }
+
+    /// The diagnostic observer's own logic (backward detection, per-group
+    /// isolation, rearm reset) — its sole job is to keep a run30-class glitch
+    /// visible, so a regression here would silently defeat that guarantee.
+    #[cfg(feature = "x743")]
+    #[test]
+    fn test_x743_tdc_diag_backward_detection_and_rearm() {
+        let mut d = X743TdcDiag::new(2);
+
+        // Forward then backward on group 0.
+        d.observe(0, 1000);
+        d.observe(0, 5); // backward
+        assert_eq!(d.last_raw[0], Some(5), "last_raw tracks the latest raw");
+        assert_eq!(d.backward_count[0], 1, "one backward step detected");
+
+        // Group 1 is independent — its first observe cannot be backward.
+        d.observe(1, 500);
+        assert_eq!(d.last_raw[1], Some(500));
+        assert_eq!(d.backward_count[1], 0, "group 1 unaffected by group 0");
+
+        // A forward step is not counted as backward.
+        d.observe(0, 2000);
+        assert_eq!(d.backward_count[0], 1, "forward step is not backward");
+
+        // Backward counter keeps counting past the log cap (count != log budget):
+        // drain the backward budget plus a few more and confirm every backward
+        // step is still tallied.
+        let over = X743TdcDiag::BACKWARD_PER_RUN + 5;
+        for _ in 0..over {
+            d.observe(0, 3000); // forward, resets baseline high
+            d.observe(0, 1); // backward
+        }
+        assert_eq!(
+            d.backward_count[0],
+            1 + over as u64,
+            "all backward steps counted even after the log budget is exhausted"
+        );
+
+        // rearm() forgets last_raw and clears counters/budgets.
+        d.rearm();
+        assert_eq!(d.last_raw[0], None);
+        assert_eq!(d.last_raw[1], None);
+        assert_eq!(d.backward_count[0], 0);
+        assert_eq!(d.backward_budget[0], X743TdcDiag::BACKWARD_PER_RUN);
+
+        // First observe after rearm is never treated as backward.
+        d.observe(0, 10);
+        assert_eq!(
+            d.backward_count[0], 0,
+            "first post-rearm observe is not backward"
+        );
     }
 
     #[cfg(feature = "x743")]
@@ -3334,15 +3721,15 @@ mod tests {
         let event = crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t::default();
         let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
         let params = x743_test_params(true);
-        let mut trackers = fresh_x743_trackers();
         let mut scratch = X743Scratch::new();
+        let mut diag = fresh_x743_diag();
         let events = Reader::x743_std_event_to_event_data(
             &event,
             &info,
             7,
             &params,
-            &mut trackers,
             &mut scratch,
+            &mut diag,
         );
         assert!(events.is_empty());
     }
@@ -3357,15 +3744,15 @@ mod tests {
         event.DataGroup[0].TDC = 100; // 500 ns coarse
         let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
         let params = x743_test_params(true);
-        let mut trackers = fresh_x743_trackers();
         let mut scratch = X743Scratch::new();
+        let mut diag = fresh_x743_diag();
         let events = Reader::x743_std_event_to_event_data(
             &event,
             &info,
             0,
             &params,
-            &mut trackers,
             &mut scratch,
+            &mut diag,
         );
         assert_eq!(events.len(), 2);
         for e in &events {
@@ -3373,68 +3760,51 @@ mod tests {
             assert_eq!(e.energy, 0);
             assert_eq!(e.flags & (1 << 24), 0, "CFD_VALID must be clear");
             assert_ne!(e.flags & (1 << 25), 0, "WF_DECODE_FAIL must be set");
-            assert_eq!(
-                e.flags & (1 << 26),
-                0,
-                "TDC_UNDERFLOW must be clear (first event)"
-            );
         }
     }
 
-    /// Regression test for TDC rollover: feed two events whose raw TDC values
-    /// wrap the 40-bit boundary and confirm the extended timestamp stays
-    /// monotonic and reflects the rollover (not the raw drop).
+    /// TODO 62 core guarantee: the V1743 timestamp is the raw 40-bit TDC × 5 ns
+    /// with NO rollover extension, so a single garbage/out-of-order TDC value
+    /// corrupts only its own event and the very next event self-heals — there is
+    /// no persistent state to poison (the run30 failure mode is impossible).
     #[cfg(feature = "x743")]
     #[test]
-    fn test_x743_std_event_to_event_data_tdc_rollover() {
-        const TDC_MAX: u64 = (1u64 << 40) - 1;
+    fn test_x743_std_event_to_event_data_raw_tdc_self_heals() {
         let mut event = crate::reader::caen_legacy::ffi::CAEN_DGTZ_X743_EVENT_t::default();
         let info = crate::reader::caen_legacy::ffi::CAEN_DGTZ_EventInfo_t::default();
         let params = x743_test_params(true);
-        let mut trackers = fresh_x743_trackers();
         let mut scratch = X743Scratch::new();
-
-        // Event 1: TDC near top of 40-bit range on group 0.
+        let mut diag = fresh_x743_diag();
         event.GrPresent[0] = 1;
-        event.DataGroup[0].TDC = TDC_MAX - 10;
-        let ev1 = Reader::x743_std_event_to_event_data(
-            &event,
-            &info,
-            0,
-            &params,
-            &mut trackers,
-            &mut scratch,
-        );
-        assert_eq!(ev1.len(), 2);
-        let ts1 = ev1[0].timestamp_ns;
 
-        // Event 2: small TDC after the wrap on the same group.
-        event.DataGroup[0].TDC = 5;
-        let ev2 = Reader::x743_std_event_to_event_data(
-            &event,
-            &info,
-            0,
-            &params,
-            &mut trackers,
-            &mut scratch,
-        );
-        assert_eq!(ev2.len(), 2);
-        let ts2 = ev2[0].timestamp_ns;
+        // Helper: decode one event with a given raw TDC and return group-0 ts_ns.
+        let mut decode = |tdc: u64| {
+            event.DataGroup[0].TDC = tdc;
+            let ev = Reader::x743_std_event_to_event_data(
+                &event,
+                &info,
+                0,
+                &params,
+                &mut scratch,
+                &mut diag,
+            );
+            assert_eq!(ev.len(), 2);
+            ev[0].timestamp_ns
+        };
 
-        assert!(
-            ts2 > ts1,
-            "post-wrap timestamp must be greater than pre-wrap (ts1={ts1}, ts2={ts2})"
-        );
-        // The gap must be ~(TDC_MAX - 10 to wrap to 5) * 5 ns, i.e. ~16 ticks * 5 ns = 80 ns,
-        // plus the full 2^40 * 5 ns period (~5497.5 s) for the rollover epoch.
-        let expected_gap_ns = ((1u64 << 40) + 5 - (TDC_MAX - 10)) as f64 * 5.0;
-        let gap = ts2 - ts1;
-        assert!(
-            (gap - expected_gap_ns).abs() < 1e-6,
-            "expected gap {expected_gap_ns} ns, got {gap} ns"
-        );
-        // No underflow flag on clean rollover.
-        assert_eq!(ev2[0].flags & (1 << 26), 0);
+        // Timestamp == raw TDC × 5 ns, directly.
+        assert!((decode(1000) - 5000.0).abs() < 1e-9);
+        // Backward glitch: ts follows the raw value (goes back), does NOT jump by
+        // an epoch — no FLAG_TDC_UNDERFLOW (bit 26) exists any more either.
+        let glitch_ts = decode(5);
+        assert!((glitch_ts - 25.0).abs() < 1e-9);
+        // The NEXT normal event is fully correct — self-healed, no persistent
+        // offset from the glitch above.
+        assert!((decode(1005) - 5025.0).abs() < 1e-9);
+
+        // Upper u64 garbage bits above bit 39 are masked off (defensive).
+        let garbage = (1u64 << 50) | 2000;
+        assert!((decode(garbage) - 10000.0).abs() < 1e-9);
     }
 
     /// `taps == 0` and `taps == 1` are pass-through (no copy, no smoothing).

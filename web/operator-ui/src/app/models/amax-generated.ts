@@ -11,7 +11,7 @@ export interface AMaxChannelConfig {
   pretrigger_input?: number;
   /** 1-bit Polarity */
   polarity?: number;
-  /** 16-bit DC Offset */
+  /** 16-bit Offset (Trapezoid) */
   offset?: number;
   /** 32-bit Threshold */
   thrs?: number;
@@ -144,7 +144,7 @@ export const AMAX_PARAM_CATEGORIES: readonly string[] = [
 export const AMAX_INPUT_PARAMS: ChannelParamDef[] = [
   { key: 'amax.pretrigger_input', label: "Pretrig Input", type: 'number', unit: "samp", min: 0, max: 1000000, step: 1, tooltip: "FW reg PRETRIGGER_INPUT • word 0x00 (ch0 @ 0x800000)" },
   { key: 'amax.polarity', label: "Polarity", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg POLARITY • word 0x01 (ch0 @ 0x800001)" },
-  { key: 'amax.offset', label: "DC Offset", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x02 (ch0 @ 0x800002)" },
+  { key: 'amax.offset', label: "Offset (Trapezoid)", type: 'number', min: 0, max: 65535, step: 1, tooltip: "FW reg OFFSET • word 0x02 (ch0 @ 0x800002)" },
   { key: 'amax.run_cfg', label: "Run Enable", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg RUN_CFG • word 0x0D (ch0 @ 0x80000D)" },
   { key: 'amax.enable_acq', label: "Enable Acquisition", type: 'enum', options: ["0", "1"], numeric: true, tooltip: "FW reg ENABLE_ACQ • word 0x19 (ch0 @ 0x800019)" },
 ];

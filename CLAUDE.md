@@ -5,6 +5,8 @@
 - ZMQ ソケットは全て HWM=0（無制限バッファ）。HWM をデフォルト(1000)に戻してはならない。
 - チャンネル（tokio mpsc, crossbeam）は unbounded またはデータを落とさない設計にすること。
 - バックプレッシャーでデータをドロップする設計は一切禁止。
+- **明示的な例外（2026-07-09, TODO 58 C3/C4 決定）: Run Stop 直後のテールデータ**。Stop 時点でパイプライン（ZMQ/チャンネル）に残留していたバッチは Merger/Recorder が非 Running 状態で破棄する。定常データの末尾数秒の切断は統計的に無害と判断して受け入れ。ただし **silent にしない**: 破棄は `dropped_batches` に計上され Merger/Recorder のログに出る。**Running 中に dropped が増えるのは重大バグ**（Stop テールとの区別はログのタイミングで判別）。
+- **明示的な例外（2026-07-13, TODO 58 L10/L11 明文化）**: ① Reader の Stop/シャットダウン時ドレインでの破棄（dig1 ドレイン上限 1000 件/1 s + CLEAR_DATA 含む）は上記 Stop テール例外の一部（warn 付き）。② **Monitor の bounded(1000) チャンネルドロップは表示専用パスとして恒久的に許容**（記録経路は Recorder が独立に持つ。ドロップはカウント済み）。この2つ以外の意図的ドロップを新設してはならない。
 
 ## Current Focus (2026-02)
 **PSD1 ネットワーク透過テスト兼デコーダテスト中**
@@ -21,7 +23,7 @@
 - **Goal:** MVP of distributed DAQ system by **mid-March 2026**
 - **Hardware:** CAEN Digitizers (Optical Link/USB)
 - **Architecture:** ZeroMQ pipeline: Reader → Merger → Recorder/Monitor
-- **Reference:** C++ implementation in `DELILA2/` submodule
+- **Reference:** C++ implementation in `legacy/DELILA2/` (local-only, gitignored)
 
 ## Tech Stack (Strict)
 Rust 2021 + tokio + tmq (ZMQ) + serde/rmp-serde (MessagePack) + axum (REST) + Angular (Frontend) + bindgen (CAEN FFI)
@@ -72,6 +74,7 @@ Web UIs: Swagger http://localhost:8080/swagger-ui/ | Monitor http://localhost:80
 - `docs/control_system_design.md` - コントロールシステム設計
 - `docs/digitizer_system_spec.md` - デジタイザシステム仕様（DevTree, パラメーター等）
 - `docs/compass_devtree_mapping.md` - CoMPASS↔DevTreeパラメーター対応表（全FW確定済）
+- `docs/amax_fw_update_manual.md` - AMax FW 更新手順（`scripts/update_amax_fw.sh` 一発の codegen→build→UI→deploy）
 - `docs/devtree_examples/` - 実機から取得したDevTree JSON（パラメーター名の正確なリファレンス）
 - `legacy/CoMPASS/` - CoMPASS設定画面スクリーンショット（UI設計のリファレンス）
 

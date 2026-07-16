@@ -74,13 +74,19 @@ rayon = "1.10"
 # MPMC channels for event builder pipeline
 crossbeam-channel = "0.5"
 
+# SIGTERM for graceful child stop in node_agent (TODO 58 M12) — already in the
+# tree transitively via zeromq-src.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 root = ["oxyroot"]
 x743 = []  # CAENDigitizer Library for V1743 (Linux only)
 # Developer / hardware-in-the-loop tools (one-shot probes, register dumpers,
 # benchmarks). Excluded from `cargo build --release` so production builds
-# only ship the 15 service binaries (emulator/reader/merger/.../delila2root).
+# only ship the core service binaries (emulator/reader/merger/recorder/...).
+# `.delila` -> ROOT conversion is now the C++ tool in `tools/delila2root/`.
 # Enable with `--features dev-tools` to build the full set locally.
 dev-tools = []
 
@@ -147,6 +153,11 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "amax_register_test"
 path = "src/bin/amax_register_test.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "pha_trap_tune"
+path = "src/bin/pha_trap_tune.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
@@ -242,11 +253,6 @@ required-features = ["dev-tools"]
 name = "oxyroot_bench"
 path = "src/bin/oxyroot_bench.rs"
 required-features = ["root", "dev-tools"]
-
-[[bin]]
-name = "delila2root"
-path = "src/bin/delila_to_root.rs"
-required-features = ["root"]
 
 [[bin]]
 name = "eb_offsets"

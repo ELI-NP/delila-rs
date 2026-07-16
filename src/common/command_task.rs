@@ -54,104 +54,117 @@ pub async fn run_command_task<S, F>(
 {
     let context = Context::new();
 
-    let receiver = match request_reply::reply(&context).bind(&command_address) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(
-                component = component_name,
-                error = %e,
-                address = %command_address,
-                "Failed to bind command socket"
-            );
-            return;
-        }
-    };
-
-    info!(
-        component = component_name,
-        address = %command_address,
-        "Command task started"
-    );
-
-    let mut current_receiver = receiver;
-
-    loop {
-        tokio::select! {
-            biased;
-
-            _ = shutdown.recv() => {
-                info!(component = component_name, "Command task received shutdown signal");
-                break;
+    // TODO 58 M9: a transient socket error used to `break` this task
+    // permanently — the component then ran on, uncontrollable (only kill
+    // worked). All error paths now drop the broken REP socket and re-bind
+    // instead; only shutdown ends the task.
+    'bind: loop {
+        let receiver = match request_reply::reply(&context).bind(&command_address) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    component = component_name,
+                    error = %e,
+                    address = %command_address,
+                    "Failed to bind command socket — retrying in 1 s"
+                );
+                tokio::select! {
+                    _ = shutdown.recv() => {
+                        info!(component = component_name, "Command task received shutdown signal");
+                        break 'bind;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => continue 'bind,
+                }
             }
+        };
 
-            recv_result = current_receiver.recv() => {
-                match recv_result {
-                    Ok((mut multipart, sender)) => {
-                        let response = if let Some(frame) = multipart.pop_front() {
-                            match Command::from_json(&frame) {
-                                Ok(cmd) => {
-                                    info!(
+        info!(
+            component = component_name,
+            address = %command_address,
+            "Command task started"
+        );
+
+        let mut current_receiver = receiver;
+
+        loop {
+            tokio::select! {
+                biased;
+
+                _ = shutdown.recv() => {
+                    info!(component = component_name, "Command task received shutdown signal");
+                    break 'bind;
+                }
+
+                recv_result = current_receiver.recv() => {
+                    match recv_result {
+                        Ok((mut multipart, sender)) => {
+                            let response = if let Some(frame) = multipart.pop_front() {
+                                match Command::from_json(&frame) {
+                                    Ok(cmd) => {
+                                        info!(
+                                            component = component_name,
+                                            command = %cmd,
+                                            "Received command"
+                                        );
+                                        let mut state = shared_state.lock().await;
+                                        handler(&mut state, &state_tx, cmd)
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            component = component_name,
+                                            error = %e,
+                                            "Invalid command"
+                                        );
+                                        // Need to get current state for error response
+                                        // We don't have access to it here without locking
+                                        CommandResponse::error(
+                                            ComponentState::Idle, // Fallback
+                                            format!("Invalid command: {}", e),
+                                        )
+                                    }
+                                }
+                            } else {
+                                CommandResponse::error(ComponentState::Idle, "Empty message")
+                            };
+
+                            let resp_bytes = match response.to_json() {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    warn!(
                                         component = component_name,
-                                        command = %cmd,
-                                        "Received command"
+                                        error = %e,
+                                        "Failed to serialize response — rebinding command socket"
                                     );
-                                    let mut state = shared_state.lock().await;
-                                    handler(&mut state, &state_tx, cmd)
+                                    drop(sender);
+                                    continue 'bind;
+                                }
+                            };
+
+                            let resp_msg: tmq::Multipart =
+                                vec![tmq::Message::from(resp_bytes.as_slice())].into();
+
+                            match sender.send(resp_msg).await {
+                                Ok(next_receiver) => {
+                                    current_receiver = next_receiver;
                                 }
                                 Err(e) => {
                                     warn!(
                                         component = component_name,
                                         error = %e,
-                                        "Invalid command"
+                                        "Failed to send response — rebinding command socket"
                                     );
-                                    // Need to get current state for error response
-                                    // We don't have access to it here without locking
-                                    CommandResponse::error(
-                                        ComponentState::Idle, // Fallback
-                                        format!("Invalid command: {}", e),
-                                    )
+                                    continue 'bind;
                                 }
                             }
-                        } else {
-                            CommandResponse::error(ComponentState::Idle, "Empty message")
-                        };
-
-                        let resp_bytes = match response.to_json() {
-                            Ok(b) => b,
-                            Err(e) => {
-                                warn!(
-                                    component = component_name,
-                                    error = %e,
-                                    "Failed to serialize response"
-                                );
-                                break;
-                            }
-                        };
-
-                        let resp_msg: tmq::Multipart =
-                            vec![tmq::Message::from(resp_bytes.as_slice())].into();
-
-                        match sender.send(resp_msg).await {
-                            Ok(next_receiver) => {
-                                current_receiver = next_receiver;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    component = component_name,
-                                    error = %e,
-                                    "Failed to send response"
-                                );
-                                break;
-                            }
                         }
-                    }
-                    Err(e) => {
-                        warn!(
-                            component = component_name,
-                            error = %e,
-                            "Command receive error"
-                        );
-                        break;
+                        Err(e) => {
+                            warn!(
+                                component = component_name,
+                                error = %e,
+                                "Command receive error — rebinding command socket"
+                            );
+                            continue 'bind;
+                        }
                     }
                 }
             }

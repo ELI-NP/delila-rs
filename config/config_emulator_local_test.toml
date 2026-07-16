@@ -1,0 +1,34 @@
+# DELILA DAQ Configuration - Local Emulator Integration Test
+# No hardware needed — single emulator source through the full pipeline.
+# Used to exercise Stop/EOS flow end-to-end (TODO 58 C1/M19 verification).
+# Usage: ./scripts/start_daq.sh config/config_emulator_local_test.toml
+
+[operator]
+experiment_name = "EmuLocalTest"
+port = 9090
+
+[network]
+[[network.sources]]
+id = 0
+name = "emu-0"
+type = "emulator"
+bind = "tcp://*:5555"
+command = "tcp://*:5560"
+pipeline_order = 1
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3

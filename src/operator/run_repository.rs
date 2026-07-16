@@ -210,10 +210,14 @@ impl RunRepository {
     ) -> Result<(), RepositoryError> {
         let now_ms = Utc::now().timestamp_millis();
 
-        // Get start time to calculate duration
+        // Get start time to calculate duration. Filter on status:"running" so a
+        // re-used run number (retake) can never clobber an already-completed
+        // run's document (TODO 58 H11) — without it, find_one may match the OLD
+        // completed doc and overwrite its end_time/duration, while the new doc
+        // stays "running" forever.
         let run_doc = self
             .collection
-            .find_one(doc! { "run_number": run_number, "exp_name": exp_name })
+            .find_one(doc! { "run_number": run_number, "exp_name": exp_name, "status": "running" })
             .await?
             .ok_or(RepositoryError::NotFound(run_number))?;
 
@@ -221,7 +225,7 @@ impl RunRepository {
 
         self.collection
             .update_one(
-                doc! { "run_number": run_number, "exp_name": exp_name },
+                doc! { "run_number": run_number, "exp_name": exp_name, "status": "running" },
                 doc! {
                     "$set": {
                         "end_time": now_ms,
@@ -277,9 +281,11 @@ impl RunRepository {
             message: message.to_string(),
         };
 
+        // status:"running" keeps errors attached to the ACTIVE run — a re-used
+        // run number must not append errors to an old completed doc (TODO 58 H11).
         self.collection
             .update_one(
-                doc! { "run_number": run_number },
+                doc! { "run_number": run_number, "status": "running" },
                 doc! {
                     "$push": {
                         "errors": mongodb::bson::to_bson(&entry).expect("ErrorLogEntry serializes to BSON"),

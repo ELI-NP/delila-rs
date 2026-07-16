@@ -45,6 +45,8 @@
     "save_waveform": true,
     "baseline_samples": 32,
     "cfd_delay_samples": 4,
-    "cfd_fraction": 0.3
+    "cfd_fraction": 0.3,
+    "charge_gate_pre_samples": 8,
+    "charge_gate_samples": 64
   }
 }
