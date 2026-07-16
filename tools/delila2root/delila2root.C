@@ -11,6 +11,7 @@
 // Or compile a standalone tool:
 //   g++ -O2 -std=c++17 delila2root.C $(root-config --cflags --libs) -o delila2root
 //   ./delila2root in.delila [out.root] [in2.delila ...]
+//   ./delila2root -o out.root --tree tr in_0000.delila in_0001.delila   # Rust-CLI compatible
 //
 // License: BSD-3-Clause (same as delila-rs).
 
@@ -31,8 +32,11 @@ static const int kDelilaCompression = 505;
 
 // Convert one or more `.delila` files (same run) into a single ROOT tree.
 // Returns the number of events written, or -1 on error.
+// `tree_name` defaults to "delila"; the CLI's `--tree` maps here (the old
+// Rust tool's converter scripts pass `--tree tr`).
 long delila2root(const char* in_path, const char* out_path = nullptr,
-                 const std::vector<std::string>& extra = {}) {
+                 const std::vector<std::string>& extra = {},
+                 const char* tree_name = "delila") {
   std::vector<std::string> inputs;
   inputs.push_back(in_path);
   for (const auto& e : extra) inputs.push_back(e);
@@ -54,7 +58,7 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
     std::fprintf(stderr, "delila2root: cannot create %s\n", out.c_str());
     return -1;
   }
-  TTree* tree = new TTree("delila", "DELILA events");
+  TTree* tree = new TTree(tree_name, "DELILA events");
 
   // --- Branch buffers (one per event field; all firmwares) ---
   UChar_t  module = 0, channel = 0, time_resolution = 0;
@@ -180,21 +184,38 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
 }
 
 #ifndef __CLING__
+// CLI accepts both the positional form and the old Rust tool's flags, so
+// existing converter scripts (`delila2root -o out.root --tree tr in_00*`)
+// keep working unchanged:
+//   delila2root in.delila [out.root] [in2.delila ...]
+//   delila2root -o out.root [--tree name] in.delila [in2.delila ...]
 int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::fprintf(stderr, "usage: %s in.delila [out.root] [in2.delila ...]\n", argv[0]);
+  std::string out;
+  std::string tree_name = "delila";
+  std::vector<std::string> inputs;
+  for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    if ((a == "-o" || a == "--output") && i + 1 < argc) {
+      out = argv[++i];
+    } else if (a == "--tree" && i + 1 < argc) {
+      tree_name = argv[++i];
+    } else if (out.empty() && a.size() >= 5 && a.substr(a.size() - 5) == ".root") {
+      out = a;  // positional out.root (legacy form)
+    } else {
+      inputs.push_back(a);
+    }
+  }
+  if (inputs.empty()) {
+    std::fprintf(stderr,
+                 "usage: %s [-o out.root] [--tree name] in.delila [in2.delila ...]\n"
+                 "       %s in.delila [out.root] [in2.delila ...]\n",
+                 argv[0], argv[0]);
     return 1;
   }
-  const char* in = argv[1];
-  const char* out = nullptr;
-  std::vector<std::string> extra;
-  // argv[2] is out.root if it ends in .root, otherwise an additional input.
-  int i = 2;
-  if (argc >= 3) {
-    std::string a2 = argv[2];
-    if (a2.size() >= 5 && a2.substr(a2.size() - 5) == ".root") { out = argv[2]; i = 3; }
-  }
-  for (; i < argc; ++i) extra.push_back(argv[i]);
-  return delila2root(in, out, extra) < 0 ? 1 : 0;
+  std::vector<std::string> extra(inputs.begin() + 1, inputs.end());
+  return delila2root(inputs[0].c_str(), out.empty() ? nullptr : out.c_str(), extra,
+                     tree_name.c_str()) < 0
+             ? 1
+             : 0;
 }
 #endif

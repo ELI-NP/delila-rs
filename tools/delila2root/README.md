@@ -60,7 +60,11 @@ g++ -O2 -std=c++17 delila2root.C $(root-config --cflags --libs) -o delila2root
 ./delila2root in.delila                    # -> in.root
 ./delila2root in.delila out.root
 ./delila2root run_0000.delila out.root run_0001.delila run_0002.delila   # merge a run
+./delila2root -o out.root --tree tr run_00*.delila   # old Rust-CLI compatible form
 ```
+
+The default tree name is `delila`; `--tree` overrides it (existing converter
+scripts written for the old Rust tool passed `--tree tr`).
 
 The output tree `delila` has a branch per event field: scalars
 (`module`, `channel`, `energy`, `energy_short`, `timestamp_ns`, `flags`,
