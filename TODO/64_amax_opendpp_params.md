@@ -75,6 +75,13 @@ AMax の設定は 3 系統。カバレッジ:
 を実行すると **reader の接続が死ぬ（以後の Apply が CAEN -15）**。Tune Up は -15 を自動再接続
 しないので DAQ 再起動が必要。**DevTree ダンプは DAQ 停止中に取ること**。
 
+**⚠️ 13july trigger-logic FW 既知バグ（2026-07-16、FW 開発者確認済み）**: OpenDPP イベントの
+**waveform が空で確定する**（エネルギーは付くが `WAVEFORM_SIZE=0`、event_size=32B のヘッダのみ。
+まれにタイミングが合った時だけ waveform 付きイベントが届く）。エネルギー値の異常も併発。
+`/cmd/reset` では回復しない。**delila 側の問題ではない**（waveform 経路のコードは 6 月末の稼働版と
+同一であることを diff で検証済み）。診断指標: reader metrics の bytes/event が 32 ぴったり =
+waveform 全欠落。FW 修正版待ち。
+
 **残（後続）:** ChGain × trapezoid の FWHM 実測（0/6/12 dB）、FW 開発者への確認事項（下記）。
 
 ---
@@ -154,4 +161,6 @@ AMax の設定は 3 系統。カバレッジ:
       （チャンネルパラメータは 10 個のみと確定、§Phase A の含意参照）
 - [ ] ChGain × trapezoid の分解能影響を実測（既知ピーク FWHM を 0/6/12 dB 比較）+
       FW 開発者にデータパス位置/内部ビット幅を確認
+      **→ 13july FW の waveform/エネルギー既知バグ修正版が来てから実施**（現 FW では
+      エネルギー値自体が異常なので FWHM 比較が成立しない）
 - [ ] Phase B/D は Phase A の結果と FW 開発者の追加要望を見て判断
