@@ -81,6 +81,11 @@ AMax の設定は 3 系統。カバレッジ:
 `/cmd/reset` では回復しない。**delila 側の問題ではない**（waveform 経路のコードは 6 月末の稼働版と
 同一であることを diff で検証済み）。診断指標: reader metrics の bytes/event が 32 ぴったり =
 waveform 全欠落。FW 修正版待ち。
+**発生時期の裏取り**: run20021（2026-07-14 記録）を TDelila でスキャン → 413,126 events 中
+waveform 付き 11.7% のみ。**バグは 13july FW flash 直後から出ていた**（Tune Up は散発 waveform
+でも表示されるため気づかれなかった）。副作用: この「小エントリ大量」データが旧 Rust delila2root
+の oxyroot 1000-entry basket バグ（上流、wbasket.rs offsets 未再成長）を初めて踏ませた →
+C++ 版に CLI 互換（`-o`/`--tree`）を追加して gant 移行済み（`85267f8`、~/.local/bin/delila2root）。
 
 **残（後続）:** ChGain × trapezoid の FWHM 実測（0/6/12 dB）、FW 開発者への確認事項（下記）。
 
