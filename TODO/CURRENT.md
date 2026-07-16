@@ -1,6 +1,6 @@
 # Current Sprint - TODO Index
 
-**Updated:** 2026-07-16 — **TODO 64 Phase 0 実装済** (DC Offset + VGA Gain を AMax Input タブへ露出、FW OFFSET を "Offset (Trapezoid)" にリネーム、689 tests pass、gant 実機検証待ち)。2026-07-13: **TODO 58 全決着** (M/L 最終回 15 FIXED + 4 文書化 + 5 defer + 2 受け入れ、archive へ移動)。TODO 57 は完了済 (2026-05-15 archive 済)。次候補 = TODO 63 (CFD 探索窓) / TODO 59 (trap auto-tune、pha_trap_tune Phase 1 実装済) / TODO 52 Phase 3。
+**Updated:** 2026-07-16 — **TODO 64 Phase 0 実装+実機検証済 / Phase A 完了** (DC Offset + VGA Gain を AMax Input タブへ露出し gant SN52622 で DevTree 直読み検証、FW OFFSET を "Offset (Trapezoid)" にリネーム。**gant 未コミットの 13july trigger-logic FW 統合+チューニングも master へ取込** `96e111c`。DPP_OPEN の DevTree ch パラメータは 10 個のみと確定)。2026-07-13: **TODO 58 全決着** (M/L 最終回 15 FIXED + 4 文書化 + 5 defer + 2 受け入れ、archive へ移動)。TODO 57 は完了済 (2026-05-15 archive 済)。次候補 = TODO 63 (CFD 探索窓) / TODO 59 (trap auto-tune、pha_trap_tune Phase 1 実装済) / TODO 52 Phase 3。
 
 このファイルは現在のスプリントの概要を示すインデックスです。
 Claudeセッション開始時に必ず読み込まれます。
@@ -15,7 +15,7 @@ Claudeセッション開始時に必ず読み込まれます。
 
 | Priority | File | Status | Summary |
 |----------|------|--------|---------|
-| **1** | [64_amax_opendpp_params.md](64_amax_opendpp_params.md) | **🚧 Phase 0 実装済 / 実機検証待ち (2026-07-16)** | AMax UI に OpenDPP 標準 DevTree パラメータ設定を追加（FW 開発者要望）。**Phase 0 実装完了**: `dc_offset`（DC Offset）+ `vga_gain`（VGA Gain）を AMax Input タブへ splice、FW レジスタ OFFSET のラベルを "Offset (Trapezoid)" にリネームして DevTree DCOffset と区別、`amax_56.json` に `vga_gain: 0` デフォルト追加。689 tests pass。**残** = gant 実機で Settings/Tune Up Apply 検証、Phase A（DPP_OPEN DevTree ダンプ）、ChGain × trapezoid FWHM 実測、FW 開発者への確認事項。Phase D = DevTree 駆動 codegen で将来の柔軟性 |
+| **1** | [64_amax_opendpp_params.md](64_amax_opendpp_params.md) | **🚧 Phase 0+A ✅済 (2026-07-16) / 残 = FWHM 実測** | AMax UI に OpenDPP 標準 DevTree パラメータ追加（FW 開発者要望）。**Phase 0 実装+実機検証済**: `dc_offset` + `vga_gain` を AMax Input タブへ splice、FW OFFSET → "Offset (Trapezoid)" リネーム。gant SN52622（13july FW）で Tune Up Apply → DevTree 直読みで反映確認。**Phase A 済**: `docs/devtree_examples/vx2730_dppopen_sn52622.json`、**DPP_OPEN の ch パラメータは 10 個のみ**（channelstriggermask 無し）と確定。**残** = ChGain × trapezoid FWHM 実測（0/6/12 dB）、FW 開発者への確認事項（ChGain データパス位置/内部ビット幅）。Phase B/D は FW 開発者の要望次第 |
 | **1** | [63_v1743_cfd_search_window.md](63_v1743_cfd_search_window.md) | **📋 OPEN (2026-07-09)** | 既存 x743 CFD テスト2件 fail (`cfd_valid=false`)。原因: `analyze()` の後方探索窓 `search_span=4·cfd_delay=16` が遅い立ち上がりパルスのゼロ交差を取り逃す (commit `e4ad305` から潜在)。修正前に実機パルスの rise/delay 比測定要。silent peak-fallback の可視化 (warn) も追加 |
 | **1** | [52_refactor_sprint_2026-q2.md](52_refactor_sprint_2026-q2.md) | **📋 Phase 3 待機 (Week 9〜)** | Phase 1+2 完了済 (23 項目、累計 -3716 行)。残 = Phase 3 Component Hardening: R-D3 (X743 read_loop split) / R-D5 (connection extract) / R-D11/D12 / R-P6 / R-P8 (ComponentRunner) / R-X3-post (ZMQ 境界 cost 再計測) |
 | **2** | [59_eliade_trap_autotune.md](59_eliade_trap_autotune.md) ([JA](59_eliade_trap_autotune_ja.md)) | **📋 PLANNING (2026-06-16)** | ELIADE Ge trap 補正 auto-tune。2026 = Ge 分解能チューン、beam 2027-01。8× clover HPGe / 4×V1725 PHA + V1730 PSD |

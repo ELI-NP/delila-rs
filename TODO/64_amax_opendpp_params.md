@@ -1,6 +1,6 @@
 # TODO 64 — AMax UI に OpenDPP（標準 DevTree）パラメータ設定を追加
 
-**Status: 🚧 Phase 0 実装済 / 実機検証待ち (2026-07-16)**
+**Status: 🚧 Phase 0 ✅実装+実機検証済 / Phase A ✅完了 (2026-07-16) — 残 = ChGain FWHM 実測 + FW 開発者確認**
 **発端:** AMax FW 開発者からのリクエスト。「レジスタベースのパラメータセッター UI は素晴らしい。
 加えて **OpenDPP（DPP_OPEN 標準 DevTree）のパラメータも設定できるようにしたい」
 **実スコープ（開発者ヒアリング 2026-07-13）:** **必須 = DC Offset のみ。あれば嬉しい = ゲイン**。
@@ -62,8 +62,20 @@ AMax の設定は 3 系統。カバレッジ:
 - 品質ゲート: `npm run build`（dist コミット済）+ `cargo fmt && cargo clippy --tests -D warnings
   && cargo test`（689 tests pass）通過。
 
-**残（実機検証・後続）:** gant 実機で Settings/Tune Up 両タブの Apply 反映確認、Phase A（DevTree
-ダンプ）、ChGain × trapezoid の FWHM 実測、FW 開発者への確認事項（下記）。
+**✅ 実機検証済み（2026-07-16、gant + VX2730 SN52622 / 13july trigger-logic FW）:**
+
+- Tune Up mode で `POST /api/tuneup/apply/0` に `dc_offset: 30.0` + `vga_gain: 0` → 成功。
+  **DevTree 直読み（caen_info --devtree）で全 ch `dcoffset = 30.001` / `chgain = 0` を確認**
+  （ground truth）。DevTree の range/increment（dcoffset 0–100/0.001、chgain 0–29/1）は
+  UI 定義と完全一致。検証後 `dc_offset: 50.0` に復元済み。
+- 注意: 検証は 13 July FW への統合後（gant の未コミット FW 統合 + チューニングを commit
+  `96e111c` として取り込み、`RegisterFile13iulie.json` で codegen 再実行した状態）。
+
+**⚠️ 運用上の落とし穴（2026-07-16 発見）**: reader が dig2 接続を保持中に `caen_info --devtree`
+を実行すると **reader の接続が死ぬ（以後の Apply が CAEN -15）**。Tune Up は -15 を自動再接続
+しないので DAQ 再起動が必要。**DevTree ダンプは DAQ 停止中に取ること**。
+
+**残（後続）:** ChGain × trapezoid の FWHM 実測（0/6/12 dB）、FW 開発者への確認事項（下記）。
 
 ---
 
@@ -91,10 +103,20 @@ AMax の設定は 3 系統。カバレッジ:
     効くか + FW 内部ビット幅（trapezoid アキュムレータの飽和条件）**。
   - デフォルトは **0 dB** とし、UI tooltip に「分光では 0 dB 推奨」を明記する。
 
-### Phase A — ground truth: DPP_OPEN DevTree ダンプ【小・Phase 0 と並行可】
+### Phase A — ground truth: DPP_OPEN DevTree ダンプ【✅ 完了 2026-07-16】
 
-- gant の AMax 実機に `caen_info <url> --devtree` → `docs/devtree_examples/vx2730_dppopen_snXXXX.json`
-  として保存。公開パラメータ + allowedvalues + range が確定する。
+- ✅ `docs/devtree_examples/vx2730_dppopen_sn52622.json` にコミット済み（gant、13july
+  trigger-logic FW、dcoffset=30.001 は検証テスト中の値）。
+- **確定した DPP_OPEN のチャンネルパラメータは 10 個のみ**:
+  `chenable / dcoffset / chgain / signaloffset / gainfactor / itlconnect / wavedatasource`
+  （writable）+ `adctovolts / chstatus`（RO）+ `handle`（メタ）。
+- **含意**:
+  1. `SignalOffset` の実在を実機で確認 → 「DC Offset」の命名判断（DevTree 側に残す）の裏付け。
+  2. **`channelstriggermask` はこの FW ビルドの DevTree に存在しない**。AMax の
+     `ch_trigger_mask` splice（PSD2 共有パス）は現行 config が未設定なので実害なしだが、
+     設定すると FELib 拒否の可能性 → Phase B で扱いを確定する。
+  3. PSD2 テーブル共有（37 項目）は 10 項目の実態に対して過大 → Phase B の専用テーブルは
+     この 10 項目が正。trigger/energy/waveform 系は全てカスタムレジスタ側。
 - FW 開発者に見せて「追加で欲しいもの」を選んでもらう入力資料にもなる。
 
 ### Phase B — 専用テーブル化【中・必要になったら】
@@ -123,11 +145,13 @@ AMax の設定は 3 系統。カバレッジ:
 
 - [x] Phase 0 (実装): AMax の Settings/Tune Up 両方の Input タブに DC Offset が出る
       （`channel-params.ts` splice、`AMAX_DC_OFFSET`）
-- [ ] Phase 0 (実機検証): gant 実機で Settings/Tune Up の Apply が反映される
+- [x] Phase 0 (実機検証): gant 実機で Tune Up Apply → DevTree 直読みで dcoffset/chgain
+      反映確認（2026-07-16、SN52622 / 13july FW）
 - [x] Phase 0: `amax.offset` を "Offset (Trapezoid)" にリネームして DevTree DCOffset
       （"DC Offset"）と UI 上で区別（ラベル/tooltip、§2 の確定情報に従う）
 - [x] Phase 0: ChGain も同時に露出（`vga_gain`、デフォルト 0 dB、「分光では 0 dB 推奨」tooltip 付き）
-- [ ] Phase A: DevTree ダンプを `docs/devtree_examples/` にコミット
+- [x] Phase A: DevTree ダンプを `docs/devtree_examples/vx2730_dppopen_sn52622.json` にコミット
+      （チャンネルパラメータは 10 個のみと確定、§Phase A の含意参照）
 - [ ] ChGain × trapezoid の分解能影響を実測（既知ピーク FWHM を 0/6/12 dB 比較）+
       FW 開発者にデータパス位置/内部ビット幅を確認
 - [ ] Phase B/D は Phase A の結果と FW 開発者の追加要望を見て判断
