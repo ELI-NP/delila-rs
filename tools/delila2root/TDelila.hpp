@@ -221,6 +221,73 @@ class Reader {
     return s;
   }
 
+  // --- Typed decode fast path -------------------------------------------
+  // These never build a Value DOM node: read_value() would allocate a Value
+  // (std::string + std::vector members, ~96 B) per scalar and per array
+  // element. The waveform decode path (512 samples × 19 probe arrays/event)
+  // is where that churn dominates, so it decodes straight into caller-owned
+  // typed vectors instead. Semantics mirror read_value()/Value::as_* exactly.
+
+  // Decode one integer of any MessagePack int encoding. Throws on a non-int.
+  int64_t read_int() {
+    uint8_t b = u8();
+    if (b <= 0x7F) return b;                       // positive fixint
+    if (b >= 0xE0) return static_cast<int8_t>(b);  // negative fixint
+    switch (b) {
+      case 0xCC: return u8();
+      case 0xCD: return be16();
+      case 0xCE: return be32();
+      case 0xCF: return static_cast<int64_t>(be64());
+      case 0xD0: return static_cast<int8_t>(u8());
+      case 0xD1: return static_cast<int16_t>(be16());
+      case 0xD2: return static_cast<int32_t>(be32());
+      case 0xD3: return static_cast<int64_t>(be64());
+      default: throw std::runtime_error("expected MessagePack int, got 0x" + hex(b));
+    }
+  }
+
+  // Decode a float/double, accepting int encodings too (like Value::as_f64).
+  double read_f64() {
+    uint8_t b = peek();
+    if (b == 0xCA) { p_++; uint32_t r = be32(); float fv; std::memcpy(&fv, &r, 4); return fv; }
+    if (b == 0xCB) { p_++; uint64_t r = be64(); double dv; std::memcpy(&dv, &r, 8); return dv; }
+    return static_cast<double>(read_int());        // int fallthrough
+  }
+
+  // Decode a bool, accepting nil (false) and ints (nonzero=true) like as_bool.
+  bool read_bool() {
+    uint8_t b = peek();
+    if (b == 0xC2) { p_++; return false; }
+    if (b == 0xC3) { p_++; return true; }
+    if (b == 0xC0) { p_++; return false; }         // nil -> false
+    return read_int() != 0;
+  }
+
+  // Read an array of ints straight into a vector<short>. clear()+reserve keeps
+  // the caller's capacity across events (DecodedWaveform reuses its vectors),
+  // so the hot path allocates only when a waveform grows past its high-water
+  // mark — no per-sample Value construction/destruction.
+  void read_i16_array(std::vector<short>& out) {
+    uint32_t n = read_array_len();
+    out.clear();
+    out.reserve(n);
+    for (uint32_t k = 0; k < n; ++k) out.push_back(static_cast<short>(read_int()));
+  }
+
+  // Digital probes are [u8] on the wire but the ROOT tree stores vector<short>;
+  // decode straight into short so we skip the intermediate uint8 vector and its
+  // widening copy (×16 branches/event in delila2root). Same loop as the i16
+  // reader — the wire values fit in a short either way.
+  void read_short_array_from_u8(std::vector<short>& out) { read_i16_array(out); }
+
+  // Read an array of ints into a vector<uint8_t> (the [u8;N] type arrays).
+  void read_u8_array(std::vector<uint8_t>& out) {
+    uint32_t n = read_array_len();
+    out.clear();
+    out.reserve(n);
+    for (uint32_t k = 0; k < n; ++k) out.push_back(static_cast<uint8_t>(read_int()));
+  }
+
  private:
   uint8_t peek() const { if (p_ >= end_) throw std::runtime_error("truncated MessagePack"); return *p_; }
   uint8_t u8() { if (p_ >= end_) throw std::runtime_error("truncated MessagePack"); return *p_++; }
@@ -497,6 +564,53 @@ class Waveform {
 };
 
 // ---------------------------------------------------------------------------
+// Typed waveform decode (no DOM)
+// ---------------------------------------------------------------------------
+// One entry of the per-file decode plan: it maps a Waveform field *position*
+// to an action, so decode_waveform() never does a schema name lookup per event
+// (unlike the generic Waveform::field() DOM path). The plan is built once from
+// schema_.fields("Waveform"); unknown/future fields become Skip, preserving v3
+// forward compatibility.
+struct WfTarget {
+  enum class Kind {
+    Skip,              // unknown/future field -> skip_value()
+    AnalogK,           // analog_probe(k+1)          -> analog[k]   ([i16])
+    DigitalK,          // digital_probe(k+1)         -> digital[k]  ([u8]->short)
+    NsPerSample,       // ns_per_sample              -> f64
+    TriggerThreshold,  // trigger_threshold          -> u16
+    TimeResolution,    // time_resolution            -> u8
+    AnalogSignedK,     // analog_probe(k+1)_is_signed-> bool
+    AnalogTypeArr,     // analog_probe_type          -> [u8;3]
+    DigitalTypeArr,    // digital_probe_type         -> [u8;16]
+  };
+  Kind kind = Kind::Skip;
+  int k = 0;  // probe index (0-based) for AnalogK/DigitalK/AnalogSignedK
+};
+
+// Typed decode target for one waveform: same data the DOM Waveform exposes, but
+// laid out as plain vectors/arrays so a converter can point ROOT branches at it
+// and reuse it across events (clear() keeps every vector's capacity).
+struct DecodedWaveform {
+  std::vector<short> analog[3];
+  std::vector<short> digital[16];
+  double ns_per_sample = 0.0;
+  uint16_t trigger_threshold = 0;
+  uint8_t time_resolution = 0;
+  bool analog_is_signed[3] = {false, false, false};
+  uint8_t analog_type[3] = {0, 0, 0};
+  uint8_t digital_type[16] = {0};
+
+  // Reset for reuse: empty every vector (retaining capacity) and zero scalars.
+  void clear() {
+    for (int k = 0; k < 3; ++k) { analog[k].clear(); analog_is_signed[k] = false; analog_type[k] = 0; }
+    for (int k = 0; k < 16; ++k) { digital[k].clear(); digital_type[k] = 0; }
+    ns_per_sample = 0.0;
+    trigger_threshold = 0;
+    time_resolution = 0;
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Event
 // ---------------------------------------------------------------------------
 class TDelila;  // fwd
@@ -531,6 +645,46 @@ class Event {
     return wf_;
   }
 
+  // Typed decode into caller-owned storage — the converter's hot path. Unlike
+  // waveform() it builds no DOM: it walks wf_bytes_ once, driven by the file's
+  // precomputed plan_ (field position -> action), decoding each array straight
+  // into `out`'s reused vectors. Returns false (after out.clear()) when there
+  // is no waveform. Semantically identical to reading waveform()'s accessors.
+  bool decode_waveform(DecodedWaveform& out) const {
+    out.clear();
+    if (!has_wf_ || wf_bytes_.empty() || !plan_) return false;
+    mp::Reader r(wf_bytes_.data(), wf_bytes_.size());
+    // Decode only min(actual array len, plan size) fields: a short/future
+    // waveform must not read past its own elements, and any plan entry beyond
+    // the wire array stays cleared (nil handling / v3 forward compat).
+    uint32_t n = r.read_array_len();
+    const std::vector<WfTarget>& plan = *plan_;
+    size_t limit = static_cast<size_t>(n) < plan.size() ? static_cast<size_t>(n) : plan.size();
+    for (size_t i = 0; i < limit; ++i) {
+      const WfTarget& t = plan[i];
+      switch (t.kind) {
+        case WfTarget::Kind::AnalogK:      r.read_i16_array(out.analog[t.k]); break;
+        case WfTarget::Kind::DigitalK:     r.read_short_array_from_u8(out.digital[t.k]); break;
+        case WfTarget::Kind::NsPerSample:  out.ns_per_sample = r.read_f64(); break;
+        case WfTarget::Kind::TriggerThreshold: out.trigger_threshold = static_cast<uint16_t>(r.read_int()); break;
+        case WfTarget::Kind::TimeResolution:   out.time_resolution = static_cast<uint8_t>(r.read_int()); break;
+        case WfTarget::Kind::AnalogSignedK:    out.analog_is_signed[t.k] = r.read_bool(); break;
+        case WfTarget::Kind::AnalogTypeArr: {  // [u8;3] — decode inline into the fixed array (no per-event heap)
+          uint32_t m = r.read_array_len();
+          for (uint32_t k = 0; k < m; ++k) { int64_t v = r.read_int(); if (k < 3) out.analog_type[k] = static_cast<uint8_t>(v); }
+          break;
+        }
+        case WfTarget::Kind::DigitalTypeArr: {  // [u8;16]
+          uint32_t m = r.read_array_len();
+          for (uint32_t k = 0; k < m; ++k) { int64_t v = r.read_int(); if (k < 16) out.digital_type[k] = static_cast<uint8_t>(v); }
+          break;
+        }
+        case WfTarget::Kind::Skip:         r.skip_value(); break;
+      }
+    }
+    return true;
+  }
+
   // Generic access to any scalar EventData field by schema name (the waveform
   // slot is a placeholder here — use waveform()).
   const mp::Value* field(const std::string& name) const {
@@ -546,6 +700,7 @@ class Event {
 
   mp::Value fields_;          // EventData scalar fields (waveform slot = nil placeholder)
   const Schema* sc_ = nullptr;
+  const std::vector<WfTarget>* plan_ = nullptr;  // file-owned waveform decode plan
   bool has_wf_ = false;
   std::vector<uint8_t> wf_bytes_;  // raw MessagePack bytes of the waveform (owned, lazy)
   mutable bool wf_built_ = false;
@@ -606,8 +761,39 @@ class TDelila {
 
     schema_ = Schema::from_header_json(header_.event_schema);
     wf_index_ = schema_.index_of("EventData", "waveform");
+    build_wf_plan();
     block_pos_ = header_size_;
     good_ = true;
+  }
+
+  // Build the per-file waveform decode plan from the schema (once, in open()).
+  // Field names are matched exactly against the v2/v3 Waveform layout; anything
+  // unrecognized (a field the Rust side adds later) maps to Skip so decode
+  // stays position-correct without knowing the new field.
+  void build_wf_plan() {
+    wf_plan_.clear();
+    const auto& fs = schema_.fields("Waveform");
+    wf_plan_.reserve(fs.size());
+    for (const auto& fd : fs) {
+      WfTarget t;  // defaults to Skip
+      const std::string& nm = fd.name;
+      bool matched = false;
+      for (int k = 0; k < 3 && !matched; ++k) {
+        if (nm == "analog_probe" + std::to_string(k + 1)) { t.kind = WfTarget::Kind::AnalogK; t.k = k; matched = true; }
+        else if (nm == "analog_probe" + std::to_string(k + 1) + "_is_signed") { t.kind = WfTarget::Kind::AnalogSignedK; t.k = k; matched = true; }
+      }
+      for (int k = 0; k < 16 && !matched; ++k)
+        if (nm == "digital_probe" + std::to_string(k + 1)) { t.kind = WfTarget::Kind::DigitalK; t.k = k; matched = true; }
+      if (!matched) {
+        if (nm == "time_resolution") t.kind = WfTarget::Kind::TimeResolution;
+        else if (nm == "trigger_threshold") t.kind = WfTarget::Kind::TriggerThreshold;
+        else if (nm == "ns_per_sample") t.kind = WfTarget::Kind::NsPerSample;
+        else if (nm == "analog_probe_type") t.kind = WfTarget::Kind::AnalogTypeArr;
+        else if (nm == "digital_probe_type") t.kind = WfTarget::Kind::DigitalTypeArr;
+        // else: unknown field -> Skip (default)
+      }
+      wf_plan_.push_back(t);
+    }
   }
 
   void parse_header(const std::vector<uint8_t>& buf) {
@@ -696,6 +882,7 @@ class TDelila {
     out.fields_.arr.clear();
     out.fields_.arr.reserve(len);
     out.sc_ = &schema_;
+    out.plan_ = &wf_plan_;
     out.has_wf_ = false;
     out.wf_bytes_.clear();
     out.wf_built_ = false;
@@ -739,6 +926,7 @@ class TDelila {
   FileHeader header_;
   FileFooter footer_;
   Schema schema_;
+  std::vector<WfTarget> wf_plan_;  // waveform decode plan (built once in open())
   std::vector<uint8_t> block_buf_;
   size_t ev_cursor_ = 0;       // byte offset of next event within block_buf_
   size_t events_remaining_ = 0;

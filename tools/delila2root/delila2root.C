@@ -22,6 +22,7 @@
 
 #include "TDelila.hpp"
 #include "TFile.h"
+#include "TROOT.h"
 #include "TTree.h"
 
 // ROOT compression setting = algorithm*100 + level. ZSTD is algorithm 5, so
@@ -37,6 +38,11 @@ static const int kDelilaCompression = 505;
 long delila2root(const char* in_path, const char* out_path = nullptr,
                  const std::vector<std::string>& extra = {},
                  const char* tree_name = "delila") {
+  // Parallelize ROOT's basket compression (ZSTD-5) across cores. Previously the
+  // converter was single-threaded: 100% of one core, compression on the same
+  // thread as decode. Works in both compiled and macro (Cling) mode.
+  ROOT::EnableImplicitMT();
+
   std::vector<std::string> inputs;
   inputs.push_back(in_path);
   for (const auto& e : extra) inputs.push_back(e);
@@ -60,18 +66,20 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
   }
   TTree* tree = new TTree(tree_name, "DELILA events");
 
-  // --- Branch buffers (one per event field; all firmwares) ---
-  UChar_t  module = 0, channel = 0, time_resolution = 0;
-  UShort_t energy = 0, energy_short = 0, trigger_threshold = 0;
-  Double_t timestamp_ns = 0.0, ns_per_sample = 0.0;
+  // --- Scalar branch buffers (one per event field; all firmwares) ---
+  UChar_t  module = 0, channel = 0;
+  UShort_t energy = 0, energy_short = 0;
+  Double_t timestamp_ns = 0.0;
   ULong64_t flags = 0;
   ULong64_t user_info[4] = {0, 0, 0, 0};
   Bool_t has_waveform = false;
-  Bool_t analog_probe_is_signed[3] = {false, false, false};
-  UChar_t analog_probe_type[3] = {0, 0, 0};
-  UChar_t digital_probe_type[16] = {0};
-  std::vector<short> analog_probe[3];
-  std::vector<short> digital_probe[16];
+
+  // --- Waveform branch buffer ---
+  // Decoded straight into this reused struct (no per-event Value DOM): the
+  // ROOT branches point at its members. Its bool/uint8_t/uint16_t/double
+  // members are layout-compatible with the Bool_t(1B)/UChar_t/UShort_t/Double_t
+  // leaflists below, so the tree's on-disk types are unchanged.
+  tdelila::DecodedWaveform dw;
 
   tree->Branch("module", &module, "module/b");
   tree->Branch("channel", &channel, "channel/b");
@@ -81,18 +89,18 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
   tree->Branch("flags", &flags, "flags/l");
   tree->Branch("user_info", user_info, "user_info[4]/l");
   tree->Branch("has_waveform", &has_waveform, "has_waveform/O");
-  tree->Branch("time_resolution", &time_resolution, "time_resolution/b");
-  tree->Branch("trigger_threshold", &trigger_threshold, "trigger_threshold/s");
-  tree->Branch("ns_per_sample", &ns_per_sample, "ns_per_sample/D");
+  tree->Branch("time_resolution", &dw.time_resolution, "time_resolution/b");
+  tree->Branch("trigger_threshold", &dw.trigger_threshold, "trigger_threshold/s");
+  tree->Branch("ns_per_sample", &dw.ns_per_sample, "ns_per_sample/D");
   for (int k = 0; k < 3; ++k)
-    tree->Branch(Form("analog_probe%d", k + 1), &analog_probe[k]);
+    tree->Branch(Form("analog_probe%d", k + 1), &dw.analog[k]);
   for (int k = 0; k < 16; ++k)
-    tree->Branch(Form("digital_probe%d", k + 1), &digital_probe[k]);
-  tree->Branch("analog_probe1_is_signed", &analog_probe_is_signed[0], "analog_probe1_is_signed/O");
-  tree->Branch("analog_probe2_is_signed", &analog_probe_is_signed[1], "analog_probe2_is_signed/O");
-  tree->Branch("analog_probe3_is_signed", &analog_probe_is_signed[2], "analog_probe3_is_signed/O");
-  tree->Branch("analog_probe_type", analog_probe_type, "analog_probe_type[3]/b");
-  tree->Branch("digital_probe_type", digital_probe_type, "digital_probe_type[16]/b");
+    tree->Branch(Form("digital_probe%d", k + 1), &dw.digital[k]);
+  tree->Branch("analog_probe1_is_signed", &dw.analog_is_signed[0], "analog_probe1_is_signed/O");
+  tree->Branch("analog_probe2_is_signed", &dw.analog_is_signed[1], "analog_probe2_is_signed/O");
+  tree->Branch("analog_probe3_is_signed", &dw.analog_is_signed[2], "analog_probe3_is_signed/O");
+  tree->Branch("analog_probe_type", dw.analog_type, "analog_probe_type[3]/b");
+  tree->Branch("digital_probe_type", dw.digital_type, "digital_probe_type[16]/b");
 
   // Set of field names we materialize into branches, for a coverage check.
   const std::set<std::string> handled_event = {
@@ -140,32 +148,10 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
       flags = ev.flags();
       for (int k = 0; k < 4; ++k) user_info[k] = ev.user_info(k);
 
+      // Typed decode straight into dw's branch buffers (both branches clear dw).
       has_waveform = ev.has_waveform();
-      // reset waveform branches
-      time_resolution = 0;
-      trigger_threshold = 0;
-      ns_per_sample = 0.0;
-      for (int k = 0; k < 3; ++k) { analog_probe[k].clear(); analog_probe_is_signed[k] = false; analog_probe_type[k] = 0; }
-      for (int k = 0; k < 16; ++k) { digital_probe[k].clear(); digital_probe_type[k] = 0; }
-
-      if (has_waveform) {
-        const auto& wf = ev.waveform();
-        for (int k = 0; k < 3; ++k) {
-          analog_probe[k] = wf.analog_probe(k + 1);
-          analog_probe_is_signed[k] = wf.analog_probe_is_signed(k + 1);
-        }
-        for (int k = 0; k < 16; ++k) {
-          auto d8 = wf.digital_probe(k + 1);
-          digital_probe[k].assign(d8.begin(), d8.end());
-        }
-        ns_per_sample = wf.ns_per_sample();
-        trigger_threshold = (UShort_t)wf.trigger_threshold();
-        if (const tdelila::mp::Value* tr = wf.field("time_resolution")) time_resolution = (UChar_t)tr->as_u64();
-        if (const tdelila::mp::Value* at = wf.field("analog_probe_type"))
-          for (size_t k = 0; k < at->arr.size() && k < 3; ++k) analog_probe_type[k] = (UChar_t)at->arr[k].as_u64();
-        if (const tdelila::mp::Value* dt = wf.field("digital_probe_type"))
-          for (size_t k = 0; k < dt->arr.size() && k < 16; ++k) digital_probe_type[k] = (UChar_t)dt->arr[k].as_u64();
-      }
+      if (has_waveform) ev.decode_waveform(dw);
+      else dw.clear();
 
       tree->Fill();
       total++;

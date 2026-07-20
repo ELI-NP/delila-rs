@@ -85,6 +85,34 @@ If the Rust side adds a field that `delila2root.C` doesn't yet write to a branch
 the converter prints a `NOTE unhandled … field` line (never silently dropped) —
 add a branch for it.
 
+## Performance
+
+For waveform-rich runs the converter uses a **typed decode path**
+(`Event::decode_waveform(DecodedWaveform&)`) instead of the generic
+`waveform()` accessor. `decode_waveform` walks the waveform's MessagePack bytes
+once, driven by a plan built per file from the schema (field position → action),
+and writes samples straight into reused `vector<short>` buffers — it builds no
+per-sample value objects and does no per-event allocation. The generic
+`waveform()` DOM access (and `ev.field(...)` / `wf.field(...)`) remains fully
+intact for interactive/macro use — only the converter switched paths. The
+converter also calls `ROOT::EnableImplicitMT()` so basket ZSTD compression runs
+across cores instead of on the decode thread.
+
+Measured 2026-07-20 on side3 (16-core, AlmaLinux, ROOT /opt/ROOT), ThGEM test
+data, identical inputs per row:
+
+| workload | old Rust/oxyroot tool | C++ pre-typed | C++ typed+IMT |
+|---|---|---|---|
+| 7-file run0008 (101.9 M events, 2.6 GB) | ≈12 min, RSS 9.5 GB, **34 GB** out | — | **3 m 30 s**, RSS 1.2 GB, **6.1 GB** out |
+| X743 waveform file (2.67 M ev, 1.1 GB) | — | 66.4 s | **54.2 s** |
+| X730 scalar file (18.2 M ev, 404 MB) | — | 39.1 s | 36.6 s |
+
+Correctness of the typed path was verified against the DOM path event-by-event
+(164 k V1725 PHA1 waveform events byte-identical) and converter old-vs-new on
+X743 (2.67 M entries: sampled exact compare + full-tree aggregate sums equal),
+X730, and AMax runs. Remaining converter cost on scalar-heavy runs is MessagePack
+scalar parse + `TTree::Fill` volume, not the waveform path.
+
 ## Format reference
 
 `["DELILA02"][u32 LE len][MsgPack FileHeader]`, then repeated
