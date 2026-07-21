@@ -75,6 +75,7 @@ Web UIs: Swagger http://localhost:8080/swagger-ui/ | Monitor http://localhost:80
 - `docs/digitizer_system_spec.md` - デジタイザシステム仕様（DevTree, パラメーター等）
 - `docs/compass_devtree_mapping.md` - CoMPASS↔DevTreeパラメーター対応表（全FW確定済）
 - `docs/amax_fw_update_manual.md` - AMax FW 更新手順（`scripts/update_amax_fw.sh` 一発の codegen→build→UI→deploy）
+- `docs/root_sink_manual.md` - root_sink（並列 ROOT recorder + JSROOT ライブモニタ）運用マニュアル
 - `docs/devtree_examples/` - 実機から取得したDevTree JSON（パラメーター名の正確なリファレンス）
 - `legacy/CoMPASS/` - CoMPASS設定画面スクリーンショット（UI設計のリファレンス）
 

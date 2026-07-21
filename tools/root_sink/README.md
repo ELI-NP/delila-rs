@@ -14,6 +14,9 @@ The Rust **Recorder that writes `.delila` stays the authoritative recorder**.
 `root_sink` is a parallel best-effort sink: it never gates, throttles, or blocks
 the pipeline, so it cannot cause data loss upstream (see *Design notes*).
 
+Japanese operator manual: [docs/root_sink_manual.md](../../docs/root_sink_manual.md)
+(運用手順・ヒストグラム定義・トラブルシューティング).
+
 ## Requirements
 
 - **ROOT** 6.20+ (for ZSTD). Provides `TFile`/`TTree`/`THttpServer`.
