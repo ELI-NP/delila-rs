@@ -1,6 +1,14 @@
 # TODO 65 — C++ ROOT シンク(スカラー ROOT Recorder + 簡易 Δt モニタ)
 
-**Status: ✅ 実装+E2E 検証済(2026-07-21、`61c9a13`)— 残 = side3 デプロイ(ホスト復帰待ち)+ 実検出器での Δt 確認**
+**Status: ✅ COMPLETED(2026-07-21、`61c9a13`+`6f65ef1`)— side3 実検出器で Δt 実証済み**
+
+**side3 実証(2026-07-21、パルサー ch3=gamma / ch7=ThGEM1 / ch11=ThGEM2)**:
+dt1 = +40.5 ns / dt2 = +41.5 ns の鋭い単一ピーク(±2bin に 100%、u/o-flow 0)、
+2D・ch 占有とも正常、16.7 kHz で記録+マッチング同時進行。libzmq は ~/.local に
+user-local ビルド(RHEL に無し)、バイナリ = ~daq/.local/bin/root_sink(rpath 焼込)。
+**教訓(`6f65ef1`)**: TApplication は DISPLAY があると X11 接続し、ssh セッション切断で
+プロセスごと死ぬ → `gROOT->SetBatch(kTRUE)` 必須(実際に 30kHz 稼働中の sink が
+親 ssh 切断で死亡した)。JSROOT はクライアント描画なので X11 不要。
 
 **検証結果(2026-07-21)**: ①単体 83/83(エンベロープ/デコード/マッチャ/ラン状態機械)
 ②Mac 手組みパブリッシャ E2E(リネーム・/Reset・シグナル)③gant ライブ AMax ストリーム受動購読
@@ -93,4 +101,4 @@ ThGEM 実測 ~37 kHz はシングルスレッド C++ で余裕(参考: delila2ro
       窓・チャンネルは CLI フラグで設定可(チャンネル省略時は recorder 専用モード)
 - [x] README(ビルド手順 no-sudo 変法込み + CLI + THttpServer の使い方)
 - [x] TDelila.hpp は `#include "../delila2root/TDelila.hpp"` で共有(コピーなし)
-- [ ] side3 復帰後: デプロイ + ThGEM 実検出器で Δt ピーク確認(既知遅延パルサー)
+- [x] side3 デプロイ + パルサーで Δt ピーク確認(dt1=+40.5ns / dt2=+41.5ns、2026-07-21)
