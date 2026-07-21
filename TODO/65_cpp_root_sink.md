@@ -1,6 +1,14 @@
 # TODO 65 — C++ ROOT シンク(スカラー ROOT Recorder + 簡易 Δt モニタ)
 
-**Status: 📋 READY(設計確定 2026-07-20、実装待ち)**
+**Status: ✅ 実装+E2E 検証済(2026-07-21、`61c9a13`)— 残 = side3 デプロイ(ホスト復帰待ち)+ 実検出器での Δt 確認**
+
+**検証結果(2026-07-21)**: ①単体 83/83(エンベロープ/デコード/マッチャ/ラン状態機械)
+②Mac 手組みパブリッシャ E2E(リネーム・/Reset・シグナル)③gant ライブ AMax ストリーム受動購読
+= reader カウンタ増分 385 と記録 385 が完全一致 ④gant ポート分離エミュレータスタックで
+実 Rust 2 ラン E2E: run101=118,100 / run102=11,100 とも **Recorder .delila と完全一致**、
+EOS ファイナライズ + `run%04d_scalar.root` リネーム + ラン間サイクル正動作。
+gant は `~/.local/bin/root_sink` 配備済み。ビルドの no-sudo 変法(zmq.h 取得 +
+libzmq.so.5 直リンク)は README 参照。
 **発端:** side3/ThGEM テストで `.delila` → delila2root 変換の 2 段が冗長(スカラー 1 億 ev/run、
 使うのは 5 フィールドのみ)。加えて ThGEM×2 + ガンマ線検出器の時間差をライブで見たい。
 
@@ -78,8 +86,11 @@ ThGEM 実測 ~37 kHz はシングルスレッド C++ で余裕(参考: delila2ro
 
 ## 完了条件
 
-- [ ] root_sink が side3 実 DAQ で .root を書き、イベント数が Recorder(.delila)と一致
-- [ ] EOS でのファイルクローズ/リネーム、複数ラン連続で正動作
-- [ ] THttpServer で dt1/dt2/2D がライブ更新され、ThGEM 実験の窓・チャンネルが config で設定可
-- [ ] README(ビルド手順 + config 例 + THttpServer の使い方)
-- [ ] TDelila.hpp 流用部の重複を作らない(ヘッダ include で共有、コピーしない)
+- [x] イベント数が Recorder(.delila)と一致(gant エミュレータ 2 ラン + ライブ AMax
+      ストリームで検証。side3 実 DAQ での再確認はホスト復帰後)
+- [x] EOS でのファイルクローズ/リネーム、複数ラン連続で正動作(run101/102 E2E)
+- [x] THttpServer で dt1/dt2/2D がライブ更新(JSROOT JSON 配信確認、/Reset 動作確認)、
+      窓・チャンネルは CLI フラグで設定可(チャンネル省略時は recorder 専用モード)
+- [x] README(ビルド手順 no-sudo 変法込み + CLI + THttpServer の使い方)
+- [x] TDelila.hpp は `#include "../delila2root/TDelila.hpp"` で共有(コピーなし)
+- [ ] side3 復帰後: デプロイ + ThGEM 実検出器で Δt ピーク確認(既知遅延パルサー)
