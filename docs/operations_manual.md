@@ -15,7 +15,8 @@ DAQ は 1 本の ZMQ パイプラインで、`scripts/start_daq.sh` が 1 つの
 
 ```
   Reader(s) ──ZMQ──> Merger ──ZMQ──┬──> Recorder  (.delila / ROOT)
-  (decode)          (sort/EB)      └──> Monitor    (histograms / waveforms)
+  (decode)          (sort/EB)      ├──> Monitor    (histograms / waveforms)
+                                   └──> root_sink  (スカラー ROOT + JSROOT、任意)
 
   Operator (REST + Web UI, port 9090) が全体を制御
 ```
@@ -24,6 +25,7 @@ DAQ は 1 本の ZMQ パイプラインで、`scripts/start_daq.sh` が 1 つの
 |---------|-------------|
 | Operator REST / Swagger UI | http://localhost:9090/swagger-ui/ |
 | Monitor Web UI | http://localhost:8081/ |
+| root_sink JSROOT モニタ（任意） | http://localhost:8090/ |
 | Mongo Express (run 履歴) | http://localhost:8082/ |
 
 > **制御は必ず Operator REST API（Web UI）経由で行う。** 直接 ZMQ コマンドは
@@ -58,8 +60,13 @@ config を 1 つ指定して起動する。
 1. 前回の残プロセスを `pkill`
 2. （必要なら）MongoDB / Docker 起動
 3. config の `[[network.sources]]` に対応する reader を起動
-4. merger → recorder → monitor →（有効なら）online_event_builder → operator を起動
+4. merger → recorder → monitor →（有効なら）online_event_builder / root_sink →
+   operator を起動
 5. Operator が `/api/status` に応答するまで待機
+
+root_sink（並列 ROOT recorder + JSROOT ライブモニタ）は config に
+`[network.root_sink]` セクションがあるときだけ起動される任意コンポーネント。
+セクションの書き方・運用は [root_sink マニュアル](root_sink_manual.md) を参照。
 
 正常起動すると末尾に Web UI の URL が表示される。
 

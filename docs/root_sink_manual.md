@@ -65,6 +65,9 @@ window_ns  = 10000
 - バイナリ探索順: `ROOT_SINK_BIN`(環境変数) > PATH > `~/.local/bin/root_sink`
   > `tools/root_sink/root_sink`。見つからなければ黄色い警告を出してスキップ
   (致命ではない)。
+- **side3 は反映済み**(2026-07-21、`~daq/delila-rs/config.toml` に上記セクション追記済み。
+  `start_daq.sh` からの自動起動とファイル名一致を run 14 で実機検証済み)。
+  外したい場合はセクションを削除またはコメントアウトするだけ。
 
 ### 手動起動(side3 の実例)
 

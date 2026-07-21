@@ -15,7 +15,8 @@ component from one config file.
 
 ```
   Reader(s) ──ZMQ──> Merger ──ZMQ──┬──> Recorder  (.delila / ROOT)
-  (decode)          (sort/EB)      └──> Monitor    (histograms / waveforms)
+  (decode)          (sort/EB)      ├──> Monitor    (histograms / waveforms)
+                                   └──> root_sink  (scalar ROOT + JSROOT, optional)
 
   Operator (REST + Web UI, port 9090) controls the whole pipeline
 ```
@@ -24,6 +25,7 @@ component from one config file.
 |---------|-----------|
 | Operator REST / Swagger UI | http://localhost:9090/swagger-ui/ |
 | Monitor Web UI | http://localhost:8081/ |
+| root_sink JSROOT monitor (optional) | http://localhost:8090/ |
 | Mongo Express (run history) | http://localhost:8082/ |
 
 > **Always control the DAQ through the Operator REST API (web UI).** Never send
@@ -59,8 +61,14 @@ Start with a single config file:
 1. `pkill`s any leftover processes from a previous session
 2. starts MongoDB / Docker if needed
 3. starts one reader per `[[network.sources]]` in the config
-4. starts merger → recorder → monitor → (if enabled) online_event_builder → operator
+4. starts merger → recorder → monitor → (if enabled) online_event_builder /
+   root_sink → operator
 5. waits until the Operator answers `/api/status`
+
+root_sink (parallel ROOT recorder + JSROOT live monitor) is an optional
+component launched only when the config has a `[network.root_sink]` section.
+See [tools/root_sink/README.md](../tools/root_sink/README.md) for the section
+keys, and [root_sink_manual.md](root_sink_manual.md) (Japanese) for operations.
 
 On success it prints the Web UI URLs.
 
