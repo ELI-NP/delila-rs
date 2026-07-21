@@ -46,6 +46,11 @@ for proc in operator monitor recorder merger reader emulator data_sink online_ev
         KILLED=true
     fi
 done
+# root_sink is script-managed but lives outside target/release (deployed to
+# ~/.local/bin / PATH), so match the exact process name — never a broad -f.
+if pkill -x root_sink 2>/dev/null; then
+    KILLED=true
+fi
 if [ "$KILLED" = true ]; then
     echo -e "${YELLOW}Killed leftover DAQ processes from previous session${NC}"
     # Wait for processes to actually exit (up to 5s), then force kill
@@ -57,6 +62,7 @@ if [ "$KILLED" = true ]; then
                 break
             fi
         done
+        pgrep -x root_sink &>/dev/null && STILL_RUNNING=true
         [ "$STILL_RUNNING" = false ] && break
         sleep 0.5
     done
@@ -64,6 +70,7 @@ if [ "$KILLED" = true ]; then
     for proc in operator monitor recorder merger reader emulator data_sink online_event_builder; do
         pkill -9 -f "target/release/$proc" 2>/dev/null
     done
+    pkill -9 -x root_sink 2>/dev/null
     sleep 0.5  # brief wait for kernel to release sockets after SIGKILL
 fi
 
@@ -221,6 +228,32 @@ is_remote() {
     [ "$host" != "localhost" ] && [ "$host" != "127.0.0.1" ]
 }
 
+# Function to get one key's value from the [network.root_sink] section.
+# Scalars only (string/int/float); arrays/tables are not supported. Empty output
+# means the key is absent.
+get_root_sink_key() {
+    local key=$1
+    awk -v target_key="$key" '
+        /^\[network\.root_sink\]/ { in_section=1; next }
+        in_section && /^\[/ { exit }
+        in_section && $0 ~ "^" target_key " *=" {
+            sub(/^[^=]*= */, "", $0)   # drop "key ="
+            sub(/ +#.*$/, "", $0)      # drop trailing " # comment"
+            gsub(/^"|"$/, "", $0)      # strip surrounding double quotes
+            print
+            exit
+        }
+    ' "$CONFIG_FILE"
+}
+
+# Append "<flag> <value>" to RS_ARGS only if the TOML key is present.
+# RS_ARGS is a global array populated by the root_sink launch block below.
+rs_add_arg() {
+    local val
+    val=$(get_root_sink_key "$1")
+    [ -n "$val" ] && RS_ARGS+=("$2" "$val")
+}
+
 # Extract source IDs from config
 SOURCE_IDS=$(grep -E "^id = " "$CONFIG_FILE" | head -n $(grep -c "\[\[network.sources\]\]" "$CONFIG_FILE") | awk '{print $3}')
 
@@ -292,6 +325,60 @@ if grep -q "^\[network\.event_builder\]" "$CONFIG_FILE" 2>/dev/null; then
         COMP_PIDS+=($!)
     else
         echo -e "  ${YELLOW}Event Builder configured but binary not found (build with --features root)${NC}"
+    fi
+fi
+
+# Start root_sink (parallel C++ ROOT sink, if configured and binary found).
+# It is a standalone binary deployed outside target/release; a missing binary is
+# a warning, not fatal (same spirit as the event builder branch above).
+ROOT_SINK_LAUNCHED=false
+ROOT_SINK_HTTP_PORT=""
+if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
+    # Binary search order: ROOT_SINK_BIN env override > PATH > ~/.local/bin >
+    # tools/root_sink. An explicit env override that is not executable is caught
+    # below rather than silently falling through.
+    if [ -z "$ROOT_SINK_BIN" ]; then
+        if command -v root_sink &>/dev/null; then
+            ROOT_SINK_BIN=$(command -v root_sink)
+        elif [ -x "$HOME/.local/bin/root_sink" ]; then
+            ROOT_SINK_BIN="$HOME/.local/bin/root_sink"
+        elif [ -x "./tools/root_sink/root_sink" ]; then
+            ROOT_SINK_BIN="./tools/root_sink/root_sink"
+        fi
+    fi
+
+    if [ -z "$ROOT_SINK_BIN" ] || [ ! -x "$ROOT_SINK_BIN" ]; then
+        echo -e "  ${YELLOW}root_sink configured but binary not found — skipping (build: see tools/root_sink/README.md)${NC}"
+    else
+        # Map TOML key -> CLI flag; only present keys become flags (root_sink has
+        # sane defaults for the rest).
+        RS_ARGS=()
+        rs_add_arg subscribe    --zmq
+        rs_add_arg output_dir   --out-dir
+        rs_add_arg tree         --tree
+        rs_add_arg exp_name     --exp-name
+        rs_add_arg hists        --hists
+        rs_add_arg gamma_ch     --gamma-ch
+        rs_add_arg thgem1_ch    --thgem1-ch
+        rs_add_arg thgem2_ch    --thgem2-ch
+        rs_add_arg window_ns    --window-ns
+        rs_add_arg margin_ns    --margin-ns
+        rs_add_arg http_port    --http-port
+        rs_add_arg dt_bins      --dt-bins
+        rs_add_arg dt_min       --dt-min
+        rs_add_arg dt_max       --dt-max
+        rs_add_arg autosave_sec --autosave-sec
+        # Always derive --operator from [operator] port; an explicit exp_name key
+        # still wins inside root_sink, so this default is always safe and yields
+        # Recorder-matching filenames.
+        RS_ARGS+=(--operator "http://localhost:${OPERATOR_PORT}")
+
+        echo "  Starting root_sink..."
+        "$ROOT_SINK_BIN" "${RS_ARGS[@]}" > "$LOG_DIR/root_sink.log" 2>&1 &
+        COMP_NAMES+=("RootSink")
+        COMP_PIDS+=($!)
+        ROOT_SINK_LAUNCHED=true
+        ROOT_SINK_HTTP_PORT=$(get_root_sink_key http_port)
     fi
 fi
 
@@ -391,6 +478,13 @@ echo -e "  Swagger UI:    ${YELLOW}http://localhost:${OPERATOR_PORT}/swagger-ui/
 echo -e "  Monitor:       ${YELLOW}http://localhost:8081/${NC}"
 if [ "$MONGO_AVAILABLE" = true ]; then
     echo -e "  Mongo Express: ${YELLOW}http://localhost:8082/${NC}"
+fi
+# root_sink THttpServer (default port 8090; skipped when http_port = 0).
+if [ "$ROOT_SINK_LAUNCHED" = true ]; then
+    RS_HTTP_PORT="${ROOT_SINK_HTTP_PORT:-8090}"
+    if [ "$RS_HTTP_PORT" != "0" ]; then
+        echo -e "  RootSink:      ${YELLOW}http://localhost:${RS_HTTP_PORT}/${NC}"
+    fi
 fi
 echo ""
 echo -e "${CYAN}=== Logs ===${NC}"

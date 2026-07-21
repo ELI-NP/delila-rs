@@ -38,7 +38,35 @@ Reader → Merger ─PUB(tcp://*:5557)─→ Recorder (.delila 主記録)
 
 ---
 
-## クイックスタート(side3 の実例)
+## クイックスタート
+
+### config TOML からの起動(推奨)
+
+DAQ config に `[network.root_sink]` セクションを置くと、`scripts/start_daq.sh`
+が他のコンポーネントと一緒に root_sink を自動起動する(online event builder と
+同じ扱い)。
+
+```toml
+[network.root_sink]
+subscribe  = "tcp://localhost:5557"
+output_dir = "/home/daq/rootsink_data"
+http_port  = 8090
+hists      = "/home/daq/rootsink_data/histograms.json"
+gamma_ch   = 3
+thgem1_ch  = 7
+thgem2_ch  = 11
+window_ns  = 10000
+```
+
+- セクションがあれば `start_daq.sh` が自動起動、無ければ従来どおり(手動起動)。
+- `--operator` は `[operator]` の `port` から自動導出される(明示不要)。
+- キー名は CLI フラグと同じ(ハイフン→アンダースコア。例 `--out-dir` →
+  `output_dir`)。指定したキーだけがフラグになり、残りは root_sink の既定値。
+- バイナリ探索順: `ROOT_SINK_BIN`(環境変数) > PATH > `~/.local/bin/root_sink`
+  > `tools/root_sink/root_sink`。見つからなければ黄色い警告を出してスキップ
+  (致命ではない)。
+
+### 手動起動(side3 の実例)
 
 ```bash
 nohup ~/.local/bin/root_sink \
@@ -62,9 +90,15 @@ nohup ~/.local/bin/root_sink \
 
 ### DAQ 再起動との関係
 
-`scripts/start_daq.sh` は DAQ コンポーネントを pkill するが **root_sink は
-対象外**なので巻き添えにならない。merger が再起動しても ZMQ が自動再接続する。
-逆に root_sink だけを再起動しても DAQ 本体には影響しない。
+root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
+(いずれも `pkill -x root_sink` で正確なプロセス名一致でkillする)。
+
+- **手動起動した sink も `start_daq.sh` 実行時に殺される**点に注意。
+- `[network.root_sink]` セクションが**無い** config で `start_daq.sh` を走らせた
+  場合も、既存の root_sink は殺される(常駐させたい場合は `start_daq.sh` の後に
+  再度手動起動する)。
+- merger が再起動しても root_sink は ZMQ を自動再接続する。逆に root_sink だけを
+  再起動しても DAQ 本体には影響しない。
 
 ---
 
@@ -225,6 +259,7 @@ tr->Draw("energy", "channel==3");
 | イベント数が Recorder と合わない | ラン途中から購読した/途中で kill した場合は当然合わない。フルランで一致しないなら異常(gant/side3 検証では 3 ラン連続で完全一致) |
 | ssh 切断で sink が死ぬ | 旧バイナリ。`gROOT->SetBatch(kTRUE)`(`6f65ef1`)以降は起きない。`nohup` 併用を推奨 |
 | ブラウザで開けない | `--http-port 0` で起動していないか、FW でポートが塞がれていないか確認 |
+| root_sink が起動しない | `start_daq.sh` の summary table で **DEAD**、または `binary not found` 警告が出る → バイナリ未配備か、ROOT 実行環境(`LD_LIBRARY_PATH`)が無い |
 
 ログの正常パターン(sink.log):
 

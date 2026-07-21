@@ -90,6 +90,20 @@ Recorder-only (no monitor), just the scalar tree:
 root_sink --out-dir /data --http-port 0
 ```
 
+### Launched by `start_daq.sh`
+
+When the DAQ config has a `[network.root_sink]` section, `scripts/start_daq.sh`
+launches root_sink automatically alongside the other components. The section keys
+are the CLI flag names with hyphens turned into underscores (`--out-dir` →
+`output_dir`); only present keys are passed, and `--operator` is derived from the
+`[operator]` port. The binary is resolved in the order `ROOT_SINK_BIN` (env) >
+`PATH` > `~/.local/bin/root_sink` > `tools/root_sink/root_sink`; if none is found
+it warns and skips (not fatal). It is managed symmetrically: both
+`start_daq.sh` and `stop_daq.sh` now `pkill -x root_sink`, so a stale sink is
+cleaned up on restart and stopped on shutdown. See
+[docs/root_sink_manual.md](../../docs/root_sink_manual.md) for the section
+example and operator notes.
+
 ## Output files
 
 While a run is in progress the tree is written to
