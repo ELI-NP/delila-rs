@@ -105,53 +105,47 @@ ThGEM 実測 ~37 kHz はシングルスレッド C++ で余裕(参考: delila2ro
 
 ---
 
-## 拡張計画: JSROOT ヒストグラムの柔軟な設定【📋 提案 2026-07-21、未実装】
+## 拡張: JSROOT ヒストグラムの柔軟な設定【✅ Phase 0/A/B 実装済 2026-07-21】
 
-「ヒストグラムの中身・ビン・レンジ・種類を root_sink の再コンパイルなしに変えたい」への
-段階案。調査の結果、**Phase 0 はコード変更ゼロ**で今日から使える。
+**実装済み(Opus 委任、Mac 単体 157 テスト + gant エミュレータ E2E + side3 run 13 実機検証)**:
 
-### Phase 0 — THttpServer/JSROOT の既存機能だけで済む部分【コード変更なし】
+- **出力ファイル名を Recorder と完全一致化**(ユーザー要求):
+  `run%04u_0000_<exp>.root`(root_sink は分割しないので seq=0000 固定、衝突時
+  `_<unix_ns>` 追記 — Rust Recorder と同一規則)。exp_name は
+  ① `--exp-name`(明示) ② `--operator URL` → ラン開始時に `GET /api/status` の
+  `experiment_name`(UI 運用では Recorder と構成的に一致。raw-socket HTTP/1.0、
+  ~2s バウンド) ③ フォールバック `"data"` + warn。
+  side3 実測: `run0013_0000_X730_ThGEM_Test.delila` / 同 `.root`、755,250 ev 完全一致。
+- **Phase A**: `SetItemField("/","_monitoring","2000")`(2s 自動更新)+ 全 2D に
+  `_drawopt=colz`。
+- **Phase B**: `--hists FILE`(histograms.json)でヒストグラム宣言。固定語彙
+  (hit: energy/energy_short/channel/module + cut channel/energy_range、coinc:
+  dt1/dt2/gamma_energy/thgem1_energy/thgem2_energy + cut *_energy_range)、
+  スコープ混在は検証エラー。`hist_config.hpp`(ROOT 不要・単体テスト可)+
+  `CoincidenceMatcher` がパートナーエネルギーを運ぶよう拡張。
+  **`/ReloadHists`** でライブ再構築(エラー時は全エラー表示+旧セット維持)。
+  finalize 時に設定コピーを `run%04u_0000_<exp>_hists.json` として保存。
+  標準 `tools/root_sink/histograms.json` = 現行 4 ヒスト(dt1/dt2/dt2_vs_dt1/channels)
+  を完全再現(ユーザー指定)。未指定時は従来ビルトインで後方互換。
+  単体テストは `tools/root_sink/test_sink_core.cpp` として恒久化(157 tests)。
 
-- **ブックマーク URL で表示プリセット**: JSROOT は URL パラメータでレイアウト・表示対象・
-  自動更新を指定できる。例:
-  `http://192.168.147.99:8090/?items=[dt1,dt2,dt2_vs_dt1,channels]&layout=grid2x2&monitoring=2000`
-  → 4 分割 + 2 秒ごと自動更新。オペレータはこの URL をブックマークするだけ。
-- 描画オプションも URL で: `&opts=[hist,hist,col,hist]`(2D は col/colz)。
-- 制約: ビン/レンジ/ヒストの種類自体は変わらない(表示だけ)。
+### ⚠️ 発見・修正した重大バグ: merger が Stop 時に EOS を破棄(2026-07-21)
 
-### Phase A — サーバ側の小改修【小、数時間】
+side3 実機で sink がラン境界を検知できず 2 ラン分 33.4M ev が 1 暫定ファイルに混入。
+真因: **実 reader は Stop ack 後に EOS を発行**(emulator は ack 前に同期発行)。
+operator の順序付き stop は ack 基準で 0.5ms 後に merger を停止 → merger の
+「not Running discard」(TODO 58 C3 Stop テール例外)が **EOS ごと破棄**していた。
+Recorder は Stop コマンドで閉じるため今まで無害、merger PUB の EOS に依存する
+root_sink が初の被害者。修正: **EndOfStream は receiver/sender 両タスクの discard から
+恒久除外**(EOS はコントロールマーカーでありデータではない。stale EOS は下流が
+run_number で無害化済み — C1)。`frame_is_eos()` + 単体テスト。side3 run 13 で
+`Received EOS — forwarding (running=false)` → finalize 成功を実証。
+**注意: gant で稼働中の AMax DAQ は旧 merger バイナリのまま**(再起動で新版に切替)。
 
-- **アイテムフィールドのデフォルト設定**: 起動時に
-  `serv->SetItemField("/","_monitoring","2000")` と 2D への `_drawopt=colz` を仕込み、
-  素の URL でも自動更新+適切な描画になるようにする。
-- (引数付きコマンドによる SetDtRange/SetWindow 等は Phase B のヒストグラム定義
-  ファイルで完全に代替されるため不採用。)
-
-### Phase B — ヒストグラム定義ファイル【中、本命 ~2-3 日】
-
-`histograms.json` で任意個のヒストグラムを宣言し、`/ReloadHists` コマンド(または
-mtime ポーリング)でライブ再構築する。**JSON パーサは TDelila.hpp の `json::Parser` を
-そのまま流用できる**(依存追加ゼロ)。
-
-```json
-{ "histograms": [
-  { "name": "dt1",      "type": "TH1D", "fill": "dt1", "bins": 2000, "min": -1000, "max": 1000 },
-  { "name": "E_gamma",  "type": "TH1D", "fill": "energy", "cut": { "channel": 3 },
-    "bins": 4096, "min": 0, "max": 65536 },
-  { "name": "E_vs_dt1", "type": "TH2D", "x": "dt1", "y": "gamma_energy",
-    "xbins": 500, "xmin": -1000, "xmax": 1000, "ybins": 512, "ymin": 0, "ymax": 65536 }
-]}
-```
-
-- **fill 変数は固定語彙**(汎用式エンジンは作らない・KISS):
-  - ヒット系: `energy` `energy_short` `channel` `module`(+ `cut.channel` / `cut.energy_range`)
-  - コインシデンス系: `dt1` `dt2` `gamma_energy` `thgem1_energy` `thgem2_energy`
-- 前提改修: `CoincResult` にマッチしたヒットの**エネルギーを載せる**(現在は時刻のみ)。
-  これで「Δt をガンマ線エネルギーでゲート」「E_gamma vs Δt の 2D」という ThGEM 物理の
-  本命プロットが可能になる。
-- 再構築はメインループ内で実施(delete → new → 再 Register)。CLI の既存フラグは
-  ファイル未指定時のデフォルト(後方互換)。
-- 設定ファイルはランとともに `run%04d_hists.json` としてコピー保存すると再現性が付く。
+Phase 0(URL ブックマーク: `?items=[dt1,dt2,dt2_vs_dt1,channels]&layout=grid2x2&monitoring=2000`)
+はコード変更なしでそのまま有効。ファイルフォーマットの正確な仕様・発展例
+(E_gamma の ch cut、E_vs_dt1、gamma_energy_range ゲート)は
+`tools/root_sink/README.md` を参照。
 
 ### Phase C — 検討したが当面見送り
 
@@ -161,5 +155,3 @@ mtime ポーリング)でライブ再構築する。**JSON パーサは TDelila.
   工数が大きい。root_sink は「ROOT ネイティブの簡易系」として住み分け。
 - **スナップショット .root の定期書き出し**: ヒスト設定とは独立の要望が出たら
   `--snapshot-sec` として追加(TBrowser 派向け)。
-
-推奨着手順: Phase 0(今日から)→ A(自動更新デフォルト、数時間)→ B(本命)。
