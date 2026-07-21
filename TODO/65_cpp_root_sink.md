@@ -119,16 +119,13 @@ ThGEM 実測 ~37 kHz はシングルスレッド C++ で余裕(参考: delila2ro
 - 描画オプションも URL で: `&opts=[hist,hist,col,hist]`(2D は col/colz)。
 - 制約: ビン/レンジ/ヒストの種類自体は変わらない(表示だけ)。
 
-### Phase A — サーバ側の小改修【小、~1 日】
+### Phase A — サーバ側の小改修【小、数時間】
 
-1. **アイテムフィールドのデフォルト設定**: 起動時に
-   `serv->SetItemField("/","_monitoring","2000")` と 2D への `_drawopt=colz` を仕込み、
-   素の URL でも自動更新+適切な描画になるようにする。
-2. **引数付きコマンド**(`RegisterCommand` は `%arg1%` 置換をサポート):
-   - `/SetDtRange(min,max,bins)` — dt1/dt2/2D を delete→再生成→再 Register
-     (全アクセスがメインスレッド経由なので競合なし。既存カウントは失われる=仕様)
-   - `/SetWindow(ns)` / `/SetChannels(g,t1,t2)` — マッチャ Config 差し替え+`reset()`
-   - JSROOT のツリーからダイアログで実行できる。柔軟性は限定的だが再起動不要になる。
+- **アイテムフィールドのデフォルト設定**: 起動時に
+  `serv->SetItemField("/","_monitoring","2000")` と 2D への `_drawopt=colz` を仕込み、
+  素の URL でも自動更新+適切な描画になるようにする。
+- (引数付きコマンドによる SetDtRange/SetWindow 等は Phase B のヒストグラム定義
+  ファイルで完全に代替されるため不採用。)
 
 ### Phase B — ヒストグラム定義ファイル【中、本命 ~2-3 日】
 
@@ -165,5 +162,4 @@ mtime ポーリング)でライブ再構築する。**JSON パーサは TDelila.
 - **スナップショット .root の定期書き出し**: ヒスト設定とは独立の要望が出たら
   `--snapshot-sec` として追加(TBrowser 派向け)。
 
-推奨着手順: Phase 0(今日から)→ A の 1(自動更新デフォルト)→ B。
-A の 2(引数コマンド)は B が入ると価値が薄れるので、B に直行してもよい。
+推奨着手順: Phase 0(今日から)→ A(自動更新デフォルト、数時間)→ B(本命)。
