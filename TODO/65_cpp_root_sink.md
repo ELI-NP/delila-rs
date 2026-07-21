@@ -102,3 +102,68 @@ ThGEM 実測 ~37 kHz はシングルスレッド C++ で余裕(参考: delila2ro
 - [x] README(ビルド手順 no-sudo 変法込み + CLI + THttpServer の使い方)
 - [x] TDelila.hpp は `#include "../delila2root/TDelila.hpp"` で共有(コピーなし)
 - [x] side3 デプロイ + パルサーで Δt ピーク確認(dt1=+40.5ns / dt2=+41.5ns、2026-07-21)
+
+---
+
+## 拡張計画: JSROOT ヒストグラムの柔軟な設定【📋 提案 2026-07-21、未実装】
+
+「ヒストグラムの中身・ビン・レンジ・種類を root_sink の再コンパイルなしに変えたい」への
+段階案。調査の結果、**Phase 0 はコード変更ゼロ**で今日から使える。
+
+### Phase 0 — THttpServer/JSROOT の既存機能だけで済む部分【コード変更なし】
+
+- **ブックマーク URL で表示プリセット**: JSROOT は URL パラメータでレイアウト・表示対象・
+  自動更新を指定できる。例:
+  `http://192.168.147.99:8090/?items=[dt1,dt2,dt2_vs_dt1,channels]&layout=grid2x2&monitoring=2000`
+  → 4 分割 + 2 秒ごと自動更新。オペレータはこの URL をブックマークするだけ。
+- 描画オプションも URL で: `&opts=[hist,hist,col,hist]`(2D は col/colz)。
+- 制約: ビン/レンジ/ヒストの種類自体は変わらない(表示だけ)。
+
+### Phase A — サーバ側の小改修【小、~1 日】
+
+1. **アイテムフィールドのデフォルト設定**: 起動時に
+   `serv->SetItemField("/","_monitoring","2000")` と 2D への `_drawopt=colz` を仕込み、
+   素の URL でも自動更新+適切な描画になるようにする。
+2. **引数付きコマンド**(`RegisterCommand` は `%arg1%` 置換をサポート):
+   - `/SetDtRange(min,max,bins)` — dt1/dt2/2D を delete→再生成→再 Register
+     (全アクセスがメインスレッド経由なので競合なし。既存カウントは失われる=仕様)
+   - `/SetWindow(ns)` / `/SetChannels(g,t1,t2)` — マッチャ Config 差し替え+`reset()`
+   - JSROOT のツリーからダイアログで実行できる。柔軟性は限定的だが再起動不要になる。
+
+### Phase B — ヒストグラム定義ファイル【中、本命 ~2-3 日】
+
+`histograms.json` で任意個のヒストグラムを宣言し、`/ReloadHists` コマンド(または
+mtime ポーリング)でライブ再構築する。**JSON パーサは TDelila.hpp の `json::Parser` を
+そのまま流用できる**(依存追加ゼロ)。
+
+```json
+{ "histograms": [
+  { "name": "dt1",      "type": "TH1D", "fill": "dt1", "bins": 2000, "min": -1000, "max": 1000 },
+  { "name": "E_gamma",  "type": "TH1D", "fill": "energy", "cut": { "channel": 3 },
+    "bins": 4096, "min": 0, "max": 65536 },
+  { "name": "E_vs_dt1", "type": "TH2D", "x": "dt1", "y": "gamma_energy",
+    "xbins": 500, "xmin": -1000, "xmax": 1000, "ybins": 512, "ymin": 0, "ymax": 65536 }
+]}
+```
+
+- **fill 変数は固定語彙**(汎用式エンジンは作らない・KISS):
+  - ヒット系: `energy` `energy_short` `channel` `module`(+ `cut.channel` / `cut.energy_range`)
+  - コインシデンス系: `dt1` `dt2` `gamma_energy` `thgem1_energy` `thgem2_energy`
+- 前提改修: `CoincResult` にマッチしたヒットの**エネルギーを載せる**(現在は時刻のみ)。
+  これで「Δt をガンマ線エネルギーでゲート」「E_gamma vs Δt の 2D」という ThGEM 物理の
+  本命プロットが可能になる。
+- 再構築はメインループ内で実施(delete → new → 再 Register)。CLI の既存フラグは
+  ファイル未指定時のデフォルト(後方互換)。
+- 設定ファイルはランとともに `run%04d_hists.json` としてコピー保存すると再現性が付く。
+
+### Phase C — 検討したが当面見送り
+
+- **TFormula 等の汎用式エンジン**: 任意式は魅力だが、イベント毎評価のコストと
+  KISS 違反。Phase B の固定語彙で不足した実例が出てから再検討。
+- **既存 delila Web Monitor への統合**: 見た目は統一されるが Rust+Angular 両側の
+  工数が大きい。root_sink は「ROOT ネイティブの簡易系」として住み分け。
+- **スナップショット .root の定期書き出し**: ヒスト設定とは独立の要望が出たら
+  `--snapshot-sec` として追加(TBrowser 派向け)。
+
+推奨着手順: Phase 0(今日から)→ A の 1(自動更新デフォルト)→ B。
+A の 2(引数コマンド)は B が入ると価値が薄れるので、B に直行してもよい。
