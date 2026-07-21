@@ -1,0 +1,21 @@
+{
+  "histograms": [
+    { "name": "dt1", "type": "TH1D",
+      "title": "t(ThGEM1) - t(gamma) [ns];#Deltat_{1} [ns];counts",
+      "fill": "dt1", "bins": 2000, "min": -1000, "max": 1000 },
+
+    { "name": "dt2", "type": "TH1D",
+      "title": "t(ThGEM2) - t(gamma) [ns];#Deltat_{2} [ns];counts",
+      "fill": "dt2", "bins": 2000, "min": -1000, "max": 1000 },
+
+    { "name": "dt2_vs_dt1", "type": "TH2D",
+      "title": "#Deltat_{2} vs #Deltat_{1};#Deltat_{1} [ns];#Deltat_{2} [ns]",
+      "x": "dt1", "y": "dt2",
+      "xbins": 500, "xmin": -1000, "xmax": 1000,
+      "ybins": 500, "ymin": -1000, "ymax": 1000 },
+
+    { "name": "channels", "type": "TH1D",
+      "title": "channel occupancy;channel;counts",
+      "fill": "channel", "bins": 64, "min": 0, "max": 64 }
+  ]
+}

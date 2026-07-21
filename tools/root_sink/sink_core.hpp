@@ -179,13 +179,25 @@ inline long decode_batch_into(const uint8_t* payload, std::size_t size,
 // 3. Coincidence matcher (pure logic — no ROOT)
 // ---------------------------------------------------------------------------
 
-// One emitted coincidence result for a ripe gamma hit.
+// A buffered hit inside the matcher: timestamp plus the energy we carry along so
+// coincidence histograms can gate/plot on the partner's energy (see hist_config).
+struct TimedHit {
+  double t = 0.0;
+  uint16_t energy = 0;
+};
+
+// One emitted coincidence result for a ripe gamma hit. The three energies let a
+// declarative histogram gate Δt on gamma energy (the headline use case) or plot a
+// partner energy — each partner energy is only meaningful when its has_dtN is set.
 struct CoincResult {
-  double gamma_t = 0.0;  // the gamma timestamp this result is about
-  bool has_dt1 = false;  // a ThGEM1 partner was found within ±window
-  double dt1 = 0.0;      // t(ThGEM1) - t(gamma)
-  bool has_dt2 = false;  // a ThGEM2 partner was found within ±window
-  double dt2 = 0.0;      // t(ThGEM2) - t(gamma)
+  double gamma_t = 0.0;        // the gamma timestamp this result is about
+  uint16_t gamma_energy = 0;   // always valid for the ripened gamma
+  bool has_dt1 = false;        // a ThGEM1 partner was found within ±window
+  double dt1 = 0.0;            // t(ThGEM1) - t(gamma)
+  uint16_t thgem1_energy = 0;  // valid iff has_dt1
+  bool has_dt2 = false;        // a ThGEM2 partner was found within ±window
+  double dt2 = 0.0;            // t(ThGEM2) - t(gamma)
+  uint16_t thgem2_energy = 0;  // valid iff has_dt2
 };
 
 // Streaming nearest-partner matcher. Hits are fed roughly in time order (arrival
@@ -222,11 +234,11 @@ class CoincidenceMatcher {
     if (t > max_ts_) max_ts_ = t;
     int ch = static_cast<int>(h.channel);
     if (ch == cfg_.gamma_ch) {
-      gamma_.push_back(t);
+      gamma_.push_back({t, h.energy});
     } else if (ch == cfg_.thgem1_ch) {
-      t1_.push_back(t);
+      t1_.push_back({t, h.energy});
     } else if (ch == cfg_.thgem2_ch) {
-      t2_.push_back(t);
+      t2_.push_back({t, h.energy});
     } else {
       return;  // not a monitored channel — nothing to buffer or ripen
     }
@@ -265,44 +277,48 @@ class CoincidenceMatcher {
  private:
   template <class ResultF>
   void ripen(double watermark, ResultF& on_result) {
-    while (!gamma_.empty() && gamma_.front() <= watermark) {
-      double gt = gamma_.front();
+    while (!gamma_.empty() && gamma_.front().t <= watermark) {
+      TimedHit g = gamma_.front();
       gamma_.pop_front();
       CoincResult res;
-      res.gamma_t = gt;
-      find_closest(t1_, gt, res.has_dt1, res.dt1);
-      find_closest(t2_, gt, res.has_dt2, res.dt2);
+      res.gamma_t = g.t;
+      res.gamma_energy = g.energy;
+      find_closest(t1_, g.t, res.has_dt1, res.dt1, res.thgem1_energy);
+      find_closest(t2_, g.t, res.has_dt2, res.dt2, res.thgem2_energy);
       on_result(res);
       // Partners older than (gt - window) can never match this-or-later gammas.
-      prune(t1_, gt - cfg_.window_ns);
-      prune(t2_, gt - cfg_.window_ns);
+      prune(t1_, g.t - cfg_.window_ns);
+      prune(t2_, g.t - cfg_.window_ns);
     }
   }
 
-  // Nearest partner to `gt` within ±window_ns; dt = partner - gt (signed).
-  void find_closest(const std::deque<double>& partners, double gt, bool& has,
-                    double& dt) const {
+  // Nearest partner to `gt` within ±window_ns; dt = partner - gt (signed), and
+  // `energy` reports the chosen partner's energy (untouched when none matches).
+  void find_closest(const std::deque<TimedHit>& partners, double gt, bool& has,
+                    double& dt, uint16_t& energy) const {
     has = false;
     dt = 0.0;
+    energy = 0;
     double best = 0.0;
-    for (double pt : partners) {
-      double d = pt - gt;
+    for (const TimedHit& p : partners) {
+      double d = p.t - gt;
       double ad = d < 0 ? -d : d;
       if (ad <= cfg_.window_ns && (!has || ad < best)) {
         has = true;
         best = ad;
         dt = d;
+        energy = p.energy;
       }
     }
   }
 
-  static void prune(std::deque<double>& dq, double below) {
-    while (!dq.empty() && dq.front() < below) dq.pop_front();
+  static void prune(std::deque<TimedHit>& dq, double below) {
+    while (!dq.empty() && dq.front().t < below) dq.pop_front();
   }
 
   Config cfg_;
   double max_ts_ = -std::numeric_limits<double>::infinity();
-  std::deque<double> gamma_, t1_, t2_;
+  std::deque<TimedHit> gamma_, t1_, t2_;
 };
 
 // ---------------------------------------------------------------------------
@@ -367,6 +383,46 @@ class RunState {
   std::set<uint32_t> seen_;  // source_ids that sent Data this run
   std::set<uint32_t> eos_;   // source_ids that sent EOS this run
 };
+
+// ---------------------------------------------------------------------------
+// 5. HTTP helpers (pure string/JSON — the socket code lives in root_sink.cxx)
+// ---------------------------------------------------------------------------
+//
+// These back the `--operator URL` experiment-name lookup: root_sink.cxx does the
+// raw-socket GET of `<URL>/api/status`, then hands the response text here so the
+// parse is unit-testable without a network. Both are total (never throw).
+
+// Split a raw HTTP response at the first "\r\n\r\n" (the header/body boundary).
+// Returns true and fills header_out/body_out on success; on a missing boundary
+// returns false with the whole input in header_out and an empty body.
+inline bool split_http_response(const std::string& raw, std::string& header_out,
+                                std::string& body_out) {
+  static const std::string sep = "\r\n\r\n";
+  std::size_t pos = raw.find(sep);
+  if (pos == std::string::npos) {
+    header_out = raw;
+    body_out.clear();
+    return false;
+  }
+  header_out = raw.substr(0, pos);
+  body_out = raw.substr(pos + sep.size());
+  return true;
+}
+
+// Extract the top-level "experiment_name" string from an operator /api/status
+// JSON body (see src/operator/routes/status.rs SystemStatus). Returns "" on any
+// parse failure or a missing/non-string key — the caller treats "" as "fall back
+// to the default name" and warns, so this never fails silently upstream.
+inline std::string extract_experiment_name(const std::string& json_body) {
+  try {
+    tdelila::json::Value root = tdelila::json::Parser(json_body).parse();
+    const tdelila::json::Value* v = root.find("experiment_name");
+    if (v && v->t == tdelila::json::Value::T::Str) return v->str;
+  } catch (const std::exception&) {
+    // fall through to "" — malformed body
+  }
+  return "";
+}
 
 }  // namespace rootsink
 

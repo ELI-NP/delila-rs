@@ -24,7 +24,14 @@
 
 #include <zmq.h>
 
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -34,11 +41,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#include "hist_config.hpp"
 #include "sink_core.hpp"
 
 #include "TApplication.h"
@@ -46,7 +56,6 @@
 #include "TH1.h"
 #include "TH2.h"
 #include "THttpServer.h"
-#include "TInterpreter.h"
 #include "TROOT.h"
 #include "TString.h"
 #include "TSystem.h"
@@ -69,8 +78,22 @@ static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int) { g_stop = 1; }
 
 // ---------------------------------------------------------------------------
-// Monitor histograms — file-scope so the /Reset HTTP command (executed by Cling
-// on the main thread) can reach them via baked-in pointers.
+// HTTP-command request flags. The /Reset and /ReloadHists buttons are executed
+// by Cling on the main thread; each command bakes a COMPILED function pointer
+// (see main) that flips one of these flags. The ACTUAL work runs in the main
+// loop right after ProcessEvents — so a reload can safely Unregister/delete the
+// live histograms without doing it from inside a Cling call frame, and neither
+// command bakes histogram pointers that would dangle after a reload.
+// ---------------------------------------------------------------------------
+static volatile sig_atomic_t g_reset = 0;
+static volatile sig_atomic_t g_reload = 0;
+static void request_reset() { g_reset = 1; }
+static void request_reload() { g_reload = 1; }
+
+// ---------------------------------------------------------------------------
+// Built-in monitor histograms — file-scope so the main-loop /Reset handler can
+// reach them without a --hists file. In --hists mode these stay null and the
+// dynamic LiveHist vector owns the displayed set instead.
 // ---------------------------------------------------------------------------
 static TH1D* g_h_dt1 = nullptr;
 static TH1D* g_h_dt2 = nullptr;
@@ -84,6 +107,9 @@ struct Options {
   std::string zmq = "tcp://localhost:5557";
   std::string out_dir = ".";
   std::string tree = "tr";
+  std::string exp_name;       // --exp-name: explicit override (wins always)
+  std::string operator_url;   // --operator: fetch experiment_name from /api/status
+  std::string hists_file;     // --hists: declarative histogram set
   int gamma_ch = -1;
   int thgem1_ch = -1;
   int thgem2_ch = -1;
@@ -102,6 +128,12 @@ static void print_usage(const char* argv0) {
       "  --zmq ADDR          merger PUB endpoint (default tcp://localhost:5557)\n"
       "  --out-dir DIR       output directory for run*.root (default .)\n"
       "  --tree NAME         TTree name (default tr)\n"
+      "  --exp-name NAME     experiment name for the output filename (override)\n"
+      "  --operator URL      operator base URL, e.g. http://localhost:9092; the\n"
+      "                      experiment name is read from <URL>/api/status at run\n"
+      "                      start (used only when --exp-name is not given)\n"
+      "  --hists FILE        histogram definition JSON (see README); replaces the\n"
+      "                      built-in dt1/dt2/dt2_vs_dt1/channels set\n"
       "  --gamma-ch N        gamma detector channel (enables Δt monitor)\n"
       "  --thgem1-ch N       ThGEM1 channel\n"
       "  --thgem2-ch N       ThGEM2 channel\n"
@@ -143,6 +175,15 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--tree") {
       if (!(v = need(i))) return false;
       opt.tree = v;
+    } else if (a == "--exp-name") {
+      if (!(v = need(i))) return false;
+      opt.exp_name = v;
+    } else if (a == "--operator") {
+      if (!(v = need(i))) return false;
+      opt.operator_url = v;
+    } else if (a == "--hists") {
+      if (!(v = need(i))) return false;
+      opt.hists_file = v;
     } else if (a == "--gamma-ch") {
       if (!(v = need(i))) return false;
       opt.gamma_ch = std::atoi(v);
@@ -182,6 +223,213 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
 }
 
 // ---------------------------------------------------------------------------
+// Minimal HTTP/1.0 GET (experiment-name lookup via --operator)
+// ---------------------------------------------------------------------------
+//
+// A dependency-free, TIME-BOUNDED GET. It fetches `<base>/api/status` from the
+// operator so the output filename can mirror the Rust Recorder's exp_name. It
+// must NEVER hang the sink: connect is non-blocking with a select() deadline and
+// the socket carries SO_RCVTIMEO/SO_SNDTIMEO, all inside a ~2 s total budget. A
+// stall here is acceptable — ZMQ (HWM=0) buffers batches while we wait. Only
+// http:// is supported; https:// is rejected at startup with a clear error.
+
+// Parse `http://host[:port][/base/path]`. Fills host/port and the request path
+// (base path with any trailing slash trimmed, then "/api/status" appended).
+// Returns false with `err` set for a non-http scheme or a missing host.
+static bool parse_operator_url(const std::string& url, std::string& host,
+                              std::string& port, std::string& request_path,
+                              std::string& err) {
+  const std::string http = "http://";
+  const std::string https = "https://";
+  if (url.rfind(https, 0) == 0) {
+    err = "https:// is not supported (use a plain http:// operator URL)";
+    return false;
+  }
+  if (url.rfind(http, 0) != 0) {
+    err = "operator URL must start with http://";
+    return false;
+  }
+  std::string rest = url.substr(http.size());
+  std::string authority = rest;
+  std::string base_path;
+  std::size_t slash = rest.find('/');
+  if (slash != std::string::npos) {
+    authority = rest.substr(0, slash);
+    base_path = rest.substr(slash);  // includes the leading '/'
+  }
+  if (authority.empty()) {
+    err = "operator URL has no host";
+    return false;
+  }
+  std::size_t colon = authority.find(':');
+  if (colon != std::string::npos) {
+    host = authority.substr(0, colon);
+    port = authority.substr(colon + 1);
+  } else {
+    host = authority;
+    port = "80";
+  }
+  if (host.empty()) {
+    err = "operator URL has no host";
+    return false;
+  }
+  // Trim a trailing '/' from the base path so we don't produce "//api/status".
+  while (!base_path.empty() && base_path.back() == '/') base_path.pop_back();
+  request_path = base_path + "/api/status";
+  return true;
+}
+
+// GET the operator status and return the raw response text in `out`. Returns
+// false with `err` set on any failure (unresolvable host, connect timeout, send
+// or recv error). Bounded to `budget_ms` total wall time.
+static bool http_get_status(const std::string& url, int budget_ms, std::string& out,
+                            std::string& err) {
+  std::string host, port, path;
+  if (!parse_operator_url(url, host, port, path, err)) return false;
+
+  using Clock = std::chrono::steady_clock;
+  auto deadline = Clock::now() + std::chrono::milliseconds(budget_ms);
+  auto remaining_ms = [&]() -> long {
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+    return ms < 0 ? 0 : static_cast<long>(ms);
+  };
+
+  struct addrinfo hints;
+  std::memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  struct addrinfo* ai = nullptr;
+  int gr = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &ai);
+  if (gr != 0 || !ai) {
+    err = "getaddrinfo(" + host + ":" + port + ") failed: " + gai_strerror(gr);
+    return false;
+  }
+
+  int fd = -1;
+  bool connected = false;
+  for (struct addrinfo* p = ai; p && !connected; p = p->ai_next) {
+    fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+    if (fd < 0) continue;
+    // Non-blocking connect so a dead host cannot block past our deadline.
+    int flags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int rc = ::connect(fd, p->ai_addr, p->ai_addrlen);
+    if (rc == 0) {
+      connected = true;
+    } else if (errno == EINPROGRESS) {
+      fd_set wset;
+      FD_ZERO(&wset);
+      FD_SET(fd, &wset);
+      struct timeval tv;
+      long ms = remaining_ms();
+      tv.tv_sec = ms / 1000;
+      tv.tv_usec = (ms % 1000) * 1000;
+      int sr = ::select(fd + 1, nullptr, &wset, nullptr, &tv);
+      if (sr > 0) {
+        int soerr = 0;
+        socklen_t len = sizeof(soerr);
+        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &len) == 0 && soerr == 0)
+          connected = true;
+      }
+    }
+    if (!connected) {
+      ::close(fd);
+      fd = -1;
+    }
+  }
+  ::freeaddrinfo(ai);
+  if (!connected) {
+    err = "connect to " + host + ":" + port + " timed out or failed";
+    if (fd >= 0) ::close(fd);
+    return false;
+  }
+
+  // Back to blocking + apply per-op timeouts for the remainder of the budget.
+  int flags = ::fcntl(fd, F_GETFL, 0);
+  ::fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+  auto set_timeout = [&](int opt) {
+    long ms = remaining_ms();
+    if (ms <= 0) ms = 1;
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    ::setsockopt(fd, SOL_SOCKET, opt, &tv, sizeof(tv));
+  };
+  set_timeout(SO_SNDTIMEO);
+  set_timeout(SO_RCVTIMEO);
+
+  std::string req = "GET " + path + " HTTP/1.0\r\nHost: " + host +
+                    "\r\nConnection: close\r\n\r\n";
+  std::size_t sent = 0;
+  while (sent < req.size()) {
+    ssize_t w = ::send(fd, req.data() + sent, req.size() - sent, 0);
+    if (w <= 0) {
+      err = "send to operator failed";
+      ::close(fd);
+      return false;
+    }
+    sent += static_cast<std::size_t>(w);
+    if (remaining_ms() == 0) break;
+  }
+
+  out.clear();
+  char buf[4096];
+  while (remaining_ms() > 0) {
+    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+    if (n > 0) {
+      out.append(buf, static_cast<std::size_t>(n));
+    } else if (n == 0) {
+      break;  // peer closed (Connection: close) — full response received
+    } else {
+      break;  // timeout / error — return whatever we have (may be empty)
+    }
+  }
+  ::close(fd);
+  if (out.empty()) {
+    err = "empty response from operator";
+    return false;
+  }
+  return true;
+}
+
+// Resolve the experiment name for the current run, honouring the priority order
+// --exp-name > --operator (/api/status) > "data". Always logs the resolved name
+// and its source; warns visibly on the "data" fallback (never silent).
+static std::string resolve_exp_name(const Options& opt) {
+  if (!opt.exp_name.empty()) {
+    std::printf("root_sink: experiment_name = \"%s\" (source: --exp-name)\n",
+                opt.exp_name.c_str());
+    return opt.exp_name;
+  }
+  if (!opt.operator_url.empty()) {
+    std::string raw, err;
+    if (http_get_status(opt.operator_url, 2000, raw, err)) {
+      std::string hdr, body;
+      split_http_response(raw, hdr, body);
+      std::string name = extract_experiment_name(body);
+      if (!name.empty()) {
+        std::printf("root_sink: experiment_name = \"%s\" (source: %s/api/status)\n",
+                    name.c_str(), opt.operator_url.c_str());
+        return name;
+      }
+      std::fprintf(stderr,
+                   "root_sink: WARNING operator /api/status had no experiment_name; "
+                   "using \"data\"\n");
+      return "data";
+    }
+    std::fprintf(stderr,
+                 "root_sink: WARNING could not fetch experiment_name from %s (%s); "
+                 "using \"data\"\n",
+                 opt.operator_url.c_str(), err.c_str());
+    return "data";
+  }
+  std::fprintf(stderr,
+               "root_sink: WARNING no --exp-name/--operator given; output uses "
+               "experiment_name \"data\"\n");
+  return "data";
+}
+
+// ---------------------------------------------------------------------------
 // ROOT scalar recorder
 // ---------------------------------------------------------------------------
 static bool path_exists(const std::string& p) {
@@ -189,16 +437,31 @@ static bool path_exists(const std::string& p) {
   return ::stat(p.c_str(), &st) == 0;
 }
 
+// Nanoseconds since the Unix epoch — the collision suffix, matching the Rust
+// Recorder's `_{unix_ns}` scheme so a clash appends the same kind of tag.
+static long long unix_nanos() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
 class Recorder {
  public:
   bool is_open() const { return file_ != nullptr; }
   const std::string& provisional() const { return provisional_; }
   long long entries() const { return entries_; }
+  // The path chosen by the last finalize() (for pairing the hists-config copy).
+  const std::string& final_path() const { return final_path_; }
 
   // Open a provisional file `<dir>/run_inprogress_<unixtime>.root` + empty tree.
-  bool open_run(const std::string& dir, const std::string& tree_name) {
+  // `exp_name` is remembered for the final filename (resolved at run start so it
+  // matches the Rust Recorder even though EOS/finalize come later).
+  bool open_run(const std::string& dir, const std::string& tree_name,
+                const std::string& exp_name) {
     out_dir_ = dir;
+    exp_name_ = exp_name.empty() ? "data" : exp_name;  // mirror the Rust fallback
     entries_ = 0;
+    final_path_.clear();
     provisional_ = dir + "/run_inprogress_" + std::to_string((long long)::time(nullptr)) + ".root";
     file_ = TFile::Open(provisional_.c_str(), "RECREATE", "", kDelilaCompression);
     if (!file_ || file_->IsZombie()) {
@@ -233,8 +496,10 @@ class Recorder {
     if (tree_) tree_->AutoSave("SaveSelf");
   }
 
-  // Close and rename to run%04d_scalar.root (collision -> _1, _2, ...).
-  // Returns the final path (or the provisional path if the rename failed).
+  // Close and rename to run%04u_0000_<exp>.root — identical to the Rust Recorder
+  // filename but for the extension (root_sink never splits, so seq is always
+  // 0000; a collision appends _<unix_ns>). Returns the final path (or the
+  // provisional path if the rename failed).
   std::string finalize(uint32_t run) {
     if (!file_) return "";
     file_->cd();
@@ -247,8 +512,10 @@ class Recorder {
     if (std::rename(provisional_.c_str(), final.c_str()) != 0) {
       std::fprintf(stderr, "root_sink: WARNING could not rename %s -> %s (%s); file kept\n",
                    provisional_.c_str(), final.c_str(), std::strerror(errno));
+      final_path_ = provisional_;
       return provisional_;
     }
+    final_path_ = final;
     return final;
   }
 
@@ -268,26 +535,135 @@ class Recorder {
 
  private:
   std::string pick_final_name(uint32_t run) const {
-    char base[64];
-    std::snprintf(base, sizeof(base), "run%04u_scalar", run);
+    char base[128];
+    std::snprintf(base, sizeof(base), "run%04u_0000_%s", run, exp_name_.c_str());
     std::string cand = out_dir_ + "/" + base + ".root";
     if (!path_exists(cand)) return cand;
-    for (int i = 1;; ++i) {
-      std::string c = out_dir_ + "/" + base + "_" + std::to_string(i) + ".root";
-      if (!path_exists(c)) return c;
-    }
+    // Collision -> append _<unix_ns> before the extension (Rust Recorder scheme).
+    std::string c = out_dir_ + "/" + base + "_" + std::to_string(unix_nanos()) + ".root";
+    return c;
   }
 
   TFile* file_ = nullptr;
   TTree* tree_ = nullptr;
   std::string out_dir_;
+  std::string exp_name_ = "data";
   std::string provisional_;
+  std::string final_path_;
   long long entries_ = 0;
   // Branch buffers (types match the leaflist: /b UChar_t, /s UShort_t, /D Double_t).
   UChar_t module_ = 0, channel_ = 0;
   UShort_t energy_ = 0, energy_short_ = 0;
   Double_t timestamp_ns_ = 0.0;
 };
+
+// ---------------------------------------------------------------------------
+// Declarative histograms (--hists)
+// ---------------------------------------------------------------------------
+struct LiveHist {
+  HistDef def;
+  TH1* h = nullptr;  // TH1D or TH2D; not owned by any TFile (AddDirectory off)
+};
+
+// Read an entire file into `out`. Returns false on open failure.
+static bool read_file(const std::string& path, std::string& out) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return false;
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  out = ss.str();
+  return true;
+}
+
+// The draw option to advertise for `d`: the explicit one, else "colz" for 2D,
+// else empty (leave a 1D to JSROOT's default).
+static std::string effective_drawopt(const HistDef& d) {
+  if (!d.drawopt.empty()) return d.drawopt;
+  return d.is2d ? std::string("colz") : std::string();
+}
+
+// Create + Register a TH1D/TH2D per def, set _drawopt, and collect LiveHists.
+// Names are validated ROOT-safe (non-empty, no '/') by parse_hist_config.
+static void build_live_hists(const std::vector<HistDef>& defs, THttpServer* server,
+                             std::vector<LiveHist>& out) {
+  out.clear();
+  out.reserve(defs.size());
+  for (const auto& d : defs) {
+    TH1* h = nullptr;
+    if (d.is2d) {
+      h = new TH2D(d.name.c_str(), d.title.c_str(), d.xbins, d.xmin, d.xmax,
+                   d.ybins, d.ymin, d.ymax);
+    } else {
+      h = new TH1D(d.name.c_str(), d.title.c_str(), d.xbins, d.xmin, d.xmax);
+    }
+    server->Register("/", h);
+    std::string dopt = effective_drawopt(d);
+    if (!dopt.empty())
+      server->SetItemField((std::string("/") + d.name).c_str(), "_drawopt", dopt.c_str());
+    out.push_back({d, h});
+  }
+}
+
+// Fill every hit-scope histogram for one decoded event.
+static void fill_hit_hists(std::vector<LiveHist>& live, const ScalarHit& h) {
+  for (auto& lh : live) {
+    if (lh.def.scope != Scope::Hit) continue;
+    if (!pass_cut(lh.def.cut, h)) continue;
+    double x = 0.0;
+    if (!value_of(lh.def.x, h, x)) continue;
+    if (lh.def.is2d) {
+      double y = 0.0;
+      if (!value_of(lh.def.y, h, y)) continue;
+      static_cast<TH2*>(lh.h)->Fill(x, y);
+    } else {
+      lh.h->Fill(x);
+    }
+  }
+}
+
+// Fill every coinc-scope histogram for one ripe coincidence result.
+static void fill_coinc_hists(std::vector<LiveHist>& live, const CoincResult& r) {
+  for (auto& lh : live) {
+    if (lh.def.scope != Scope::Coinc) continue;
+    if (!pass_cut(lh.def.cut, r)) continue;
+    double x = 0.0;
+    if (!value_of(lh.def.x, r, x)) continue;
+    if (lh.def.is2d) {
+      double y = 0.0;
+      if (!value_of(lh.def.y, r, y)) continue;
+      static_cast<TH2*>(lh.h)->Fill(x, y);
+    } else {
+      lh.h->Fill(x);
+    }
+  }
+}
+
+// Snapshot the current --hists file next to the finalized ROOT file, named
+// "<root path minus .root>_hists.json". By deriving from the (possibly
+// collision-suffixed) final path, the copy stays paired with its run file.
+static void copy_hists_sidecar(const std::string& hists_file,
+                               const std::string& root_path) {
+  if (root_path.empty()) return;
+  std::string base = root_path;
+  const std::string ext = ".root";
+  if (base.size() >= ext.size() &&
+      base.compare(base.size() - ext.size(), ext.size(), ext) == 0)
+    base.erase(base.size() - ext.size());
+  std::string dst = base + "_hists.json";
+  std::string text;
+  if (!read_file(hists_file, text)) {
+    std::fprintf(stderr, "root_sink: WARNING could not read %s to pair with %s\n",
+                 hists_file.c_str(), root_path.c_str());
+    return;
+  }
+  std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    std::fprintf(stderr, "root_sink: WARNING could not write %s\n", dst.c_str());
+    return;
+  }
+  out << text;
+  std::printf("root_sink: histogram config copied -> %s\n", dst.c_str());
+}
 
 // ---------------------------------------------------------------------------
 // main
@@ -301,8 +677,48 @@ int main(int argc, char** argv) {
   const bool coinc_enabled =
       opt.gamma_ch >= 0 && opt.thgem1_ch >= 0 && opt.thgem2_ch >= 0;
 
+  // --hists only defines monitor histograms, so it needs the HTTP server. Warn
+  // and ignore it rather than silently drop it when the server is off.
+  bool use_hists = http_enabled && !opt.hists_file.empty();
+  if (!opt.hists_file.empty() && !http_enabled)
+    std::fprintf(stderr,
+                 "root_sink: WARNING --hists %s ignored because --http-port 0 "
+                 "(no monitor server)\n",
+                 opt.hists_file.c_str());
+
+  // Parse the histogram definitions up front — ANY error is fatal at startup.
+  std::vector<HistDef> hist_defs;
+  if (use_hists) {
+    std::string text;
+    if (!read_file(opt.hists_file, text)) {
+      std::fprintf(stderr, "root_sink: ERROR cannot read --hists file %s\n",
+                   opt.hists_file.c_str());
+      return 2;
+    }
+    ParseResult pr = parse_hist_config(text);
+    if (!pr.errors.empty()) {
+      std::fprintf(stderr, "root_sink: %zu error(s) in %s:\n", pr.errors.size(),
+                   opt.hists_file.c_str());
+      for (const auto& e : pr.errors)
+        std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+      return 2;
+    }
+    hist_defs = std::move(pr.defs);
+    bool has_coinc = false;
+    for (const auto& d : hist_defs)
+      if (d.scope == Scope::Coinc) has_coinc = true;
+    if (has_coinc && !coinc_enabled)
+      std::fprintf(stderr,
+                   "root_sink: WARNING --hists has coincidence histograms but the "
+                   "Δt matcher is DISABLED (need --gamma-ch/--thgem1-ch/--thgem2-ch) "
+                   "— those histograms will stay empty\n");
+  }
+
   std::printf("root_sink: sub=%s out-dir=%s tree=%s\n", opt.zmq.c_str(),
               opt.out_dir.c_str(), opt.tree.c_str());
+  if (use_hists)
+    std::printf("root_sink: histograms defined by %s (%zu hist(s))\n",
+                opt.hists_file.c_str(), hist_defs.size());
   if (coinc_enabled)
     std::printf("root_sink: monitor gamma=ch%d thgem1=ch%d thgem2=ch%d window=%.0fns margin=%.0fns\n",
                 opt.gamma_ch, opt.thgem1_ch, opt.thgem2_ch, opt.window_ns, opt.margin_ns);
@@ -315,18 +731,9 @@ int main(int argc, char** argv) {
   // --- ROOT monitor objects (created before any TFile; detached from gDirectory
   //     so they persist across runs and are never owned/deleted by a run file) ---
   THttpServer* server = nullptr;
+  std::vector<LiveHist> live_hists;  // populated only in --hists mode
   if (http_enabled) {
     TH1::AddDirectory(kFALSE);
-    g_h_dt1 = new TH1D("dt1", "t(ThGEM1) - t(gamma) [ns];#Deltat_{1} [ns];counts",
-                       opt.dt_bins, opt.dt_min, opt.dt_max);
-    g_h_dt2 = new TH1D("dt2", "t(ThGEM2) - t(gamma) [ns];#Deltat_{2} [ns];counts",
-                       opt.dt_bins, opt.dt_min, opt.dt_max);
-    // 2D reuses the Δt axes but caps each axis at 500 bins: dt-bins defaults to
-    // 2000, and a 2000x2000 (=4M-bin) 2D would be needlessly heavy to draw live.
-    int b2 = std::min(opt.dt_bins, 500);
-    g_h_dt2_vs_dt1 = new TH2D("dt2_vs_dt1", "#Deltat_{2} vs #Deltat_{1};#Deltat_{1} [ns];#Deltat_{2} [ns]",
-                              b2, opt.dt_min, opt.dt_max, b2, opt.dt_min, opt.dt_max);
-    g_h_channels = new TH1I("channels", "channel occupancy;channel;counts", 64, 0, 64);
 
     // A TApplication must exist for gSystem->ProcessEvents() to drive the HTTP
     // server's timer. It is process-lifetime (never deleted) — don't store it in
@@ -344,18 +751,43 @@ int main(int argc, char** argv) {
     new TApplication("root_sink", &fake_argc, fake_argv);
 
     server = new THttpServer(Form("http:%d", opt.http_port));
-    server->Register("/", g_h_dt1);
-    server->Register("/", g_h_dt2);
-    server->Register("/", g_h_dt2_vs_dt1);
-    server->Register("/", g_h_channels);
-    // /Reset zeroes all four histograms. The command runs through Cling on the
-    // main thread; we bake the (dictionaried) TH1 pointers into an interpreter
-    // function so no compiled-symbol export (-rdynamic) is needed.
-    gInterpreter->Declare(
-        Form("void rootsink_reset(){((TH1*)%p)->Reset();((TH1*)%p)->Reset();"
-             "((TH1*)%p)->Reset();((TH1*)%p)->Reset();}",
-             (void*)g_h_dt1, (void*)g_h_dt2, (void*)g_h_dt2_vs_dt1, (void*)g_h_channels));
-    server->RegisterCommand("/Reset", "rootsink_reset()", "button;Reset histograms");
+    // 2 s JSROOT auto-refresh for the whole tree.
+    server->SetItemField("/", "_monitoring", "2000");
+
+    if (use_hists) {
+      build_live_hists(hist_defs, server, live_hists);
+      // /ReloadHists re-reads the file live (handled in the main loop). Only
+      // registered in --hists mode. Like /Reset it bakes a compiled function
+      // pointer, not histogram pointers, so it survives a reload.
+      server->RegisterCommand(
+          "/ReloadHists",
+          Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reload)),
+          "button;Reload histogram definitions");
+    } else {
+      g_h_dt1 = new TH1D("dt1", "t(ThGEM1) - t(gamma) [ns];#Deltat_{1} [ns];counts",
+                         opt.dt_bins, opt.dt_min, opt.dt_max);
+      g_h_dt2 = new TH1D("dt2", "t(ThGEM2) - t(gamma) [ns];#Deltat_{2} [ns];counts",
+                         opt.dt_bins, opt.dt_min, opt.dt_max);
+      // 2D reuses the Δt axes but caps each axis at 500 bins: dt-bins defaults to
+      // 2000, and a 2000x2000 (=4M-bin) 2D would be needlessly heavy to draw live.
+      int b2 = std::min(opt.dt_bins, 500);
+      g_h_dt2_vs_dt1 = new TH2D("dt2_vs_dt1", "#Deltat_{2} vs #Deltat_{1};#Deltat_{1} [ns];#Deltat_{2} [ns]",
+                                b2, opt.dt_min, opt.dt_max, b2, opt.dt_min, opt.dt_max);
+      g_h_channels = new TH1I("channels", "channel occupancy;channel;counts", 64, 0, 64);
+      server->Register("/", g_h_dt1);
+      server->Register("/", g_h_dt2);
+      server->Register("/", g_h_dt2_vs_dt1);
+      server->Register("/", g_h_channels);
+      server->SetItemField("/dt2_vs_dt1", "_drawopt", "colz");
+    }
+
+    // /Reset zeroes whatever histograms are currently live (built-in or dynamic).
+    // It flips g_reset, consumed by the main loop; the compiled function pointer
+    // keeps the command valid across a reload (no baked histogram pointers to
+    // dangle). No -rdynamic needed — the pointer is baked as a literal.
+    server->RegisterCommand(
+        "/Reset", Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reset)),
+        "button;Reset histograms");
     std::printf("root_sink: THttpServer on http://<host>:%d/  (open in a browser; JSROOT)\n",
                 opt.http_port);
   }
@@ -389,12 +821,18 @@ int main(int argc, char** argv) {
   long long events_written = 0;
   long long matcher_fills = 0;
 
-  // Emit any coincidence results a matcher produced into the histograms.
+  // Emit any coincidence results a matcher produced into the histograms. In
+  // --hists mode the declarative coinc-scope set decides what gets filled; the
+  // built-in mode keeps the hard-coded dt1/dt2/dt2_vs_dt1 fills.
   auto emit = [&](const CoincResult& r) {
-    if (r.has_dt1) g_h_dt1->Fill(r.dt1);
-    if (r.has_dt2) g_h_dt2->Fill(r.dt2);
-    if (r.has_dt1 && r.has_dt2) g_h_dt2_vs_dt1->Fill(r.dt1, r.dt2);
     ++matcher_fills;
+    if (use_hists) {
+      fill_coinc_hists(live_hists, r);
+    } else {
+      if (r.has_dt1) g_h_dt1->Fill(r.dt1);
+      if (r.has_dt2) g_h_dt2->Fill(r.dt2);
+      if (r.has_dt1 && r.has_dt2) g_h_dt2_vs_dt1->Fill(r.dt1, r.dt2);
+    }
   };
 
   auto process = [&](const uint8_t* data, size_t size) {
@@ -405,7 +843,11 @@ int main(int argc, char** argv) {
             env.payload, env.payload_size,
             [&](uint32_t sid) {
               run_state.on_data(sid, [&] {
-                if (!recorder.open_run(opt.out_dir, opt.tree)) {
+                // Resolve exp_name once, at the Idle->Writing transition. With
+                // --operator this does the (bounded) HTTP fetch; ZMQ HWM=0
+                // buffers batches during the ~2 s at most that it can take.
+                std::string exp = resolve_exp_name(opt);
+                if (!recorder.open_run(opt.out_dir, opt.tree, exp)) {
                   std::fprintf(stderr, "root_sink: run start FAILED — dropping this run's events\n");
                 }
                 if (matcher) matcher->reset();  // clock may restart between runs
@@ -417,7 +859,10 @@ int main(int argc, char** argv) {
               recorder.fill(h);
               ++events_written;
               if (http_enabled) {
-                if (h.channel < 64) g_h_channels->Fill(h.channel);
+                if (use_hists)
+                  fill_hit_hists(live_hists, h);
+                else if (h.channel < 64)
+                  g_h_channels->Fill(h.channel);
                 if (matcher) matcher->push(h, emit);
               }
             });
@@ -434,6 +879,8 @@ int main(int argc, char** argv) {
               std::string fn = recorder.finalize(rn);
               std::printf("root_sink: run %u finalized -> %s (%lld events)\n", rn,
                           fn.c_str(), ev);
+              if (use_hists)
+                copy_hists_sidecar(opt.hists_file, recorder.final_path());
               if (http_enabled)
                 std::printf("root_sink: (monitor histograms kept across the run boundary)\n");
             },
@@ -489,6 +936,52 @@ int main(int argc, char** argv) {
 
     // Service HTTP requests on the main thread (no lock needed vs Fill above).
     if (server) gSystem->ProcessEvents();
+
+    // Apply any HTTP command that fired during ProcessEvents. Doing the work here
+    // (not inside the Cling call) lets a reload safely delete the live objects.
+    if (g_reset) {
+      g_reset = 0;
+      if (use_hists) {
+        for (auto& lh : live_hists)
+          if (lh.h) lh.h->Reset();
+      } else if (http_enabled) {
+        if (g_h_dt1) g_h_dt1->Reset();
+        if (g_h_dt2) g_h_dt2->Reset();
+        if (g_h_dt2_vs_dt1) g_h_dt2_vs_dt1->Reset();
+        if (g_h_channels) g_h_channels->Reset();
+      }
+      std::printf("root_sink: /Reset — histograms zeroed\n");
+      std::fflush(stdout);
+    }
+    if (g_reload) {
+      g_reload = 0;  // /ReloadHists is only registered in --hists mode
+      std::string text;
+      if (!read_file(opt.hists_file, text)) {
+        std::fprintf(stderr,
+                     "root_sink: /ReloadHists could not read %s — keeping current set\n",
+                     opt.hists_file.c_str());
+      } else {
+        ParseResult pr = parse_hist_config(text);
+        if (!pr.errors.empty()) {
+          std::fprintf(stderr, "root_sink: /ReloadHists — %zu error(s), keeping current set:\n",
+                       pr.errors.size());
+          for (const auto& e : pr.errors)
+            std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+        } else {
+          for (auto& lh : live_hists) {
+            if (lh.h) {
+              server->Unregister(lh.h);
+              delete lh.h;
+            }
+          }
+          live_hists.clear();
+          build_live_hists(pr.defs, server, live_hists);
+          std::printf("root_sink: /ReloadHists — %zu histogram(s) now live\n",
+                      live_hists.size());
+        }
+      }
+      std::fflush(stdout);
+    }
 
     auto now = Clock::now();
     using std::chrono::duration;

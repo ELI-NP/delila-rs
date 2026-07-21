@@ -53,6 +53,12 @@ root_sink [options]
   --zmq ADDR          merger PUB endpoint          (default tcp://localhost:5557)
   --out-dir DIR       output directory             (default .)
   --tree NAME         TTree name                   (default tr)
+  --exp-name NAME     experiment name for the output filename (override)
+  --operator URL      operator base URL, e.g. http://localhost:9092; experiment
+                      name is read from <URL>/api/status at run start (only when
+                      --exp-name is not given)
+  --hists FILE        histogram definition JSON (see below); replaces the
+                      built-in dt1/dt2/dt2_vs_dt1/channels set
   --gamma-ch N        gamma detector channel       (enables the Δt monitor)
   --thgem1-ch N       ThGEM1 channel
   --thgem2-ch N       ThGEM2 channel
@@ -86,8 +92,33 @@ root_sink --out-dir /data --http-port 0
 While a run is in progress the tree is written to
 `<out-dir>/run_inprogress_<unixtime>.root` and `AutoSave`d every `--autosave-sec`
 so it is already openable in ROOT. On the run's `EndOfStream` the file is closed
-and renamed to `run%04d_scalar.root` (using the EOS-carried run number;
-collisions get a `_1`, `_2`, … suffix). The tree has exactly:
+and renamed to
+
+```
+run%04u_0000_<exp>.root
+```
+
+using the EOS-carried run number. This is **identical to the Rust Recorder's
+`.delila` filename** (`run{run:04}_{seq:04}_{exp}.delila`) but for the extension:
+`root_sink` never splits a run into segments, so the sequence field is always the
+literal `0000`. On a name collision it appends `_<unix_ns>` (nanoseconds since the
+epoch) before the extension — the same collision scheme the Rust Recorder uses.
+
+`<exp>` (the experiment name) is resolved once at each run start, in priority
+order — the resolved name and its source are logged, and any fallback is warned
+(never silent):
+
+1. `--exp-name NAME` — explicit override, wins always.
+2. `--operator URL` — HTTP `GET <URL>/api/status` and take the top-level
+   `experiment_name` string. In normal UI-driven operation this matches the Rust
+   Recorder's filename by construction. The fetch is bounded to ~2 s (a
+   non-blocking connect + socket timeouts); ZMQ (HWM=0) buffers batches while it
+   runs, so it never hangs the sink. Only `http://` is supported — `https://` is
+   rejected at startup.
+3. Neither given, or the fetch failed / returned no name → `"data"` (with a
+   warning to stderr). This mirrors the Rust Recorder's empty-name fallback.
+
+The tree has exactly:
 
 | branch         | leaf | type      |
 |----------------|------|-----------|
@@ -104,19 +135,156 @@ line reports it.
 ## Live monitor (THttpServer / JSROOT)
 
 Point a browser at `http://<host>:8090/`. ROOT serves the built-in JSROOT UI;
-click a histogram to draw it, and it updates live (JSROOT's *Monitor* toggle).
-Registered objects:
+the whole tree auto-refreshes every 2 s (`_monitoring`), and each 2D histogram
+draws with `colz` by default (`_drawopt`). The default (no `--hists`) objects:
 
 - **`dt1`**  — `t(ThGEM1) − t(gamma)` [ns]
 - **`dt2`**  — `t(ThGEM2) − t(gamma)` [ns]
 - **`dt2_vs_dt1`** — 2D, X = Δt₁, Y = Δt₂ (each axis capped at 500 bins)
 - **`channels`** — channel occupancy 0..63 (a freebie; filled for every event)
-- **`/Reset`** — a command button that zeroes all four histograms
+- **`/Reset`** — a command button that zeroes every currently live histogram
 
 Histograms are **never auto-cleared on a run boundary** — they accumulate physics
 across runs until you hit `/Reset` (a log line marks each boundary). The
 coincidence *timing* state, on the other hand, is reset per run, because the
 digitizer clock can restart between runs.
+
+## Custom histograms (`--hists FILE`)
+
+By default the four objects above are hard-coded. Pass `--hists FILE` and that
+JSON file **fully defines** the displayed set instead (the built-ins are not
+created). Without `--hists` behaviour is exactly as before — full backward
+compatibility. `channels` is expressible as `x = channel`, so there is no special
+case. If `--hists` is given while the HTTP server is disabled (`--http-port 0`)
+the file is warned about and ignored (histograms only live on the server). If the
+file has coincidence histograms but the Δt matcher is off (no `--gamma-ch /
+--thgem1-ch / --thgem2-ch`), a prominent startup warning notes they will stay
+empty (not fatal).
+
+Any parse error at startup prints **all** problems and exits with code 2. On
+finalize the current histogram file is copied next to the run's ROOT file as
+`<final root path minus ".root">_hists.json`, so each run keeps a snapshot of the
+config that produced it (it inherits any collision suffix and stays paired).
+
+### File format
+
+Top-level object with a `histograms` array. Each entry is one histogram:
+
+```json
+{ "histograms": [
+  { "name": "dt1", "type": "TH1D", "fill": "dt1", "bins": 2000, "min": -1000, "max": 1000 }
+] }
+```
+
+Common keys: `name` (required, ROOT-safe: non-empty, no `/`, unique), `title`
+(optional, defaults to `name`; ROOT parses an embedded `";xaxis;yaxis"`), `type`
+(`"TH1D"` or `"TH2D"`), `drawopt` (optional; empty means `colz` for 2D, nothing
+for 1D).
+
+- **1D (`TH1D`)** — `x` (the fill variable) plus `xbins` / `xmin` / `xmax`.
+  Aliases: `fill` for `x`, and `bins` / `min` / `max` for the axis keys.
+- **2D (`TH2D`)** — `x`, `y`, and `xbins/xmin/xmax` + `ybins/ymin/ymax`
+  (no aliases).
+
+Validation collects every error at once: unknown JSON keys (typo protection),
+unknown type/variable, duplicate or unsafe names, `bins ≤ 0`, `min ≥ max`, and
+**scope mixing** (see below).
+
+### Vocabulary
+
+Every histogram lives entirely in one **scope**; `x`, `y`, and the cut must all
+belong to the same scope (mixing is an error). This is what makes "gate Δt on
+gamma energy" expressible.
+
+**hit scope** — one row per decoded event:
+
+| kind     | names |
+|----------|-------|
+| variable | `energy`, `energy_short`, `channel`, `module` |
+| cut      | `channel` (int: keep events on that channel), `energy_range` (`[min,max]` inclusive) |
+
+**coinc scope** — one row per *ripe gamma* coincidence result (needs the Δt
+matcher enabled):
+
+| kind     | names |
+|----------|-------|
+| variable | `dt1`, `dt2`, `gamma_energy`, `thgem1_energy`, `thgem2_energy` |
+| cut      | `gamma_energy_range`, `thgem1_energy_range`, `thgem2_energy_range` (each `[min,max]` inclusive) |
+
+Coinc semantics: `gamma_energy` is always present for a ripe gamma; `dt1` /
+`thgem1_energy` only fill when a ThGEM1 partner was found (likewise dt2/ThGEM2). A
+`thgem1_energy_range` cut therefore fails when that partner is absent. At most one
+cut key per histogram.
+
+### Standard config (reproduces the built-ins)
+
+The repo ships `histograms.json` that reproduces the four built-in histograms
+exactly — `--hists histograms.json` renders the same display as the defaults:
+
+```json
+{ "histograms": [
+  { "name": "dt1",        "type": "TH1D",
+    "title": "t(ThGEM1) - t(gamma) [ns];#Deltat_{1} [ns];counts",
+    "fill": "dt1",     "bins": 2000, "min": -1000, "max": 1000 },
+  { "name": "dt2",        "type": "TH1D",
+    "title": "t(ThGEM2) - t(gamma) [ns];#Deltat_{2} [ns];counts",
+    "fill": "dt2",     "bins": 2000, "min": -1000, "max": 1000 },
+  { "name": "dt2_vs_dt1", "type": "TH2D",
+    "title": "#Deltat_{2} vs #Deltat_{1};#Deltat_{1} [ns];#Deltat_{2} [ns]",
+    "x": "dt1", "y": "dt2",
+    "xbins": 500, "xmin": -1000, "xmax": 1000,
+    "ybins": 500, "ymin": -1000, "ymax": 1000 },
+  { "name": "channels",   "type": "TH1D",
+    "title": "channel occupancy;channel;counts",
+    "fill": "channel", "bins": 64, "min": 0, "max": 64 }
+]}
+```
+
+### Advanced examples
+
+Add these to your own `--hists` file (they are examples, not part of the standard
+config):
+
+Gamma energy spectrum, only for events on channel 0 (hit scope, `channel` cut):
+
+```json
+{ "name": "E_gamma", "type": "TH1D", "x": "energy", "channel": 0,
+  "xbins": 4096, "xmin": 0, "xmax": 16384 }
+```
+
+Gamma energy vs Δt₁ — both axes are coinc-scope, so this is allowed:
+
+```json
+{ "name": "E_vs_dt1", "type": "TH2D", "x": "dt1", "y": "gamma_energy",
+  "xbins": 400, "xmin": -1000, "xmax": 1000,
+  "ybins": 512, "ymin": 0, "ymax": 16384 }
+```
+
+Δt₁ gated by gamma energy (the headline use case):
+
+```json
+{ "name": "dt1_gated", "type": "TH1D", "fill": "dt1",
+  "bins": 400, "min": -200, "max": 200,
+  "gamma_energy_range": [800, 1200] }
+```
+
+### Reloading live (`/ReloadHists`)
+
+With `--hists`, a **`/ReloadHists`** command button appears (and can be triggered
+without the UI):
+
+```sh
+curl 'http://<host>:8090/ReloadHists/cmd.json'
+```
+
+It re-reads the file: on success the old histograms are unregistered and the new
+set is built + registered (drawopt applied); on **any** parse error it prints them
+all and **keeps the current set** unchanged. A one-line summary is logged either
+way. Edit the file, hit reload — no restart, no lost data.
+
+`/Reset` is unchanged: it zeroes every currently live histogram (built-in or
+dynamic). Both commands run on the main loop (a flag flipped by the button), so a
+reload can safely delete and rebuild the live objects.
 
 ## Design notes
 
@@ -153,6 +321,19 @@ digitizer clock can restart between runs.
 
 ## Testing
 
-`sink_core.hpp` is pure logic and compiles with plain `g++ -std=c++17`. A
-self-test (envelope parse, batch decode, coincidence matcher, run state) can be
-built against just this header and `../delila2root/TDelila.hpp` — no ROOT, no ZMQ.
+`sink_core.hpp` and `hist_config.hpp` are pure logic and compile with plain
+`g++ -std=c++17` — no ROOT, no ZMQ. `test_sink_core.cpp` covers envelope parse,
+batch decode, the coincidence matcher (with energies), run state, the HTTP
+helpers (`split_http_response` / `extract_experiment_name`), and the histogram
+config parser (all error classes + `value_of` / `pass_cut` for both scopes):
+
+```sh
+cd tools/root_sink
+g++ -std=c++17 -O0 -g test_sink_core.cpp -o /tmp/ts && /tmp/ts
+```
+
+It prints `N passed, 0 failed` and exits non-zero on any failure.
+
+The `--operator` HTTP client and all the ROOT wiring in `root_sink.cxx` are not
+in the unit test (they need sockets / ROOT); they are covered by the live/E2E
+runs on gant and side3.
