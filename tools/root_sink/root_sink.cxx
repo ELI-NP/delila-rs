@@ -331,6 +331,13 @@ int main(int argc, char** argv) {
     // A TApplication must exist for gSystem->ProcessEvents() to drive the HTTP
     // server's timer. It is process-lifetime (never deleted) — don't store it in
     // an unused local. Pass an empty argv so it doesn't try to parse our flags.
+    //
+    // Batch mode is mandatory for a headless DAQ sink: without it, TApplication
+    // connects to $DISPLAY when one is set (e.g. an ssh session), and ROOT's
+    // X11 error handler TERMINATES the process when that X connection dies —
+    // observed live on side3 (sink killed mid-run when its parent ssh session
+    // closed). JSROOT renders client-side, so the HTTP monitor needs no X11.
+    gROOT->SetBatch(kTRUE);
     static int fake_argc = 1;
     static char a0[] = "root_sink";
     static char* fake_argv[] = {a0, nullptr};
