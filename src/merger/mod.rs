@@ -452,16 +452,35 @@ impl Merger {
                 }
 
                 // Always receive from ZMQ to drain the socket buffer
-                // Data is only forwarded when Running, otherwise discarded
+                // Data is only forwarded when Running, otherwise discarded.
+                // EndOfStream is exempt from that discard — see below.
                 msg = socket.next() => {
                     match msg {
                         Some(Ok(multipart)) => {
+                            // EndOfStream must be forwarded regardless of state.
+                            // A real Reader acks Stop BEFORE its decode pipeline
+                            // flushes the EOS, so the operator's ordered stop
+                            // moves the merger out of Running ~ms before the EOS
+                            // arrives; the Stop-tail discard below would then
+                            // silently eat the run boundary and every PUB
+                            // consumer that finalizes on EOS (root_sink) hangs
+                            // in "writing" forever (observed on side3, run 12,
+                            // 2026-07-21). EOS is a control marker, not data —
+                            // the TODO 58 C3 accepted-loss exception does not
+                            // cover it. Stale EOS downstream is safe: Recorder
+                            // filters by run_number (C1), root_sink ignores
+                            // EOS while idle.
+                            let is_eos = multipart
+                                .0
+                                .front()
+                                .is_some_and(|d| Self::frame_is_eos(d));
+
                             // Not running — discard to prevent ZMQ buffer growth.
                             // Tail batches after Stop land here by design
                             // (accepted loss — see CLAUDE.md データ保全 exception).
                             // Count + log so the loss is observable, never silent
                             // (TODO 58 C3): dropped growing while Running is a bug.
-                            if !is_running {
+                            if !is_running && !is_eos {
                                 let n = ext_state
                                     .atomic_stats
                                     .dropped_batches
@@ -505,7 +524,11 @@ impl Merger {
                                     }
                                     Some(MessageHeader::EndOfStream { source_id }) => {
                                         ext_state.atomic_stats.record_eos();
-                                        info!(source = source_id, "Received EOS");
+                                        info!(
+                                            source = source_id,
+                                            running = is_running,
+                                            "Received EOS — forwarding (run-boundary marker)"
+                                        );
                                     }
                                     Some(MessageHeader::Heartbeat { source_id }) => {
                                         trace!(source = source_id, "Received heartbeat");
@@ -537,6 +560,17 @@ impl Merger {
                 }
             }
         }
+    }
+
+    /// True when a raw frame is an EndOfStream marker. EOS is exempt from the
+    /// not-Running Stop-tail discard in BOTH merger tasks (receiver + sender):
+    /// silently dropping it orphans every EOS-driven consumer downstream
+    /// (root_sink never finalizes its run file — side3 run 12, 2026-07-21).
+    fn frame_is_eos(data: &[u8]) -> bool {
+        matches!(
+            MessageHeader::parse(data),
+            Some(MessageHeader::EndOfStream { .. })
+        )
     }
 
     /// Sender task: channel → PUB (zero-copy: direct byte forwarding)
@@ -582,20 +616,32 @@ impl Merger {
                     match data {
                         Some(multipart) => {
                             if !is_running {
-                                // Accepted Stop-tail loss — count + log, never
-                                // silent (TODO 58 C3; CLAUDE.md exception).
-                                let n = ext_state
-                                    .atomic_stats
-                                    .dropped_batches
-                                    .fetch_add(1, Ordering::Relaxed)
-                                    + 1;
-                                if n == 1 || n.is_multiple_of(1000) {
-                                    info!(
-                                        discarded_total = n,
-                                        "Sender discarding batch while not Running (expected Stop tail)"
-                                    );
+                                // EndOfStream is exempt from the Stop-tail
+                                // discard here too (same reasoning as the
+                                // receiver): the run-boundary marker must reach
+                                // PUB subscribers even though the merger left
+                                // Running before the Reader's EOS flushed.
+                                let is_eos = multipart
+                                    .0
+                                    .front()
+                                    .is_some_and(|d| Self::frame_is_eos(d));
+                                if !is_eos {
+                                    // Accepted Stop-tail loss — count + log, never
+                                    // silent (TODO 58 C3; CLAUDE.md exception).
+                                    let n = ext_state
+                                        .atomic_stats
+                                        .dropped_batches
+                                        .fetch_add(1, Ordering::Relaxed)
+                                        + 1;
+                                    if n == 1 || n.is_multiple_of(1000) {
+                                        info!(
+                                            discarded_total = n,
+                                            "Sender discarding batch while not Running (expected Stop tail)"
+                                        );
+                                    }
+                                    continue;
                                 }
-                                continue;
+                                info!("Publishing EOS while not Running (run-boundary marker)");
                             }
                             // True zero-copy: forward original ZMQ Multipart directly
                             match socket.send(multipart).await {
@@ -630,6 +676,30 @@ impl Merger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // EOS must survive the not-Running Stop-tail discard (receiver + sender):
+    // a real Reader acks Stop before its pipeline flushes the EOS, so the
+    // merger has already left Running when the marker arrives. Data and
+    // Heartbeat frames must NOT be exempt — the C3 accepted-loss exception
+    // stays in force for them.
+    #[test]
+    fn eos_frame_exempt_from_stop_tail_discard() {
+        use crate::common::{EventDataBatch, Message};
+
+        let eos = Message::eos(3, 42).to_msgpack().unwrap();
+        assert!(Merger::frame_is_eos(&eos));
+
+        let hb = Message::heartbeat(3, 7).to_msgpack().unwrap();
+        assert!(!Merger::frame_is_eos(&hb));
+
+        let data = Message::Data(EventDataBatch::new(3, 1))
+            .to_msgpack()
+            .unwrap();
+        assert!(!Merger::frame_is_eos(&data));
+
+        assert!(!Merger::frame_is_eos(&[]));
+        assert!(!Merger::frame_is_eos(&[0xC0]));
+    }
 
     #[test]
     fn default_config() {
