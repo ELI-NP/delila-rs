@@ -117,9 +117,19 @@ run%04u_0000_<exp>.root
 
 using the EOS-carried run number. This is **identical to the Rust Recorder's
 `.delila` filename** (`run{run:04}_{seq:04}_{exp}.delila`) but for the extension:
-`root_sink` never splits a run into segments, so the sequence field is always the
+`root_sink` does not split runs itself, so the sequence field is normally the
 literal `0000`. On a name collision it appends `_<unix_ns>` (nanoseconds since the
 epoch) before the extension — the same collision scheme the Rust Recorder uses.
+
+One caveat: ROOT itself auto-splits a `TTree`'s file when it crosses
+`TTree::GetMaxTreeSize`. root_sink raises that limit to **2 TB** (unreachable
+for scalar data — ~10^11 events), and if it is ever crossed anyway, the
+ROOT-made continuation files (`<stem>_1.root`, …) are renamed at finalize with
+Recorder-style sequence numbers (`run%04u_0001_<exp>.root`, …) plus a WARNING —
+verified end-to-end with a tiny test threshold (see *Testing*). The rollover
+also invalidates the original `TFile*` (ROOT deletes it in `ChangeFile`), which
+is why all closing goes through `TTree::GetCurrentFile()` and rollover detection
+compares file NAMES, never pointers (the allocator can reuse the address).
 
 `<exp>` (the experiment name) is resolved once at each run start, in priority
 order — the resolved name and its source are logged, and any fallback is warned
@@ -354,3 +364,13 @@ It prints `N passed, 0 failed` and exits non-zero on any failure.
 The `--operator` HTTP client and all the ROOT wiring in `root_sink.cxx` are not
 in the unit test (they need sockets / ROOT); they are covered by the live/E2E
 runs on gant and side3.
+
+The MaxTreeSize rollover path can be E2E-tested by compiling with a tiny
+threshold and running any emulator stack:
+
+```sh
+g++ ... -DROOTSINK_TEST_MAX_TREE_SIZE=300000 root_sink.cxx ... -o root_sink_rolltest
+```
+
+A short run must then finalize into `run%04u_0000_…`, `run%04u_0001_…`, … with
+the part entries summing to the Recorder's event count.

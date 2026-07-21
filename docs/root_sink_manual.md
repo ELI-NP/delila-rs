@@ -136,8 +136,14 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 
 - 確定名は **Rust Recorder の `.delila` と拡張子以外完全一致**
   (例: `run0013_0000_X730_ThGEM_Test.delila` ↔ 同 `.root`)。
-  root_sink はファイル分割しないので連番部は常に `0000`。
+  root_sink 自身は分割しないので連番部は通常 `0000`。
   名前衝突時は Recorder と同じく `_<unix ナノ秒>` を付加する。
+- **ROOT の自動分割への備え**: ROOT は TTree のファイルが `MaxTreeSize` を超えると
+  勝手に次ファイルへ切り替える。root_sink はこの閾値を **2 TB** に設定しており
+  (スカラーデータでは ~10^11 イベント相当、実質未到達)、万一超えた場合も
+  WARNING を出した上で分割パートを `run%04u_0001_<exp>.root`, `_0002_`… と
+  **Recorder と同じ連番規則**でリネームする(縮小閾値ビルドで E2E 検証済み。
+  全パートのエントリ合計 = Recorder のイベント数を確認)。
 - リネームは **EndOfStream 受信時**(= operator の Stop)に行われる。
   run 番号も EOS が運んでくるため operator への依存はない。
 - 実験名 `<exp>` の解決順:
@@ -278,8 +284,9 @@ root_sink: histogram config copied -> .../run0013_0000_X730_ThGEM_Test_hists.jso
 
 ## 制限事項(仕様)
 
-- ファイル分割なし(連番は常に `0000`)。Recorder が分割した場合、`.root` は
-  1 ファイルに全量が入る。
+- 自発的なファイル分割なし(連番は通常 `0000`)。Recorder が分割した場合でも
+  `.root` は 1 ファイルに全量が入る。例外は ROOT 自身の `MaxTreeSize`(2 TB)
+  超過時のみで、その場合は `_0001`… と Recorder 準拠の連番になる(上記参照)。
 - ラン境界は EOS 頼み。EOS を出さない上流(古いスタック)とは組み合わせ不可。
 - モニタヒストは表示専用。記録の正はあくまで TTree / `.delila`。
 - 波形は扱わない(スカラー 5 フィールドのみ)。波形が要る場合は従来どおり

@@ -496,24 +496,32 @@ class Recorder {
     if (tree_) tree_->AutoSave("SaveSelf");
   }
 
-  // Close and rename to run%04u_0000_<exp>.root — identical to the Rust Recorder
-  // filename but for the extension (root_sink never splits, so seq is always
-  // 0000; a collision appends _<unix_ns>). Returns the final path (or the
-  // provisional path if the rename failed).
+  // Close and rename to run%04u_<seq>_<exp>.root — identical to the Rust
+  // Recorder filename but for the extension. Normally one file per run
+  // (seq 0000); if the tree crossed TTree::GetMaxTreeSize, ROOT's automatic
+  // ChangeFile has split it into <stem>_1.root, <stem>_2.root, ... — those
+  // parts are renamed with the Recorder's sequence convention (0001, 0002, ...).
+  // A collision appends _<unix_ns>. Returns the seq-0 final path (or the
+  // provisional path if that rename failed).
   std::string finalize(uint32_t run) {
     if (!file_) return "";
-    file_->cd();
-    tree_->Write();
-    file_->Close();
-    delete file_;
-    file_ = nullptr;
-    tree_ = nullptr;
-    std::string final = pick_final_name(run);
+    int parts = close_all_parts();
+    std::string final = pick_final_name(run, 0);
     if (std::rename(provisional_.c_str(), final.c_str()) != 0) {
       std::fprintf(stderr, "root_sink: WARNING could not rename %s -> %s (%s); file kept\n",
                    provisional_.c_str(), final.c_str(), std::strerror(errno));
-      final_path_ = provisional_;
-      return provisional_;
+      final = provisional_;
+    }
+    // Rename any ROOT-made continuation parts (verified naming: <stem>_k.root).
+    std::string stem = provisional_.substr(0, provisional_.size() - 5);  // drop ".root"
+    for (int k = 1; k <= parts; ++k) {
+      std::string part = stem + "_" + std::to_string(k) + ".root";
+      std::string part_final = pick_final_name(run, k);
+      if (std::rename(part.c_str(), part_final.c_str()) != 0)
+        std::fprintf(stderr, "root_sink: WARNING could not rename %s -> %s (%s); file kept\n",
+                     part.c_str(), part_final.c_str(), std::strerror(errno));
+      else
+        std::printf("root_sink: rollover part %d -> %s\n", k, part_final.c_str());
     }
     final_path_ = final;
     return final;
@@ -523,20 +531,46 @@ class Recorder {
   // never finalized, so it must not masquerade as a complete run%04d file).
   void close_unfinalized() {
     if (!file_) return;
-    file_->cd();
-    tree_->Write();
-    file_->Close();
-    delete file_;
-    file_ = nullptr;
-    tree_ = nullptr;
+    int parts = close_all_parts();
     std::printf("root_sink: shutdown mid-run — kept provisional %s (%lld events, NOT finalized)\n",
                 provisional_.c_str(), entries_);
+    if (parts > 0)
+      std::printf("root_sink: (plus %d ROOT rollover part(s) kept as %s_*.root)\n", parts,
+                  provisional_.substr(0, provisional_.size() - 5).c_str());
   }
 
  private:
-  std::string pick_final_name(uint32_t run) const {
+  // Write + close the run's tree, via the CURRENT file. When the tree crossed
+  // MaxTreeSize, ROOT's ChangeFile DELETED our original TFile and moved the
+  // tree to <stem>_k.root — `file_` is then dangling and must not be touched
+  // (empirically the allocator often reuses the same address, so a pointer
+  // compare can lie; the file NAME is the only reliable rollover signal).
+  // Returns the number of continuation parts (0 = the normal single-file case).
+  int close_all_parts() {
+    TFile* cur = tree_->GetCurrentFile();
+    bool rolled = cur && provisional_ != cur->GetName();
+    int parts = 0;
+    if (rolled) {
+      // Count <stem>_1.root ... — earlier parts were already closed by ROOT.
+      std::string stem = provisional_.substr(0, provisional_.size() - 5);
+      while (path_exists(stem + "_" + std::to_string(parts + 1) + ".root")) ++parts;
+      std::fprintf(stderr,
+                   "root_sink: WARNING tree crossed MaxTreeSize — ROOT split the run into "
+                   "%d extra part(s); renaming them with Recorder-style sequence numbers\n",
+                   parts);
+    }
+    cur->cd();
+    tree_->Write();
+    cur->Close();
+    delete cur;  // == file_ only in the un-rolled case; file_ may be dangling
+    file_ = nullptr;
+    tree_ = nullptr;
+    return parts;
+  }
+
+  std::string pick_final_name(uint32_t run, int seq) const {
     char base[128];
-    std::snprintf(base, sizeof(base), "run%04u_0000_%s", run, exp_name_.c_str());
+    std::snprintf(base, sizeof(base), "run%04u_%04d_%s", run, seq, exp_name_.c_str());
     std::string cand = out_dir_ + "/" + base + ".root";
     if (!path_exists(cand)) return cand;
     // Collision -> append _<unix_ns> before the extension (Rust Recorder scheme).
@@ -727,6 +761,20 @@ int main(int argc, char** argv) {
 
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
+
+  // ROOT auto-splits a TTree's file when it crosses TTree::GetMaxTreeSize
+  // (ROOT 6 default: 100 GB). Raise it to 2 TB: at 14 B/event a scalar run
+  // cannot realistically get there (~10^11 events), so a run stays one file.
+  // If it IS ever crossed, Recorder::finalize renames the ROOT-made parts
+  // with Recorder-style sequence numbers instead of crashing on the TFile*
+  // that ChangeFile deletes (see Recorder::close_all_parts).
+  // ROOTSINK_TEST_MAX_TREE_SIZE exists so the rollover path can be E2E-tested
+  // with a tiny threshold (see README).
+#ifdef ROOTSINK_TEST_MAX_TREE_SIZE
+  TTree::SetMaxTreeSize(ROOTSINK_TEST_MAX_TREE_SIZE);
+#else
+  TTree::SetMaxTreeSize(2000000000000LL);  // 2 TB
+#endif
 
   // --- ROOT monitor objects (created before any TFile; detached from gDirectory
   //     so they persist across runs and are never owned/deleted by a run file) ---
