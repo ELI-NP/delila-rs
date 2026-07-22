@@ -111,7 +111,7 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 |---|---|---|
 | `--zmq ADDR` | `tcp://localhost:5557` | merger PUB エンドポイント |
 | `--out-dir DIR` | `.` | `.root` 出力ディレクトリ |
-| `--tree NAME` | `tr` | TTree 名 |
+| `--tree NAME` | `delila` | TTree 名(delila2root と同じ既定値 — マクロを共用可能) |
 | `--exp-name NAME` | (なし) | ファイル名の実験名を明示指定(最優先) |
 | `--operator URL` | (なし) | 例 `http://localhost:9092`。ラン開始時に `/api/status` の `experiment_name` を取得 |
 | `--hists FILE` | (なし) | ヒストグラム定義 JSON(後述)。未指定ならビルトイン 4 種 |
@@ -168,7 +168,7 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 ```cpp
 // 解析例
 TFile f("run0013_0000_X730_ThGEM_Test.root");
-TTree* tr = (TTree*)f.Get("tr");
+TTree* tr = (TTree*)f.Get("delila");
 tr->Draw("energy", "channel==3");
 ```
 

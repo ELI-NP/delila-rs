@@ -106,7 +106,7 @@ static TH1I* g_h_channels = nullptr;
 struct Options {
   std::string zmq = "tcp://localhost:5557";
   std::string out_dir = ".";
-  std::string tree = "tr";
+  std::string tree = "delila";  // same default as delila2root — one macro works on both
   std::string exp_name;       // --exp-name: explicit override (wins always)
   std::string operator_url;   // --operator: fetch experiment_name from /api/status
   std::string hists_file;     // --hists: declarative histogram set
@@ -127,7 +127,7 @@ static void print_usage(const char* argv0) {
       "usage: %s [options]\n"
       "  --zmq ADDR          merger PUB endpoint (default tcp://localhost:5557)\n"
       "  --out-dir DIR       output directory for run*.root (default .)\n"
-      "  --tree NAME         TTree name (default tr)\n"
+      "  --tree NAME         TTree name (default delila)\n"
       "  --exp-name NAME     experiment name for the output filename (override)\n"
       "  --operator URL      operator base URL, e.g. http://localhost:9092; the\n"
       "                      experiment name is read from <URL>/api/status at run\n"

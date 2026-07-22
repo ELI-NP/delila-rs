@@ -55,7 +55,7 @@ convention as `delila2root`); on **gant** source `thisroot.sh` first
 root_sink [options]
   --zmq ADDR          merger PUB endpoint          (default tcp://localhost:5557)
   --out-dir DIR       output directory             (default .)
-  --tree NAME         TTree name                   (default tr)
+  --tree NAME         TTree name                   (default delila, same as delila2root)
   --exp-name NAME     experiment name for the output filename (override)
   --operator URL      operator base URL, e.g. http://localhost:9092; experiment
                       name is read from <URL>/api/status at run start (only when
