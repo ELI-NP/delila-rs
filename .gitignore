@@ -53,7 +53,13 @@ AMAX_firmware32_channel_4input_caenlist
 # Compiled binaries
 tools/delila2root/delila2root
 tools/delila2root/delila2root_*
+tools/root_sink/root_sink
 __pycache__/
+
+# CAEN library runtime logs. libCAEN* drops these into whatever directory the
+# process was started from as soon as a board is opened, so they appear in the
+# repo root on any DAQ host (CAENBoard_<model>Log.txt, CAENParametersLog.txt).
+CAEN*Log.txt
 
 # Test output files
 *.root
