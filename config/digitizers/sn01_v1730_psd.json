@@ -10,7 +10,7 @@
     "start_source": "START_MODE_SW",
     "gpio_mode": "OUT_PROPAGATION_RUN",
     "record_length": 1000,
-    "waveforms_enabled": true,
+    "waveforms_enabled": false,
     "vtrace_probe_0": "VPROBE_INPUT",
     "vtrace_probe_1": "VPROBE_CFD",
     "vtrace_probe_2": "VPROBE_GATE",
