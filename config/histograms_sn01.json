@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "root_sink live histograms for eliadeSN01 (1x V1730SB DPP-PSD, 16 ch).",
+    "hit scope only (energy / energy_short / channel / module) so these fill",
+    "without the Delta-t coincidence matcher, which needs gamma/thgem channels",
+    "that are not defined on this setup. Served live over THttpServer:8090",
+    "(browse with JSROOT). After editing, reload without restarting the DAQ:",
+    "  curl http://localhost:8090/ReloadHists",
+    "A 'channel' key on a histogram is a cut: keep only hits on that channel."
+  ],
+  "histograms": [
+    { "name": "channels", "type": "TH1D",
+      "title": "channel occupancy;channel;counts",
+      "fill": "channel", "bins": 16, "min": 0, "max": 16 },
+
+    { "name": "energy_long", "type": "TH1D",
+      "title": "energy (long gate), all channels;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768 },
+
+    { "name": "energy_short", "type": "TH1D",
+      "title": "energy (short gate), all channels;energy_short [LSB];counts",
+      "fill": "energy_short", "bins": 1024, "min": 0, "max": 32768 },
+
+    { "name": "psd_short_vs_long", "type": "TH2D",
+      "title": "PSD charge comparison;energy long [LSB];energy short [LSB]",
+      "x": "energy", "y": "energy_short",
+      "xbins": 512, "xmin": 0, "xmax": 32768,
+      "ybins": 512, "ymin": 0, "ymax": 32768 },
+
+    { "name": "energy_ch00", "type": "TH1D", "title": "energy ch0;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 0 },
+    { "name": "energy_ch01", "type": "TH1D", "title": "energy ch1;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 1 },
+    { "name": "energy_ch02", "type": "TH1D", "title": "energy ch2;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 2 },
+    { "name": "energy_ch03", "type": "TH1D", "title": "energy ch3;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 3 },
+    { "name": "energy_ch04", "type": "TH1D", "title": "energy ch4;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 4 },
+    { "name": "energy_ch05", "type": "TH1D", "title": "energy ch5;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 5 },
+    { "name": "energy_ch06", "type": "TH1D", "title": "energy ch6;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 6 },
+    { "name": "energy_ch07", "type": "TH1D", "title": "energy ch7;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 7 },
+    { "name": "energy_ch08", "type": "TH1D", "title": "energy ch8;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 8 },
+    { "name": "energy_ch09", "type": "TH1D", "title": "energy ch9;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 9 },
+    { "name": "energy_ch10", "type": "TH1D", "title": "energy ch10;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 10 },
+    { "name": "energy_ch11", "type": "TH1D", "title": "energy ch11;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 11 },
+    { "name": "energy_ch12", "type": "TH1D", "title": "energy ch12;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 12 },
+    { "name": "energy_ch13", "type": "TH1D", "title": "energy ch13;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 13 },
+    { "name": "energy_ch14", "type": "TH1D", "title": "energy ch14;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 14 },
+    { "name": "energy_ch15", "type": "TH1D", "title": "energy ch15;energy [LSB];counts",
+      "fill": "energy", "bins": 1024, "min": 0, "max": 32768, "channel": 15 }
+  ]
+}

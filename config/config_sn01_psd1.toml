@@ -1,0 +1,75 @@
+# DELILA DAQ Configuration - ELIADE @ SN01 (172.18.4.201 / eliadesn01.eli-np.ro)
+# Hardware: 1x V1730SB (DPP-PSD "PSD1"), A3818 optical link 0, conet_node 0.
+#   Board confirmed via caen_info (2026-07-23):
+#     V1730SB, SerialNum = 30478, FwType = DPP-PSD, 16 ch, 500 MS/s.
+#     V1730 timestamp LSB = 2 ns.
+#
+# Build on SN01 (CAEN FELib isolated prefix; gcc-9 include needed for bindgen):
+#   CAEN_PREFIX=/opt/delila-caen \
+#   LIBCLANG_PATH=/lib/x86_64-linux-gnu \
+#   BINDGEN_EXTRA_CLANG_ARGS="-isystem /usr/lib/gcc/x86_64-linux-gnu/9/include" \
+#   cargo build --release --bins
+#
+# Run on SN01:
+#   LD_LIBRARY_PATH=/opt/delila-caen/lib ./scripts/start_daq.sh config/config_sn01_psd1.toml
+#
+# Verify link/node if the crate is re-cabled:
+#   LD_LIBRARY_PATH=/opt/delila-caen/lib ./target/release/caen_info \
+#     "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+
+[operator]
+experiment_name = "ELIADE_SN01"
+port = 9090
+
+# Run history -> local native MongoDB (auth disabled, fresh install).
+[operator.mongodb]
+uri = "mongodb://localhost:27017"
+database = "delila"
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# --- 1x V1730SB DPP-PSD (PSD1), 500 MHz -> 2 ns timestamp step ---
+[[network.sources]]
+id = 0
+name = "PSD1-V1730-0"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/sn01_v1730_psd.json"
+pipeline_order = 1
+time_step_ns = 2.0
+
+# --- Pipeline components ---
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- root_sink: parallel C++ ROOT recorder + live JSROOT monitor ---
+# Extra subscriber on the merger PUB. Best-effort: never gates the pipeline, so
+# the Rust Recorder writing .delila stays the authoritative recorder.
+# Writes run%04u_0000_<exp>.root (same naming as the Recorder, exp from
+# /api/status via the auto-derived --operator flag).
+# Delta-t matcher is OFF (no gamma/thgem channels on this setup) -> the
+# histogram set is hit-scope only; see config/histograms_sn01.json.
+# Live plots: http://<host>:8090/  (JSROOT)
+[network.root_sink]
+subscribe = "tcp://localhost:5557"
+output_dir = "./data"
+http_port = 8090
+hists = "config/histograms_sn01.json"
+autosave_sec = 30

@@ -1,0 +1,48 @@
+# DELILA-Rust DAQ as a systemd service.
+#
+# Template — written for eliadeSN01. On another host adjust User=,
+# WorkingDirectory= and the config file in ExecStart=.
+#
+# Why Type=oneshot + RemainAfterExit=yes: start_daq.sh launches the components
+# (reader / merger / recorder / monitor / root_sink / operator) in the
+# background and then exits. There is no single long-lived foreground process
+# for systemd to track, so the unit is "done" once the script succeeds and stays
+# active; the components live on in the unit's cgroup and are torn down by
+# ExecStop (plus systemd's cgroup kill as a backstop).
+#
+# No environment is set here on purpose: start_daq.sh prepends the CAEN FELib
+# prefix to LD_LIBRARY_PATH itself, and root_sink / delila2root have their ROOT
+# library path baked in as an rpath. So the service works without a login shell.
+#
+# Install:
+#   sudo cp scripts/systemd/delila-daq.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now delila-daq      # start now + on every boot
+#
+# Operate:
+#   systemctl status delila-daq
+#   sudo systemctl restart delila-daq
+#   sudo systemctl stop delila-daq
+#   journalctl -u delila-daq -n 50              # startup output
+#
+# Note: this only supervises startup/shutdown. It does not restart an individual
+# component that dies mid-run — the Operator Web UI reports component state.
+
+[Unit]
+Description=DELILA-Rust DAQ (ELIADE SN01)
+Documentation=https://github.com/ELI-NP/delila-rs
+# Run history goes to the local MongoDB; the network must be up for the Web UI.
+After=network-online.target mongod.service
+Wants=network-online.target mongod.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=eliade
+WorkingDirectory=/home/eliade/delila-rs
+ExecStart=/home/eliade/delila-rs/scripts/start_daq.sh config/config_sn01_psd1.toml
+ExecStop=/home/eliade/delila-rs/scripts/stop_daq.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
