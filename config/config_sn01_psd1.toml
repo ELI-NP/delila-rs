@@ -50,7 +50,10 @@ pipeline_order = 2
 [network.recorder]
 subscribe = "tcp://localhost:5557"
 command = "tcp://*:5580"
-output_dir = "./data"
+# Absolute path on purpose: neither the Recorder nor root_sink expands "~"
+# (and the shell does not expand it inside a TOML value either), so "~/..."
+# would create a directory literally named "~".
+output_dir = "/home/eliade/DELILA_data"
 pipeline_order = 3
 
 [network.monitor]
@@ -69,7 +72,9 @@ pipeline_order = 3
 # Live plots: http://<host>:8090/  (JSROOT)
 [network.root_sink]
 subscribe = "tcp://localhost:5557"
-output_dir = "./data"
+# Must match [network.recorder].output_dir so the .delila and .root files of a
+# run land side by side. Absolute path — see the note above.
+output_dir = "/home/eliade/DELILA_data"
 http_port = 8090
 hists = "config/histograms_sn01.json"
 autosave_sec = 30
