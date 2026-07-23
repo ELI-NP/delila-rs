@@ -86,6 +86,17 @@ fi
 MONGODB_URI="${MONGODB_URI:-mongodb://delila:delila_pass@localhost:27017}"
 MONGODB_DATABASE="${MONGODB_DATABASE:-delila}"
 
+# CAEN FELib isolated prefix (see scripts/setup_caen_felib.sh). FELib dlopen()s
+# its dig1/dig2 backends at runtime, and dlopen does NOT use the binaries' baked
+# rpath for that lookup — it needs LD_LIBRARY_PATH. Interactive logins get this
+# from ~/.bashrc, but non-interactive runs (cron, ssh "cmd", systemd) do not, and
+# the resulting failure is obscure: CAEN -10 "DEVICE LIBRARY NOT AVAILABLE".
+# Prepend it here when the prefix exists so the DAQ starts from any shell.
+CAEN_PREFIX_LIB="${CAEN_PREFIX:-/opt/delila-caen}/lib"
+if [ -d "$CAEN_PREFIX_LIB" ] && [[ ":${LD_LIBRARY_PATH}:" != *":${CAEN_PREFIX_LIB}:"* ]]; then
+    export LD_LIBRARY_PATH="${CAEN_PREFIX_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ]; then
     echo -e "${RED}Error: Config file not found: $CONFIG_FILE${NC}"
@@ -102,7 +113,22 @@ fi
 MONGO_AVAILABLE=false
 if [ "$SKIP_MONGO" = false ]; then
     echo ""
-    echo -e "${CYAN}=== Checking Docker/MongoDB ===${NC}"
+    echo -e "${CYAN}=== Checking MongoDB ===${NC}"
+
+    # A natively installed mongod (systemd, e.g. eliadeSN01) or any already
+    # reachable server at MONGODB_URI needs no Docker at all. Probe it FIRST,
+    # otherwise a Docker-less host reports "Continuing without run history
+    # persistence" while the Operator is in fact recording happily — a false
+    # alarm that reads like a broken DAQ.
+    if command -v mongosh &>/dev/null &&
+       mongosh --quiet "$MONGODB_URI" --eval 'db.runCommand({ping:1}).ok' &>/dev/null; then
+        echo -e "  ${GREEN}MongoDB is running (native/remote)${NC}"
+        MONGO_AVAILABLE=true
+    fi
+fi
+
+# Docker/Colima fallback: only when no server answered above.
+if [ "$SKIP_MONGO" = false ] && [ "$MONGO_AVAILABLE" = false ]; then
 
     # Check if Docker is available, if not try to start Colima (macOS)
     if ! docker info &>/dev/null; then
@@ -155,7 +181,9 @@ if [ "$SKIP_MONGO" = false ]; then
     if [ "$MONGO_AVAILABLE" = false ]; then
         echo -e "  ${YELLOW}Continuing without run history persistence${NC}"
     fi
-else
+fi
+
+if [ "$SKIP_MONGO" = true ]; then
     echo ""
     echo -e "${YELLOW}Skipping MongoDB check (--no-mongo)${NC}"
 fi
