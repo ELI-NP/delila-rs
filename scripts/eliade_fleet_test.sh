@@ -35,7 +35,8 @@ ALL=("$BOSS" "${SOURCES[@]}")
 if [ "${1:-}" = "stop" ]; then
     note "=== Tearing down fleet test processes ==="
     for h in "${ALL[@]}"; do
-        $SSH eliade@$h 'pkill -f "target/release/(operator|merger|recorder|monitor|emulator)" 2>/dev/null; true' \
+        # [o]perator etc.: keep the pattern from matching this ssh command itself
+        $SSH eliade@$h 'pkill -f "target/release/([o]perator|[m]erger|[r]ecorder|[m]onitor|[e]mulator)" 2>/dev/null; true' \
             && echo "  $h: stopped" || echo "  $h: unreachable"
     done
     exit 0
@@ -57,18 +58,18 @@ pass "config on all nodes"
 
 # 3. Boss: pipeline components (start_daq.sh skips the remote sources)
 note "=== 3/6 Starting boss components on SN09 ==="
-$SSH eliade@$BOSS 'cd ~/delila-rs && pkill -f "target/release/(operator|merger|recorder|monitor|emulator)" 2>/dev/null; sleep 1;
+$SSH eliade@$BOSS 'cd ~/delila-rs && pkill -f "target/release/([o]perator|[m]erger|[r]ecorder|[m]onitor|[e]mulator)" 2>/dev/null; sleep 1;
   setsid bash scripts/start_daq.sh config/config_eliade_fleet.toml > /tmp/fleet_start.out 2>&1 < /dev/null & sleep 8;
-  pgrep -f "target/release/operator" > /dev/null' || fail "boss startup (see SN09:/tmp/fleet_start.out)"
+  pgrep -f "target/release/[o]perator" > /dev/null' || fail "boss startup (see SN09:/tmp/fleet_start.out)"
 pass "boss up"
 
 # 4. Remote emulators
 note "=== 4/6 Starting emulators ==="
 for k in "${!SOURCES[@]}"; do
     h=${SOURCES[$k]}; id=${SOURCE_IDS[$k]}
-    $SSH eliade@$h "cd ~/delila-rs && pkill -f 'target/release/emulator' 2>/dev/null; sleep 0.5;
+    $SSH eliade@$h "cd ~/delila-rs && pkill -f 'target/release/[e]mulator' 2>/dev/null; sleep 0.5;
       setsid ./target/release/emulator --config config/config_eliade_fleet.toml --source-id $id \
-        > /tmp/fleet_emulator.log 2>&1 < /dev/null & sleep 1; pgrep -f 'target/release/emulator' > /dev/null" \
+        > /tmp/fleet_emulator.log 2>&1 < /dev/null & sleep 1; pgrep -f 'target/release/[e]mulator' > /dev/null" \
         || fail "emulator on $h"
     echo "  $h: emulator (source_id=$id) up"
 done

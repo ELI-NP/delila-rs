@@ -1,0 +1,46 @@
+# Remote-machinery smoke test: one emulator on puppex (172.18.4.76) streaming
+# into a boss pipeline on the local workstation. Explicit ports everywhere so
+# it works against puppex's older (April) rsync-deployed binaries.
+# Driven ad-hoc; see TODO/CURRENT.md ELIADE fleet test for the full-scale case.
+
+[operator]
+experiment_name = "RemoteTest76"
+port = 9093
+
+[network]
+[[network.sources]]
+id = 0
+name = "emu-puppex"
+type = "emulator"
+host = "172.18.4.76"
+bind = "tcp://*:5755"
+command = "tcp://*:5760"
+pipeline_order = 1
+
+[network.merger]
+subscribe = ["tcp://172.18.4.76:5755"]
+publish = "tcp://*:5757"
+command = "tcp://*:5770"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5757"
+command = "tcp://*:5780"
+output_dir = "./data/remote_test_76"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5757"
+command = "tcp://*:5790"
+http_port = 8083
+pipeline_order = 3
+
+[settings]
+source = "file"
+
+[settings.file]
+events_per_batch = 1000
+batch_interval_ms = 50
+num_modules = 1
+channels_per_module = 16
+enable_waveform = false
