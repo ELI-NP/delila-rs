@@ -1,0 +1,112 @@
+# DELILA DAQ — ELIADE fleet distributed test (emulator, no hardware)
+#
+# First exercise of the multi-computer case at ELIADE scale, ahead of the
+# A3818 cards: 8 emulator sources on SN02..SN08 + SN10 stream over the
+# network into SN09 (the "boss": Operator + Merger + Recorder + Monitor).
+# SN01 is deliberately excluded — it runs the live V1725 pulser DAQ.
+#
+# Driven by scripts/eliade_fleet_test.sh from a workstation that can ssh to
+# every node. Ports auto-allocate per source: data = 7000+id, command =
+# 5560+id (each on its own host, so no collisions anyway). The merger's
+# subscribe list is auto-generated from the sources' host fields.
+#
+# Run control: http://eliadeSN09:9090/ (REST + web UI)
+
+[operator]
+experiment_name = "ELIADE_FLEET"
+port = 9090
+
+[network]
+
+# --- Remote emulator sources: id = node number ---
+[[network.sources]]
+id = 2
+name = "emu-SN02"
+type = "emulator"
+host = "172.18.4.202"
+pipeline_order = 1
+
+[[network.sources]]
+id = 3
+name = "emu-SN03"
+type = "emulator"
+host = "172.18.4.203"
+pipeline_order = 1
+
+[[network.sources]]
+id = 4
+name = "emu-SN04"
+type = "emulator"
+host = "172.18.4.204"
+pipeline_order = 1
+
+[[network.sources]]
+id = 5
+name = "emu-SN05"
+type = "emulator"
+host = "172.18.4.205"
+pipeline_order = 1
+
+[[network.sources]]
+id = 6
+name = "emu-SN06"
+type = "emulator"
+host = "172.18.4.206"
+pipeline_order = 1
+
+[[network.sources]]
+id = 7
+name = "emu-SN07"
+type = "emulator"
+host = "172.18.4.207"
+pipeline_order = 1
+
+[[network.sources]]
+id = 8
+name = "emu-SN08"
+type = "emulator"
+host = "172.18.4.208"
+pipeline_order = 1
+
+[[network.sources]]
+id = 10
+name = "emu-SN10"
+type = "emulator"
+host = "172.18.4.210"
+pipeline_order = 1
+
+# --- Boss node SN09 (172.18.4.209) ---
+[network.merger]
+# subscribe omitted -> auto-generated from the sources above
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+# Backlog watermarks (TODO 68): generous soft warn, no autostop for the
+# first plumbing test.
+backlog_soft_limit_mb = 4096
+backlog_hard_limit_mb = 0
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+output_dir = "./data"
+pipeline_order = 3
+backlog_soft_limit_mb = 4096
+backlog_hard_limit_mb = 0
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- Emulator rate: ~20 kHz per node, ~160 kHz aggregate over 8 nodes ---
+[settings]
+source = "file"
+
+[settings.file]
+events_per_batch = 1000
+batch_interval_ms = 50
+num_modules = 1
+channels_per_module = 16
+enable_waveform = false
