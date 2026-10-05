@@ -232,7 +232,7 @@ impl ComponentClient {
     ) -> Vec<CommandResult> {
         // Sort by pipeline_order descending (downstream first, then upstream)
         let mut sorted: Vec<_> = configs.iter().collect();
-        sorted.sort_by(|a, b| b.pipeline_order.cmp(&a.pipeline_order));
+        sorted.sort_by_key(|c| std::cmp::Reverse(c.pipeline_order));
 
         // Log the start order for debugging
         tracing::info!(

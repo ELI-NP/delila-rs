@@ -221,11 +221,7 @@ fn analyze_raw_data(data: &[u8], size: usize) {
 
     // Calculate number of events
     let ch_data_words = ch_size as usize - 2; // subtract header
-    let n_events = if event_words > 0 {
-        ch_data_words / event_words
-    } else {
-        0
-    };
+    let n_events = ch_data_words.checked_div(event_words).unwrap_or(0);
     println!("  Channel data:   {} words (ch_size - 2)", ch_data_words);
     println!("  Events:         {} (ch_data / event_size)", n_events);
 

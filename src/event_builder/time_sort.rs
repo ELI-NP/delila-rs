@@ -107,7 +107,7 @@ impl TimeSortBuffer {
     pub fn flush(&mut self) -> Vec<Hit> {
         let mut result = Vec::new();
 
-        for (_, hits) in self.buffer.iter() {
+        for hits in self.buffer.values() {
             result.extend(hits.iter().cloned());
         }
 

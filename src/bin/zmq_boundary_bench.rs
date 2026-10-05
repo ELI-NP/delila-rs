@@ -260,11 +260,9 @@ async fn main() -> anyhow::Result<()> {
 
     let total_events = args.rate * args.duration;
     let total_batches = total_events.div_ceil(args.batch_size as u64);
-    let nanos_per_batch = if args.rate == 0 {
-        0
-    } else {
-        1_000_000_000u64 * args.batch_size as u64 / args.rate
-    };
+    let nanos_per_batch = (1_000_000_000u64 * args.batch_size as u64)
+        .checked_div(args.rate)
+        .unwrap_or(0);
 
     info!(
         total_events,

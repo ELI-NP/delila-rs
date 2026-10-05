@@ -895,7 +895,7 @@ mod tests {
         let msg = Message::eos(99, 0);
         let bytes = msg.to_msgpack().unwrap();
 
-        println!("EOS bytes: {:02x?}", &bytes);
+        println!("EOS bytes: {:02x?}", bytes);
 
         let header = MessageHeader::parse(&bytes);
         assert!(header.is_some(), "Failed to parse EOS header");

@@ -426,18 +426,10 @@ impl X743TdcDiag {
 
     /// Re-arm at run start (SWStartAcquisition): fresh budgets, forget last raw.
     fn rearm(&mut self) {
-        for b in &mut self.budget {
-            *b = Self::STARTUP_PER_RUN;
-        }
-        for b in &mut self.backward_budget {
-            *b = Self::BACKWARD_PER_RUN;
-        }
-        for c in &mut self.backward_count {
-            *c = 0;
-        }
-        for l in &mut self.last_raw {
-            *l = None;
-        }
+        self.budget.fill(Self::STARTUP_PER_RUN);
+        self.backward_budget.fill(Self::BACKWARD_PER_RUN);
+        self.backward_count.fill(0);
+        self.last_raw.fill(None);
     }
 
     /// Observe the masked 40-bit raw TDC for group `g`. Logs the first
@@ -758,7 +750,8 @@ fn unpack_amax_debug_waveform(samples: &[u16]) -> decoder::common::Waveform {
     let mut digital_probe4 = Vec::with_capacity(n);
     let mut digital_probe5 = Vec::with_capacity(n);
 
-    for chunk in samples.chunks_exact(4) {
+    let (chunks, _) = samples.as_chunks::<4>();
+    for chunk in chunks {
         analog_probe1.push(chunk[0] as i16);
         analog_probe2.push(chunk[1] as i16);
         analog_probe3.push(chunk[2] as i16);

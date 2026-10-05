@@ -118,7 +118,7 @@ fn main() {
 
     // Top 10 slowest
     let mut sorted = timings.clone();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|t| std::cmp::Reverse(t.1));
     println!("\nTop 10 slowest:");
     for (name, dur, ok) in sorted.iter().take(10) {
         let status = if *ok { "ok" } else { "ERR" };
