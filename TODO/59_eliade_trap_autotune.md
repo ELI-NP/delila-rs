@@ -619,8 +619,16 @@ floods us with noise" frustration — it tells you whether the fix is even in pa
       3.77→3.32 keV), segments 0 to −2 %. Table at the end of §5.7.
 - [ ] **Try FW 6592/1200 (two pickup periods)**: keeps the core null, longer shaping for segments.
 - [ ] **Explain the 12 % FW/SW gap on the segments** (emulate the FW baseline restoration offline).
-- [ ] **Automate FW-side scans** (Operator REST Tune Up apply → root_sink hits → FWHM). The only way
-      to measure rise > 4 µs, where the segments' optimum is.
+- [~] **Automate FW-side scans** — `pha_fw_scan` (2026-10-05, `dev-tools`; not yet run on hardware).
+      The only way to measure rise > 4 µs, where the segments' optimum is. Per point: `/apply` every
+      board (board-wide trapezoid), `/api/run/start`, list-mode run, `/api/stop`, read the run's
+      `.delila`, fit both ⁶⁰Co lines per channel. The pair is found by its energy RATIO (never "the
+      tallest line"), so the FW gain need not be known. Point 0 = the config as found, measured under
+      the same conditions. Originals are backed up and re-applied at the end, also on error / Ctrl-C /
+      SIGTERM. Output: table, CSV, `dig<ID>_proposed.json` (per-channel override at each channel's best
+      point, NOT applied). Pure logic in `src/offline/fw_scan.rs`; E2E tests against a mock Operator.
+      Statistics: ±1.5/√N per width → N(1332) ≥ 2500 per point for ±3 %. First target: eliadeSN05
+      (3× V1725 SN 220/219/186, moved from SN02 on 2026-10-05).
 - [ ] **Hardware (ELIADE team)**: find the 303 kHz source (HV path first), check ch9 on its own.
 - [ ] **Finalize the Phase 0 capture spec:** fix max-rise-to-test → window length (current
       plan 20 µs) + pre-trigger (= rise_max + 0.2·flat, max 8176 ns); pick source (⁶⁰Co /

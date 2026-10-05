@@ -161,6 +161,11 @@ path = "src/bin/pha_trap_tune.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "pha_fw_scan"
+path = "src/bin/pha_fw_scan.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "amax_data_test"
 path = "src/bin/amax_data_test.rs"
 required-features = ["dev-tools"]

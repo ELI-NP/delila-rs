@@ -53,6 +53,31 @@ const CONTENT_REFERENCE_MIN_FIT_FRACTION: f64 = 0.5;
 /// clear of the charge-collection time (HPGe ≲ 400 ns) at 2–4 ns/sample.
 const TAIL_START: usize = 128;
 
+/// Parse a grid axis: `lo:hi:step` (inclusive) or a comma-separated list.
+pub fn parse_values(text: &str) -> Result<Vec<f64>, String> {
+    let num = |t: &str| t.trim().parse::<f64>().map_err(|e| format!("'{t}': {e}"));
+    let values = if text.contains(':') {
+        let parts: Vec<&str> = text.split(':').collect();
+        if parts.len() != 3 {
+            return Err(format!("'{text}': expected lo:hi:step"));
+        }
+        let (lo, hi, step) = (num(parts[0])?, num(parts[1])?, num(parts[2])?);
+        if !(step > 0.0 && hi >= lo) {
+            return Err(format!("'{text}': need step > 0 and hi ≥ lo"));
+        }
+        let n = ((hi - lo) / step + 1e-9).floor() as usize;
+        (0..=n).map(|i| lo + i as f64 * step).collect()
+    } else {
+        text.split(',')
+            .map(num)
+            .collect::<Result<Vec<f64>, String>>()?
+    };
+    if values.is_empty() || values.iter().any(|v| v.is_nan() || *v <= 0.0) {
+        return Err(format!("'{text}': values must be positive"));
+    }
+    Ok(values)
+}
+
 /// One recorded waveform to replay.
 #[derive(Debug, Clone)]
 pub struct ScanEvent {
@@ -364,6 +389,26 @@ mod tests {
             PointOutcome::Fit(f) => f.fwhm,
             other => panic!("expected a fit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_values_accepts_ranges_and_lists() {
+        assert_eq!(
+            parse_values("1000:2000:500").unwrap(),
+            vec![1000.0, 1500.0, 2000.0]
+        );
+        assert_eq!(
+            parse_values("1000:2200:500").unwrap(),
+            vec![1000.0, 1500.0, 2000.0]
+        );
+        assert_eq!(
+            parse_values("250, 1000,4000").unwrap(),
+            vec![250.0, 1000.0, 4000.0]
+        );
+        assert!(parse_values("1000:500:100").is_err());
+        assert!(parse_values("1000:2000").is_err());
+        assert!(parse_values("0,100").is_err());
+        assert!(parse_values("abc").is_err());
     }
 
     #[test]

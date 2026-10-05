@@ -101,39 +101,14 @@ impl Default for Opts {
             scan: false,
             module: None,
             probe: 1,
-            scan_rise_ns: range_list("1000:8000:500").unwrap_or_default(),
-            scan_flat_ns: range_list("500:2000:250").unwrap_or_default(),
+            scan_rise_ns: scan::parse_values("1000:8000:500").unwrap_or_default(),
+            scan_flat_ns: scan::parse_values("500:2000:250").unwrap_or_default(),
             fw_window: None,
             line_kev: None,
             pz_auto: false,
             scan_csv: None,
         }
     }
-}
-
-/// Parse `lo:hi:step` (inclusive) or a comma-separated list into values.
-fn range_list(text: &str) -> Result<Vec<f64>, String> {
-    let num = |t: &str| t.trim().parse::<f64>().map_err(|e| format!("'{t}': {e}"));
-    let values = if text.contains(':') {
-        let parts: Vec<&str> = text.split(':').collect();
-        if parts.len() != 3 {
-            return Err(format!("'{text}': expected lo:hi:step"));
-        }
-        let (lo, hi, step) = (num(parts[0])?, num(parts[1])?, num(parts[2])?);
-        if !(step > 0.0 && hi >= lo) {
-            return Err(format!("'{text}': need step > 0 and hi ≥ lo"));
-        }
-        let n = ((hi - lo) / step + 1e-9).floor() as usize;
-        (0..=n).map(|i| lo + i as f64 * step).collect()
-    } else {
-        text.split(',')
-            .map(num)
-            .collect::<Result<Vec<f64>, String>>()?
-    };
-    if values.is_empty() || values.iter().any(|v| v.is_nan() || *v <= 0.0) {
-        return Err(format!("'{text}': values must be positive"));
-    }
-    Ok(values)
 }
 
 /// Parse `LO:HI` into an ordered pair.
@@ -246,12 +221,12 @@ fn parse_opts(args: &[String]) -> Result<Opts, String> {
             }
             "--scan-rise-ns" => {
                 o.scan_rise_ns =
-                    range_list(&val(i)?).map_err(|e| format!("--scan-rise-ns: {e}"))?;
+                    scan::parse_values(&val(i)?).map_err(|e| format!("--scan-rise-ns: {e}"))?;
                 i += 2;
             }
             "--scan-flat-ns" => {
                 o.scan_flat_ns =
-                    range_list(&val(i)?).map_err(|e| format!("--scan-flat-ns: {e}"))?;
+                    scan::parse_values(&val(i)?).map_err(|e| format!("--scan-flat-ns: {e}"))?;
                 i += 2;
             }
             "--fw-window" => {
@@ -1164,26 +1139,6 @@ mod tests {
     use rand_distr::{Distribution, Normal};
 
     #[test]
-    fn range_list_accepts_ranges_and_lists() {
-        assert_eq!(
-            range_list("1000:2000:500").unwrap(),
-            vec![1000.0, 1500.0, 2000.0]
-        );
-        assert_eq!(
-            range_list("1000:2200:500").unwrap(),
-            vec![1000.0, 1500.0, 2000.0]
-        );
-        assert_eq!(
-            range_list("250, 1000,4000").unwrap(),
-            vec![250.0, 1000.0, 4000.0]
-        );
-        assert!(range_list("1000:500:100").is_err());
-        assert!(range_list("1000:2000").is_err());
-        assert!(range_list("0,100").is_err());
-        assert!(range_list("abc").is_err());
-    }
-
-    #[test]
     fn scan_flags_are_parsed() {
         let args: Vec<String> = "pha_trap_tune run.delila --scan --ch 3 --module 2 --probe 2 \
             --scan-rise-ns 1000,2000 --scan-flat-ns 500:1000:250 --fw-window 3960:4040 \
@@ -1304,8 +1259,8 @@ mod tests {
             scan: true,
             pz_auto: true,
             line_kev: Some(1332.5),
-            scan_rise_ns: range_list(rise).unwrap(),
-            scan_flat_ns: range_list(flat).unwrap(),
+            scan_rise_ns: scan::parse_values(rise).unwrap(),
+            scan_flat_ns: scan::parse_values(flat).unwrap(),
             scan_csv: Some(csv.to_path_buf()),
             ..Opts::default()
         }

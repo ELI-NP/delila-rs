@@ -545,8 +545,16 @@ CFD {delay, fraction, smoothing} + 共有 smoothing をオフラインで掃く 
       セグメント 0〜−2 %。§5.7 末尾の表。
 - [ ] **FW 6592/1200（2 周期）を試す**: コアの谷はそのまま、セグメントに長い整形。
 - [ ] **セグメントの FW/SW 12 % 乖離の解明**（FW ベースライン復元のオフライン模擬）。
-- [ ] **FW 側スキャンの自動化**（Operator REST の Tune Up apply → root_sink ヒット → FWHM）。
-      rise > 4 µs（セグメントの最適域）はこれでしか測れない。
+- [~] **FW 側スキャンの自動化** — `pha_fw_scan`（2026-10-05、`dev-tools`、実機未実行）。
+      rise > 4 µs（セグメントの最適域）はこれでしか測れない。点ごとに全ボードへ `/apply`（ボード一律の
+      台形）→ `/api/run/start` → リストモードのラン → `/api/stop` → そのランの `.delila` を読み、
+      ch ごとに ⁶⁰Co 2 本をフィット。2 本は**エネルギー比**で特定（「最も高い線」は使わない）ので FW
+      ゲインを知らなくてよい。点 0 = 現状の設定を同条件で測ったもの。元の設定は退避し、終了時に
+      再適用（エラー / Ctrl-C / SIGTERM でも）。出力 = 表・CSV・`dig<ID>_proposed.json`（各 ch の
+      最良点を per-channel override にしたもの、**適用はしない**）。純ロジックは
+      `src/offline/fw_scan.rs`、モック Operator に対する E2E テストあり。統計: 幅の誤差 ±1.5/√N →
+      ±3 % には 1 点あたり N(1332) ≥ 2500。最初の対象 = eliadeSN05（V1725 ×3、SN 220/219/186、
+      2026-10-05 に SN02 から移設）。
 - [ ] **ハード側（ELIADE チーム）**: 303 kHz 発生源の特定（HV 経路が第一容疑）、ch9 個別点検。
 - [ ] **Phase 0 capture 仕様の確定:** 最大 rise 決定 → 窓長（現行案 20 µs）+ pre-trigger
       （= rise_max + 0.2·flat、上限 8176 ns）; 源選定（⁶⁰Co/¹⁵²Eu、未定）; per-channel の
