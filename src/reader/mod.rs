@@ -111,7 +111,11 @@ impl X743WaveformStats {
         let n_bl = baseline_n.min(n / 2);
         let baseline: f32 = samples[..n_bl].iter().sum::<f32>() / n_bl as f32;
 
-        // Signed extremum over the post-baseline region.
+        // Signed extremum over the post-baseline region — the FIRST sample of a
+        // flat top for BOTH polarities. (`max_by` returns the LAST of equal
+        // maxima: a saturated positive pulse then put the peak at the end of its
+        // plateau, the CFD search below never reached the leading edge, and the
+        // time fell back to the peak sample. Fixed 2026-10-05.)
         let (peak_index, peak) = if negative_pulse {
             samples[n_bl..]
                 .iter()
@@ -122,7 +126,7 @@ impl X743WaveformStats {
             samples[n_bl..]
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .min_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, &v)| (i + n_bl, v))?
         };
         let amplitude = (peak - baseline).abs();
@@ -3380,6 +3384,9 @@ mod tests {
             cfd_fraction: 0.5,
             ttf_smoothing_taps: 0,
             channel_negative: [negative; caen_legacy::MAX_CHANNELS],
+            use_soft_charge: false,
+            charge_gate_pre_samples: 8,
+            charge_gate_samples: 64,
         }
     }
 
@@ -3414,9 +3421,14 @@ mod tests {
     #[cfg(feature = "x743")]
     #[test]
     fn test_x743_cfd_negative_pulse_sub_sample_timing() {
-        // 10 ns rise at 0.3125 ns/sample = 32 samples; baseline 64; peak hold 32.
+        // analyze() searches back from the peak at most max(4·delay, 16) samples,
+        // so the synthetic rise must be shorter than that (real V1743 edges are):
+        // 12 samples here. (Until 2026-10-05 this test used a 32-sample rise and
+        // a delayed-signal time reference; it could never pass, and since the
+        // soft-charge fields were added the x743 test build did not compile, so
+        // nobody noticed.)
         let ns_per_sample = 1.0 / 3.2;
-        let wf = x743_synth_pulse(64, 32, 32, 256, 1000.0, true);
+        let wf = x743_synth_pulse(64, 12, 32, 256, 1000.0, true);
         let stats = X743WaveformStats::analyze(&wf, ns_per_sample, true, 32, 4, 0.3)
             .expect("analyzer returned None");
         assert!(
@@ -3425,19 +3437,15 @@ mod tests {
         );
         assert!(stats.baseline.abs() < 1e-3, "baseline ≈ 0 for our synth");
         assert!((stats.amplitude - 1000.0).abs() < 1e-3);
-        // For a linear ramp from 0 to −A over `rise_len` samples starting at sample 64,
-        // the CFD signal d[i] = f·x[i] − x[i − delay] with f=0.3, delay=4 crosses zero
-        // at x[i] = x[i−delay] / f → same-height point on a linear ramp happens when
-        //   delta_sample · (1/f − 1) = delay  →  delta = delay / (1/f − 1) = 4 / (10/3 − 1)
-        //   = 4 / (7/3) = 12/7 ≈ 1.714 samples past the start of the rise.
-        // So the zero-crossing ≈ sample 64 + 1.714 ≈ 65.714 → time ≈ 20.54 ns.
-        // Allow up to 1 sample (0.31 ns) of tolerance — the backward-search picks
-        // the bracketing samples and linear-interpolates, which on a linear ramp
-        // is accurate to well below that tolerance.
-        let expected_ns = (64.0 + 12.0 / 7.0) * ns_per_sample;
+        // Classic CFD d[i] = f·x[i] − x[i − delay] (prompt sample's time is
+        // reported). On a linear ramp starting at sample s, x[j] ∝ (j − s + 1),
+        // so d = 0 where (j − s + 1)(1 − f) = delay → j = s − 1 + delay/(1 − f)
+        // = 64 − 1 + 4/0.7 = 68.714. d is linear in j there, so the linear
+        // interpolation is exact; allow a small float tolerance.
+        let expected_ns = (63.0 + 4.0 / 0.7) * ns_per_sample;
         let diff = (stats.cfd_time_ns - expected_ns).abs();
         assert!(
-            diff < 0.35,
+            diff < 0.01,
             "cfd_time_ns={} expected≈{} (diff={})",
             stats.cfd_time_ns,
             expected_ns,
@@ -3447,13 +3455,38 @@ mod tests {
 
     #[cfg(feature = "x743")]
     #[test]
+    fn test_x743_cfd_saturated_plateau_times_both_polarities_alike() {
+        // A long flat top (ADC saturation) must not push the peak to the end of
+        // the plateau: the CFD search starts at the peak and looks back at most
+        // max(4·delay, 16) samples. Both polarities must give the same, valid
+        // leading-edge time.
+        let ns = 1.0 / 3.2;
+        let neg = x743_synth_pulse(64, 12, 120, 256, 1000.0, true);
+        let pos = x743_synth_pulse(64, 12, 120, 256, 1000.0, false);
+        let sn = X743WaveformStats::analyze(&neg, ns, true, 32, 4, 0.3).expect("neg");
+        let sp = X743WaveformStats::analyze(&pos, ns, false, 32, 4, 0.3).expect("pos");
+        assert!(
+            sn.cfd_valid && sp.cfd_valid,
+            "neg {} pos {}",
+            sn.cfd_valid,
+            sp.cfd_valid
+        );
+        assert_eq!(sn.peak_index, sp.peak_index);
+        assert_eq!(sp.peak_index, 64 + 11, "first sample of the plateau");
+        assert!((sn.cfd_time_ns - sp.cfd_time_ns).abs() < 1e-9);
+        assert!((sp.cfd_time_ns - (63.0 + 4.0 / 0.7) * ns).abs() < 0.01);
+    }
+
+    #[cfg(feature = "x743")]
+    #[test]
     fn test_x743_cfd_positive_pulse_finds_edge() {
-        let wf = x743_synth_pulse(48, 24, 16, 128, 800.0, false);
+        // Rise (12) within analyze()'s max(4·delay, 16)-sample search span.
+        let wf = x743_synth_pulse(48, 12, 16, 128, 800.0, false);
         let stats =
             X743WaveformStats::analyze(&wf, 1.0 / 3.2, false, 32, 4, 0.3).expect("analyzer None");
         assert!(stats.cfd_valid);
         assert!((stats.amplitude - 800.0).abs() < 1e-3);
-        assert!(stats.peak_index >= 48 + 24 && (stats.peak_index as usize) < 128);
+        assert!(stats.peak_index >= 48 + 11 && (stats.peak_index as usize) < 128);
     }
 
     #[cfg(feature = "x743")]

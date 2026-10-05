@@ -105,7 +105,10 @@ fn main() {
             .rustified_enum("CAEN_DGTZ_AcquisitionMode_t")
             .rustified_enum("CAEN_DGTZ_TrigerLogic_t")
             .rustified_enum("CAEN_DGTZ_EnaDis_t")
-            .generate_comments(true)
+            // CAENDigitizer.h comments contain indented prose that rustdoc compiles
+            // as Rust doctests (`cargo test --features x743` failed on
+            // CAEN_DGTZ_SetGroupEnableMask). The FELib header is clean.
+            .generate_comments(false)
             .derive_debug(true)
             .derive_default(true)
             .generate()
