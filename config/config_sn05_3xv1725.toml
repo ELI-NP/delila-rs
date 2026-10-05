@@ -1,0 +1,104 @@
+# DELILA DAQ Configuration - ELIADE @ SN05 (eliadeSN05, 10.14.0.15)
+# Hardware: 3x V1725 DPP-PHA ("PHA1"), A3818 optical link 0, daisy chain.
+#   Probed with caen-toolbox on SN02 2026-10-02 and again on SN05 2026-10-05
+#   (the link-0 fibre moved from SN02 to SN05; ROM serial = PID):
+#     conet_node 0 = V1725 SN 220
+#     conet_node 1 = V1725 SN 219
+#     conet_node 2 = V1725 SN 186
+#     conet_node 3 / link 1: nothing.
+#   All three configured as DPP-PHA (PHA1) on SN02, run 1, 2026-10-02.
+# V1725 timestamp LSB = 4 ns (250 MS/s).
+#
+# Channel settings start from SN01 board #1 as tuned on 2026-10-02
+# (trapezoid 3296/1200 ns = 1/303 kHz pickup period, X4, POSITIVE, waveforms
+# OFF) with NO per-channel overrides - tune thresholds per crystal in Tune Up.
+#
+# The three boards run INDEPENDENTLY (all START_MODE_SW, no S-IN / clock
+# cabling): each board has its own time base and they start a few ms apart
+# (user decision 2026-10-02: board-to-board time offsets do not matter).
+# To synchronize later see config/config_sn01_3xv1725.toml (same recipe).
+#
+# Use on SN05 (start_daq.sh reads ./config.toml by default). config.toml is a
+# SYMLINK, as on SN01 - re-point it, never `cp` onto it:
+#   ln -sfn config/config_sn05_3xv1725.toml config.toml
+# Close caen-toolbox before starting the DAQ (board access is exclusive).
+#
+# Bandwidth: one CONET link (~80 MB/s) for three boards. Waveforms ON is
+# ~27 MB/s per board (20 us records) -> capture one board at a time.
+# Waveforms + record >= 7168 ns also trigger the couple memory arbiter
+# (TODO 59 §5.7). List mode is ~16 kB/s per board (SN01 run 23).
+
+[operator]
+experiment_name = "ELIADE_SN05"
+port = 9090
+
+# Run history -> local native MongoDB (auth disabled, provisioned 2026-07).
+[operator.mongodb]
+uri = "mongodb://localhost:27017"
+database = "delila"
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# All readers share pipeline_order 1 (armed and started in parallel).
+
+[[network.sources]]
+id = 0
+name = "PHA1-V1725-0"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/sn05_v1725_pha_0.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 1
+name = "PHA1-V1725-1"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+config_file = "config/digitizers/sn05_v1725_pha_1.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 2
+name = "PHA1-V1725-2"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=2"
+config_file = "config/digitizers/sn05_v1725_pha_2.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# --- Pipeline components ---
+# [network.merger] has no explicit `subscribe`: it is derived from the source
+# list, so it picks up all three readers (ports 7000-7002).
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# Absolute path on purpose: neither the Recorder nor root_sink expands "~".
+# (SN05 has only / - 1.8 TB.)
+output_dir = "/home/eliade/DELILA_data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- root_sink: parallel C++ ROOT recorder + live JSROOT monitor ---
+# Hit tree carries `module`; histograms_sn01.json is hit-scope only and sums
+# modules per channel (use module_vs_channel / energy_vs_module to separate).
+[network.root_sink]
+subscribe = "tcp://localhost:5557"
+output_dir = "/home/eliade/DELILA_data"
+http_port = 8090
+hists = "config/histograms_sn01.json"
+autosave_sec = 30
