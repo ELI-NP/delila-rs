@@ -1,6 +1,6 @@
 # TODO 59 — ELIADE PHA Energy-Resolution Auto-Tune (SW Trapezoid Replay)
 
-**Status: 📋 PLANNING (2026-06-16, revised 2026-07-13)**
+**Status: 🚧 ACTIVE — first scan on a real HPGe done (SN01 run 22, ⁶⁰Co); FW verification pending (2026-10-02)**
 **Owner:** Aogaki + Claude
 **Experiment:** ELIADE (8× Clover HPGe array, ELI-NP)
 **Target timeline:** Bench tests start June 2026 · Ge resolution tune-up through 2026 · Beam from Jan 2027
@@ -13,6 +13,18 @@
 > **from-scratch implementation + probe-overlay reverse engineering**. ③ 20 µs waveforms
 > verified on hardware and through the whole DELILA chain (decoder / `.delila` v3 /
 > delila2root). ④ Scope and limits of offline RCCR2 trigger optimization captured in §6b.
+
+> **Revision 2026-09-30 (project start):** scope = **energy resolution first**; trigger /
+> timing (§6b, minimizing the amplitude dependence of the timing) is stage two.
+> ① **The July diagnosis "stage 2 (BLR) diverges, a dynamic BLR is needed" was wrong.** The
+> real cause was the replay's initial condition: the history before the record was filled
+> with `input[0]`, which injects that one sample's noise with weight k (425 ppm per ADC
+> count of white noise vs. the ideal 20 ppm). The history is now the **pedestal**
+> (pre-trigger mean); no dynamic BLR is needed.
+> ② The **capture constraint** that follows: pre-trigger ≥ `rise + (1 − peak%)·flat`
+> (§3.5 item 2 rewritten).
+> ③ **Phase 2 scan implemented** (`pha_trap_tune --scan`, §5.6). The score is FWHM **and**
+> peak content (§5.4 addendum). Tested on synthetic waveforms; real data pending.
 
 ---
 
@@ -165,8 +177,22 @@ before it reaches disk.**
    record must contain baseline + full trapezoid response ≈ `2·(rise+flat) + decay`. Current
    plan: **20 µs window + a few µs pre-trigger**. Too-short windows silently corrupt
    long-shaping evals.
-2. **Sufficient pre-trigger baseline** (the baseline restorer averages pre-pulse samples;
-   2–4 µs as a guide).
+2. **Pre-trigger ≥ `rise + (1 − peak%)·flat`, set by the longest rise to be scanned
+   (rewritten 2026-09-30).** The trapezoid energy is "sum of k samples on the flat-top side
+   minus sum of the k samples just before the pulse", so without **rise-many recorded
+   samples** before the pulse the baseline-side window cannot be formed. The FW has a
+   continuous stream; offline there is only the record. Filling the gap with the pedestal
+   makes the white-noise term `√(1/k + 1/P)` (P = pre-trigger samples): long rise times
+   come out pessimistic vs. the FW and the right side of the U-curve is distorted. **The
+   scan tool does not evaluate such grid points; it reports them as "window".**
+   - FW limit: the Pre Trigger register 0x1n38 is 9 bits × 4 samples = **2044 samples =
+     8176 ns on the 725 series** (UM5678 rev5 §1.5) → rise up to ~7.9 µs can be scanned.
+   - **To verify on hardware**: the DevTree `ch_pretrg` maximum. The DT5730B dump says
+     2000 ns and the UI caps at 4000 ns. If the V1725 refuses 8000 ns, consider a direct
+     register write. If 4000 ns is the limit, only rise ≤ ~3.8 µs can be scanned.
+   - The July es2 pulser data replayed rise 5000 ns with a pre-trigger of **1024 ns**.
+   - Record window: the post side needs `rise + peak%·flat`. Pre 8.2 µs + post 11.8 µs =
+     the current 20 µs window covers rise 8 µs / flat 2 µs.
 3. **No clipping**: after any coarse_gain change, confirm the highest energies of interest
    (incl. the sum peak) stay inside the ADC range.
 4. **No decimation** (it breaks filter-response equivalence).
@@ -347,11 +373,93 @@ centroid to the known energy (e.g. 1332 keV), and report **FWHM in keV**. Minimi
 a *fixed* channel window would be wrong. (For the inner loop a robust half-max width estimate
 is fine; do the full Gaussian fit for final reporting.)
 
+**Addendum 2026-09-30 — do not rank by FWHM alone.** The FWHM is the width of the Gaussian
+core, and a setting that loses events into a tail keeps — or even sharpens — its core.
+Ballistic deficit is the textbook case: with a flat top shorter than the charge-collection
+time only the fast pulses stay in the peak, and they form a very narrow one (synthetic
+data: 46 % of the events left at flat 200 ns, core width equal to flat 1000 ns). Each grid
+point therefore also reports its **peak content** (events in the peak / events replayed),
+and points below 95 % of the grid maximum are not eligible as "best" (shown as `!`).
+Implementation = the unbinned soft-window moment method in
+[peak.rs](../src/offline/peak.rs) (exact for a Gaussian, no binning, works on
+integer-quantized FW energies). Precision ~1.5/√N per point (~0.7 % at 50k counts);
+neighbouring grid points share their events, so the ranking is far more certain than that.
+
 ### 5.5 Output
 
 Per channel: optimal `{rise, flat-top, peaking, PZ M}` + the FWHM curve (for the colleague
 to sanity-check the U-shape), emitted as a **config patch** ready to apply via the existing
 `start_delay`-style per-channel config path.
+
+### 5.6 The implemented scan tool (2026-09-30)
+
+```bash
+cargo run --release --features dev-tools --bin pha_trap_tune -- run0001_*.delila \
+    --scan --ch 0 --line-kev 1332.5 --pz-auto \
+    --scan-rise-ns 1000:8000:500 --scan-flat-ns 500:2000:250 --scan-csv scan_ch0.csv
+```
+
+- **Event selection**: an FW-energy window picks ONE line (`--fw-window LO:HI`; default =
+  tallest peak ±1 %). The SW peak position is re-found at every grid point (§5.4).
+- **Trapezoid evaluation**: [`Prepared`](../src/offline/trap.rs) computes it in closed form
+  from prefix sums (tested to agree numerically with the recursion): O(samples) once per
+  event + O(1) per grid point. M enters linearly, so the pole-zero can be scanned at the
+  same cost. Energies are in input ADC counts (normalized by `k·(M+1)`).
+- **Pole-zero**: `--pz-auto` measures τ from the pulse tails (§5.1 "measure, don't search").
+- **Pile-up cut**: events whose pre-trigger rides on the tail of an earlier pulse (their
+  pedestal is not the true baseline) are excluded by their tilt, and **counted**.
+- **Output**: FWHM table + peak-content table + best point, the grid points that could not
+  be evaluated and why, CSV. The FW's own resolution on the same selection (LSB-quantized)
+  is printed as the reference.
+- **Not yet implemented**: per-channel config patch, all-channel batch run, peaking
+  position / peak_nsmean axes.
+- Tests: `cargo test --lib offline` (33) + `cargo test --features dev-tools --bin
+  pha_trap_tune` (5, incl. an end-to-end run of `--scan` on a synthetic `.delila`).
+
+### 5.7 First scan on real data — eliadeSN01 run 22 (recorded 2026-10-01, analysed 10-02)
+
+**Conditions:** V1725 SN217 DPP-PHA, one crystal (core at two gains = ch0/ch1, segments ch2–9),
+⁶⁰Co only, X1, POSITIVE, single trace, pre-trigger 4000 ns (**V1725 DevTree limit [128, 4000] ns**,
+confirmed on hardware), record 20000 ns, FW trapezoid 3008/1008 ns, PZ 50 µs. One hour, 91 files,
+97.1 GB. Cores: first 30 files; segments: all files. 1332.5 keV line, explicit FW window per channel.
+
+| ch | role | N(1332) | FW measured | SW @ FW point | SW/FW | best SW (rise/flat) | SW gain |
+|---|---|---|---|---|---|---|---|
+| 0 | core, high gain | 12570 | 3.31 | 3.26 | 0.98 | 2.71 (3304/1200) | −17 % |
+| 1 | core, low gain | 21990 | 3.61 | 3.50 | 0.97 | 2.95 (3304/1400) | −16 % |
+| 2–8 | segment | 2090–4811 | 3.82–4.54 | 3.37–3.97 | 0.87–0.88 | 3.25–3.82 (3300–3530) | −2 to −5 % |
+| 9 | segment | 2193 | 5.84 | 5.07 | 0.87 | 4.76 (3304/1200) | −6 % |
+
+(FWHM in keV. Details: `results/eliade_sn01/2026-10-02_run22_scan_summary.txt`, figure
+`..._fwhm_vs_rise_all.png`.)
+
+**Findings:**
+1. **The D0 trigger marker is recorded ~290 ns after the input edge**, so sampling
+   `rise + peak%·flat` after the marker overshoots the flat top. The reference is now the **edge
+   half height** (`trap::pulse_midpoint`); SW = FW/2.011 event by event (91–96 % of clean events
+   within ±0.3 %).
+2. **The noise is a 303 kHz switcher (harmonics 9–21, odd ones dominant).** A trapezoid box of
+   length k nulls f = n/k, so **rise = 1/303 kHz = 3.30 µs removes every harmonic**. The cores are
+   dominated by it (jagged FWHM vs rise, valley at 3304 ns). The FW-settable 3296 ns is +0.5 % from
+   the best; ±32 ns costs +5 % (a narrow valley = fragile against frequency drift).
+3. **The segments are white-noise dominated** (FWHM falls monotonically with rise and is still
+   falling at 3.4 µs) → their optimum lies beyond the 4 µs pre-trigger limit. Net gain only 2–6 %.
+4. **The pickup is strong on the cores and weak on the segments** → the HV path (switching HV
+   supply ripple / HV filter) is the first suspect.
+5. **Open: on the segments the FW is 12–13 % worse than SW at the same parameters** (cores agree).
+   Suspect the FW baseline restoration disturbed by frequent noise triggers (ch9: 2.0 M
+   waveforms/h). Segment FW gains must be measured, not inferred.
+6. **Scan metric fix:** counting peak content in each point's own fit window let noise-broadened
+   points swallow the low-energy shoulder, set the maximum and disqualify every good narrow
+   point → content is now counted in a **window common to all points (±3× the narrowest FWHM)**
+   (`scan::CONTENT_WINDOW_FWHMS`).
+7. **Auto FW window traps:** ⁶⁰Co 1173 keV is often taller than 1332 keV, and a lowered threshold
+   makes E≈1 noise the tallest code → `fw_lines` (ignores codes < 64, lists candidates) + a
+   warning when combined with `--line-kev`. The day-one keV values had taken the 1173 line as
+   1332.5 and were 13.6 % too large (correction note in `2026-10-01_run22_prelim_scan.txt`).
+8. **DIG1 couple arbiter confirmed on hardware** (record ≥ 1792 samples: one of two simultaneous
+   events in a couple is dropped, UM5678 §1.2). Both core gains share couple 0/1, so physics runs
+   with waveforms on lose ~half of each.
 
 ---
 
@@ -490,26 +598,42 @@ floods us with noise" frustration — it tells you whether the fix is even in pa
 
 ## 8. Concrete next steps
 
+- [x] **Verify the pre-trigger maximum on a V1725** (2026-10-01: DevTree `[128, 4000]` ns, 8000 is
+      clamped to 4000). Register 0x1n38 goes to 8176 ns, so a raw write via DIG1
+      `extra_registers` (uncommitted, not deployed) is worth a try.
+- [ ] **FW verification (ELIADE team's one-hour run, FW 3296/1200)**: FW FWHM from the root_sink
+      hits vs the §5.7 prediction (cores 2.7–2.95 keV). Also a few minutes at 6592/1200 (two periods).
+- [ ] **Explain the 12 % FW/SW gap on the segments** (emulate the FW baseline restoration offline).
+- [ ] **Automate FW-side scans** (Operator REST Tune Up apply → root_sink hits → FWHM). The only way
+      to measure rise > 4 µs, where the segments' optimum is.
+- [ ] **Hardware (ELIADE team)**: find the 303 kHz source (HV path first), check ch9 on its own.
 - [ ] **Finalize the Phase 0 capture spec:** fix max-rise-to-test → window length (current
-      plan 20 µs) + pre-trigger; pick source (⁶⁰Co / ¹⁵²Eu); back-compute per-channel adc_min
-      (incl. coarse_gain / fine_gain alignment).
-- [ ] **Confirm dual-trace effective sampling** (interleave → ~8 ns/sample?) on hardware.
+      plan 20 µs) + pre-trigger (= rise_max + 0.2·flat, max 8176 ns); pick source (⁶⁰Co /
+      ¹⁵²Eu, open); back-compute per-channel adc_min (incl. coarse_gain / fine_gain
+      alignment). Host / crystals not yet known (2026-09-30).
+- [x] **Confirm dual-trace effective sampling** (2026-10-01: the input is duplicated in pairs =
+      8 ns effective → capture in single trace, `vtrace_probe_1 = VPROBE_NONE`).
 - [ ] **Revisit coarse_gain**: raise the ADC-range utilization of individual channels
       (currently ~12%; push toward X4). Confirm no clipping (incl. sum peak).
 - [ ] **Record one validation run + one capture run** (start with 1 crystal on es2 and close
       the full loop ①–④ once).
-- [ ] **`pha_trap_tune` bin skeleton:** read `.delila` (waveform + FW energy + FW params)
-      (`dev-tools` feature, offline family).
-- [ ] **From-scratch, stage-separated SW trap** (§4.4): the public recursion + per-stage
-      traces. No AMax core reuse (it does not exist).
+- [x] **`pha_trap_tune` bin skeleton:** read `.delila` (waveform + FW energy + FW params)
+      (`dev-tools` feature, offline family). (2026-07-13)
+- [x] **From-scratch, stage-separated SW trap** (§4.4): the public recursion + per-stage
+      traces. No AMax core reuse (it does not exist). (2026-07-13; initial-condition bug
+      fixed 2026-09-30)
 - [ ] **Phase 1 validation harness:** per-event residual + probe2 overlay + D1=Peaking window
       match + FWHM_SW vs FWHM_FW. Feed a pulser run (identical waveforms) first to speed up
       convergence (§4.5).
 - [ ] **Pulser phase scan:** per flat-top candidate, measure the FW-energy spread over
       identical-amplitude pulses → detector-free direct observation of the trap × trigger
       cross-term (§4.5 item 2).
-- [ ] **Phase 2 grid search + free-peak Gaussian fit** → per-channel config patch (deep on 2
-      channels → narrow rollout, §5.3).
+- [x] **Phase 2 grid search + free-peak fit** (§5.6, 2026-09-30, verified on synthetic
+      waveforms).
+- [~] **Close Phase 1 on real data** (2026-10-02): per event SW = FW/2.011 on every channel.
+      FWHM agrees on the cores (0.97–0.98); **not yet on the segments (0.87)**.
+- [ ] **Per-channel config patch output + all-channel batch** (deep on 2 channels → narrow
+      rollout, §5.3).
 - [ ] **Phase 3 HW verify** loop + lock-in.
 - [ ] **(Later) reader option to omit digital probes** from EventData — halves event size
       (for production after trigger validation is done; a few lines + a config flag).

@@ -1,6 +1,6 @@
 # TODO 59 — ELIADE PHA エネルギー分解能 自動チューン（SW 台形リプレイ）【日本語版】
 
-**Status: 📋 PLANNING (2026-06-16, 改訂 2026-07-13)**
+**Status: 🚧 ACTIVE — 実 HPGe（SN01 run 22, ⁶⁰Co）で初回スキャン完了、FW 検証待ち (2026-10-02)**
 **担当:** Aogaki + Claude
 **実験:** ELIADE（8× Clover HPGe アレイ, ELI-NP）
 **タイムライン:** ベンチテスト 2026年6月開始 · Ge 分解能チューンアップ 2026年いっぱい · ビーム 2027年1月〜
@@ -13,6 +13,16 @@
 > `amax.rs` は decoder のみで SW trap 実装は存在しなかった）→ **スクラッチ実装 + probe-overlay
 > 逆工学**方式へ転換。③ 20 µs 波形の実機動作 + DELILA 全経路（decoder/.delila v3/delila2root）の
 > 想定を検証済み。④ RCCR2 トリガーのオフライン最適化の可否と限界を §6b に反映。
+
+> **改訂 2026-09-30（プロジェクト開始）:** スコープ = **まずエネルギー分解能のみ**。トリガー/
+> タイミング（§6b、振幅依存のタイミング変動の最小化）は第 2 段。
+> ① **7 月の「stage 2 (BLR) 乖離、動的 BLR が必要」という診断は誤りだった。** 真因は
+> リプレイの初期条件: 記録開始より前の履歴を `input[0]` で埋めていたため、その 1 サンプルの
+> ノイズが重み k で混入していた（白色ノイズ 1 ADC あたり 425 ppm、理想 20 ppm）。履歴を
+> **ペデスタル（pre-trigger 平均）**に替えて解消。動的 BLR の実装は不要になった。
+> ② そこから出る**録り方の制約**: pre-trigger ≥ `rise + (1 − peak%)·flat`（§3.5 項目 2 を改訂）。
+> ③ **Phase 2 スキャン本体を実装**（`pha_trap_tune --scan`、§5.6）。指標は FWHM **と**
+> ピーク残存率の 2 本立て（§5.4 追記）。合成波形でテスト済、実データ待ち。
 
 ---
 
@@ -146,7 +156,20 @@ per-event で持つので、SW 実装の逆工学顕微鏡になる（§4）。�
 1. **波形窓長 ≥ テストする最長シェーピング。** rise ~8 µs まで掃くなら窓は
    baseline + 完全な台形応答 ≈ `2·(rise+flat) + 減衰` を含むこと。**20 µs 窓 + pre-trigger
    数 µs** が現行案。窓が短いと長シェーピングの eval が silent に誤る。
-2. **pre-trigger baseline を十分に**（baseline restorer の平均に使う。2–4 µs 目安）。
+2. **pre-trigger ≥ `rise + (1 − peak%)·flat`（掃く最長 rise で決まる。改訂 2026-09-30）。**
+   台形のエネルギーは「flat top 側の k サンプル和 − パルス直前の k サンプル和」なので、
+   パルス前に **rise 分の実サンプル**が無いと baseline 側の窓が作れない。FW は連続ストリームを
+   持つが、オフラインは記録窓しか無い。不足分をペデスタルで代用すると白色ノイズの寄与が
+   `√(1/k + 1/P)`（P = pre-trigger サンプル数）になり、長い rise ほど FW より悲観的に出て
+   U 字カーブの右側が歪む。**スキャンツールは不足する格子点を評価せず「window」と表示する。**
+   - FW 上限: Pre Trigger レジスタ 0x1n38 は 9 bit × 4 サンプル = **2044 サンプル =
+     725 系で 8176 ns**（UM5678 rev5 §1.5）。→ rise ≤ ~7.9 µs まで掃ける。
+   - **要実機確認**: DevTree `ch_pretrg` の上限。DT5730B の dump は 2000 ns、UI は
+     4000 ns 上限としている。V1725 で 8000 ns が通らない場合はレジスタ直書きを検討。
+     4000 ns 止まりなら掃けるのは rise ≤ ~3.8 µs。
+   - 7 月の es2 パルサーデータは pre-trigger **1024 ns** で rise 5000 ns を再生していた。
+   - 記録窓: post 側は `rise + peak%·flat` が要る。pre 8.2 µs + post 11.8 µs = 現行の
+     20 µs 窓で rise 8 µs / flat 2 µs まで収まる。
 3. **クリップ禁止**: coarse_gain 変更後、最高エネルギー（sum peak 含む）が ADC レンジ内に
    収まることを確認。
 4. **decimation は使わない**（フィルタ応答の等価性が崩れる）。
@@ -308,10 +331,79 @@ rise を変えると **gain が変わり、peak centroid が移動**する。フ
 を報告すること。*固定* ch 窓で FWHM を最小化すると間違える。（内側ループは robust な half-max 幅推定で
 よい; 最終報告は full Gaussian フィット。）
 
+**追記 2026-09-30 — FWHM だけで順位を付けてはいけない。** FWHM は Gauss コアの幅であり、
+イベントを裾へ失う設定でもコアは細いまま、むしろ細くなる。典型が ballistic deficit: flat top が
+電荷収集時間より短いと、収集の速いパルスだけがピークに残り、それが非常に細いピークを作る
+（合成データで flat 200 ns のとき残存 46 %、コア幅は flat 1000 ns と同等）。よって各格子点で
+**ピーク残存率**（ピーク内イベント数 / 再生イベント数）を併記し、格子内最大の 95 % 未満の点は
+best の候補から外す（表示は `!`）。実装 = [peak.rs](../src/offline/peak.rs) の unbinned
+soft-window モーメント法（Gauss に対し厳密、ビニング無し、整数量子化された FW energy でも動く）。
+精度は 1 点あたり ~1.5/√N（5 万カウントで ~0.7 %）。隣接格子点は同一イベントなので順位はそれより
+ずっと確か。
+
 ### 5.5 出力
 
 per channel: 最適 `{rise, flat-top, peaking, PZ M}` + FWHM カーブ（同僚が U 字を sanity-check 用）、
 既存の `start_delay` 方式の per-channel config パスで適用できる **config patch** として吐く。
+
+### 5.6 実装済みスキャンツール（2026-09-30）
+
+```bash
+cargo run --release --features dev-tools --bin pha_trap_tune -- run0001_*.delila \
+    --scan --ch 0 --line-kev 1332.5 --pz-auto \
+    --scan-rise-ns 1000:8000:500 --scan-flat-ns 500:2000:250 --scan-csv scan_ch0.csv
+```
+
+- **イベント選択**: FW energy の窓で 1 本の線を選ぶ（`--fw-window LO:HI`、省略時は最頻ピーク ±1 %）。
+  SW 側のピーク位置は格子点ごとに探し直す（§5.4）。
+- **台形の評価**: [`Prepared`](../src/offline/trap.rs) が prefix sum から閉形式で計算（再帰と
+  数値一致をテスト済）。1 イベント O(サンプル数) の前処理 + 格子点あたり O(1)。M は線形に入るので
+  PZ も同コストで掃ける。エネルギーは入力 ADC カウント単位（`k·(M+1)` で正規化）。
+- **PZ**: `--pz-auto` がパルスの尾から τ を実測（§5.1 の「測って固定」）。
+- **pile-up カット**: pre-trigger が前パルスの尾に乗っているイベント（ペデスタルが真の baseline で
+  ない）を傾きで除外し、**件数を表示**。
+- **出力**: FWHM 表 + ピーク残存率表 + best、評価できなかった格子点とその理由、CSV。
+  FW 自身の分解能（同じ選択、LSB 量子化込み）も基準として表示。
+- **未実装**: per-channel config patch の書き出し、全 ch 一括実行、peaking 位置 / peak_nsmean の軸。
+- テスト: `cargo test --lib offline`（33 本）+ `cargo test --features dev-tools --bin pha_trap_tune`
+  （5 本、合成 `.delila` を書いて `--scan` を通す end-to-end 含む）。
+
+### 5.7 実データ初回スキャン — eliadeSN01 run 22（2026-10-01 録り、10-02 解析）
+
+**条件:** V1725 SN217 DPP-PHA、1 結晶（コア 2 ゲイン = ch0/ch1、セグメント ch2–9）、⁶⁰Co のみ、
+X1、POSITIVE、シングルトレース、pre-trigger 4000 ns（**V1725 DevTree 上限 [128, 4000] ns** を実機で確認）、
+レコード 20000 ns、FW 台形 3008/1008 ns、PZ 50 µs。1 時間、91 ファイル 97.1 GB。
+コアは先頭 30 ファイル、セグメントは全ファイル。1332.5 keV、FW 窓は ch ごとに明示。
+
+| ch | 役割 | N(1332) | FW 実測 | SW @ FW 点 | SW/FW | 最良 SW (rise/flat) | SW 改善 |
+|---|---|---|---|---|---|---|---|
+| 0 | コア高ゲイン | 12570 | 3.31 | 3.26 | 0.98 | 2.71 (3304/1200) | −17 % |
+| 1 | コア低ゲイン | 21990 | 3.61 | 3.50 | 0.97 | 2.95 (3304/1400) | −16 % |
+| 2–8 | セグメント | 2090–4811 | 3.82–4.54 | 3.37–3.97 | 0.87–0.88 | 3.25–3.82 (3300–3530) | −2〜−5 % |
+| 9 | セグメント | 2193 | 5.84 | 5.07 | 0.87 | 4.76 (3304/1200) | −6 % |
+
+（FWHM は keV。詳細 = `results/eliade_sn01/2026-10-02_run22_scan_summary.txt`、図 `..._fwhm_vs_rise_all.png`）
+
+**わかったこと:**
+1. **D0 トリガーマーカーは入力プローブより ~290 ns 遅れて記録される** → マーカー基準で
+   `rise + peak%·flat` を読むと平坦部を越える。基準を**エッジ半値点**（`trap::pulse_midpoint`）に変更して
+   SW = FW/2.011 がイベント単位で一致（クリーンイベントの 91–96 % が ±0.3 %）。
+2. **ノイズ = 303 kHz スイッチャーの倍音（9〜21 次、奇数次優勢）**。台形の箱は f = n/k を消すので
+   **rise = 1/303 kHz = 3.30 µs で全倍音が消える**。コアはこれが支配的（rise に対しギザギザ、3304 で谷）。
+   FW で設定可能な 3296 ns は最良 +0.5 %、±32 ns で +5 %（谷が狭い = 周波数ドリフトに弱い）。
+3. **セグメントは白色ノイズ支配**（rise に対し単調減少、3.4 µs でもまだ下がる）→ 最適は
+   pre-trigger 4 µs の外。正味改善は 2–6 % のみ。
+4. **混入はコアに強くセグメントに弱い** → HV 経路（スイッチング HV のリップル / HV フィルター）が第一容疑。
+5. **未解明: セグメントでは FW が SW より 12–13 % 悪い**（コアは一致）。FW ベースライン復元が頻繁な
+   ノイズトリガーで乱される説（ch9 は 2.0 M 波形/h）。セグメントの FW 改善量は実測が必要。
+6. **スキャン指標の修正**: ピーク残存率を各点自身の fit 窓で数えると、ノイズで広がった点が肩を飲み込んで
+   最大値を取り、細い良い点が全部不適格になった → **全点共通窓（±3× 最小 FWHM）**で数えるよう変更
+   （`scan::CONTENT_WINDOW_FWHMS`）。
+7. **auto FW 窓の罠**: Co は 1173 keV の方が高いことが多く、閾値を下げると E≈1 のノイズが最多になる →
+   `fw_lines`（コード 64 未満を無視、候補を表示）+ `--line-kev` 併用時の警告。初日の keV 値は 1173 線を
+   1332.5 で換算しており 13.6 % 過大だった（`2026-10-01_run22_prelim_scan.txt` に訂正注記）。
+8. **DIG1 カップルのアービター**（レコード ≥ 1792 サンプルで同時イベントの片方が消える、UM5678 §1.2）を
+   実機で確認。コア 2 ゲインが同じカップル (0/1) なので波形 ON の物理ランでは各々 ~半分を失う。
 
 ---
 
@@ -432,22 +524,35 @@ CFD {delay, fraction, smoothing} + 共有 smoothing をオフラインで掃く 
 
 ## 8. 次の具体ステップ
 
-- [ ] **Phase 0 capture 仕様の確定:** 最大 rise 決定 → 窓長（現行案 20 µs）+ pre-trigger; 源選定
-      （⁶⁰Co/¹⁵²Eu）; per-channel の adc_min 逆算（coarse_gain/fine_gain 整列込み）。
-- [ ] **dual trace の実効サンプリング確認**（interleave で 8 ns/sample 相当かを実機で確認）。
+- [x] **V1725 実機で pre-trigger 上限を確認**（2026-10-01: DevTree `[128, 4000]` ns、8000 は 4000 に
+      クランプ）。レジスタ 0x1n38 は 8176 ns まで書けるので DIG1 `extra_registers`（未コミット・未配備）で
+      生書き込みを試す余地あり。
+- [ ] **FW 検証（ELIADE チームの 1 時間ラン、FW 3296/1200）**: root_sink ヒットから FW FWHM を測り
+      §5.7 の予測（コア 2.7–2.95 keV）と照合。6592/1200（2 周期）も数分。
+- [ ] **セグメントの FW/SW 12 % 乖離の解明**（FW ベースライン復元のオフライン模擬）。
+- [ ] **FW 側スキャンの自動化**（Operator REST の Tune Up apply → root_sink ヒット → FWHM）。
+      rise > 4 µs（セグメントの最適域）はこれでしか測れない。
+- [ ] **ハード側（ELIADE チーム）**: 303 kHz 発生源の特定（HV 経路が第一容疑）、ch9 個別点検。
+- [ ] **Phase 0 capture 仕様の確定:** 最大 rise 決定 → 窓長（現行案 20 µs）+ pre-trigger
+      （= rise_max + 0.2·flat、上限 8176 ns）; 源選定（⁶⁰Co/¹⁵²Eu、未定）; per-channel の
+      adc_min 逆算（coarse_gain/fine_gain 整列込み）。接続ホスト/結晶は未定（2026-09-30）。
+- [x] **dual trace の実効サンプリング確認**（2026-10-01: 入力は 2 サンプル重複 = 実効 8 ns →
+      capture はシングルトレース `vtrace_probe_1 = VPROBE_NONE`）。
 - [ ] **coarse_gain 見直し**: 個別 ch の ADC レンジ利用率を上げる（現状 ~12%、X4 側へ）。
       クリップ確認（sum peak 含む）。
 - [ ] **validation run + capture run を各1本録る**（es2 で 1 結晶から始め、①〜④を一周通す）。
-- [ ] **`pha_trap_tune` bin スケルトン:** `.delila`（波形 + FW energy + FW param）を読む
-      （`dev-tools` feature、オフライン系）。
-- [ ] **段分離 SW trap をスクラッチ実装**（§4.4）: 公知の再帰 + per-stage トレース。
-      AMax コアは流用しない（存在しない）。
+- [x] **`pha_trap_tune` bin スケルトン:** `.delila`（波形 + FW energy + FW param）を読む
+      （`dev-tools` feature、オフライン系）。（2026-07-13）
+- [x] **段分離 SW trap をスクラッチ実装**（§4.4）: 公知の再帰 + per-stage トレース。
+      AMax コアは流用しない（存在しない）。（2026-07-13、初期条件バグ修正 2026-09-30）
 - [ ] **Phase 1 validation ハーネス:** per-event 残差 + probe2 重ね + D1=Peaking 窓照合 +
       FWHM_SW vs FWHM_FW。パルサーラン（同一波形）を先に食わせて収束を速める（§4.5）。
 - [ ] **パルサー位相スキャン:** flat-top 候補ごとに同一波高への FW energy 散り幅を測定
       → trap×trigger 交差項の検出器なし直接観測（§4.5 項目 2）。
-- [ ] **Phase 2 grid search + free-peak Gaussian フィット** → per-channel config patch
-      （深掘り 2ch → 狭域展開、§5.3）。
+- [x] **Phase 2 grid search + free-peak フィット**（§5.6、2026-09-30、合成波形で検証）。
+- [~] **実データで Phase 1 を閉じる**（2026-10-02）: per-event は全 ch で SW = FW/2.011。
+      FWHM はコア一致（0.97–0.98）、**セグメントは未達（0.87）**。
+- [ ] **per-channel config patch 出力 + 全 ch 一括**（深掘り 2ch → 狭域展開、§5.3）。
 - [ ] **Phase 3 実機 verify** ループ + 確定。
 - [ ] **（将来）reader に digital-probe 省略オプション**: EventData から digital probe を落として
       イベントサイズ半減（trigger 検証が終わった後の本番向け、数行 + config flag）。
