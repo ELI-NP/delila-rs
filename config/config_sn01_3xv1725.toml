@@ -1,0 +1,137 @@
+# DELILA DAQ Configuration - ELIADE @ SN01 (eliadeSN01, 10.14.0.11)
+# Hardware: 3x V1725 DPP-PHA ("PHA1"), A3818 optical link 0, daisy chain
+#   conet_node 0 = V1725 #1 (already in service; caen-toolbox 2026-10-02 saw
+#                  PIDs 209/206/203 on nodes 0-2 - the "217" in its JSON is stale)
+#   conet_node 1 = V1725 #2
+#   conet_node 2 = V1725 #3
+# Serial numbers: press Detect in the UI after switching (fills them from HW).
+#
+# The three boards run INDEPENDENTLY (all START_MODE_SW, no S-IN / clock
+# cabling): each board has its own time base and they start a few ms apart.
+# Fine for per-crystal energy work (user decision 2026-10-02: board-to-board
+# time offsets do not matter). See the end of this header to synchronize later.
+# V1725 timestamp LSB = 4 ns (250 MS/s).
+#
+# Use on SN01 (start_daq.sh reads ./config.toml by default). On SN01
+# config.toml is a SYMLINK - re-point it, never `cp` onto it (that would
+# overwrite the link target, config_sn01_psd1.toml):
+#   ln -sfn config/config_sn01_3xv1725.toml config.toml     # 3 boards (2026-10-02)
+#   ln -sfn config/config_sn01_psd1.toml config.toml        # back to 1 board
+#   # needs config/digitizers/sn01_v1725_pha_1.json and _2.json next to _pha.json;
+#   # then restart the DAQ (the Operator reads config.toml only at startup).
+#
+# ---------------------------------------------------------------------------
+# BEFORE switching to this file (a reader whose board cannot be opened makes
+# Configure fail for the WHOLE DAQ, so a half-installed chain breaks the
+# working single-board setup):
+#
+# 1. Optical: A3818 link 0 -> board #1 OUT -> #2 IN, #2 OUT -> #3 IN.
+#    Verify every node with the DAQ STOPPED (caen_info kills a live reader
+#    connection):
+#      LD_LIBRARY_PATH=/opt/delila-caen/lib ./target/release/caen_info \
+#        "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+#      (same for conet_node=2)
+#    Each must report a V1725 with FwType DPP-PHA. Copy the SerialNum into the
+#    board's JSON ("serial_number" - bookkeeping only).
+#
+# 2. Close caen-toolbox (and anything else holding the boards) before
+#    starting the DAQ - board access is exclusive.
+# ---------------------------------------------------------------------------
+#
+# To synchronize later (clover add-back / cross-crystal coincidence):
+#   - cabling: #1 TRG-OUT -> #2 S-IN -> (#2 TRG-OUT) -> #3 S-IN, NIM levels;
+#     #1 CLK-OUT -> #2 CLK-IN, #2 CLK-OUT -> #3 CLK-IN, and set #2/#3 to the
+#     external clock in HARDWARE (VME: the clock-source bit is reserved per
+#     UM5678 and /par/dt_ext_clock is rejected with CAEN -1); check PLL lock.
+#   - #2/#3 JSON: start_source = START_MODE_S_IN,
+#     gpio_mode = OUT_PROPAGATION_SYNCIN (#1 already has START_MODE_SW +
+#     OUT_PROPAGATION_RUN). Same scheme as config_76_production.toml.
+#   - Without the S-IN cable, S_IN-mode boards never start (zero events).
+#
+# Bandwidth: all three boards share ONE CONET link (~80 MB/s). With waveforms
+# ON one board alone wrote ~27 MB/s in run 22 (20 us records, single trace),
+# so three boards with waveforms will saturate the link. Waveform captures:
+# one board at a time, or move a board to link 1. List mode (waveforms OFF)
+# is tiny: run 23 (60Co, one board) wrote 57 MB/h = ~16 kB/s.
+#
+# Waveforms + long records also trigger the couple memory arbiter (record >=
+# 1792 samples = 7168 ns on the V1725: simultaneous events in channels 2m/2m+1
+# keep only one). See TODO 59 §5.7.
+
+[operator]
+experiment_name = "ELIADE_SN01"
+port = 9090
+
+# Run history -> local native MongoDB (auth disabled).
+[operator.mongodb]
+uri = "mongodb://localhost:27017"
+database = "delila"
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# All readers share pipeline_order 1 (armed and started in parallel).
+
+[[network.sources]]
+id = 0
+name = "PHA1-V1725-0"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/sn01_v1725_pha.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 1
+name = "PHA1-V1725-1"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+config_file = "config/digitizers/sn01_v1725_pha_1.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 2
+name = "PHA1-V1725-2"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=2"
+config_file = "config/digitizers/sn01_v1725_pha_2.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# --- Pipeline components ---
+# [network.merger] has no explicit `subscribe`: it is derived from the source
+# list, so it picks up all three readers (ports 7000-7002).
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# Absolute path on purpose: neither the Recorder nor root_sink expands "~".
+output_dir = "/home/eliade/DELILA_data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- root_sink: parallel C++ ROOT recorder + live JSROOT monitor ---
+# The hit tree carries `module`, so per-board analysis works offline as is.
+# NOTE: histograms_sn01.json fills energy_chNN from every module (a 'module'
+# cut is not supported in hist_config) - use the module_vs_channel /
+# energy_vs_module 2D plots to separate boards live.
+[network.root_sink]
+subscribe = "tcp://localhost:5557"
+# Must match [network.recorder].output_dir so the .delila and .root of a run
+# land side by side.
+output_dir = "/home/eliade/DELILA_data"
+http_port = 8090
+hists = "config/histograms_sn01.json"
+autosave_sec = 30

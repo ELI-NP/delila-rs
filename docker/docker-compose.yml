@@ -110,7 +110,9 @@ services:
     ports:
       - "8082:8082"
     volumes:
-      - ./elog/elogd.cfg:/usr/local/elog/elogd.cfg:ro
+      # Per-host logbook: ELOG_CFG=<file in docker/elog/> in docker/.env
+      # (gitignored), e.g. elogd_thgem.cfg on the ThGEM host. Default: 3MV.
+      - ./elog/${ELOG_CFG:-elogd.cfg}:/usr/local/elog/elogd.cfg:ro
       - ./data/elog:/usr/local/elog/logbooks
 
   grafana:

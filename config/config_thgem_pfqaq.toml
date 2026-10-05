@@ -1,0 +1,148 @@
+# DELILA DAQ Configuration - ThGEM experiment @ pf-qaq (daq@172.18.5.210)
+#
+# Successor of side3 (daq@192.168.144.102) with MORE digitizers. Built on
+# 2026-10-05 from what is recorded about side3 (it was not reachable that day):
+# replace config/digitizers/thgem_v1730_psd1_0.json with side3's tuned board
+# JSON when side3 is back.
+#
+# Hardware (planned): A3818 optical card (4 links) - NOT yet on the PCI bus
+#   on 2026-10-05 (`lspci -nn | grep 10ee` empty; a fitted card shows up there
+#   even without its driver).
+#   link 0 / node 0 : V1730 DPP-PSD  ThGEM board - side3 channel map:
+#        ch0 LaBr3 | ch1 ThGEM1 trig, ch2 XL, ch3 XR, ch4 Y bottom, ch5 Y up
+#                  | ch6 ThGEM2 trig, ch7 XL, ch8 XR, ch9 Y bottom, ch10 Y top
+#   links 1-3       : additional digitizers - blocks below are DISABLED: a
+#        reader whose board cannot be opened makes Configure fail for the
+#        whole DAQ. Enable each one once its board answers:
+#          LD_LIBRARY_PATH=/opt/delila-caen/lib ./target/release/caen_info \
+#            "dig1://caen.internal/optical_link?link_num=N&conet_node=0"
+#        (DAQ stopped; caen_info kills a live reader connection). Change
+#        type/time_step_ns/JSON if a board is not a V1730 PSD (V1725 = 4 ns).
+#   All boards: START_MODE_SW, independent time bases (no S-IN / clock chain).
+#
+# root_sink with >1 board: its Delta-t, XY and built-event matchers select
+#    hits by CHANNEL only, and its Sorter assumes ONE time base (independently
+#    started boards drift apart and the lagging board's hits fall out of the
+#    .root). `module = 0` below restricts root_sink to the ThGEM board; the
+#    Recorder's .delila and the Monitor (8081) still cover every board.
+#
+# Build (x743 = V1743 support, as on side3):
+#   CAEN_PREFIX=/opt/delila-caen cargo build --release --bins --features x743
+# Use:  ln -sfn config/config_thgem_pfqaq.toml config.toml && ./scripts/start_daq.sh
+#   (config.toml as a symlink, like SN01/SN02 - never `cp` onto it)
+# MongoDB, InfluxDB 3, Grafana, eLog: docker/ stack (docker compose up -d in docker/).
+
+[operator]
+experiment_name = "ThGEM"
+# Same port as side3 (there Cockpit owns 9090; here 9090 is free).
+port = 9091
+
+# Per-second rates into InfluxDB 3 of the docker/ stack (host 8086 -> 8181).
+[operator.influxdb]
+url = "http://localhost:8086"
+database = "delila"
+interval_secs = 2
+
+# Run summaries auto-posted to the docker/ stack eLog (logbook from
+# docker/elog/elogd_thgem.cfg, selected by ELOG_CFG in docker/.env).
+[operator.elog]
+url = "http://localhost:8082"
+logbook = "ThGEM"
+
+# MongoDB: start_daq.sh passes the docker/ stack credentials
+# (mongodb://delila:delila_pass@localhost:27017, db delila) by default.
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# --- link 0: the ThGEM / LaBr3 board (V1730, 500 MS/s -> 2 ns) ---
+[[network.sources]]
+id = 0
+name = "PSD1-V1730-ThGEM"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/thgem_v1730_psd1_0.json"
+pipeline_order = 1
+time_step_ns = 2.0
+
+# --- links 1-3: additional digitizers (enable when installed) ---
+#[[network.sources]]
+#id = 1
+#name = "PSD1-V1730-1"
+#type = "psd1"
+#digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
+#config_file = "config/digitizers/thgem_v1730_psd1_1.json"
+#pipeline_order = 1
+#time_step_ns = 2.0
+
+#[[network.sources]]
+#id = 2
+#name = "PSD1-V1730-2"
+#type = "psd1"
+#digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=0"
+#config_file = "config/digitizers/thgem_v1730_psd1_2.json"
+#pipeline_order = 1
+#time_step_ns = 2.0
+
+#[[network.sources]]
+#id = 3
+#name = "PSD1-V1730-3"
+#type = "psd1"
+#digitizer_url = "dig1://caen.internal/optical_link?link_num=3&conet_node=0"
+#config_file = "config/digitizers/thgem_v1730_psd1_3.json"
+#pipeline_order = 1
+#time_step_ns = 2.0
+
+# --- Pipeline components ---
+# [network.merger] has no explicit `subscribe`: it is derived from the source
+# list, so enabling a source block is the only edit needed.
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# Absolute path on purpose: neither the Recorder nor root_sink expands "~".
+output_dir = "/home/daq/DELILA_data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- root_sink: parallel ROOT recorder + live JSROOT ThGEM monitor (:8090) ---
+# side3 settings (2026-08/09): LaBr3 = ch0, ThGEM triggers = ch1 / ch6,
+# window 1000 ns, margin 20 ms (covers the 8.2 ms arrival jitter of the old
+# unsorted tree; harmless with the sorted MT root_sink).
+#
+# XY channel order is T,XL,XR,YU,YD. side3 ran "1,2,3,4,5" / "6,7,8,9,10", which
+# put the BOTTOM wire in the YU slot (Y mirrored, accepted for that campaign
+# and to be fixed at a campaign boundary). This new setup fixes it:
+# YU = ch5 (up) / ch10 (top). Revert to "1,2,3,4,5" / "6,7,8,9,10" to compare
+# with side3 images directly.
+[network.root_sink]
+subscribe = "tcp://localhost:5557"
+# Must match [network.recorder].output_dir (.delila and .root side by side).
+output_dir = "/home/daq/DELILA_data"
+http_port = 8090
+hists = "config/histograms_thgem.json"
+# Only the ThGEM board (source id 0) - see the header.
+module = 0
+gamma_ch = 0
+thgem1_ch = 1
+thgem2_ch = 6
+xy1_ch = "1,2,3,5,4"
+xy2_ch = "6,7,8,10,9"
+window_ns = 1000
+margin_ns = 20000000
+autosave_sec = 30
+# MT root_sink (TODO 66): worker threads + the integrated built-event tree
+# (both ThGEM planes + LaBr3 per trigger; NaN = arm missing).
+workers = 3
+built_tree = "built"
