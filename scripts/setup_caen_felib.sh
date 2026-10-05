@@ -76,16 +76,31 @@ log "Installing dpp-digitizer XMLs -> $XMLDIR (hardcoded path)"
 cp -a "$STAGE"/x/usr/local/share/dpp-digitizer/*.xml "$XMLDIR/"
 
 # 4) dig2 backend (Gen2) — optional; ELIADE is Gen1-only so a dig2 build
-#    failure must NOT abort the (already-successful) dig1 install. Fully
-#    non-fatal: the whole block runs in a subshell guarded with `|| true`.
-if [ -d "$DIG2_SRC" ] && [ -f "$DIG2_SRC/CMakeLists.txt" ]; then
+#    failure must NOT abort the (already-successful) dig1 install. caen-dig2 is
+#    an AUTOTOOLS project (./configure), not CMake: the old CMakeLists.txt test
+#    never matched, so dig2 was silently skipped on every host until 2026-10-05.
+#    Needs Boost headers (apt: libboost-dev). Fully non-fatal, but loud.
+if [ -d "$DIG2_SRC" ] && [ -x "$DIG2_SRC/configure" ]; then
   log "Building + installing CAEN dig2 backend -> $PREFIX (optional)"
-  (
-    cmake -S "$DIG2_SRC" -B "$DIG2_SRC/build" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-          -DCMAKE_PREFIX_PATH="$PREFIX" >/dev/null &&
-    cmake --build "$DIG2_SRC/build" -j"$(nproc)" >/dev/null &&
-    cmake --install "$DIG2_SRC/build" >/dev/null
-  ) || log "dig2 backend skipped (non-fatal; not needed for Gen1/ELIADE)"
+  if (
+    cd "$DIG2_SRC" &&
+    # A git checkout scrambles mtimes; without this, make tries to re-run
+    # aclocal/automake (not installed) and stops with error 127.
+    touch aclocal.m4 && sleep 1 && touch configure &&
+    find . -name Makefile.in -exec touch {} + &&
+    B="$(mktemp -d)" && cd "$B" &&
+    "$DIG2_SRC/configure" --disable-assert --prefix="$PREFIX" \
+        CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib" >/dev/null &&
+    make -j"$(nproc)" >/dev/null &&
+    make install >/dev/null
+  ); then
+    log "dig2 backend installed"
+  else
+    log "WARNING: dig2 backend NOT installed (Boost headers missing? apt install libboost-dev)"
+    log "         Gen2 digitizers (VX27xx/V27xx) will not open; Gen1 is unaffected."
+  fi
+elif [ -d "$DIG2_SRC" ]; then
+  log "WARNING: $DIG2_SRC has no ./configure — dig2 backend NOT installed"
 fi
 
 log "Done. Installed under $PREFIX (libs) + $XMLDIR (dig1 XML)."
