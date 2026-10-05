@@ -355,6 +355,7 @@ mod tests {
             channel_names: None,
             x743: None,
             amax_board: None,
+            extra_registers: Vec::new(),
         }
     }
 

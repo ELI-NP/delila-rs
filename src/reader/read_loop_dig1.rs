@@ -22,6 +22,28 @@ use super::{
     ReadLoopOutput, ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
 };
 use crate::common::ComponentState;
+use crate::config::digitizer::{DigitizerConfig, DIG1_COUPLE_LOCAL_BUFFER_SAMPLES};
+
+/// Warn (once per successful apply) when the DIG1 couple memory arbiter is
+/// active — the record length forces each channel couple (2m, 2m+1) onto the
+/// shared SRAM, so simultaneous triggers inside a couple lose one event.
+/// See [`DigitizerConfig::dig1_couple_arbiter_samples`].
+fn warn_if_couple_arbiter_active(dig_config: &DigitizerConfig, time_step_ns: f64) {
+    let Some(samples) = dig_config.dig1_couple_arbiter_samples(time_step_ns) else {
+        return;
+    };
+    let record_length_ns = dig_config.board.record_length.unwrap_or_default();
+    let limit_ns = f64::from(DIG1_COUPLE_LOCAL_BUFFER_SAMPLES) * time_step_ns;
+    warn!(
+        record_length_ns,
+        samples,
+        time_step_ns,
+        limit_ns,
+        "DIG1 couple memory arbiter active: when both channels of a couple (2m, 2m+1) \
+         trigger together the firmware keeps only ONE event (UM5678 §1.2). Use a record \
+         length below {limit_ns} ns or disable waveforms for coincidence data."
+    );
+}
 
 /// ReadLoop task for the RAW endpoint (DIG1/DIG2 RAW format) — runs in
 /// `spawn_blocking`. Reads raw bytes from CAEN digitizer and forwards them
@@ -135,6 +157,10 @@ pub(crate) fn run(
                                 Ok(()) => match conn.handle.apply_config(&dig_config) {
                                     Ok(count) => {
                                         info!(count, "Digitizer configuration applied");
+                                        warn_if_couple_arbiter_active(
+                                            &dig_config,
+                                            config.time_step_ns,
+                                        );
                                     }
                                     Err(e) => {
                                         warn!(error = %e, "Auto-configure from JSON failed — \
@@ -373,6 +399,7 @@ pub(crate) fn run(
                         None => Err("Not connected to digitizer".to_string()),
                     };
                     if result.is_ok() {
+                        warn_if_couple_arbiter_active(&dig_config, config.time_step_ns);
                         if let Some(ref mut conn) = connection {
                             conn.auto_config_failed = false;
                             conn.enabled_channels = get_enabled_channels_from_config(&dig_config);

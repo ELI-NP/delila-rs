@@ -898,7 +898,57 @@ impl CaenHandle {
             }
         }
 
+        // Raw register escape hatch — LAST, so it overrides FELib writes above.
+        self.apply_config_extra_registers(config);
+
         Ok(applied)
+    }
+
+    /// Apply raw register writes (`DigitizerConfig::extra_registers`) in order.
+    ///
+    /// For each entry: `set_user_register(addr, data)`, then read it back with
+    /// `get_user_register(addr)` and log address / written / read-back /
+    /// comment at INFO. A failed write, failed read-back, or a read-back that
+    /// differs from what was written is a `warn!` — never fatal (same policy
+    /// as the CFD-interpolation register block in [`Self::apply_config`]).
+    ///
+    /// Returns the number of failed or mismatched writes.
+    pub fn apply_extra_registers(&self, regs: &[crate::config::digitizer::RegisterWrite]) -> usize {
+        let failed = apply_register_writes(
+            regs,
+            |addr, data| self.set_user_register(addr, data),
+            |addr| self.get_user_register(addr),
+        );
+        let summary = format!(
+            "Applied {} extra register writes, {} failed/mismatched",
+            regs.len(),
+            failed
+        );
+        if failed == 0 {
+            tracing::info!(total = regs.len(), failed, "{}", summary);
+        } else {
+            tracing::warn!(total = regs.len(), failed, "{}", summary);
+        }
+        failed
+    }
+
+    /// Final step of both [`Self::apply_config`] and
+    /// [`Self::apply_config_validated`]: apply `config.extra_registers` on
+    /// DIG1, or warn that they are ignored on any other firmware (no silent
+    /// drop). Outcome is logged by [`Self::apply_extra_registers`].
+    fn apply_config_extra_registers(&self, config: &crate::config::digitizer::DigitizerConfig) {
+        if config.extra_registers.is_empty() {
+            return;
+        }
+        if !config.firmware.is_dig1() {
+            tracing::warn!(
+                firmware = ?config.firmware,
+                count = config.extra_registers.len(),
+                "extra_registers is DIG1-only (PSD1/PHA1) — ignoring these register writes"
+            );
+            return;
+        }
+        self.apply_extra_registers(&config.extra_registers);
     }
 
     /// Apply AMax-firmware per-channel registers via direct user-register writes.
@@ -1175,7 +1225,14 @@ impl CaenHandle {
         self.validate_num_channels(config.num_channels)?;
 
         let params = config.to_caen_parameters();
-        self.apply_params_validated(&params, param_cache)
+        let result = self.apply_params_validated(&params, param_cache)?;
+
+        // Raw register escape hatch — LAST, so it overrides FELib writes above.
+        // Non-fatal: failures are logged (warn summary) but `result` is
+        // unchanged — it reports FELib parameters only.
+        self.apply_config_extra_registers(config);
+
+        Ok(result)
     }
 
     /// Apply only SetInRun parameters with validation (safe while Running).
@@ -1460,6 +1517,58 @@ fn values_equivalent(a: &str, b: &str) -> bool {
         return (af - bf).abs() <= 1e-6 * af.abs().max(bf.abs()).max(1.0);
     }
     at.eq_ignore_ascii_case(bt)
+}
+
+/// Write each [`RegisterWrite`] in order and read it back. Hardware-agnostic
+/// core of [`CaenHandle::apply_extra_registers`] (register access is injected
+/// so the logic is testable without a digitizer).
+///
+/// Never aborts: every entry is attempted. Returns the number of entries that
+/// failed to write, could not be read back, or read back a different value.
+///
+/// [`RegisterWrite`]: crate::config::digitizer::RegisterWrite
+fn apply_register_writes(
+    regs: &[crate::config::digitizer::RegisterWrite],
+    mut write: impl FnMut(u32, u32) -> Result<(), CaenError>,
+    mut read: impl FnMut(u32) -> Result<u32, CaenError>,
+) -> usize {
+    use tracing::{info, warn};
+
+    let mut failed = 0;
+    for reg in regs {
+        let addr = format!("0x{:04X}", reg.addr);
+        let written = format!("0x{:08X}", reg.data);
+        let comment = reg.comment.as_deref().unwrap_or("");
+
+        if let Err(e) = write(reg.addr, reg.data) {
+            warn!(%addr, %written, comment, error = %e, "Extra register write failed");
+            failed += 1;
+            continue;
+        }
+
+        match read(reg.addr) {
+            Ok(value) => {
+                let read_back = format!("0x{:08X}", value);
+                info!(%addr, %written, %read_back, comment, "Extra register written");
+                if value != reg.data {
+                    // Not necessarily an error: reserved / read-only bits are
+                    // commonly masked by the FW. Surface it so the operator
+                    // can check the field actually took the intended value.
+                    warn!(
+                        %addr, %written, %read_back, comment,
+                        "Extra register read-back differs from the written value \
+                         (reserved/read-only bits, or the FW rejected the value)"
+                    );
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                warn!(%addr, %written, comment, error = %e, "Extra register written but read-back failed");
+                failed += 1;
+            }
+        }
+    }
+    failed
 }
 
 impl EndpointHandle {
@@ -1773,6 +1882,110 @@ impl Drop for CaenHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::digitizer::RegisterWrite;
+    use std::cell::RefCell;
+
+    fn reg(addr: u32, data: u32) -> RegisterWrite {
+        RegisterWrite {
+            addr,
+            data,
+            comment: None,
+        }
+    }
+
+    fn fake_err() -> CaenError {
+        CaenError {
+            code: -1,
+            name: "GenericError".to_string(),
+            description: "mock".to_string(),
+        }
+    }
+
+    /// Mock register file: `mask` simulates reserved / read-only bits the FW
+    /// drops on write; addresses in `bad_write` / `bad_read` fail.
+    struct MockRegs {
+        regs: RefCell<HashMap<u32, u32>>,
+        writes: RefCell<Vec<(u32, u32)>>,
+        mask: u32,
+        bad_write: Vec<u32>,
+        bad_read: Vec<u32>,
+    }
+
+    impl MockRegs {
+        fn new(mask: u32) -> Self {
+            Self {
+                regs: RefCell::new(HashMap::new()),
+                writes: RefCell::new(Vec::new()),
+                mask,
+                bad_write: Vec::new(),
+                bad_read: Vec::new(),
+            }
+        }
+
+        fn run(&self, regs: &[RegisterWrite]) -> usize {
+            apply_register_writes(
+                regs,
+                |addr, data| {
+                    if self.bad_write.contains(&addr) {
+                        return Err(fake_err());
+                    }
+                    self.writes.borrow_mut().push((addr, data));
+                    self.regs.borrow_mut().insert(addr, data & self.mask);
+                    Ok(())
+                },
+                |addr| {
+                    if self.bad_read.contains(&addr) {
+                        return Err(fake_err());
+                    }
+                    Ok(self.regs.borrow().get(&addr).copied().unwrap_or(0))
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn register_writes_all_ok_in_order() {
+        let mock = MockRegs::new(u32::MAX);
+        // Same address twice: the later entry must win (order preserved).
+        let failed = mock.run(&[reg(0x8038, 125), reg(0x1038, 250), reg(0x8038, 500)]);
+        assert_eq!(failed, 0);
+        assert_eq!(
+            *mock.writes.borrow(),
+            vec![(0x8038, 125), (0x1038, 250), (0x8038, 500)]
+        );
+        assert_eq!(mock.regs.borrow().get(&0x8038), Some(&500));
+    }
+
+    #[test]
+    fn register_write_readback_mismatch_is_counted() {
+        // FW keeps only the 9-bit field → 0x3FF reads back as 0x1FF.
+        let mock = MockRegs::new(0x1FF);
+        let failed = mock.run(&[reg(0x1038, 0x3FF), reg(0x1138, 0x0FF)]);
+        assert_eq!(failed, 1, "only the masked write differs");
+    }
+
+    #[test]
+    fn register_write_error_is_counted_and_later_writes_still_run() {
+        let mut mock = MockRegs::new(u32::MAX);
+        mock.bad_write.push(0x8038);
+        let failed = mock.run(&[reg(0x8038, 500), reg(0x1038, 250)]);
+        assert_eq!(failed, 1);
+        assert_eq!(*mock.writes.borrow(), vec![(0x1038, 250)]);
+    }
+
+    #[test]
+    fn register_readback_error_is_counted() {
+        let mut mock = MockRegs::new(u32::MAX);
+        mock.bad_read.push(0x1038);
+        assert_eq!(mock.run(&[reg(0x1038, 250)]), 1);
+    }
+
+    #[test]
+    fn register_writes_empty_is_noop() {
+        let mock = MockRegs::new(u32::MAX);
+        assert_eq!(mock.run(&[]), 0);
+        assert!(mock.writes.borrow().is_empty());
+    }
 
     #[test]
     fn values_equivalent_handles_numeric_and_case() {

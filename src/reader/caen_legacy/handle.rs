@@ -586,6 +586,16 @@ impl X743Handle {
 
         info!("Applying V1743 configuration...");
 
+        // The top-level `extra_registers` is the DIG1 (FELib) escape hatch;
+        // V1743 reads `x743.extra_registers`. Don't drop it silently.
+        if !config.extra_registers.is_empty() {
+            warn!(
+                count = config.extra_registers.len(),
+                "Top-level extra_registers is DIG1-only and is ignored for V1743 — \
+                 move these entries to x743.extra_registers"
+            );
+        }
+
         let mut params_applied: usize = 0;
 
         // 1. Reset

@@ -178,6 +178,29 @@ pub struct DigitizerConfig {
     /// `AMaxBoardConfig::default()` = ENABLE_ACQ unset = legacy mode).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amax_board: Option<AMaxBoardConfig>,
+
+    /// Raw register writes — **DIG1 (PSD1/PHA1) only**. Escape hatch for
+    /// settings the FELib `dig1` DevTree does not expose, or caps below the
+    /// hardware range. Mirrors WaveDemo's `WRITE_REGISTER`.
+    ///
+    /// Applied in order **after all FELib parameters** (and after the forced
+    /// `ch_extras_opt` / CFD-interpolation writes) on every apply — both the
+    /// Configure auto-load and the operator Apply. Each write is read back and
+    /// logged; a failed write or a read-back that differs is a `warn!`, never
+    /// fatal. Later entries win over earlier writes to the same address, and
+    /// over whatever FELib just wrote there.
+    ///
+    /// Example: V1725 DPP-PHA pre-trigger beyond the DevTree cap of 4000 ns.
+    /// The Pre Trigger register is a 9-bit field in units of 4 samples
+    /// (UM5678 rev5 §1.5) → up to 2044 samples = 8176 ns at 4 ns/sample.
+    /// Write `0x8038` (broadcast to all channels) or `0x1n38` (channel n)
+    /// with `data = samples / 4`, e.g. `{"addr": "0x8038", "data": "500"}`
+    /// for 2000 samples = 8000 ns.
+    ///
+    /// Ignored (with a warning) for any other firmware; V1743 uses
+    /// `x743.extra_registers` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_registers: Vec<RegisterWrite>,
 }
 
 /// V1743-specific configuration parameters
@@ -376,7 +399,10 @@ pub fn x743_threshold_v_to_dac(v_input_volts: f32, dc_offset_pct: f32) -> u32 {
 }
 
 /// Single arbitrary register write entry. Order in `Vec<RegisterWrite>` is preserved
-/// and applied verbatim at the end of `apply_config_standard`.
+/// and applied verbatim after the high-level configuration: at the end of
+/// `apply_config_standard` for V1743 (`X743Config::extra_registers`), and at the
+/// end of `apply_config` / `apply_config_validated` for DIG1
+/// (`DigitizerConfig::extra_registers`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterWrite {
     /// 32-bit register address. Accepts `0x` hex string, decimal string, or integer.
@@ -1362,6 +1388,14 @@ static SET_IN_RUN_PHA1: &[&str] = &[
     "ch_pu_flag_en",
 ];
 
+/// DIG1 (x725/x730 DPP-PSD / DPP-PHA) per-couple local buffer size in samples.
+///
+/// Channels are paired into couples (2m, 2m+1). Below this record length each
+/// channel of a couple acquires into its own local buffer; at or above it the
+/// couple shares external SRAM behind a fair-mode memory arbiter. See
+/// [`DigitizerConfig::dig1_couple_arbiter_samples`].
+pub const DIG1_COUPLE_LOCAL_BUFFER_SAMPLES: u32 = 1792;
+
 impl DigitizerConfig {
     /// Load digitizer configuration from a JSON file
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> Result<Self, DigitizerConfigError> {
@@ -1413,7 +1447,7 @@ impl DigitizerConfig {
             self.channel_defaults.event_selector = None;
 
             // Remove from all channel overrides
-            for (_, ch_config) in self.channel_overrides.iter_mut() {
+            for ch_config in self.channel_overrides.values_mut() {
                 ch_config.event_trigger_source = None;
                 ch_config.wave_trigger_source = None;
                 ch_config.wave_saving = None;
@@ -1449,7 +1483,47 @@ impl DigitizerConfig {
             channel_names: None,
             x743: None,
             amax_board: None,
+            extra_registers: Vec::new(),
         }
+    }
+
+    /// DIG1 couple memory arbiter check — returns the record length in
+    /// samples when the couple memory arbiter is active, `None` otherwise.
+    ///
+    /// Hardware fact (CAEN UM5678 rev5 §1.2 "Record Length" for DPP-PHA, and
+    /// UM4380 rev6 "Record Length" register 0x1n20 for DPP-PSD): x725/x730
+    /// channels are grouped in couples (2m, 2m+1). With a record length below
+    /// [`DIG1_COUPLE_LOCAL_BUFFER_SAMPLES`] (1792) samples each channel of a
+    /// couple has its own local buffer and acquires independently. At or above
+    /// it the couple uses an external SRAM and "a memory arbiter decides in
+    /// fair mode which event of the two channels is saved".
+    ///
+    /// **Consequence:** when both channels of a couple trigger together, the
+    /// firmware keeps only ONE of the two events — the other is lost without
+    /// any flag in the data stream. Confirmed on a V1725 (record 20000 ns,
+    /// waveforms on): coincidences inside every couple were exactly 0 while
+    /// across couples they were 0.3–2.6 %. In list mode (waveforms disabled)
+    /// the record length is ignored and the arbiter is not involved.
+    ///
+    /// `board.record_length` is in **ns** for PSD1/PHA1 (pushed verbatim to
+    /// `/par/reclen`, see [`Self::to_caen_parameters`]); `time_step_ns` is the
+    /// ADC sample period (4 ns for x725, 2 ns for x730). A fractional sample
+    /// count is rounded up so the check errs on the side of warning.
+    ///
+    /// Returns `None` for non-DIG1 firmware, when waveforms are not explicitly
+    /// enabled, when no record length is set, or for a non-positive /
+    /// non-finite `time_step_ns`.
+    pub fn dig1_couple_arbiter_samples(&self, time_step_ns: f64) -> Option<u32> {
+        if !self.firmware.is_dig1() || self.board.waveforms_enabled != Some(true) {
+            return None;
+        }
+        if !time_step_ns.is_finite() || time_step_ns <= 0.0 {
+            return None;
+        }
+        let record_length_ns = self.board.record_length?;
+        // `as` saturates on overflow; the result is only compared and logged.
+        let samples = (f64::from(record_length_ns) / time_step_ns).ceil() as u32;
+        (samples >= DIG1_COUPLE_LOCAL_BUFFER_SAMPLES).then_some(samples)
     }
 
     /// Create a master digitizer config
@@ -2839,6 +2913,149 @@ mod tests {
         assert_eq!(x743_threshold_v_to_dac(5.0, 50.0), 0);
         // Combined edge: V=-1.0 with DC offset = 0% (= -1.25 V) → V_at_adc = -2.25 → clamp -1.25
         assert_eq!(x743_threshold_v_to_dac(-1.0, 0.0), 65535);
+    }
+
+    // ===========================================================================
+    // DIG1 couple memory arbiter (UM5678 rev5 §1.2 / UM4380 rev6)
+    // ===========================================================================
+
+    fn dig1_with_waveforms(
+        firmware: FirmwareType,
+        record_length_ns: Option<u32>,
+        waveforms: Option<bool>,
+    ) -> DigitizerConfig {
+        let mut config = DigitizerConfig::new(0, "dig1", firmware);
+        config.board.record_length = record_length_ns;
+        config.board.waveforms_enabled = waveforms;
+        config
+    }
+
+    #[test]
+    fn couple_arbiter_pha1_4ns_long_record_is_flagged() {
+        // V1725 (250 MS/s): 20000 ns = 5000 samples >= 1792 → arbiter active.
+        let config = dig1_with_waveforms(FirmwareType::PHA1, Some(20000), Some(true));
+        assert_eq!(config.dig1_couple_arbiter_samples(4.0), Some(5000));
+    }
+
+    #[test]
+    fn couple_arbiter_threshold_is_1792_samples() {
+        // 7136 ns / 4 ns = 1784 samples — independent local buffers.
+        let below = dig1_with_waveforms(FirmwareType::PHA1, Some(7136), Some(true));
+        assert_eq!(below.dig1_couple_arbiter_samples(4.0), None);
+        // 7168 ns / 4 ns = 1792 samples — exactly at the limit → arbiter.
+        let at = dig1_with_waveforms(FirmwareType::PHA1, Some(7168), Some(true));
+        assert_eq!(
+            at.dig1_couple_arbiter_samples(4.0),
+            Some(DIG1_COUPLE_LOCAL_BUFFER_SAMPLES)
+        );
+    }
+
+    #[test]
+    fn couple_arbiter_ignored_in_list_mode() {
+        // Waveforms disabled (explicitly or unset) → record length is ignored
+        // by the FW, so no arbiter regardless of length.
+        let off = dig1_with_waveforms(FirmwareType::PHA1, Some(20000), Some(false));
+        assert_eq!(off.dig1_couple_arbiter_samples(4.0), None);
+        let unset = dig1_with_waveforms(FirmwareType::PHA1, Some(20000), None);
+        assert_eq!(unset.dig1_couple_arbiter_samples(4.0), None);
+    }
+
+    #[test]
+    fn couple_arbiter_psd1_2ns() {
+        // x730 (500 MS/s): 4000 ns = 2000 samples.
+        let config = dig1_with_waveforms(FirmwareType::PSD1, Some(4000), Some(true));
+        assert_eq!(config.dig1_couple_arbiter_samples(2.0), Some(2000));
+    }
+
+    #[test]
+    fn couple_arbiter_not_reported_for_dig2() {
+        for fw in [FirmwareType::PHA2, FirmwareType::PSD2] {
+            let config = dig1_with_waveforms(fw, Some(20000), Some(true));
+            assert_eq!(config.dig1_couple_arbiter_samples(2.0), None, "{fw:?}");
+        }
+    }
+
+    #[test]
+    fn couple_arbiter_degenerate_inputs_are_none() {
+        let no_reclen = dig1_with_waveforms(FirmwareType::PHA1, None, Some(true));
+        assert_eq!(no_reclen.dig1_couple_arbiter_samples(4.0), None);
+        let config = dig1_with_waveforms(FirmwareType::PHA1, Some(20000), Some(true));
+        assert_eq!(config.dig1_couple_arbiter_samples(0.0), None);
+        assert_eq!(config.dig1_couple_arbiter_samples(-4.0), None);
+        assert_eq!(config.dig1_couple_arbiter_samples(f64::NAN), None);
+    }
+
+    // ===========================================================================
+    // Top-level extra_registers (DIG1 raw register escape hatch)
+    // ===========================================================================
+
+    #[test]
+    fn extra_registers_parse_from_json() {
+        let json = r#"{
+            "digitizer_id": 0,
+            "name": "V1725 PHA",
+            "firmware": "PHA1",
+            "num_channels": 16,
+            "board": {},
+            "extra_registers": [
+                {"addr": "0x8038", "data": "500", "comment": "pre-trigger 8000 ns"}
+            ]
+        }"#;
+        let config: DigitizerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.extra_registers.len(), 1);
+        let reg = &config.extra_registers[0];
+        assert_eq!(reg.addr, 0x8038);
+        assert_eq!(reg.data, 500);
+        assert_eq!(reg.comment.as_deref(), Some("pre-trigger 8000 ns"));
+    }
+
+    #[test]
+    fn extra_registers_absent_by_default_and_not_serialized_when_empty() {
+        let config = DigitizerConfig::new(0, "PHA1", FirmwareType::PHA1);
+        assert!(config.extra_registers.is_empty());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            !json.contains("extra_registers"),
+            "empty extra_registers must be omitted: {json}"
+        );
+    }
+
+    #[test]
+    fn extra_registers_roundtrip_json() {
+        let mut config = DigitizerConfig::new(0, "PHA1", FirmwareType::PHA1);
+        config.extra_registers.push(RegisterWrite {
+            addr: 0x1038,
+            data: 0x1F4,
+            comment: None,
+        });
+        let json = serde_json::to_string(&config).unwrap();
+        let back: DigitizerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extra_registers.len(), 1);
+        assert_eq!(back.extra_registers[0].addr, 0x1038);
+        assert_eq!(back.extra_registers[0].data, 0x1F4);
+        assert_eq!(back.extra_registers[0].comment, None);
+    }
+
+    /// Every checked-in digitizer JSON (except the monitor layout, which is a
+    /// different schema) must still load after the schema additions.
+    #[test]
+    fn checked_in_digitizer_fixtures_still_load() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config/digitizers");
+        let mut loaded = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some("monitor_layout.json") {
+                continue;
+            }
+            let config = DigitizerConfig::load(&path)
+                .unwrap_or_else(|e| panic!("{} failed to load: {e}", path.display()));
+            assert!(config.extra_registers.is_empty(), "{}", path.display());
+            loaded += 1;
+        }
+        assert!(loaded > 0, "no fixtures found in {}", dir.display());
     }
 
     /// `trigger_threshold_v` round-trips through serde alongside `trigger_threshold`.

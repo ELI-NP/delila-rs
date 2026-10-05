@@ -3574,6 +3574,7 @@ mod tests {
                 extra_registers: Vec::new(),
             }),
             amax_board: None,
+            extra_registers: Vec::new(),
         };
         let p = X743DecodeParams::from_config(Some(&dc));
         assert!(p.channel_negative[0], "ch0 defaults to Negative");
@@ -3680,6 +3681,7 @@ mod tests {
                 extra_registers: Vec::new(),
             }),
             amax_board: None,
+            extra_registers: Vec::new(),
         };
         let p = X743DecodeParams::from_config(Some(&dc));
         assert!(p.use_soft_charge, "energy_source=\"soft\" enables charge");
