@@ -461,6 +461,20 @@ confirmed on hardware), record 20000 ns, FW trapezoid 3008/1008 ns, PZ 50 µs. O
    events in a couple is dropped, UM5678 §1.2). Both core gains share couple 0/1, so physics runs
    with waveforms on lose ~half of each.
 
+**FW verification — run 23 (2026-10-02, FW 3296/1200, waveforms off, 60 min) vs run 22
+(3008/1008)**, all hits of both runs (root_sink .root), same fit (Gaussian + linear background):
+
+| ch | run 22 @1332 | run 23 @1332 | change |
+|---|---|---|---|
+| 0 core high gain | 3.47 | 3.02 | −12.8 % |
+| 1 core low gain | 3.77 | 3.32 | −11.8 % |
+| 2–8 segments | 3.71–4.27 | 3.68–4.22 | 0 to −2 % |
+| 9 segment | 5.45 | 5.37 | −1.6 % |
+
+→ the FW realises about 70 % of the predicted core gain (SW −16 to −17 %); segments barely
+change, as predicted. List mode raised the cores' 1332 counts ×3.5 / ×1.4 (no arbiter or
+readout losses). (`results/eliade_sn01/2026-10-02_run22_vs_run23_fw.txt`)
+
 ---
 
 ## 6. Phase 3 — Hardware verification
@@ -601,8 +615,9 @@ floods us with noise" frustration — it tells you whether the fix is even in pa
 - [x] **Verify the pre-trigger maximum on a V1725** (2026-10-01: DevTree `[128, 4000]` ns, 8000 is
       clamped to 4000). Register 0x1n38 goes to 8176 ns, so a raw write via DIG1
       `extra_registers` (uncommitted, not deployed) is worth a try.
-- [ ] **FW verification (ELIADE team's one-hour run, FW 3296/1200)**: FW FWHM from the root_sink
-      hits vs the §5.7 prediction (cores 2.7–2.95 keV). Also a few minutes at 6592/1200 (two periods).
+- [x] **FW verification (run 23, FW 3296/1200)** (2026-10-02): cores −12 % (3.47→3.02 /
+      3.77→3.32 keV), segments 0 to −2 %. Table at the end of §5.7.
+- [ ] **Try FW 6592/1200 (two pickup periods)**: keeps the core null, longer shaping for segments.
 - [ ] **Explain the 12 % FW/SW gap on the segments** (emulate the FW baseline restoration offline).
 - [ ] **Automate FW-side scans** (Operator REST Tune Up apply → root_sink hits → FWHM). The only way
       to measure rise > 4 µs, where the segments' optimum is.
