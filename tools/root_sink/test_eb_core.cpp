@@ -502,6 +502,42 @@ static void test_sorter_reset_between_runs() {
   CHECK(r.second > r.first);  // and its core actually contains hits
 }
 
+static void test_sorter_counts_hits_behind_core() {
+  // A hit older than the last emitted core_end can never enter any core range
+  // (H10 floor): it reaches neither the hits tree nor a built event. That is
+  // the safe-horizon contract, but crossing it must be COUNTED, never silent:
+  // with independent per-board clocks the oscillator drift alone crosses a
+  // 50 ms horizon within tens of minutes (pf-qaq ThGEM setup, 2026-10-05).
+  Sorter s(small_cfg());
+  std::vector<SortedChunk> chunks;
+  auto grab = [&](SortedChunk&& c) { chunks.push_back(std::move(c)); };
+  std::vector<ScalarHit> b1 = {hit(0, 0.0), hit(0, 20000.0)};
+  s.push_batch(std::move(b1), grab);
+  CHECK(chunks.size() == 1);
+  CHECK(near(chunks[0].core_end, 15000.0));
+  CHECK(s.late_hits() == 0);
+  // 9000 and 14999 are behind core_end; 15000 is the next core_start (inclusive).
+  std::vector<ScalarHit> b2 = {hit(1, 9000.0), hit(1, 14999.0), hit(1, 15000.0),
+                               hit(1, 16000.0)};
+  s.push_batch(std::move(b2), grab);
+  CHECK(s.late_hits() == 2);
+  s.flush(grab);
+  std::vector<double> emitted;
+  for (const SortedChunk& c : chunks) {
+    auto r = core_range(c);
+    for (std::size_t i = r.first; i < r.second; ++i) emitted.push_back(c.hits[i].timestamp_ns);
+  }
+  auto has = [&](double t) {
+    for (double e : emitted)
+      if (near(e, t)) return true;
+    return false;
+  };
+  CHECK(!has(9000.0) && !has(14999.0));  // the counted hits are really gone
+  CHECK(has(15000.0) && has(16000.0) && has(20000.0) && has(0.0));
+  s.reset();
+  CHECK(s.late_hits() == 0);
+}
+
 static void test_sorter_late_hit_lands_sorted() {
   // A hit arriving late (but within the safe horizon) must appear in the
   // correct sorted position of the next chunk, not be lost or misplaced.
@@ -928,6 +964,7 @@ int main() {
   test_sorter_reset_between_runs();
   test_sorter_flush_remainder();
   test_sorter_late_hit_lands_sorted();
+  test_sorter_counts_hits_behind_core();
   test_builder_full_event();
   test_builder_partial_arm();
   test_builder_trigger_only();

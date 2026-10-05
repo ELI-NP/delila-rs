@@ -303,6 +303,10 @@ class Sorter {
     for (const ScalarHit& h : hits) {
       if (h.timestamp_ns > max_ts_) max_ts_ = h.timestamp_ns;
       if (h.timestamp_ns < min_ts_) min_ts_ = h.timestamp_ns;
+      // Behind the emitted core: no future core range can hold it (H10 floor),
+      // so it reaches neither the hits tree nor a built event. Out of the
+      // safe-horizon contract — counted so the caller can say so.
+      if (h.timestamp_ns < prev_core_end_) ++late_;
     }
     if (buffer_.empty()) {
       buffer_ = std::move(hits);
@@ -345,9 +349,15 @@ class Sorter {
     max_ts_ = -std::numeric_limits<double>::infinity();
     min_ts_ = std::numeric_limits<double>::infinity();
     prev_core_end_ = -std::numeric_limits<double>::infinity();
+    late_ = 0;
   }
 
   std::size_t buffered() const { return buffer_.size(); }
+
+  // Hits of this run that arrived behind an already-emitted core_end (disorder
+  // beyond safe_horizon_ns) and are therefore missing from the hits tree and
+  // the built events. Reset by reset().
+  uint64_t late_hits() const { return late_; }
 
  private:
   Config cfg_;
@@ -355,6 +365,7 @@ class Sorter {
   double max_ts_ = -std::numeric_limits<double>::infinity();
   double min_ts_ = std::numeric_limits<double>::infinity();
   double prev_core_end_ = -std::numeric_limits<double>::infinity();
+  uint64_t late_ = 0;
 };
 
 // ---------------------------------------------------------------------------

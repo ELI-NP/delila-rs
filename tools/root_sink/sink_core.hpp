@@ -30,6 +30,7 @@
 #ifndef ROOTSINK_SINK_CORE_HPP
 #define ROOTSINK_SINK_CORE_HPP
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
@@ -209,9 +210,10 @@ struct CoincResult {
 // timestamp is <= watermark are matched against every ThGEM1/ThGEM2 hit currently
 // buffered, picking the CLOSEST within ±window_ns.
 //
-// Channel identity: the ThGEM test uses a SINGLE digitizer, so hits are matched
-// on `channel` alone (module ignored). If this is ever reused across digitizers
-// with overlapping channel numbers, extend the identity to (module, channel).
+// Channel identity: hits are matched on `channel` alone (module ignored). With
+// more than one digitizer, restrict the stream to the ThGEM board first with
+// keep_module (--module) — that also keeps a second board's independent clock
+// out of the watermark.
 //
 // Cost: each hit is pushed once and pruned once; find_closest scans only the
 // partners still inside the active window, which is bounded by rate*margin. So
@@ -323,6 +325,18 @@ class CoincidenceMatcher {
   std::deque<TimedHit> gamma_, t1_, t2_;
 };
 
+// Keep only the hits of digitizer `module` (in order); `module` < 0 keeps every
+// hit. Applied to each decoded batch before anything else sees it (--module):
+// the matchers key on channel alone, and every downstream stage — Sorter,
+// built-event builder, watermark matchers — assumes ONE time base, which
+// independently started boards do not share.
+inline void keep_module(std::vector<ScalarHit>& hits, int module) {
+  if (module < 0) return;
+  hits.erase(std::remove_if(hits.begin(), hits.end(),
+                            [module](const ScalarHit& h) { return h.module != module; }),
+             hits.end());
+}
+
 // ---------------------------------------------------------------------------
 // 3b. Position matcher (delay-line XY — pure logic, no ROOT)
 // ---------------------------------------------------------------------------
@@ -355,7 +369,8 @@ struct PosResult {
 //     be low-rate, so waiting for the next monitored hit to ripen would add
 //     seconds of display latency; the empty-queue ripen test is O(1) anyway.
 //
-// Channel identity is `channel` alone (module ignored) — same caveat as above.
+// Channel identity is `channel` alone (module ignored) — use keep_module
+// (--module) with more than one digitizer, as above.
 class PositionMatcher {
  public:
   struct Config {

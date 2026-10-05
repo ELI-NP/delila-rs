@@ -117,6 +117,7 @@ struct Options {
   std::string exp_name;       // --exp-name: explicit override (wins always)
   std::string operator_url;   // --operator: fetch experiment_name from /api/status
   std::string hists_file;     // --hists: declarative histogram set
+  int module = -1;  // --module M: process only digitizer M's hits (-1 = all)
   int gamma_ch = -1;
   int thgem1_ch = -1;
   int thgem2_ch = -1;
@@ -151,6 +152,11 @@ static void print_usage(const char* argv0) {
       "                      start (used only when --exp-name is not given)\n"
       "  --hists FILE        histogram definition JSON (see README); replaces the\n"
       "                      built-in dt1/dt2/dt2_vs_dt1/channels set\n"
+      "  --module M          process only hits of digitizer (module) M — tree,\n"
+      "                      histograms, matchers and built events alike\n"
+      "                      (default: all). Needed with >1 digitizer: the\n"
+      "                      matchers key on channel alone and every stage\n"
+      "                      assumes one time base\n"
       "  --gamma-ch N        gamma detector channel (enables Δt monitor)\n"
       "  --thgem1-ch N       ThGEM1 channel\n"
       "  --thgem2-ch N       ThGEM2 channel\n"
@@ -212,6 +218,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--hists") {
       if (!(v = need(i))) return false;
       opt.hists_file = v;
+    } else if (a == "--module") {
+      if (!(v = need(i))) return false;
+      opt.module = std::atoi(v);
     } else if (a == "--gamma-ch") {
       if (!(v = need(i))) return false;
       opt.gamma_ch = std::atoi(v);
@@ -938,6 +947,10 @@ int main(int argc, char** argv) {
 
   std::printf("root_sink: sub=%s out-dir=%s tree=%s\n", opt.zmq.c_str(),
               opt.out_dir.c_str(), opt.tree.c_str());
+  if (opt.module >= 0)
+    std::printf("root_sink: --module %d: only digitizer %d's hits are recorded, histogrammed "
+                "and matched (the .delila keeps every board)\n",
+                opt.module, opt.module);
   if (use_hists)
     std::printf("root_sink: histograms defined by %s (%zu hist(s))\n",
                 opt.hists_file.c_str(), hist_defs.size());
@@ -1112,6 +1125,8 @@ int main(int argc, char** argv) {
     std::atomic<long long> matcher_fills{0};  // Display
     std::atomic<long long> xy_fills{0};       // Display
     std::atomic<long long> display_drops{0};  // tee overflow (counted + logged)
+    std::atomic<long long> other_module{0};   // hits dropped by --module (Receiver)
+    std::atomic<long long> late{0};           // hits behind the emitted core (Sorter)
     std::atomic<bool> writing{false};         // stream run state (status line)
   } counters;
 
@@ -1154,6 +1169,11 @@ int main(int argc, char** argv) {
             std::printf("root_sink: run started (source %u)\n", sid);
             std::fflush(stdout);
           });
+          // --module: before ANY consumer — the matchers key on channel alone and
+          // the Sorter / watermarks assume one time base (sink_core.hpp).
+          std::size_t decoded = hits.size();
+          keep_module(hits, opt.module);
+          counters.other_module += static_cast<long long>(decoded - hits.size());
           counters.received += static_cast<long long>(hits.size());
           if (http_enabled) {
             eb::DisplayMsg d;
@@ -1240,6 +1260,21 @@ int main(int argc, char** argv) {
     scfg.lookback_ns = opt.window_ns;  // context carry >= coincidence window
     eb::Sorter sorter(scfg);
     uint64_t seq = 0;
+    // No silent loss: hits that arrived behind an emitted core (disorder beyond
+    // --safe-horizon-ms) are in neither the hits tree nor the built events.
+    // Reported once per run (RunClose, or Shutdown of a still-open run).
+    uint64_t reported_late = 0;
+    auto report_late = [&](const eb::Sorter& so) {
+      counters.late = static_cast<long long>(so.late_hits());
+      if (so.late_hits() > reported_late)
+        std::fprintf(stderr,
+                     "root_sink: WARNING %llu hit(s) this run arrived more than %.0f ms behind "
+                     "the newest hit and are MISSING from the hits tree and built events "
+                     "(the .delila has them). Unsynchronized digitizers? Use --module, or "
+                     "raise --safe-horizon-ms.\n",
+                     static_cast<unsigned long long>(so.late_hits()), opt.safe_horizon_ms);
+      reported_late = so.late_hits();
+    };
     auto emit_chunk = [&](eb::SortedChunk&& c) {
       eb::WorkMsg m;
       m.seq = seq++;
@@ -1252,10 +1287,12 @@ int main(int argc, char** argv) {
       switch (in.ctrl) {
         case eb::Ctrl::None:
           sorter.push_batch(std::move(in.hits), emit_chunk);
+          counters.late = static_cast<long long>(sorter.late_hits());  // status line
           break;
         case eb::Ctrl::RunOpen: {
           sorter.reset();  // R11: forget the previous run's clock, or the new
                            // run's hits all fall below core_start and vanish
+          reported_late = 0;
           eb::WorkMsg m;
           m.ctrl = eb::Ctrl::RunOpen;
           m.seq = seq++;
@@ -1264,6 +1301,7 @@ int main(int argc, char** argv) {
         }
         case eb::Ctrl::RunClose: {
           sorter.flush(emit_chunk);  // the run's tail becomes the last chunk
+          report_late(sorter);
           eb::WorkMsg m;
           m.ctrl = eb::Ctrl::RunClose;
           m.seq = seq++;
@@ -1276,6 +1314,7 @@ int main(int argc, char** argv) {
           // still reach the file (close_unfinalized keeps it). The pills then
           // carry the highest seqs, so the Writer drains all real work first.
           sorter.flush(emit_chunk);
+          report_late(sorter);
           for (int i = 0; i < n_workers; ++i) {
             eb::WorkMsg m;
             m.ctrl = eb::Ctrl::Shutdown;
@@ -1534,12 +1573,13 @@ int main(int argc, char** argv) {
       std::printf(
           "root_sink: %s | events=%lld (written=%lld) | %.0f ev/s | chunks=%lld | "
           "built=%lld | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "
-          "write=%zu disp=%zu] | display_drops=%lld\n",
+          "write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | late=%lld\n",
           counters.writing ? "WRITING" : "idle", rec, (long long)counters.written,
           rate, (long long)counters.chunks, (long long)counters.built,
           (long long)counters.matcher_fills, (long long)counters.xy_fills,
           to_sorter.size(), work_q.size(), writer_q.size(), display_q.size(),
-          (long long)counters.display_drops);
+          (long long)counters.display_drops, (long long)counters.other_module,
+          (long long)counters.late);
       std::fflush(stdout);
       t_last_status = now;
       last_received = rec;

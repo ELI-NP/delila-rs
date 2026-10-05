@@ -401,6 +401,7 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg tree         --tree
         rs_add_arg exp_name     --exp-name
         rs_add_arg hists        --hists
+        rs_add_arg module       --module
         rs_add_arg gamma_ch     --gamma-ch
         rs_add_arg thgem1_ch    --thgem1-ch
         rs_add_arg thgem2_ch    --thgem2-ch

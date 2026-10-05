@@ -65,7 +65,19 @@ window_ns  = 10000
 # chunk_span_ms   = 100
 # safe_horizon_ms = 50
 # built_tree      = "events"   # 要 xy1_ch(+任意で xy2_ch / gamma_ch)
+# 2026-10 追加:
+# module          = 0          # デジタイザ 2 台以上なら必須(下記)
 ```
+
+- **デジタイザが 2 台以上なら `module` を指定する。** Δt / XY マッチャーと built tree は
+  チャンネル番号だけでヒットを選び、Sorter とマッチャーは時間軸が 1 本である前提で動く。
+  他のボードの ch0〜10 が LaBr3 / ThGEM 扱いされ、さらに独立にスタートしたボードの時計は
+  ずれていくので、ずれが `safe_horizon_ms` を超えると遅れた側のボードのヒットが .root から
+  落ちる(2026-10-05 E2E: 200 ms 遅れのボード 0 で 4000 件中 1489 件欠落)。`module = M` で
+  デコード直後にボード M 以外を捨てる(ツリー・ヒスト・マッチャー・built tree すべてに効く)。
+  .delila(Recorder)と Monitor(8081)は全ボードを持つ。
+- 安全幅を越えて遅れたヒットは、数えて status 行の `late=` とラン毎 1 回の WARNING で報告する
+  (以前は無言で捨てていた)。
 
 - セクションがあれば `start_daq.sh` が自動起動、無ければ従来どおり(手動起動)。
 - `--operator` は `[operator]` の `port` から自動導出される(明示不要)。

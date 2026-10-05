@@ -239,6 +239,65 @@ static void test_batch_decode() {
 }
 
 // ---------------------------------------------------------------------------
+// keep_module (--module): one board's hits only
+// ---------------------------------------------------------------------------
+static ScalarHit mod_hit(uint8_t mod, uint8_t ch, double t, uint16_t e = 0) {
+  ScalarHit h;
+  h.module = mod;
+  h.channel = ch;
+  h.timestamp_ns = t;
+  h.energy = e;
+  return h;
+}
+
+static void test_keep_module() {
+  const std::vector<ScalarHit> v = {mod_hit(0, 1, 10.0), mod_hit(1, 1, 11.0),
+                                    mod_hit(0, 6, 12.0), mod_hit(2, 0, 13.0)};
+  auto all = v;
+  keep_module(all, -1);
+  CHECK(all.size() == 4);  // -1 = every module (the default, side3 behaviour)
+  auto m0 = v;
+  keep_module(m0, 0);
+  CHECK(m0.size() == 2 && m0[0].module == 0 && m0[1].channel == 6);
+  CHECK(near(m0[0].timestamp_ns, 10.0) && near(m0[1].timestamp_ns, 12.0));  // order kept
+  auto m3 = v;
+  keep_module(m3, 3);
+  CHECK(m3.empty());
+}
+
+static void test_foreign_module_hits_do_not_reach_the_matcher() {
+  // The matchers key on CHANNEL alone. A second board breaks them two ways:
+  // (a) its channel 1 is taken for ThGEM1; (b) its independent clock drives
+  // the watermark, so a gamma ripens before its real partner arrives.
+  CoincidenceMatcher::Config cfg;
+  cfg.gamma_ch = 0;
+  cfg.thgem1_ch = 1;
+  cfg.window_ns = 100.0;
+  cfg.margin_ns = 1000.0;
+  auto run = [&](int module) {
+    CoincidenceMatcher m(cfg);
+    std::vector<CoincResult> out;
+    auto keep = [&](const CoincResult& r) { out.push_back(r); };
+    std::vector<ScalarHit> batch1 = {mod_hit(0, 0, 1000.0, 7),      // gamma
+                                     mod_hit(1, 1, 1005.0, 99),     // board 1 ch1
+                                     mod_hit(1, 5, 1.0e9, 0)};      // board 1, clock far ahead
+    keep_module(batch1, module);
+    for (const ScalarHit& h : batch1) m.push(h, keep);
+    std::vector<ScalarHit> batch2 = {mod_hit(0, 1, 1060.0, 42)};  // the real ThGEM1 hit
+    keep_module(batch2, module);
+    for (const ScalarHit& h : batch2) m.push(h, keep);
+    m.flush(keep);
+    return out;
+  };
+  auto unfiltered = run(-1);
+  CHECK(unfiltered.size() == 1);
+  CHECK(unfiltered[0].has_dt1 && unfiltered[0].thgem1_energy == 99);  // wrong partner
+  auto filtered = run(0);
+  CHECK(filtered.size() == 1);
+  CHECK(filtered[0].has_dt1 && filtered[0].thgem1_energy == 42 && near(filtered[0].dt1, 60.0));
+}
+
+// ---------------------------------------------------------------------------
 // Coincidence matcher tests (with energies)
 // ---------------------------------------------------------------------------
 static ScalarHit hit(uint8_t ch, double t, uint16_t e) {
@@ -852,6 +911,8 @@ int main() {
   test_envelope();
   test_batch_decode();
   test_matcher();
+  test_keep_module();
+  test_foreign_module_hits_do_not_reach_the_matcher();
   test_pos_matcher();
   test_parse_ch_list();
   test_run_state();

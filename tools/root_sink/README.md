@@ -62,6 +62,9 @@ root_sink [options]
                       --exp-name is not given)
   --hists FILE        histogram definition JSON (see below); replaces the
                       built-in dt1/dt2/dt2_vs_dt1/channels set
+  --module M          process only digitizer M's hits (default: all) — the
+                      tree, histograms, matchers and built events alike;
+                      required with >1 digitizer (see Design notes)
   --gamma-ch N        gamma detector channel       (enables the Δt monitor)
   --thgem1-ch N       ThGEM1 channel
   --thgem2-ch N       ThGEM2 channel
@@ -372,6 +375,17 @@ reload can safely delete and rebuild the live objects.
   ⇒ one EOS closes. This set-based rule deliberately avoids the first-EOS-latch
   trap of naive multi-source consumers. A stale EOS received while idle is logged
   and ignored.
+- **One digitizer per root_sink (`--module`).** The Δt / XY matchers and the
+  built-event builder select hits by `channel` alone, and the Sorter, the
+  watermark matchers and the builder all assume ONE time base. A second board
+  breaks both: its channels land in the ThGEM/LaBr3 slots, and an independently
+  started board's clock drifts away from the first. Once the drift exceeds
+  `--safe-horizon-ms`, the lagging board's hits arrive behind an emitted core
+  and never reach the `.root` (E2E, 2026-10-05: board 0 lagging 200 ms → 1489
+  of 4000 hits missing). `--module M` drops the other boards right after
+  decoding, before any consumer. Hits behind an emitted core are counted
+  (`late=` in the status line, one WARNING per run) — never silently lost; the
+  `.delila` from the Recorder has every board in any case.
 - **Monitor disabled without channel flags.** Omit any of `--gamma-ch /
   --thgem1-ch / --thgem2-ch` and the Δt matcher is off (recorder-only). The
   `THttpServer` (if `--http-port` ≠ 0) still shows channel occupancy.
