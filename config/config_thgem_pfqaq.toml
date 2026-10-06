@@ -107,7 +107,9 @@ pipeline_order = 2
 subscribe = "tcp://localhost:5557"
 command = "tcp://*:5580"
 # Absolute path on purpose: neither the Recorder nor root_sink expands "~".
-output_dir = "/home/daq/DELILA_data"
+# /data = nvme1n1 (XFS, 3.5 TB, recording + analysis). Finished runs move to
+# /archive/DELILA_data (ZFS raidz2 on 4x 20 TB HDD, long-term storage).
+output_dir = "/data/DELILA_data"
 pipeline_order = 3
 
 [network.monitor]
@@ -129,7 +131,7 @@ pipeline_order = 3
 [network.root_sink]
 subscribe = "tcp://localhost:5557"
 # Must match [network.recorder].output_dir (.delila and .root side by side).
-output_dir = "/home/daq/DELILA_data"
+output_dir = "/data/DELILA_data"
 http_port = 8090
 hists = "config/histograms_thgem.json"
 # Only the ThGEM board (source id 0) - see the header.
