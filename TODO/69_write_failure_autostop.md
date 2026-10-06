@@ -1,6 +1,6 @@
 # TODO 69 — ディスク書き込み失敗でランを止める (Recorder / root_sink)
 
-**Status: 📋 OPEN (2026-10-06) — 方針未決(§4)**
+**Status: 📋 OPEN (2026-10-06) — Phase 1 はデフォルト ON で決定(§4)、未着手**
 
 **関連:** CLAUDE.md 絶対ルール(落とすくらいなら止める) /
 TODO 58 H7(`write_failed` ラッチ、[archive](archive/58_code_review_2026-06-10.md)) /
@@ -63,8 +63,11 @@ pf-qaq の `scripts/archive_sync.sh`(cron 15 分): `/data` が 80 % を超えた
 - 停止の種類: **drain-first ではなく即時停止**が自然(書けないディスクへ drain しても意味がない)。
   source を先に止めて欠損を最小にする点は drain-first と同じ。
 - 停止理由を Mongo の run 記録 / eLog に残す。
-- **決めること:**
-  1. デフォルト ON か opt-in か。絶対ルールからすると ON が筋。backlog autostop は二重 opt-in にした経緯あり(TODO 68)。
+- **決定 (2026-10-06, ユーザー): デフォルト ON。** TOML セクション無しで常に動く。
+  backlog autostop(TODO 68)が二重 opt-in なのは、水位の閾値がホストの RAM 次第で
+  誤発火の余地があるため。書き込み失敗は誤検知の余地が無い事実なので、絶対ルールどおり常に止める。
+- **実装時に決めること:**
+  1. 無効化の手段(TOML で opt-out)を残すか。残さない方が KISS だが、障害解析で止めたくない場面があるか。
   2. ポーリング間隔(backlog watcher と共用するか)。
   3. 複数 Recorder 構成で 1 台だけ失敗した場合も止めるか(止める、が絶対ルールに沿う)。
 
