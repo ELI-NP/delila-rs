@@ -26,13 +26,18 @@
       "title": "t(ThGEM2) - t(LaBr3);#Deltat_{2} [ns];counts",
       "fill": "dt2", "bins": 2000, "min": -1000, "max": 1000 },
 
+    { "name": "dt2_vs_dt1", "type": "TH2D",
+      "title": "#Deltat_{2} vs #Deltat_{1};#Deltat_{1} [ns];#Deltat_{2} [ns]",
+      "x": "dt1", "y": "dt2",
+      "xbins": 500, "xmin": -1000, "xmax": 1000, "ybins": 500, "ymin": -1000, "ymax": 1000 },
+
     { "name": "tof1", "type": "TH1D",
       "title": "ThGEM1 TOF window;#Deltat_{1} [ns];counts",
-      "fill": "dt1", "bins": 240, "min": 70, "max": 190 },
+      "fill": "dt1", "bins": 1024, "min": 70, "max": 190 },
 
     { "name": "tof2", "type": "TH1D",
       "title": "ThGEM2 TOF window;#Deltat_{2} [ns];counts",
-      "fill": "dt2", "bins": 240, "min": 70, "max": 190 },
+      "fill": "dt2", "bins": 1024, "min": 70, "max": 190 },
 
     { "name": "xy1_pos", "type": "TH2D",
       "title": "ThGEM1 XY;x = t_{XR} - t_{XL} [ns];y = t_{YU} - t_{YD} [ns]",

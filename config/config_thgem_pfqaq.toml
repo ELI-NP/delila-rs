@@ -1,14 +1,16 @@
-# DELILA DAQ Configuration - ThGEM experiment @ pf-qaq (daq@172.18.5.210)
+# DELILA DAQ Configuration - ThGEM experiment @ pf-qaq (daq@192.168.144.142 at the experiment site since 2026-10-06; 172.18.5.210 in the lab)
 #
-# Successor of side3 (daq@192.168.144.102) with MORE digitizers. Built on
-# 2026-10-05 from what is recorded about side3 (it was not reachable that day):
-# replace config/digitizers/thgem_v1730_psd1_0.json with side3's tuned board
-# JSON when side3 is back.
+# Successor of side3 (back in the office since 2026-10-06, daq@172.18.4.147)
+# with MORE digitizers. Continues side3's run series: same experiment_name, and
+# side3's ThGEM run history (MongoDB) and data (/archive/DELILA_data/side3_ThGEM)
+# were copied here on 2026-10-06.
+# config/digitizers/thgem_v1730_psd1_0.json = side3's final tuned
+# config/digitizers/psd1_test.json, verbatim (VX1730B SN66, saved 2026-08-03,
+# used through run 51 on 2026-09-15).
 #
-# Hardware (planned): A3818 optical card (4 links) - NOT yet on the PCI bus
-#   on 2026-10-05 (`lspci -nn | grep 10ee` empty; a fitted card shows up there
-#   even without its driver).
-#   link 0 / node 0 : V1730 DPP-PSD  ThGEM board - side3 channel map:
+# Hardware: A3818 optical card (4 links); on this board (X13SWA-TF) its slot
+#   needs BIOS bifurcation x8x8 or the card does not enumerate.
+#   link 0 / node 0 : VX1730B SN66 DPP-PSD  ThGEM board - side3 channel map:
 #        ch0 LaBr3 | ch1 ThGEM1 trig, ch2 XL, ch3 XR, ch4 Y bottom, ch5 Y up
 #                  | ch6 ThGEM2 trig, ch7 XL, ch8 XR, ch9 Y bottom, ch10 Y top
 #   links 1-3       : additional digitizers - blocks below are DISABLED: a
@@ -33,7 +35,9 @@
 # MongoDB, InfluxDB 3, Grafana, eLog: docker/ stack (docker compose up -d in docker/).
 
 [operator]
-experiment_name = "ThGEM"
+# Same name as side3: the Operator numbers runs per experiment_name (most recent
+# run of that name + 1), so this continues side3's series at run 52.
+experiment_name = "X730_ThGEM_Test"
 # Same port as side3 (there Cockpit owns 9090; here 9090 is free).
 port = 9091
 
@@ -63,6 +67,7 @@ name = "PSD1-V1730-ThGEM"
 type = "psd1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
 config_file = "config/digitizers/thgem_v1730_psd1_0.json"
+adc_min = 1   # as on side3: drop E=0 events
 pipeline_order = 1
 time_step_ns = 2.0
 
@@ -124,10 +129,13 @@ pipeline_order = 3
 # unsorted tree; harmless with the sorted MT root_sink).
 #
 # XY channel order is T,XL,XR,YU,YD. side3 ran "1,2,3,4,5" / "6,7,8,9,10", which
-# put the BOTTOM wire in the YU slot (Y mirrored, accepted for that campaign
-# and to be fixed at a campaign boundary). This new setup fixes it:
-# YU = ch5 (up) / ch10 (top). Revert to "1,2,3,4,5" / "6,7,8,9,10" to compare
-# with side3 images directly.
+# put ThGEM1's BOTTOM wire (ch4) in the YU slot (Y mirrored, accepted for that
+# campaign). Here ThGEM1 uses YU = ch5 (up) and is the reference orientation.
+# ThGEM2 by its labels would be "6,7,8,10,9" (YU = ch10 top), but its first
+# images (runs 54-56, 2026-10-06) came out Y-mirrored relative to ThGEM1 (the
+# narrow edge band at the top instead of the bottom), so its Y wires are taken
+# in the opposite order to match ThGEM1. X orientation not verified (the grid
+# image is left-right symmetric).
 [network.root_sink]
 subscribe = "tcp://localhost:5557"
 # Must match [network.recorder].output_dir (.delila and .root side by side).
@@ -140,7 +148,7 @@ gamma_ch = 0
 thgem1_ch = 1
 thgem2_ch = 6
 xy1_ch = "1,2,3,5,4"
-xy2_ch = "6,7,8,10,9"
+xy2_ch = "6,7,8,9,10"
 window_ns = 1000
 margin_ns = 20000000
 autosave_sec = 30
@@ -148,3 +156,8 @@ autosave_sec = 30
 # (both ThGEM planes + LaBr3 per trigger; NaN = arm missing).
 workers = 3
 built_tree = "built"
+# Sorter disorder absorption. The default 50 ms is too short for this board:
+# run 52 (2026-10-06, VX1730B alone, 3.4 kHz) arrived up to 82 ms out of time
+# order (DIG1 reads out per channel-pair aggregates) and root_sink dropped
+# 436 of 86054 hits (0.5 %, all channels, scattered over the run) as late.
+safe_horizon_ms = 1000
