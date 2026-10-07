@@ -1,0 +1,24 @@
+{
+  "$schema": "../schemas/timeSettings.schema.json",
+  "_comment": [
+    "delayline_offsets.C on pf-qaq run 56 (2026-10-06, X730_ThGEM_Test) (module 0): centres each delay-line XY image (mid of 1/99 % edges) by splitting its raw centre over the two arms of each axis; triggers and other channels 0.",
+    "raw centres: plane1 (-17.504, -29.801) ns from 14660 events; plane2 (-2.500, -15.152) ns from 15751 events.",
+    "Why: moving the ThGEM setup to pf-qaq at the site changed the cables (TODO 70): XL arrived ~17.5 ns after XR and Y-bottom ~30 ns after Y-up on ThGEM1, so the root_sink XY image sat off-centre; side3 had all four arms at ~88-90 ns after the trigger.",
+    "Regenerate after any cabling change: root -l -b -q 'tools/root_sink/delayline_offsets.C(\"<delila2root dir>/runNNNN_*.root\",\"1,2,3,5,4\",\"6,7,8,9,10\",\"config/time_settings_thgem.json\",\"<label>\")'. root_sink re-reads this file at every run start: write a temp file and mv it into place.",
+    "aligned_ts = raw_ts - offset_ns (positive = channel arrives late)."
+  ],
+  "version": "1.0",
+  "entries": [
+    {"module": 0, "channel": 1, "ref": null, "offset_ns": 0.0000},
+    {"module": 0, "channel": 6, "ref": [0, 1], "offset_ns": 0.0000},
+    {"module": 0, "channel": 2, "ref": [0, 1], "offset_ns": 8.7520},
+    {"module": 0, "channel": 3, "ref": [0, 1], "offset_ns": -8.7520},
+    {"module": 0, "channel": 5, "ref": [0, 1], "offset_ns": -14.9004},
+    {"module": 0, "channel": 4, "ref": [0, 1], "offset_ns": 14.9004},
+    {"module": 0, "channel": 7, "ref": [0, 6], "offset_ns": 1.2500},
+    {"module": 0, "channel": 8, "ref": [0, 6], "offset_ns": -1.2500},
+    {"module": 0, "channel": 9, "ref": [0, 6], "offset_ns": -7.5762},
+    {"module": 0, "channel": 10, "ref": [0, 6], "offset_ns": 7.5762},
+    {"module": 0, "channel": 0, "ref": [0, 1], "offset_ns": 0.0000}
+  ]
+}

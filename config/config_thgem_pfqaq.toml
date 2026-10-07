@@ -161,3 +161,9 @@ built_tree = "built"
 # order (DIG1 reads out per channel-pair aggregates) and root_sink dropped
 # 436 of 86054 hits (0.5 %, all channels, scattered over the run) as late.
 safe_horizon_ms = 1000
+# Per-(module,channel) cable/delay offsets (TODO 70): aligned = raw - offset_ns
+# for the hits tree, built events and monitors (the .delila stays raw). The move
+# to the site changed the ThGEM cables — without this the XY images sat at
+# (-17.5, -29.8) / (-2.5, -15.2) ns. Re-read at every run start (edit via a temp
+# file + mv); regenerate with tools/root_sink/delayline_offsets.C after recabling.
+time_calib_file = "config/time_settings_thgem.json"
