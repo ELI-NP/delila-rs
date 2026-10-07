@@ -14,6 +14,7 @@
 // the two binaries stay independent so the 215 existing checks are never
 // touched by eb work).
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -1228,7 +1229,13 @@ static void test_sorter_set_lookback() {
 struct RefResult {
   std::vector<GenericEvent> events;
   uint64_t orphans = 0, contested = 0;
+  uint64_t ac_flagged = 0, l2_accepted = 0;
+  std::vector<uint64_t> flag_true, accept_true;
 };
+
+static bool in_list(const std::vector<uint16_t>& v, uint16_t k) {
+  return std::find(v.begin(), v.end(), k) != v.end();
+}
 
 static bool hit_order(const ScalarHit& a, const ScalarHit& b) {
   if (a.timestamp_ns != b.timestamp_ns) return a.timestamp_ns < b.timestamp_ns;
@@ -1303,7 +1310,66 @@ static RefResult reference_build(std::vector<ScalarHit> hits, const EventDef& d)
     eh.energy_short = h.energy_short;
     eh.dt = h.timestamp_ns - r.events[ev].t;
     eh.is_trigger = group_of[i] >= 0;
+    // AC (Phase C): any shield hit of a pair this channel is a detector of,
+    // within [t - ac_pre, t + ac_post] of THIS hit — over all hits, events
+    // play no part.
+    const uint16_t key = mc_key(h.module, h.channel);
+    for (const AcPair& p : d.ac_pairs) {
+      if (!in_list(p.detector, key)) continue;
+      for (const ScalarHit& o : hits) {
+        double dt = o.timestamp_ns - h.timestamp_ns;
+        if (in_list(p.shield, mc_key(o.module, o.channel)) && dt >= -d.ac_pre_ns &&
+            dt <= d.ac_post_ns)
+          eh.with_ac = true;
+      }
+    }
+    if (eh.with_ac) ++r.ac_flagged;
     r.events[ev].hits.push_back(eh);
+  }
+  // L2 (Phase C), straight from the definition's lists (no bit masks).
+  r.flag_true.assign(d.flags.size(), 0);
+  r.accept_true.assign(d.accepts.size(), 0);
+  for (GenericEvent& e : r.events) {
+    if (d.counters.empty()) continue;
+    e.l2_counts.assign(d.counters.size(), 0);
+    for (std::size_t c = 0; c < d.counters.size(); ++c)
+      for (const EventHit& h : e.hits) {
+        if (!in_list(d.counters[c].channels, mc_key(h.mod, h.ch))) continue;
+        L2Ac m = d.counters[c].ac;
+        if (m == L2Ac::Any || (m == L2Ac::Clean && !h.with_ac) || (m == L2Ac::Vetoed && h.with_ac))
+          ++e.l2_counts[c];
+      }
+    for (std::size_t f = 0; f < d.flags.size(); ++f) {
+      long long v = e.l2_counts[static_cast<std::size_t>(d.flags[f].counter)];
+      long long x = d.flags[f].value;
+      bool b = false;
+      switch (d.flags[f].op) {
+        case L2Op::Eq: b = v == x; break;
+        case L2Op::Ne: b = v != x; break;
+        case L2Op::Lt: b = v < x; break;
+        case L2Op::Le: b = v <= x; break;
+        case L2Op::Gt: b = v > x; break;
+        case L2Op::Ge: b = v >= x; break;
+      }
+      if (b) {
+        e.l2_flags |= uint64_t(1) << f;
+        ++r.flag_true[f];
+      }
+    }
+    for (std::size_t a = 0; a < d.accepts.size(); ++a) {
+      const L2Accept& acc = d.accepts[a];
+      bool b = acc.is_and;
+      for (int f : acc.flags) {
+        bool fb = (e.l2_flags >> f) & 1;
+        b = acc.is_and ? (b && fb) : (b || fb);
+      }
+      if (b) {
+        e.l2_accepts |= uint64_t(1) << a;
+        ++r.accept_true[a];
+        e.l2_accept = true;
+      }
+    }
+    if (e.l2_accept) ++r.l2_accepted;
   }
   return r;
 }
@@ -1340,10 +1406,17 @@ static bool same_events(const std::vector<GenericEvent>& a, const std::vector<Ge
     auto cx = canon(x.hits), cy = canon(y.hits);
     for (std::size_t j = 0; j < cx.size(); ++j)
       if (cx[j].dt != cy[j].dt || cx[j].mod != cy[j].mod || cx[j].ch != cy[j].ch ||
-          cx[j].energy != cy[j].energy || cx[j].is_trigger != cy[j].is_trigger) {
-        why = "event " + std::to_string(i) + " hit " + std::to_string(j) + " differs";
+          cx[j].energy != cy[j].energy || cx[j].is_trigger != cy[j].is_trigger ||
+          cx[j].with_ac != cy[j].with_ac) {
+        why = "event " + std::to_string(i) + " hit " + std::to_string(j) + " differs" +
+              (cx[j].with_ac != cy[j].with_ac ? " (with_ac)" : "");
         return false;
       }
+    if (x.l2_counts != y.l2_counts || x.l2_flags != y.l2_flags ||
+        x.l2_accepts != y.l2_accepts || x.l2_accept != y.l2_accept) {
+      why = "event " + std::to_string(i) + " L2 differs";
+      return false;
+    }
   }
   return true;
 }
@@ -1529,6 +1602,255 @@ static void test_generic_group_span_ends_at_core_end() {
   CHECK(chunks >= 2);
   CHECK(evs.size() == 1);
   CHECK(evs.size() == 1 && evs[0].n_triggers == 2 && near(evs[0].t, 14000.0));
+}
+
+// --- Phase C: AC flag + L2 ---
+
+// Copy a definition, let `f` add Phase C sections, rebuild the lookups.
+template <class F>
+static std::shared_ptr<const EventDef> with_c(std::shared_ptr<const EventDef> base, F f) {
+  auto d = std::make_shared<EventDef>(*base);
+  f(*d);
+  d->index_channels();
+  return d;
+}
+
+static uint16_t K(int m, int c) { return mc_key(static_cast<uint8_t>(m), static_cast<uint8_t>(c)); }
+
+// ThGEM-like def + "Ge" = m0c3 (detector), "BGO" = m0c7 (shield), window
+// [-300, +200] around the flagged hit.
+static std::shared_ptr<const EventDef> ac_def() {
+  return with_c(thgem_def(), [](EventDef& d) {
+    d.ac_pre_ns = 300;
+    d.ac_post_ns = 200;
+    AcPair p;
+    p.name = "Ge";
+    p.detector = {K(0, 3)};
+    p.shield = {K(0, 7)};
+    d.ac_pairs.push_back(p);
+  });
+}
+
+static void test_generic_ac_window_edges() {
+  // Shield hits at exactly -300 and +200 of a Ge hit flag it (inclusive);
+  // -300.5 / +200.5 do not. The shield hit itself is never flagged.
+  auto def = ac_def();
+  CHECK(near(def->lookback_ns(), 4000.0 + 500.0));
+  struct Case { double bgo; bool flagged; };
+  for (Case cs : {Case{-300.0, true}, Case{200.0, true}, Case{-300.5, false},
+                  Case{200.5, false}, Case{0.0, true}}) {
+    GenericStats st;
+    auto evs = one_chunk({hit(1, 1000.0), hit(3, 1100.0), hit(7, 1100.0 + cs.bgo)}, def, st);
+    CHECK(evs.size() == 1);
+    if (evs.size() != 1) continue;
+    const EventHit* ge = find_ch(evs[0], 3);
+    const EventHit* bgo = find_ch(evs[0], 7);
+    CHECK(ge && ge->with_ac == cs.flagged);
+    CHECK(bgo && !bgo->with_ac);
+    CHECK(st.ac_flagged == (cs.flagged ? 1u : 0u));
+  }
+}
+
+static void test_generic_ac_partner_in_other_event_or_none() {
+  // The Ge hit (ch3, 600) sits in event 1 (ref 0); its BGO partner 180 ns
+  // later (780) is nearer to event 2's reference (1500) and is assigned THERE
+  // (rule 4) — still flags. A second Ge in event 2 whose BGO lies outside every window (an
+  // orphan) is flagged too: AC is independent of events.
+  auto def = with_c(thgem_def(1000, 1000, 1000), [](EventDef& d) {
+    d.ac_pre_ns = 200;
+    d.ac_post_ns = 200;
+    AcPair p;
+    p.name = "Ge";
+    p.detector = {K(0, 3)};
+    p.shield = {K(0, 7)};
+    d.ac_pairs.push_back(p);
+  });
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 0.0), hit(3, 600.0), hit(7, 780.0), hit(1, 1500.0),
+                        hit(3, 2400.0), hit(7, 2550.0)},
+                       def, st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK(find_ch(evs[0], 3) && find_ch(evs[0], 3)->with_ac);
+  CHECK(find_ch(evs[1], 7) != nullptr);  // the partner went to event 2
+  CHECK(find_ch(evs[1], 3) && find_ch(evs[1], 3)->with_ac);
+  CHECK(st.orphans == 1);                // the second BGO (2550 > 1500 + 1000)
+  CHECK(st.ac_flagged == 2);
+}
+
+static void test_generic_l2_counts_flags_accepts() {
+  // Counters count HITS (one channel twice = 2), with the three AC modes;
+  // flags compare; accepts AND/OR; L2Accept = OR of the accepts.
+  auto def = with_c(ac_def(), [](EventDef& d) {
+    L2Counter all, clean, vetoed, arms;
+    all.name = "nGe"; all.channels = {K(0, 3)};
+    clean.name = "nGeClean"; clean.channels = {K(0, 3)}; clean.ac = L2Ac::Clean;
+    vetoed.name = "nGeVeto"; vetoed.channels = {K(0, 3)}; vetoed.ac = L2Ac::Vetoed;
+    arms.name = "nArms"; arms.channels = {K(0, 2), K(0, 4), K(0, 5)};
+    d.counters = {all, clean, vetoed, arms};
+    L2Flag f0, f1, f2;
+    f0.name = "TwoGe"; f0.counter = 0; f0.op = L2Op::Eq; f0.value = 2;
+    f1.name = "AnyClean"; f1.counter = 1; f1.op = L2Op::Ge; f1.value = 1;
+    f2.name = "ManyArms"; f2.counter = 3; f2.op = L2Op::Gt; f2.value = 3;
+    d.flags = {f0, f1, f2};
+    L2Accept a0, a1;
+    a0.name = "Both"; a0.is_and = true; a0.flags = {0, 1};
+    a1.name = "Either"; a1.is_and = false; a1.flags = {2};
+    d.accepts = {a0, a1};
+  });
+  GenericStats st;
+  // Event 1: two Ge hits on ch3 (one vetoed by BGO at +50), 2 arms.
+  // Event 2 (far away): one clean Ge, 4 arm hits (ch2 twice).
+  auto evs = one_chunk({hit(1, 0.0), hit(3, 10.0), hit(7, 60.0), hit(3, 600.0), hit(2, 20.0),
+                        hit(4, 30.0), hit(1, 100000.0), hit(3, 100010.0), hit(2, 100020.0),
+                        hit(2, 100025.0), hit(4, 100030.0), hit(5, 100040.0)},
+                       def, st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK((evs[0].l2_counts == std::vector<uint32_t>{2, 1, 1, 2}));
+  CHECK(evs[0].l2_flags == 0b011u);  // TwoGe, AnyClean
+  CHECK(evs[0].l2_accepts == 0b01u && evs[0].l2_accept);
+  CHECK((evs[1].l2_counts == std::vector<uint32_t>{1, 1, 0, 4}));
+  CHECK(evs[1].l2_flags == 0b110u);  // AnyClean, ManyArms
+  CHECK(evs[1].l2_accepts == 0b10u && evs[1].l2_accept);
+  CHECK(st.flag_true[0] == 1 && st.flag_true[1] == 2 && st.flag_true[2] == 1);
+  CHECK(st.accept_true[0] == 1 && st.accept_true[1] == 1 && st.l2_accepted == 2);
+  // No l2 section: nothing computed, nothing counted.
+  GenericStats st2;
+  auto plain = one_chunk({hit(1, 0.0), hit(3, 10.0)}, ac_def(), st2);
+  CHECK(plain.size() == 1 && plain[0].l2_counts.empty() && !plain[0].l2_accept);
+  CHECK(st2.l2_accepted == 0);
+}
+
+static void test_generic_ac_late_shield_after_core_end() {
+  // Chunk contract with AC: the first batch splits at core_end = 15000. The
+  // event with reference 14500 holds a Ge hit at 14600 whose BGO partner
+  // (15500, inside ac_post = 1000) is legitimately later than core_end and
+  // only arrives with the next batch. The chunk must not emit that event yet
+  // (ev_hi = D - pre - post - ac_post = 13600): the next chunk, which has the
+  // BGO, emits it — flagged.
+  auto def = with_c(thgem_def(200.0, 200.0, 100.0), [](EventDef& d) {
+    d.ac_pre_ns = 0;
+    d.ac_post_ns = 1000;
+    AcPair p;
+    p.name = "Ge";
+    p.detector = {K(0, 3)};
+    p.shield = {K(0, 7)};
+    d.ac_pairs.push_back(p);
+  });
+  Sorter::Config scfg = small_cfg();
+  scfg.lookback_ns = def->lookback_ns();
+  Sorter s(scfg);
+  TriggerGrouper g;
+  g.reset(def);
+  std::vector<GenericEvent> evs;
+  GenericStats st;
+  std::size_t chunks = 0;
+  auto on_chunk = [&](SortedChunk&& c) {
+    ++chunks;
+    for (auto& e : build_generic_events(c, g.plan_chunk(c), st)) evs.push_back(std::move(e));
+  };
+  std::vector<ScalarHit> b1 = {hit(1, 14500.0), hit(3, 14600.0)};
+  for (int i = 0; i <= 20; ++i) b1.push_back(hit(9, i * 1000.0));
+  std::vector<ScalarHit> b2 = {hit(7, 15500.0)};
+  for (int i = 21; i <= 40; ++i) b2.push_back(hit(9, i * 1000.0));
+  s.push_batch(std::move(b1), on_chunk);
+  s.push_batch(std::move(b2), on_chunk);
+  s.flush(on_chunk);
+  CHECK(chunks >= 2);
+  CHECK(evs.size() == 1);
+  CHECK(evs.size() == 1 && find_ch(evs[0], 3) && find_ch(evs[0], 3)->with_ac);
+  CHECK(s.late_hits() == 0);
+}
+
+static void test_generic_ac_l2_matches_reference_randomized() {
+  // As test_generic_matches_reference_randomized, plus AC pairs (a trigger
+  // channel is also a detector; one channel is detector of one pair and
+  // shield of another) and L2 with all three AC modes, both accept kinds.
+  // Chunk spans are small so AC partners straddle chunk boundaries.
+  int mismatches = 0;
+  std::string first_why;
+  for (int seed = 1; seed <= 200; ++seed) {
+    std::mt19937 rng(static_cast<unsigned>(seed) * 7919u);
+    std::uniform_int_distribution<int> u(0, 1000000);
+    double pre = 100.0 + (u(rng) % 1200);
+    double post = 100.0 + (u(rng) % 1200);
+    double group = static_cast<double>(u(rng) % static_cast<int>(std::min(pre, post) + 1));
+    auto base = mkdef(pre, post, group,
+                      {{"A", 1, {{0, 1}}}, {"B", 2, {{0, 6}, {1, 2}}}, {"C", 1, {{1, 0}}}});
+    double acpre = static_cast<double>(u(rng) % 900), acpost = static_cast<double>(u(rng) % 900);
+    int op0 = u(rng) % 6, op1 = u(rng) % 6;
+    long long v0 = u(rng) % 3, v1 = u(rng) % 3;
+    bool and0 = u(rng) % 2;
+    auto def = with_c(base, [&](EventDef& d) {
+      d.ac_pre_ns = acpre;
+      d.ac_post_ns = acpost;
+      AcPair p1, p2;
+      p1.name = "P1"; p1.detector = {K(0, 1), K(0, 3), K(0, 4)}; p1.shield = {K(1, 5), K(1, 6)};
+      p2.name = "P2"; p2.detector = {K(1, 5), K(1, 3)}; p2.shield = {K(0, 7)};
+      d.ac_pairs = {p1, p2};
+      L2Counter c0, c1, c2, c3;
+      c0.name = "nA"; c0.channels = {K(0, 1)};
+      c1.name = "nDetClean"; c1.channels = {K(0, 3), K(0, 4), K(1, 3)}; c1.ac = L2Ac::Clean;
+      c2.name = "nDetVeto"; c2.channels = {K(0, 3), K(0, 4), K(1, 3)}; c2.ac = L2Ac::Vetoed;
+      c3.name = "nShield"; c3.channels = {K(1, 5), K(1, 6), K(0, 7)};
+      d.counters = {c0, c1, c2, c3};
+      L2Flag f0, f1, f2;
+      f0.name = "F0"; f0.counter = 1; f0.op = static_cast<L2Op>(op0); f0.value = v0;
+      f1.name = "F1"; f1.counter = 2; f1.op = static_cast<L2Op>(op1); f1.value = v1;
+      f2.name = "F2"; f2.counter = 3; f2.op = L2Op::Ge; f2.value = 1;
+      d.flags = {f0, f1, f2};
+      L2Accept a0, a1;
+      a0.name = "X0"; a0.is_and = and0; a0.flags = {0, 1};
+      a1.name = "X1"; a1.is_and = !and0; a1.flags = {1, 2};
+      d.accepts = {a0, a1};
+    });
+    std::vector<ScalarHit> hits;
+    double t = 1000.0;
+    int nburst = 30 + u(rng) % 40;
+    for (int b = 0; b < nburst; ++b) {
+      t += static_cast<double>(u(rng) % 4000);
+      int n = 1 + u(rng) % 9;
+      for (int k = 0; k < n; ++k) {
+        double ht = t + static_cast<double>(u(rng) % 2400) - 600.0;
+        if (u(rng) % 3 == 0) ht = std::floor(ht / 50.0) * 50.0;
+        if (ht < 0) ht = 0;
+        hits.push_back(mhit(u(rng) % 2, u(rng) % 8, ht, static_cast<uint16_t>(u(rng) & 0xffff)));
+      }
+    }
+    RefResult ref = reference_build(hits, *def);
+    Sorter::Config scfg;
+    scfg.chunk_span_ns = 1500.0 + (u(rng) % 8000);
+    scfg.safe_horizon_ns = 3000.0 + (u(rng) % 3000);
+    scfg.lookback_ns = 0.0;
+    std::vector<ScalarHit> arrival = hits;
+    std::sort(arrival.begin(), arrival.end(), hit_order);
+    jitter_arrival(arrival, scfg.safe_horizon_ns * 0.4, rng);
+    PipeResult got = run_generic_pipeline(arrival, def, scfg, 1 + u(rng) % 15);
+    std::string why;
+    bool ok = got.late == 0 && same_events(got.events, ref.events, why) &&
+              got.stats.orphans == ref.orphans && got.stats.contested == ref.contested &&
+              got.stats.hits_in_events + got.stats.orphans == hits.size() &&
+              got.stats.ac_flagged == ref.ac_flagged && got.stats.l2_accepted == ref.l2_accepted;
+    for (std::size_t f = 0; ok && f < ref.flag_true.size(); ++f)
+      ok = got.stats.flag_true[f] == ref.flag_true[f];
+    for (std::size_t a = 0; ok && a < ref.accept_true.size(); ++a)
+      ok = got.stats.accept_true[a] == ref.accept_true[a];
+    if (!ok) {
+      if (mismatches == 0) {
+        char buf[256];
+        std::snprintf(buf, sizeof buf, "seed %d (ac %g/%g, %zu chunks): %s | ac_flagged %llu/%llu",
+                      seed, acpre, acpost, got.chunks, why.c_str(),
+                      static_cast<unsigned long long>(got.stats.ac_flagged),
+                      static_cast<unsigned long long>(ref.ac_flagged));
+        first_why = buf;
+      }
+      ++mismatches;
+    }
+  }
+  if (mismatches) std::printf("  AC/L2 randomized: %d/200 mismatch, first: %s\n", mismatches,
+                              first_why.c_str());
+  CHECK(mismatches == 0);
 }
 
 static void test_generic_pool_determinism() {
@@ -1919,6 +2241,11 @@ int main() {
   test_generic_boundary_reference_after_core_end();
   test_generic_matches_reference_randomized();
   test_generic_group_span_ends_at_core_end();
+  test_generic_ac_window_edges();
+  test_generic_ac_partner_in_other_event_or_none();
+  test_generic_l2_counts_flags_accepts();
+  test_generic_ac_late_shield_after_core_end();
+  test_generic_ac_l2_matches_reference_randomized();
   test_generic_pool_determinism();
   test_thgem_from_event_plane1();
   test_thgem_from_event_both_planes();

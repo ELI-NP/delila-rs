@@ -823,10 +823,11 @@ static void test_edef_trigger_errors() {
   CHECK(any_contains(edef_trig_errs(R"("channels":[[0,1]])"), "'name' must be a non-empty string"));
   CHECK(any_contains(edef_trig_errs(R"("name":"","channels":[[0,1]])"), "'name'"));
   CHECK(any_contains(edef_trig_errs(R"("name":3,"channels":[[0,1]])"), "'name'"));
-  // Tag-based selection needs the channel table (Phase C): a specific message.
+  // Tag-based selection without a tag table: the tag is unknown, and says why.
   std::vector<std::string> tags = edef_trig_errs(R"("name":"Si","tags":["SiE"])");
-  CHECK(any_contains(tags, "triggers[0]: 'tags' needs the channel table (TODO 71 Phase C); use "
-                           "'channels'"));
+  CHECK(tags.size() == 1 &&
+        any_contains(tags, "triggers[0]: unknown tag 'SiE' in 'tags' (the file has no "
+                           "top-level 'tags' table)"));
   CHECK(any_contains(edef_trig_errs(R"("name":"T","channels":[[0,1]],"chanels":[[0,2]])"),
                      "unknown key 'chanels'"));
   CHECK(edef_trig_errs(R"("name":"T","_comment":"front strips","channels":[[0,1]])").empty());
@@ -993,6 +994,497 @@ static void test_edef_provenance_json() {
   // Never loaded: still valid JSON, says so.
   JV z = tdelila::json::Parser(event_def_provenance_json(ActiveEventDef{})).parse();
   CHECK(z.find("applied") && !z.find("applied")->b);
+}
+
+// --- Phase C (TODO/71_phase_c_proposal.md): tag table, anti-Compton, L2 -----
+
+// The proposal's ELIADE-like example (§2.2), verbatim: 2 clovers (m0-3, m4-7;
+// ch0 = core high gain, ch1 = core low gain, ch2-9 = segments) + BGO on m8.
+static const std::string kEdefEliade =
+    R"({"version": "1.1",
+ "window_ns": {"pre": 2000, "post": 2000},
+ "group_ns": 2000,
+ "tags": {
+   "C1":   [[0, 0, 9], [1, 0, 9], [2, 0, 9], [3, 0, 9]],
+   "C2":   [[4, 0, 9], [5, 0, 9], [6, 0, 9], [7, 0, 9]],
+   "core": [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]],
+   "seg":  [[0, 2, 9], [1, 2, 9], [2, 2, 9], [3, 2, 9], [4, 2, 9], [5, 2, 9], [6, 2, 9], [7, 2, 9]],
+   "BGO1": [[8, 0, 3]],
+   "BGO2": [[8, 4, 7]]},
+ "triggers": [{"name": "Ge", "tags": ["core"]}],
+ "anti_compton": {
+   "window_ns": {"pre": 300, "post": 300},
+   "pairs": [{"name": "C1", "detector": ["C1"], "shield": ["BGO1"]},
+             {"name": "C2", "detector": ["C2"], "shield": ["BGO2"]}]},
+ "l2": {
+   "counters": [{"name": "nGe",      "tags": ["core"]},
+                {"name": "nGeClean", "tags": ["core"], "ac": "clean"},
+                {"name": "nSeg",     "tags": ["seg"]},
+                {"name": "nBGO",     "tags": ["BGO1", "BGO2"]}],
+   "flags":    [{"name": "GeGe", "counter": "nGeClean", "op": ">=", "value": 2}],
+   "accept":   [{"name": "GammaGamma", "op": "AND", "flags": ["GeGe"]}]}})";
+
+// A 1.1 file from a tag table, triggers and further top-level members.
+static std::string edef_c_json(const std::string& tags, const std::string& triggers,
+                               const std::string& extra = "") {
+  return R"({"version":"1.1","window_ns":{"pre":1000,"post":1000},"group_ns":100,"tags":)" +
+         tags + R"(,"triggers":)" + triggers + extra + "}";
+}
+
+static const char* const kOneTrig = R"([{"name":"T","channels":[[9,9]]}])";
+
+static std::vector<uint16_t> keys(std::initializer_list<std::pair<int, int>> mc) {
+  std::vector<uint16_t> v;
+  for (const auto& p : mc) v.push_back(mc_key(static_cast<uint8_t>(p.first),
+                                              static_cast<uint8_t>(p.second)));
+  return v;
+}
+
+static void test_edef_tags_resolve() {
+  EventDefParseResult r = parse_event_def(
+      edef_c_json(R"({"_comment":"x","A":[[0,3,5],[1,7],[0,0]],"B":[[2,9,9]],"C":[[0,4]]})",
+                  kOneTrig),
+      kEdefHorizon);
+  CHECK(r.errors.empty() && r.warnings.empty());
+  CHECK(r.def.tags.size() == 3 && !r.def.tags.count("_comment"));
+  CHECK(r.def.tags["A"] == keys({{0, 3}, {0, 4}, {0, 5}, {1, 7}, {0, 0}}));  // file order
+  CHECK(r.def.tags["B"] == keys({{2, 9}}));  // [m, c, c] = one channel
+  // Tags alone change nothing downstream: no trigger, AC or counter from them.
+  CHECK(r.def.trigger_index(0, 3) == -1 && !r.def.has_ac() && !r.def.has_l2());
+  CHECK(r.def.ac_det_mask.empty() && r.def.counter_mask.empty());
+  auto tag_errs = [](const std::string& tags) { return edef_errs(edef_c_json(tags, kOneTrig)); };
+  // The same channel in two tags is fine (a core is in "core" and in "C1").
+  CHECK(tag_errs(R"({"A":[[0,1]],"B":[[0,0,3]]})").empty());
+  CHECK(any_contains(tag_errs(R"({"A":[[0,5,3]]})"), "tags['A'][0]: range first 5 > last 3"));
+  const char* bad[] = {"[[0,1,2,3]]", "[[0,256]]", "[[0,1,300]]", "[[-1,0]]",
+                       "[[0,1.5]]",   "[\"0_1\"]", "[[0]]",       "[[0,\"1\",2]]"};
+  for (const char* b : bad)
+    CHECK(any_contains(tag_errs(std::string(R"({"A":)") + b + "}"),
+                       "tags['A'][0] must be [module, channel] or [module, first, last]"));
+  // Within one tag: listed twice -> one error per tag, long overlaps elided.
+  std::vector<std::string> one = tag_errs(R"({"A":[[0,0,9],[0,5]]})");
+  CHECK(one.size() == 1 && any_contains(one, "tags['A']: m0c5 listed twice"));
+  std::vector<std::string> ten = tag_errs(R"({"A":[[0,0,9],[0,0,9]]})");
+  CHECK(ten.size() == 1 && any_contains(ten, "tags['A']: m0c0, m0c1, m0c2, m0c3, m0c4, m0c5, "
+                                             "m0c6, m0c7 (+2 more) listed twice"));
+  CHECK(any_contains(tag_errs(R"({"A":[]})"), "tags['A'] must be a non-empty array"));
+  CHECK(any_contains(tag_errs(R"({"A":5})"), "tags['A'] must be a non-empty array"));
+  CHECK(any_contains(tag_errs(R"({"":[[0,1]]})"), "tags: empty tag name"));
+  CHECK(any_contains(tag_errs(R"({"_comment":5,"A":[[0,1]]})"), "tags: '_comment'"));
+  CHECK(any_contains(tag_errs(R"([["A",[0,1]]])"), "'tags' must be an object"));
+}
+
+static void test_edef_trigger_tags() {
+  const std::string tags = R"({"A":[[0,3,5]],"B":[[0,5,6]],"C1":[[0,0,9]]})";
+  // Union: `channels` first (file order), then each tag's channels not yet
+  // listed. Overlaps between channels and tags, or between two tags, of ONE
+  // trigger are merged silently.
+  EventDefParseResult u = parse_event_def(
+      edef_c_json(tags, R"([{"name":"T","channels":[[0,9],[0,4]],"tags":["A","B"]}])"),
+      kEdefHorizon);
+  CHECK(u.errors.empty());
+  CHECK(u.def.triggers.size() == 1 &&
+        u.def.triggers[0].channels == keys({{0, 9}, {0, 4}, {0, 3}, {0, 5}, {0, 6}}));
+  CHECK(u.def.trigger_index(0, 6) == 0 && u.def.trigger_index(0, 7) == -1);
+  // Tags only, with a priority.
+  EventDefParseResult t = parse_event_def(
+      edef_c_json(tags, R"([{"name":"X","priority":1,"tags":["A"]},
+                            {"name":"Y","priority":2,"channels":[[1,0]]}])"),
+      kEdefHorizon);
+  CHECK(t.errors.empty() && t.def.priorities_given);
+  CHECK(t.def.trigger_index(0, 4) == 0 && t.def.trigger_index(1, 0) == 1);
+  CHECK(format_event_def_line(t.def) ==
+        "window [-1000, +1000] ns, group 100 ns, 2 trigger(s): X(p1: m0c3-5) Y(p2: m1c0); tags 3");
+  // One channel = one trigger, across tags too: one error per trigger pair.
+  std::vector<std::string> x = edef_errs(
+      edef_c_json(tags, R"([{"name":"X","tags":["A"]},{"name":"Y","tags":["B"]}])"));
+  CHECK(x.size() == 1 && any_contains(x, "m0c5 listed in both trigger 'X' and trigger 'Y'"));
+  std::vector<std::string> big = edef_errs(
+      edef_c_json(tags, R"([{"name":"X","tags":["C1"]},{"name":"Y","channels":[[0,0]],
+                            "tags":["C1"]}])"));
+  CHECK(big.size() == 1 && any_contains(big, "m0c0, m0c1, m0c2, m0c3, m0c4, m0c5, m0c6, m0c7 "
+                                             "(+2 more) listed in both trigger 'X' and "
+                                             "trigger 'Y'"));
+  // Explicit duplicates inside `channels` are still an error (Phase A).
+  CHECK(any_contains(edef_errs(edef_c_json(tags, R"([{"name":"X","channels":[[0,1],[0,1]]}])")),
+                     "m0c1 listed twice in trigger 'X'"));
+  // Errors.
+  std::vector<std::string> unk = edef_errs(edef_c_json(tags, R"([{"name":"X","tags":["A","Z"]}])"));
+  CHECK(unk.size() == 1 && any_contains(unk, "triggers[0]: unknown tag 'Z' in 'tags'") &&
+        !any_contains(unk, "no top-level"));
+  auto trig_errs = [&](const char* body) {
+    return edef_errs(edef_c_json(tags, std::string("[{") + body + "}]"));
+  };
+  CHECK(any_contains(trig_errs(R"("name":"X")"),
+                     "triggers[0]: 'channels' must be a non-empty array of [module, channel], "
+                     "or give 'tags'"));
+  for (const char* b : {R"("name":"X","tags":[])", R"("name":"X","tags":[1])",
+                        R"("name":"X","tags":"A")"})
+    CHECK(any_contains(trig_errs(b), "triggers[0]: 'tags' must be a non-empty array of tag names"));
+  CHECK(any_contains(trig_errs(R"("name":"X","channels":[],"tags":["A"])"), "'channels' is empty"));
+}
+
+// Base for the AC / L2 tests: G = 4 "Ge" channels, S / S2 shields, X elsewhere.
+static const char* const kAcTags =
+    R"({"G":[[0,0,3]],"S":[[1,0,1]],"G2":[[2,0]],"S2":[[1,1,2]],"X":[[3,0]]})";
+static const char* const kAcTrig = R"([{"name":"T","tags":["G"]}])";
+static const char* const kAcOne =
+    R"(,"anti_compton":{"window_ns":{"pre":200,"post":300},
+                         "pairs":[{"name":"P1","detector":["G"],"shield":["S"]}]})";
+
+static std::vector<std::string> ac_errs(const std::string& ac) {
+  return edef_errs(edef_c_json(kAcTags, kAcTrig, R"(,"anti_compton":)" + ac));
+}
+
+static void test_edef_anti_compton() {
+  EventDefParseResult r = parse_event_def(
+      edef_c_json(kAcTags, kAcTrig,
+                  R"(,"anti_compton":{"_comment":"x","window_ns":{"pre":200,"post":300},
+                      "pairs":[{"name":"P1","detector":["G"],"shield":["S"]},
+                               {"name":"P2","_comment":"y","detector":["G","G2"],
+                                "shield":["S2"]}]})"),
+      kEdefHorizon);
+  CHECK(r.errors.empty() && r.warnings.empty());
+  const EventDef& d = r.def;
+  CHECK(d.has_ac() && !d.has_l2() && near(d.ac_pre_ns, 200.0) && near(d.ac_post_ns, 300.0));
+  CHECK(d.ac_pairs.size() == 2 && d.ac_pairs[1].name == "P2");
+  CHECK(d.ac_pairs[1].detector == keys({{0, 0}, {0, 1}, {0, 2}, {0, 3}, {2, 0}}));
+  CHECK(d.ac_pairs[1].shield == keys({{1, 1}, {1, 2}}));
+  // index_channels(): bit i = pair i. A channel may sit in two pairs.
+  CHECK(d.ac_det_mask.size() == 65536 && d.ac_shield_mask.size() == 65536);
+  CHECK(d.ac_det_mask[mc_key(0, 0)] == 3 && d.ac_det_mask[mc_key(2, 0)] == 2 &&
+        d.ac_det_mask[mc_key(1, 0)] == 0 && d.ac_det_mask[mc_key(3, 0)] == 0);
+  CHECK(d.ac_shield_mask[mc_key(1, 0)] == 1 && d.ac_shield_mask[mc_key(1, 1)] == 3 &&
+        d.ac_shield_mask[mc_key(1, 2)] == 2 && d.ac_shield_mask[mc_key(0, 0)] == 0);
+  CHECK(d.counter_mask.empty());
+  // lookback = G + 2 pre + post + ac_pre + ac_post = 100 + 2000 + 1000 + 500.
+  CHECK(near(d.lookback_ns(), 3600.0) && near(d.ac_lookahead_ns(), 300.0));
+  CHECK(format_event_def_line(d) ==
+        "window [-1000, +1000] ns, group 100 ns, 1 trigger(s), reference = first of group: "
+        "T(m0c0-3); tags 5; AC [-200, +300] ns, 2 pair(s)");
+  // The AC window counts in the lookback bound; without the section it would pass.
+  std::vector<std::string> lb = edef_errs(edef_c_json(kAcTags, kAcTrig, kAcOne), 3600.0);
+  CHECK(lb.size() == 1 && any_contains(lb, "+ anti_compton pre + post = 3600 ns >= Sorter safe "
+                                           "horizon 3600 ns"));
+  CHECK(edef_errs(edef_c_json(kAcTags, kAcTrig, kAcOne), 3600.5).empty());
+  CHECK(edef_errs(edef_c_json(kAcTags, kAcTrig), 3600.0).empty());
+  // Errors.
+  const std::string win = R"("window_ns":{"pre":200,"post":300})";
+  auto pair_errs = [&](const std::string& p) {
+    return ac_errs("{" + win + R"(,"pairs":[)" + p + "]}");
+  };
+  std::vector<std::string> ov = pair_errs(R"({"name":"P1","detector":["G"],"shield":["S","G"]})");
+  CHECK(ov.size() == 1 && any_contains(ov, "anti_compton.pairs[0] ('P1'): m0c0, m0c1, m0c2, "
+                                           "m0c3 in both 'detector' and 'shield'"));
+  CHECK(any_contains(ac_errs(R"({"window_ns":{"pre":-1,"post":300},"pairs":[
+                                {"name":"P1","detector":["G"],"shield":["S"]}]})"),
+                     "'anti_compton.window_ns.pre' must be a finite number >= 0"));
+  CHECK(any_contains(ac_errs(R"({"pairs":[{"name":"P1","detector":["G"],"shield":["S"]}]})"),
+                     "'anti_compton.window_ns' must be an object"));
+  CHECK(any_contains(ac_errs("{" + win + "}"), "'anti_compton.pairs' must be a non-empty array"));
+  CHECK(any_contains(ac_errs("{" + win + R"(,"pairs":[]})"), "'anti_compton.pairs' must be"));
+  std::string many;
+  for (int i = 0; i < 65; ++i)
+    many += std::string(i ? "," : "") + R"({"name":"P)" + std::to_string(i) +
+            R"(","detector":["G"],"shield":["S"]})";
+  CHECK(any_contains(pair_errs(many), "'anti_compton.pairs' has 65 entries; at most 64"));
+  CHECK(any_contains(pair_errs(R"({"name":"P1","detector":["G"],"shield":["BGO9"]})"),
+                     "anti_compton.pairs[0]: unknown tag 'BGO9' in 'shield'"));
+  CHECK(any_contains(pair_errs(R"({"name":"P1","shield":["S"]})"),
+                     "anti_compton.pairs[0]: 'detector' must be a non-empty array of tag names"));
+  CHECK(any_contains(pair_errs(R"({"name":"P1","detector":[],"shield":["S"]})"),
+                     "anti_compton.pairs[0]: 'detector' must be a non-empty array of tag names"));
+  CHECK(any_contains(pair_errs(R"({"name":"P1","detector":["G"],"shield":["S"]},
+                              {"name":"P1","detector":["G2"],"shield":["S2"]})"),
+                     "anti_compton.pairs[0] and anti_compton.pairs[1]: duplicate name 'P1'"));
+  CHECK(any_contains(pair_errs(R"({"detector":["G"],"shield":["S"]})"),
+                     "anti_compton.pairs[0]: 'name' must be a non-empty string"));
+  CHECK(any_contains(pair_errs(R"({"name":"P1","detector":["G"],"shields":["S"]})"),
+                     "anti_compton.pairs[0]: unknown key 'shields'"));
+  CHECK(any_contains(ac_errs(R"({"window":{"pre":1,"post":1},)" + win +
+                             R"(,"pairs":[{"name":"P1","detector":["G"],"shield":["S"]}]})"),
+                     "anti_compton: unknown key 'window'"));
+  CHECK(any_contains(ac_errs("[]"), "'anti_compton' must be an object"));
+}
+
+static std::vector<std::string> l2_errs(const std::string& l2, bool with_ac = true) {
+  return edef_errs(edef_c_json(kAcTags, kAcTrig, std::string(with_ac ? kAcOne : "") +
+                                                     R"(,"l2":)" + l2));
+}
+
+static void test_edef_l2() {
+  EventDefParseResult r = parse_event_def(
+      edef_c_json(kAcTags, kAcTrig, std::string(kAcOne) + R"(,"l2":{"_comment":"x",
+        "counters":[{"name":"nG","tags":["G"]},
+                    {"name":"nGc","tags":["G"],"ac":"clean"},
+                    {"name":"nGv","tags":["G","S"],"ac":"vetoed"},
+                    {"name":"_n2","tags":["G"],"ac":"any","_comment":"y"}],
+        "flags":[{"name":"f_eq","counter":"nG","op":"==","value":1},
+                 {"name":"f_ne","counter":"nGc","op":"!=","value":0},
+                 {"name":"f_lt","counter":"nGv","op":"<","value":-3},
+                 {"name":"f_le","counter":"_n2","op":"<=","value":4},
+                 {"name":"f_gt","counter":"nG","op":">","value":0},
+                 {"name":"f_ge","counter":"nGc","op":">=","value":9007199254740992}],
+        "accept":[{"name":"A1","op":"AND","flags":["f_eq","f_ge"]},
+                  {"name":"A2","op":"OR","flags":["f_lt"]}]})"),
+      kEdefHorizon);
+  CHECK(r.errors.empty() && r.warnings.empty());
+  const EventDef& d = r.def;
+  CHECK(d.has_l2() && d.counters.size() == 4 && d.flags.size() == 6 && d.accepts.size() == 2);
+  CHECK(d.counters[0].ac == L2Ac::Any && d.counters[1].ac == L2Ac::Clean &&
+        d.counters[2].ac == L2Ac::Vetoed && d.counters[3].ac == L2Ac::Any);
+  CHECK(d.counters[2].channels == keys({{0, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 0}, {1, 1}}));
+  CHECK(d.flags[0].op == L2Op::Eq && d.flags[1].op == L2Op::Ne && d.flags[2].op == L2Op::Lt &&
+        d.flags[3].op == L2Op::Le && d.flags[4].op == L2Op::Gt && d.flags[5].op == L2Op::Ge);
+  CHECK(d.flags[0].counter == 0 && d.flags[1].counter == 1 && d.flags[2].counter == 2 &&
+        d.flags[3].counter == 3);
+  CHECK(d.flags[2].value == -3 && d.flags[5].value == 9007199254740992LL);
+  CHECK(d.accepts[0].is_and && d.accepts[0].flags == std::vector<int>({0, 5}));
+  CHECK(!d.accepts[1].is_and && d.accepts[1].flags == std::vector<int>({2}));
+  // index_channels(): bit i = counters[i].
+  CHECK(d.counter_mask.size() == 65536 && d.counter_mask[mc_key(0, 0)] == 0xF &&
+        d.counter_mask[mc_key(1, 0)] == 0x4 && d.counter_mask[mc_key(3, 0)] == 0);
+  CHECK(format_event_def_line(d).find("; L2 4 counter(s), 6 flag(s), 2 accept(s)") !=
+        std::string::npos);
+  // Counters only (no flags / accept) is a valid L2.
+  EventDefParseResult c = parse_event_def(
+      edef_c_json(kAcTags, kAcTrig, R"(,"l2":{"counters":[{"name":"nG","tags":["G"]}]})"),
+      kEdefHorizon);
+  CHECK(c.errors.empty() && c.def.has_l2() && c.def.flags.empty() && c.def.accepts.empty() &&
+        !c.def.has_ac());
+  // References are resolved at load time (ELIFANT silently returned false).
+  const std::string cnt = R"("counters":[{"name":"nG","tags":["G"]}])";
+  CHECK(any_contains(l2_errs("{" + cnt + R"(,"flags":[{"name":"f","counter":"nGG","op":">",
+                                                      "value":0}]})"),
+                     "l2.flags[0]: unknown counter 'nGG'"));
+  CHECK(any_contains(l2_errs("{" + cnt + R"(,"flags":[{"name":"f","counter":"nG","op":">",
+                                                      "value":0}],
+                    "accept":[{"name":"a","op":"OR","flags":["f","nope"]}]})"),
+                     "l2.accept[0]: unknown flag 'nope'"));
+  auto flag = [&](const std::string& f) {
+    return l2_errs("{" + cnt + R"(,"flags":[)" + f + "]}");
+  };
+  CHECK(any_contains(flag(R"({"name":"f","counter":"nG","op":"=>","value":0})"),
+                     "l2.flags[0]: 'op' must be one of == != < <= > >="));
+  CHECK(any_contains(flag(R"({"name":"f","counter":"nG","value":0})"), "'op' must be one of"));
+  for (const char* v : {"1.5", "\"2\"", "1e300", "null"})
+    CHECK(any_contains(flag(std::string(R"({"name":"f","counter":"nG","op":">","value":)") + v +
+                            "}"),
+                       "l2.flags[0]: 'value' must be an integer"));
+  CHECK(any_contains(flag(R"({"name":"f","counter":"nG","op":">"})"),
+                     "'value' must be an integer"));
+  CHECK(any_contains(flag(R"({"name":"f","counter":3,"op":">","value":0})"),
+                     "'counter' must be the name of an l2 counter"));
+  auto acc = [&](const std::string& a) {
+    return l2_errs("{" + cnt + R"(,"flags":[{"name":"f","counter":"nG","op":">","value":0}],
+                                  "accept":[)" + a + "]}");
+  };
+  CHECK(any_contains(acc(R"({"name":"a","op":"XOR","flags":["f"]})"),
+                     "l2.accept[0]: 'op' must be \"AND\" or \"OR\""));
+  CHECK(any_contains(acc(R"({"name":"a","op":"and","flags":["f"]})"), "'op' must be \"AND\""));
+  CHECK(any_contains(acc(R"({"name":"a","op":"AND","flags":[]})"),
+                     "l2.accept[0]: 'flags' must be a non-empty array of l2 flag names"));
+  CHECK(any_contains(acc(R"({"name":"a","op":"AND"})"), "'flags' must be a non-empty array"));
+  // Names: unique over counters + flags + accepts, C identifiers, not a fixed branch.
+  std::vector<std::string> dup = l2_errs(
+      R"({"counters":[{"name":"x","tags":["G"]}],
+          "flags":[{"name":"x","counter":"x","op":">","value":0}]})");
+  CHECK(dup.size() == 1 &&
+        any_contains(dup, "l2.counters[0] and l2.flags[0]: duplicate name 'x'"));
+  CHECK(any_contains(acc(R"({"name":"f","op":"AND","flags":["f"]})"),
+                     "l2.flags[0] and l2.accept[0]: duplicate name 'f'"));
+  for (const char* fixed : {"NHits", "EventID", "HitWithAC", "L2Accept", "TriggerIdx"})
+    CHECK(any_contains(l2_errs(std::string(R"({"counters":[{"name":")") + fixed +
+                               R"(","tags":["G"]}]})"),
+                       "is a fixed events-tree branch"));
+  for (const char* bad : {"2fold", "n-Ge", "n Ge", "nGe!", "\xc3\xa9t"})
+    CHECK(any_contains(l2_errs(std::string(R"({"counters":[{"name":")") + bad +
+                               R"(","tags":["G"]}]})"),
+                       "is not a C identifier"));
+  CHECK(any_contains(l2_errs(R"({"counters":[{"name":"","tags":["G"]}]})"),
+                     "l2.counters[0]: 'name' must be a non-empty string"));
+  // Lists: counters required, every present list non-empty and <= 64.
+  CHECK(any_contains(l2_errs(R"({"flags":[{"name":"f","counter":"nG","op":">","value":0}]})"),
+                     "'l2.counters' is required"));
+  CHECK(any_contains(l2_errs(R"({"counters":[]})"), "'l2.counters' must be a non-empty array"));
+  CHECK(any_contains(l2_errs("{" + cnt + R"(,"flags":[]})"),
+                     "'l2.flags' must be a non-empty array (omit it if unused)"));
+  CHECK(any_contains(l2_errs("{" + cnt + R"(,"accept":[]})"), "'l2.accept' must be"));
+  std::string many;
+  for (int i = 0; i < 65; ++i)
+    many += std::string(i ? "," : "") + R"({"name":"c)" + std::to_string(i) + R"(","tags":["G"]})";
+  CHECK(any_contains(l2_errs(R"({"counters":[)" + many + "]}"),
+                     "'l2.counters' has 65 entries; at most 64"));
+  // Counter tags and ac.
+  CHECK(any_contains(l2_errs(R"({"counters":[{"name":"n","tags":["Q"]}]})"),
+                     "l2.counters[0]: unknown tag 'Q' in 'tags'"));
+  CHECK(any_contains(l2_errs(R"({"counters":[{"name":"n"}]})"),
+                     "l2.counters[0]: 'tags' must be a non-empty array of tag names"));
+  CHECK(any_contains(l2_errs(R"({"counters":[{"name":"n","tags":["G"],"ac":"dirty"}]})"),
+                     "l2.counters[0]: 'ac' must be \"any\", \"clean\" or \"vetoed\""));
+  for (const char* ac : {"clean", "vetoed"}) {
+    std::vector<std::string> e = l2_errs(
+        std::string(R"({"counters":[{"name":"n","tags":["G"],"ac":")") + ac + R"("}]})", false);
+    CHECK(e.size() == 1 && any_contains(e, "needs an 'anti_compton' section"));
+  }
+  CHECK(l2_errs(R"({"counters":[{"name":"n","tags":["G"],"ac":"any"}]})", false).empty());
+  // A "clean" counter over channels no pair flags is legal but useless: warn.
+  EventDefParseResult w = parse_event_def(
+      edef_c_json(kAcTags, kAcTrig, std::string(kAcOne) +
+                  R"(,"l2":{"counters":[{"name":"nX","tags":["X"],"ac":"clean"}]})"),
+      kEdefHorizon);
+  CHECK(w.errors.empty() && w.warnings.size() == 1 &&
+        any_contains(w.warnings, "none of its channels is an anti_compton detector"));
+  // Unknown keys and shape.
+  CHECK(any_contains(l2_errs("{" + cnt + R"(,"accepts":[]})"), "l2: unknown key 'accepts'"));
+  CHECK(any_contains(l2_errs(R"({"counters":[{"name":"n","tag":["G"],"tags":["G"]}]})"),
+                     "l2.counters[0]: unknown key 'tag'"));
+  CHECK(any_contains(l2_errs("[]"), "'l2' must be an object"));
+  CHECK(any_contains(l2_errs(R"({"counters":[5]})"), "l2.counters[0]: not an object"));
+}
+
+static void test_edef_eliade_example() {
+  EventDefParseResult r = parse_event_def(kEdefEliade, kEdefHorizon);
+  CHECK(r.errors.empty() && r.warnings.empty());  // "1.1": no version warning
+  const EventDef& d = r.def;
+  CHECK(d.tags.size() == 6);
+  CHECK(d.tags.at("C1").size() == 40 && d.tags.at("C2").size() == 40 &&
+        d.tags.at("core").size() == 8 && d.tags.at("seg").size() == 64 &&
+        d.tags.at("BGO1").size() == 4 && d.tags.at("BGO2").size() == 4);
+  CHECK(d.tags.at("seg")[0] == mc_key(0, 2) && d.tags.at("seg")[8] == mc_key(1, 2) &&
+        d.tags.at("BGO2")[0] == mc_key(8, 4));
+  // The cores are the triggers; no priorities -> the first core of a group.
+  CHECK(d.triggers.size() == 1 && d.triggers[0].channels.size() == 8 && !d.priorities_given);
+  CHECK(d.trigger_index(3, 0) == 0 && d.trigger_index(3, 1) == -1 &&
+        d.trigger_index(8, 0) == -1);
+  // AC: clover i's 40 channels flagged by BGO i.
+  CHECK(d.has_ac() && d.ac_pairs.size() == 2 && near(d.ac_pre_ns, 300.0) &&
+        near(d.ac_post_ns, 300.0));
+  CHECK(d.ac_pairs[0].detector.size() == 40 && d.ac_pairs[0].shield == d.tags.at("BGO1"));
+  CHECK(d.ac_det_mask[mc_key(0, 5)] == 1 && d.ac_det_mask[mc_key(4, 9)] == 2 &&
+        d.ac_det_mask[mc_key(8, 0)] == 0 && d.ac_det_mask[mc_key(9, 0)] == 0);
+  CHECK(d.ac_shield_mask[mc_key(8, 3)] == 1 && d.ac_shield_mask[mc_key(8, 4)] == 2 &&
+        d.ac_shield_mask[mc_key(0, 0)] == 0);
+  // L2: nGe | nGeClean on a core, nSeg on a segment, nBGO on a BGO, nothing on
+  // the low-gain core.
+  CHECK(d.has_l2() && d.counters.size() == 4 && d.counters[1].ac == L2Ac::Clean);
+  CHECK(d.counter_mask[mc_key(0, 0)] == 0x3 && d.counter_mask[mc_key(7, 0)] == 0x3 &&
+        d.counter_mask[mc_key(0, 1)] == 0 && d.counter_mask[mc_key(0, 2)] == 0x4 &&
+        d.counter_mask[mc_key(8, 7)] == 0x8);
+  CHECK(d.flags.size() == 1 && d.flags[0].counter == 1 && d.flags[0].op == L2Op::Ge &&
+        d.flags[0].value == 2);
+  CHECK(d.accepts.size() == 1 && d.accepts[0].is_and &&
+        d.accepts[0].flags == std::vector<int>({0}));
+  // lookback 2000 + 2*2000 + 2000 + 300 + 300 = 8.6 us (proposal §2.4).
+  CHECK(near(d.lookback_ns(), 8600.0) && near(d.ac_lookahead_ns(), 300.0));
+  CHECK(any_contains(edef_errs(kEdefEliade, 8600.0), "8600 ns >= Sorter safe horizon"));
+  CHECK(format_event_def_line(d) ==
+        "window [-2000, +2000] ns, group 2000 ns, 1 trigger(s), reference = first of group: "
+        "Ge(m0c0,m1c0,m2c0,m3c0,m4c0,m5c0,m6c0,m7c0); tags 6; AC [-300, +300] ns, 2 pair(s); "
+        "L2 4 counter(s), 1 flag(s), 1 accept(s)");
+}
+
+static void test_edef_phase_c_compat() {
+  // A 1.0 file (Phase A) reads exactly as before: no tag / AC / L2 state.
+  EventDefParseResult r = parse_event_def(kEdefThGEM, kEdefHorizon);
+  check_thgem_def(r);
+  CHECK(r.def.tags.empty() && !r.def.has_ac() && !r.def.has_l2());
+  CHECK(r.def.ac_det_mask.empty() && r.def.ac_shield_mask.empty() && r.def.counter_mask.empty());
+  CHECK(near(r.def.ac_lookahead_ns(), 0.0) && near(r.def.lookback_ns(), 4000.0));
+  ActiveEventDef a;
+  std::vector<std::string> errors;
+  CHECK(reload_event_def(a, &kEdefThGEM, "", "p", kEdefHorizon, "t", errors));
+  const std::string p = event_def_provenance_json(a);
+  CHECK(p.find("\"tags\"") == std::string::npos &&
+        p.find("\"anti_compton\"") == std::string::npos &&
+        p.find("\"l2\"") == std::string::npos);
+  // Versions: 1.0 and 1.1 silent, anything else a warning.
+  std::string v11 = kEdefThGEM, v12 = kEdefThGEM;
+  v11.replace(v11.find("\"1.0\""), 5, "\"1.1\"");
+  v12.replace(v12.find("\"1.0\""), 5, "\"1.2\"");
+  CHECK(parse_event_def(v11, kEdefHorizon).warnings.empty());
+  std::vector<std::string> w = parse_event_def(v12, kEdefHorizon).warnings;
+  CHECK(w.size() == 1 && any_contains(w, "\"1.2\" (this reader knows \"1.0\" and \"1.1\")"));
+  // The proposal's ThGEM L2 example (§2.2) on top of the ThGEM triggers.
+  std::string l2 = kEdefThGEM;
+  l2.insert(l2.rfind('}'), R"(,"tags": {"arms1": [[0, 2, 5]]},
+    "l2": {"counters": [{"name": "nArms1", "tags": ["arms1"]}],
+           "flags":    [{"name": "Full1", "counter": "nArms1", "op": "==", "value": 4}],
+           "accept":   [{"name": "Full", "op": "OR", "flags": ["Full1"]}]})");
+  EventDefParseResult t = parse_event_def(l2, kEdefHorizon);
+  CHECK(t.errors.empty() && t.def.has_l2() && !t.def.has_ac());
+  CHECK(t.def.counter_mask[mc_key(0, 2)] == 1 && t.def.counter_mask[mc_key(0, 5)] == 1 &&
+        t.def.counter_mask[mc_key(0, 6)] == 0 && t.def.counter_mask[mc_key(0, 1)] == 0);
+  CHECK(t.def.flags[0].op == L2Op::Eq && t.def.flags[0].value == 4 && !t.def.accepts[0].is_and);
+  CHECK(near(t.def.lookback_ns(), 4000.0));  // L2 adds no lookback
+}
+
+static void test_edef_phase_c_collect_all() {
+  // One error per problem, across every section, and no lookback complaint.
+  std::vector<std::string> all = edef_errs(
+      R"({"version":"1.1","window_ns":{"pre":1000,"post":1e9},"group_ns":100,
+          "tags":{"G":[[0,0,3]],"S":[[1,0,1]]},
+          "triggers":[{"name":"T","tags":["G","Gx"]}],
+          "anti_compton":{"window_ns":{"pre":10,"post":10},
+                          "pairs":[{"name":"P","detector":["G"],"shield":["S","G"]}]},
+          "l2":{"counters":[{"name":"NHits","tags":["G"]}],
+                "flags":[{"name":"f","counter":"nX","op":"=>","value":1}]}})");
+  CHECK(all.size() == 5);
+  CHECK(any_contains(all, "unknown tag 'Gx'") && any_contains(all, "in both 'detector' and") &&
+        any_contains(all, "'NHits' is a fixed") && any_contains(all, "unknown counter 'nX'") &&
+        any_contains(all, "'op' must be one of"));
+  CHECK(!any_contains(all, "safe horizon"));
+}
+
+static void test_edef_phase_c_provenance() {
+  ActiveEventDef a;
+  std::vector<std::string> errors;
+  CHECK(reload_event_def(a, &kEdefEliade, "", "/p/eliade.json", kEdefHorizon, "t", errors));
+  using JV = tdelila::json::Value;
+  JV v = tdelila::json::Parser(event_def_provenance_json(a)).parse();
+  CHECK(v.find("status") && v.find("status")->str == "ok");
+  CHECK(v.find("source_text") && v.find("source_text")->str == kEdefEliade);
+  CHECK(v.find("warnings") && v.find("warnings")->arr.empty());
+  const JV* tags = v.find("tags");
+  CHECK(tags && tags->t == JV::T::Obj && tags->obj.size() == 6);
+  if (tags && tags->find("C1") && tags->find("BGO2")) {
+    CHECK(tags->find("C1")->arr.size() == 40);
+    const JV& b = tags->find("BGO2")->arr[0];
+    CHECK(b.arr.size() == 2 && b.arr[0].num == 8.0 && b.arr[1].num == 4.0);
+  }
+  const JV* ac = v.find("anti_compton");
+  CHECK(ac && ac->find("window_ns") && ac->find("window_ns")->find("pre") &&
+        ac->find("window_ns")->find("pre")->num == 300.0);
+  const JV* pairs = ac ? ac->find("pairs") : nullptr;
+  CHECK(pairs && pairs->arr.size() == 2);
+  if (pairs && pairs->arr.size() == 2) {
+    const JV& p1 = pairs->arr[1];
+    CHECK(p1.find("index") && p1.find("index")->num == 1.0);
+    CHECK(p1.find("name") && p1.find("name")->str == "C2");
+    CHECK(p1.find("detector") && p1.find("detector")->arr.size() == 40);
+    CHECK(p1.find("shield") && p1.find("shield")->arr.size() == 4 &&
+          p1.find("shield")->arr[0].arr[1].num == 4.0);
+  }
+  const JV* l2 = v.find("l2");
+  CHECK(l2 && l2->t == JV::T::Obj);
+  if (l2 && l2->find("counters") && l2->find("flags") && l2->find("accept")) {
+    const JV& cs = *l2->find("counters");
+    CHECK(cs.arr.size() == 4);
+    CHECK(cs.arr[1].find("index") && cs.arr[1].find("index")->num == 1.0);
+    CHECK(cs.arr[1].find("name") && cs.arr[1].find("name")->str == "nGeClean");
+    CHECK(cs.arr[1].find("ac") && cs.arr[1].find("ac")->str == "clean");
+    CHECK(cs.arr[0].find("ac") && cs.arr[0].find("ac")->str == "any");
+    CHECK(cs.arr[3].find("channels") && cs.arr[3].find("channels")->arr.size() == 8);
+    const JV& f = l2->find("flags")->arr[0];
+    CHECK(f.find("counter") && f.find("counter")->str == "nGeClean");
+    CHECK(f.find("op") && f.find("op")->str == ">=" && f.find("value") &&
+          f.find("value")->num == 2.0);
+    const JV& x = l2->find("accept")->arr[0];
+    CHECK(x.find("name") && x.find("name")->str == "GammaGamma" && x.find("op") &&
+          x.find("op")->str == "AND");
+    CHECK(x.find("flags") && x.find("flags")->arr.size() == 1 &&
+          x.find("flags")->arr[0].str == "GeGe");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1644,6 +2136,14 @@ int main() {
   test_edef_lookback_and_collect_all();
   test_edef_reload_policy();
   test_edef_provenance_json();
+  test_edef_tags_resolve();
+  test_edef_trigger_tags();
+  test_edef_anti_compton();
+  test_edef_l2();
+  test_edef_eliade_example();
+  test_edef_phase_c_compat();
+  test_edef_phase_c_collect_all();
+  test_edef_phase_c_provenance();
 
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;

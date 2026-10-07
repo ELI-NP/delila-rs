@@ -677,6 +677,15 @@ inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
 // each orphan is counted by the one chunk whose [ev_lo, ev_hi) holds its TIME.
 // Over a run, hits_in_events + orphans == the hits in the core ranges.
 //
+// Phase C (TODO/71_phase_c_proposal.md) rides on the same chunks, still pure
+// per (chunk, plan): the AC flag of a detector hit looks for a shield hit in
+// [t - ac_pre, t + ac_post] of THAT HIT over the whole chunk (events play no
+// part — a shield hit that rule 4 gave to a neighbour, or to no event, still
+// counts), and L2 (counters -> flags -> accepts) is evaluated per event and
+// only flags it. AC widens the contract on both sides: ev_hi loses another
+// ac_post (shield hits up to ev_hi + post + ac_post must be complete) and the
+// lookback gains ac_pre + ac_post (EventDef::lookback_ns()).
+//
 // A hit that broke the disorder contract (Sorter late_hits(): behind an
 // emitted core) is not in the hits tree and was not fed as a trigger; it may
 // still ride a later chunk as context and join an event there. That case is
@@ -707,6 +716,7 @@ struct EventHit {
   uint16_t energy = 0, energy_short = 0;
   double dt = 0.0;          // hit time - reference time (aligned ns)
   bool is_trigger = false;  // a trigger-channel hit (a member of this event's group)
+  bool with_ac = false;     // Phase C: an AC shield fired within the AC window of this hit
 };
 
 struct GenericEvent {
@@ -714,6 +724,11 @@ struct GenericEvent {
   uint8_t mod = 0, ch = 0, trig_idx = 0;
   uint32_t n_triggers = 0;
   std::vector<EventHit> hits;  // time order; includes the reference itself
+  // Phase C L2 (empty / 0 when the definition has no l2 section):
+  std::vector<uint32_t> l2_counts;  // per EventDef::counters
+  uint64_t l2_flags = 0;            // bit i = flags[i] true
+  uint64_t l2_accepts = 0;          // bit i = accepts[i] true
+  bool l2_accept = false;           // OR of all accepts
 };
 
 // Per-chunk counters (summed per run by the Writer). Exactly-once over a run:
@@ -725,12 +740,22 @@ struct GenericStats {
   uint64_t orphans = 0;    // hits inside no window (still in the .delila / hits tree)
   // NTriggers distribution: [i] = events with min(NTriggers, 8) == i + 1 ("8" = 8+).
   std::array<uint64_t, 8> ntrig{};
+  // Phase C: hits in emitted events with HitWithAC; events per true flag /
+  // accept (index = EventDef::flags / accepts); events with L2Accept.
+  uint64_t ac_flagged = 0;
+  std::array<uint64_t, 64> flag_true{};
+  std::array<uint64_t, 64> accept_true{};
+  uint64_t l2_accepted = 0;
   void add(const GenericStats& o) {
     events += o.events;
     hits_in_events += o.hits_in_events;
     contested += o.contested;
     orphans += o.orphans;
     for (std::size_t i = 0; i < ntrig.size(); ++i) ntrig[i] += o.ntrig[i];
+    ac_flagged += o.ac_flagged;
+    for (std::size_t i = 0; i < flag_true.size(); ++i) flag_true[i] += o.flag_true[i];
+    for (std::size_t i = 0; i < accept_true.size(); ++i) accept_true[i] += o.accept_true[i];
+    l2_accepted += o.l2_accepted;
   }
 };
 
@@ -775,7 +800,9 @@ class TriggerGrouper {
     }
     const double margin = d.pre_ns + d.post_ns;
     const double frontier = open_ ? cur_.first_t : c.core_end;
-    double ev_hi = frontier - margin;  // +inf at the flush
+    // With AC, an event's last hits look ac_post further ahead for shield
+    // hits, which must be complete too (below core_end).
+    double ev_hi = frontier - margin - d.ac_lookahead_ns();  // +inf at the flush
     if (ev_hi < ev_lo_) ev_hi = ev_lo_;  // monotone by construction; keep the chain
     p.ev_lo = ev_lo_;
     p.ev_hi = ev_hi;
@@ -827,9 +854,60 @@ class TriggerGrouper {
   double ev_lo_ = -std::numeric_limits<double>::infinity();
 };
 
+// L2 (Phase C): counters -> flags -> accepts over ONE event's hits, after AC.
+// Flag-only: the event is always kept; L2Accept says whether it passed.
+inline void apply_l2(const EventDef& d, GenericEvent& e, GenericStats& stats) {
+  if (!d.has_l2()) return;
+  e.l2_counts.assign(d.counters.size(), 0);
+  for (const EventHit& h : e.hits) {
+    uint64_t m = d.counter_mask[mc_key(h.mod, h.ch)];
+    for (std::size_t i = 0; m; ++i, m >>= 1) {
+      if (!(m & 1)) continue;
+      L2Ac ac = d.counters[i].ac;
+      if (ac == L2Ac::Any || (ac == L2Ac::Clean && !h.with_ac) ||
+          (ac == L2Ac::Vetoed && h.with_ac))
+        ++e.l2_counts[i];
+    }
+  }
+  e.l2_flags = 0;
+  for (std::size_t i = 0; i < d.flags.size(); ++i) {
+    const L2Flag& f = d.flags[i];
+    const long long v = e.l2_counts[static_cast<std::size_t>(f.counter)];
+    bool b = false;
+    switch (f.op) {
+      case L2Op::Eq: b = v == f.value; break;
+      case L2Op::Ne: b = v != f.value; break;
+      case L2Op::Lt: b = v < f.value; break;
+      case L2Op::Le: b = v <= f.value; break;
+      case L2Op::Gt: b = v > f.value; break;
+      case L2Op::Ge: b = v >= f.value; break;
+    }
+    if (b) {
+      e.l2_flags |= uint64_t(1) << i;
+      ++stats.flag_true[i];
+    }
+  }
+  e.l2_accepts = 0;
+  for (std::size_t i = 0; i < d.accepts.size(); ++i) {
+    const L2Accept& a = d.accepts[i];
+    bool b = a.is_and;
+    for (int f : a.flags) {
+      bool fb = (e.l2_flags >> f) & 1;
+      b = a.is_and ? (b && fb) : (b || fb);
+    }
+    if (b) {
+      e.l2_accepts |= uint64_t(1) << i;
+      ++stats.accept_true[i];
+    }
+  }
+  e.l2_accept = e.l2_accepts != 0;
+  if (e.l2_accept) ++stats.l2_accepted;
+}
+
 // Rules 3-4, run by a Worker: a pure function of the chunk and its plan, so
 // the output does not depend on the worker count. Adds this chunk's counters
-// to `stats`.
+// to `stats`. Phase C rides along: the AC flag of every hit placed in an
+// emitted event, then L2 per event.
 inline std::vector<GenericEvent> build_generic_events(const SortedChunk& c,
                                                       const EventPlan& p,
                                                       GenericStats& stats) {
@@ -857,6 +935,29 @@ inline std::vector<GenericEvent> build_generic_events(const SortedChunk& c,
   auto in_window = [&](std::size_t j, double t) {
     double dt = t - refs[j].t;
     return dt >= -d.pre_ns && dt <= d.post_ns;
+  };
+  // AC: per pair, the sorted times of its shield hits in this chunk (the
+  // chunk is time-ordered, so they come out sorted). A detector hit is
+  // flagged when any of its pairs has a shield hit in
+  // [t - ac_pre, t + ac_post] — measured from the hit, events play no part.
+  std::vector<std::vector<double>> shield_t;
+  if (d.has_ac()) {
+    shield_t.resize(d.ac_pairs.size());
+    for (const ScalarHit& h : c.hits) {
+      uint64_t m = d.ac_shield_mask[mc_key(h.module, h.channel)];
+      for (std::size_t i = 0; m; ++i, m >>= 1)
+        if (m & 1) shield_t[i].push_back(h.timestamp_ns);
+    }
+  }
+  auto ac_flag = [&](const ScalarHit& h) {
+    uint64_t m = d.ac_det_mask[mc_key(h.module, h.channel)];
+    for (std::size_t i = 0; m; ++i, m >>= 1) {
+      if (!(m & 1)) continue;
+      const std::vector<double>& v = shield_t[i];
+      auto it = std::lower_bound(v.begin(), v.end(), h.timestamp_ns - d.ac_pre_ns);
+      if (it != v.end() && *it <= h.timestamp_ns + d.ac_post_ns) return true;
+    }
+    return false;
   };
 
   for (const ScalarHit& h : c.hits) {
@@ -901,11 +1002,14 @@ inline std::vector<GenericEvent> build_generic_events(const SortedChunk& c,
     eh.energy_short = h.energy_short;
     eh.dt = t - e.t;
     eh.is_trigger = k >= 0;
+    eh.with_ac = d.has_ac() && ac_flag(h);
     e.hits.push_back(eh);
     ++stats.hits_in_events;
     if (contested) ++stats.contested;
+    if (eh.with_ac) ++stats.ac_flagged;
   }
 
+  for (GenericEvent& e : out) apply_l2(d, e, stats);
   stats.events += out.size();
   for (const GenericEvent& e : out) {
     uint32_t m = e.n_triggers < 8 ? e.n_triggers : 8;
@@ -991,6 +1095,9 @@ struct WorkMsg {
   GenericStats gstats;           // the worker's counters for `events`
   uint32_t run_number = 0;       // RunClose
   RunProvenance prov;            // RunOpen only
+  // RunOpen only: the run's frozen event definition, so the Writer can create
+  // the definition-named L2 branches (null = no events tree this run).
+  std::shared_ptr<const EventDef> event_def;
 };
 
 // Receiver -> Display (bounded tee). Data may be dropped-and-counted; control
