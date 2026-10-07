@@ -21,8 +21,7 @@
 //   --rate H     throttle to H hits/s (0 = unthrottled).
 //
 // Build (ROOT for the tree, zmq for the socket):
-//   g++ -O2 -std=c++17 test_publisher.cxx $(root-config --cflags --libs) \
-//       -lzmq -o test_publisher
+//   g++ -O2 -std=c++17 test_publisher.cxx $(root-config --cflags --libs) -lzmq -o test_publisher
 //
 // Example (V0/V2 gates):
 //   ./test_publisher --file tmp/run0023_0000_X730_ThGEM_Test.root --run 23

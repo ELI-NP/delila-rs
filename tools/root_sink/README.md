@@ -267,6 +267,10 @@ hit arrays in time order):
 | `HitTime[NHits]` | `/D` | hit time − `TriggerTime` [ns] (the reference is at 0) |
 | `HitIsTrigger[NHits]` | `/O` | a trigger hit of this event's group |
 
+Leaf types for `SetBranchAddress`: `/l` = `ULong64_t`, `/i` = `UInt_t` (NOT
+`Int_t` — ROOT refuses the mismatch), `/b` = `UChar_t`, `/s` = `UShort_t`,
+`/O` = `Bool_t`; size the hit arrays with `events->GetMaximum("NHits")`.
+
 ```cpp
 events->Draw("HitTime", "HitCh==0 && TriggerIdx==0");  // LaBr3 vs a ThGEM1 reference
 events->Draw("NTriggers");                              // overlap / pile-up of triggers

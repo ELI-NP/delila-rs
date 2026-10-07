@@ -156,7 +156,11 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
 
 ### pf-qaq への配備(未実施)
 
-1. 新しいバイナリを入れる前に、`config_thgem_pfqaq.toml` の **`hits_tree = true` のコメントを外す**(外さないと hits ツリーが出なくなる。built だけになるので起動は通ってしまう)。`event_def_file` も外せば events ツリーが出る。
+**配備前テストは済み (2026-10-07、本番を止めずに `~/tmp/todo71_test/` で):** GCC 13.3 + ROOT 6.38.06 でビルド・単体テスト 465/256 合格。pf-qaq の run 57(生の時刻、288,571 ヒット)を別ポートで再生 → hits / built が本番と同数(built 46,544)、events 46,544(NTriggers すべて 1)、`check_events` と `compare_hits`(時刻オフセット込み)ともに IDENTICAL、`--hists` 付きの本番フラグでも同じ。`start_daq.sh` の TOML→引数の変換も模擬して確認。
+
+**配備の罠(このテストで判明):** pf-qaq の `scripts/start_daq.sh` は古く、`hits_tree` / `event_def_file` を知らない → TOML にキーを足しても**黙って無視**され、新しいバイナリは hits ツリー無しで動く。**バイナリ・`start_daq.sh`・`config/event_def_thgem.json` を同時に入れる**こと。pf-qaq の TOML にはまだ TODO 71 の行が無いので、コメントを外すのではなく**キーを書き足す**。
+
+1. 新しいバイナリと一緒に `scripts/start_daq.sh` と `config/event_def_thgem.json` を入れ、`config_thgem_pfqaq.toml` の `[network.root_sink]` に **`hits_tree = true`** を足す(足さないと hits ツリーが出なくなる。built だけになるので起動は通ってしまう)。`event_def_file = "config/event_def_thgem.json"` も足せば events ツリーが出る。
 2. 入れ替えは TODO 70 §5 と同じ手順(ランとランの間に `root_sink.prev` を残して `install` → `mv`)。
 3. 最初のランの後で `root -l -b -q 'check_events.C+("<run>.root")'` が IDENTICAL になることを確認する。
 

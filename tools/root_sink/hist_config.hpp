@@ -450,8 +450,10 @@ inline void parse_one(const tdelila::json::Value& hv, std::size_t idx,
     const JV* cv = hv.find(ck);
     if (!cv) continue;
     ++cut_count;
-    CutKind kind;
-    Scope csc;
+    // Initialised only to quiet GCC's -Wmaybe-uninitialized: cutkey_lookup
+    // sets both for every cut_keys() entry.
+    CutKind kind = CutKind::None;
+    Scope csc = Scope::Hit;
     cutkey_lookup(ck, kind, csc);  // always true for a cut_keys() entry
     Cut c;
     c.kind = kind;

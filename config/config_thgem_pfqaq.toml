@@ -167,6 +167,8 @@ safe_horizon_ms = 1000
 # (-17.5, -29.8) / (-2.5, -15.2) ns. Re-read at every run start (edit via a temp
 # file + mv); regenerate with tools/root_sink/delayline_offsets.C after recabling.
 time_calib_file = "config/time_settings_thgem.json"
-# TODO 71 (needs a root_sink built after 2026-10-07; an older binary exits on these keys):
+# TODO 71 — deploy root_sink AND scripts/start_daq.sh AND config/event_def_thgem.json
+# together (c121318+): an older start_daq.sh silently ignores both keys (the new
+# binary then runs without the hits tree), an older root_sink exits on the flags.
 # hits_tree = true                                  # the per-hit tree is now opt-in — keep it on pf-qaq
 # event_def_file = "config/event_def_thgem.json"    # generic events tree
