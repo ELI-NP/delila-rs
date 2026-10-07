@@ -17,6 +17,12 @@
 //     trigger plus XL/XR/YU/YD arms each) additionally fill pos1/pos2-scope
 //     histograms (x = t_XR - t_XL, y = t_YU - t_YD).
 //
+// Time offsets (--time-calib, TODO 70): a timeSettings.json of per-(module,
+// channel) cable/delay offsets is applied once, in the Receiver, to every hit
+// (aligned = raw - offset_ns) — so the hits tree, built events and monitors are
+// all on the aligned axis, while the .delila stays raw. The applied table is
+// recorded per run (TTree UserInfo + <run>_timeSettings.json).
+//
 // All logic (envelope parse, decode, matcher, run state) is in sink_core.hpp and
 // is unit-tested without ROOT/ZMQ. This file is only the wiring.
 //
@@ -56,12 +62,15 @@
 #include "eb_core.hpp"
 #include "hist_config.hpp"
 #include "sink_core.hpp"
+#include "time_offsets.hpp"
 
 #include "TApplication.h"
 #include "TFile.h"
 #include "TH1.h"
 #include "TH2.h"
 #include "THttpServer.h"
+#include "TList.h"
+#include "TNamed.h"
 #include "TROOT.h"
 #include "TRootSniffer.h"
 #include "TString.h"
@@ -138,6 +147,9 @@ struct Options {
   // Channels come from --xy1-ch (required), --xy2-ch (optional 2nd plane) and
   // --gamma-ch (optional LaBr3); the window is the shared --window-ns.
   std::string built_tree;
+  // --time-calib FILE: per-(module,channel) time offsets (timeSettings.json),
+  // re-read at every run start (empty = off, timestamps recorded raw).
+  std::string time_calib;
 };
 
 static void print_usage(const char* argv0) {
@@ -179,6 +191,11 @@ static void print_usage(const char* argv0) {
       "  --built-tree NAME   also write an integrated built-event TTree NAME\n"
       "                      (requires --xy1-ch; --xy2-ch adds the 2nd plane,\n"
       "                       --gamma-ch adds LaBr3/TOF; window = --window-ns)\n"
+      "  --time-calib FILE   per-(module,channel) time offsets: timeSettings.json\n"
+      "                      tree form (or legacy time-calib output); aligned =\n"
+      "                      raw - offset_ns for every consumer (hits tree, built\n"
+      "                      events, monitors). Re-read at every run start, frozen\n"
+      "                      per run; recorded in TTree UserInfo + _timeSettings.json\n"
       "  --help              this message\n",
       argv0);
 }
@@ -280,6 +297,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--built-tree") {
       if (!(v = need(i))) return false;
       opt.built_tree = v;
+    } else if (a == "--time-calib") {
+      if (!(v = need(i))) return false;
+      opt.time_calib = v;
     } else {
       std::fprintf(stderr, "root_sink: unknown argument '%s' (try --help)\n", a.c_str());
       return false;
@@ -518,14 +538,20 @@ class Recorder {
   long long entries() const { return entries_; }
   // The path chosen by the last finalize() (for pairing the hists-config copy).
   const std::string& final_path() const { return final_path_; }
+  // What open_run recorded about this run (time offsets) — for the sidecar.
+  const eb::RunProvenance& provenance() const { return prov_; }
 
   // Open a provisional file `<dir>/run_inprogress_<unixtime>.root` + empty tree.
   // `exp_name` is remembered for the final filename (resolved at run start so it
   // matches the Rust Recorder even though EOS/finalize come later). A non-empty
   // `built_tree_name` adds the integrated built-event tree in the SAME file.
+  // `prov` (frozen at RunOpen by the Receiver) is attached to both trees'
+  // UserInfo so every file says which time offsets — if any — its times carry.
   bool open_run(const std::string& dir, const std::string& tree_name,
-                const std::string& exp_name, const std::string& built_tree_name = "") {
+                const std::string& exp_name, const std::string& built_tree_name = "",
+                const eb::RunProvenance& prov = eb::RunProvenance()) {
     out_dir_ = dir;
+    prov_ = prov;
     exp_name_ = exp_name.empty() ? "data" : exp_name;  // mirror the Rust fallback
     entries_ = 0;
     built_entries_ = 0;
@@ -538,7 +564,11 @@ class Recorder {
       file_ = nullptr;
       return false;
     }
-    tree_ = new TTree(tree_name.c_str(), "DELILA scalar events");
+    const bool aligned = !prov_.time_offsets_source.empty();
+    tree_ = new TTree(tree_name.c_str(),
+                      aligned ? "DELILA scalar events (timestamp_ns ALIGNED: raw - "
+                                "timeSettings offset; see UserInfo)"
+                              : "DELILA scalar events");
     tree_->Branch("module", &module_, "module/b");
     tree_->Branch("channel", &channel_, "channel/b");
     tree_->Branch("energy", &energy_, "energy/s");
@@ -586,6 +616,13 @@ class Recorder {
       built_->Branch("e_sum2", &bev_.e_sum2, "e_sum2/i");
       built_->Branch("n_arms1", &bev_.n_arms1, "n_arms1/b");
       built_->Branch("n_arms2", &bev_.n_arms2, "n_arms2/b");
+    }
+    // UserInfo is part of the TTree object: written by every AutoSave and into
+    // every MaxTreeSize part (a file-level key would land in the last part only).
+    if (!prov_.time_offsets_meta.empty()) {
+      tree_->GetUserInfo()->Add(new TNamed("timeSettings", prov_.time_offsets_meta.c_str()));
+      if (built_)
+        built_->GetUserInfo()->Add(new TNamed("timeSettings", prov_.time_offsets_meta.c_str()));
     }
     return true;
   }
@@ -716,6 +753,7 @@ class Recorder {
   UShort_t energy_ = 0, energy_short_ = 0;
   Double_t timestamp_ns_ = 0.0;
   eb::BuiltEvent bev_;  // built-tree branch buffer (fill_built copies into it)
+  eb::RunProvenance prov_;  // this run's time-offset record (open_run)
 };
 
 // ---------------------------------------------------------------------------
@@ -824,28 +862,72 @@ static void fill_pos_hists(std::vector<LiveHist>& live, const PosResult& r,
 // Snapshot the current --hists file next to the finalized ROOT file, named
 // "<root path minus .root>_hists.json". By deriving from the (possibly
 // collision-suffixed) final path, the copy stays paired with its run file.
-static void copy_hists_sidecar(const std::string& hists_file,
-                               const std::string& root_path) {
-  if (root_path.empty()) return;
+// Write `text` to "<root path minus .root><suffix>" so the sidecar stays paired
+// with its (possibly collision-suffixed) run file. Returns the path written, or
+// "" (with a WARNING) on failure.
+static std::string write_text_sidecar(const std::string& root_path, const std::string& suffix,
+                                      const std::string& text) {
+  if (root_path.empty()) return "";
   std::string base = root_path;
   const std::string ext = ".root";
   if (base.size() >= ext.size() &&
       base.compare(base.size() - ext.size(), ext.size(), ext) == 0)
     base.erase(base.size() - ext.size());
-  std::string dst = base + "_hists.json";
+  std::string dst = base + suffix;
+  std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    std::fprintf(stderr, "root_sink: WARNING could not write %s\n", dst.c_str());
+    return "";
+  }
+  out << text;
+  return dst;
+}
+
+static void copy_hists_sidecar(const std::string& hists_file,
+                               const std::string& root_path) {
+  if (root_path.empty()) return;
   std::string text;
   if (!read_file(hists_file, text)) {
     std::fprintf(stderr, "root_sink: WARNING could not read %s to pair with %s\n",
                  hists_file.c_str(), root_path.c_str());
     return;
   }
-  std::ofstream out(dst, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    std::fprintf(stderr, "root_sink: WARNING could not write %s\n", dst.c_str());
-    return;
+  std::string dst = write_text_sidecar(root_path, "_hists.json", text);
+  if (!dst.empty()) std::printf("root_sink: histogram config copied -> %s\n", dst.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Time offsets (--time-calib): file I/O around time_offsets.hpp
+// ---------------------------------------------------------------------------
+static std::string now_utc_iso() {
+  std::time_t t = std::time(nullptr);
+  std::tm tmv;
+  gmtime_r(&t, &tmv);
+  char buf[32];
+  std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+  return buf;
+}
+
+// Read + parse + resolve `path` into `a` (reload_offsets policy: on failure the
+// previous table is kept and marked stale). The recorded path is the realpath.
+static bool load_offsets_file(const std::string& path, ActiveOffsets& a, double max_spread_ns,
+                              std::vector<std::string>& errors) {
+  char resolved[4096];
+  std::string real = ::realpath(path.c_str(), resolved) ? std::string(resolved) : path;
+  std::string text;
+  if (!read_file(path, text)) {
+    std::string why = std::strerror(errno);
+    return reload_offsets(a, nullptr, why, real, max_spread_ns, now_utc_iso(), errors);
   }
-  out << text;
-  std::printf("root_sink: histogram config copied -> %s\n", dst.c_str());
+  return reload_offsets(a, &text, "", real, max_spread_ns, now_utc_iso(), errors);
+}
+
+static std::string offsets_summary(const ActiveOffsets& a) {
+  char buf[256];
+  std::snprintf(buf, sizeof buf, "%s, %zu entries, %d root(s), depth %d, spread %.3f ns",
+                a.table.format.c_str(), a.table.abs_ns.size(), a.table.roots, a.table.max_depth,
+                a.table.spread_ns());
+  return buf;
 }
 
 // ---------------------------------------------------------------------------
@@ -945,8 +1027,38 @@ int main(int argc, char** argv) {
                    "--xy2-ch is not set — those histograms will stay empty\n");
   }
 
+  // --time-calib: load + validate up front — ANY error is fatal at startup
+  // (at a later run start a bad edit keeps the previous table, STALE).
+  const bool toff_enabled = !opt.time_calib.empty();
+  const double safe_horizon_ns = opt.safe_horizon_ms * 1e6;
+  ActiveOffsets toff_boot;
+  if (toff_enabled) {
+    std::vector<std::string> errs;
+    if (!load_offsets_file(opt.time_calib, toff_boot, safe_horizon_ns, errs)) {
+      std::fprintf(stderr, "root_sink: %zu error(s) in --time-calib %s:\n", errs.size(),
+                   opt.time_calib.c_str());
+      for (const auto& e : errs) std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+      return 2;
+    }
+  }
+
   std::printf("root_sink: sub=%s out-dir=%s tree=%s\n", opt.zmq.c_str(),
               opt.out_dir.c_str(), opt.tree.c_str());
+  if (toff_enabled) {
+    std::printf("root_sink: time offsets: %s (%s) — aligned_ts = raw_ts - offset_ns for "
+                "every consumer; re-read at every run start\n",
+                toff_boot.source_path.c_str(), offsets_summary(toff_boot).c_str());
+    std::printf("root_sink: time offsets: %s\n", format_offsets_line(toff_boot.table).c_str());
+    for (const auto& w : toff_boot.table.warnings)
+      std::fprintf(stderr, "root_sink: WARNING time offsets: %s\n", w.c_str());
+    if (toff_boot.table.spread_ns() >= opt.margin_ns)
+      std::fprintf(stderr,
+                   "root_sink: WARNING time offsets: spread %.3f ns >= --margin-ns %.0f — the "
+                   "display matchers may ripen before an aligned partner arrives\n",
+                   toff_boot.table.spread_ns(), opt.margin_ns);
+  } else {
+    std::printf("root_sink: time offsets: none (timestamp_ns recorded RAW)\n");
+  }
   if (opt.module >= 0)
     std::printf("root_sink: --module %d: only digitizer %d's hits are recorded, histogrammed "
                 "and matched (the .delila keeps every board)\n",
@@ -1128,7 +1240,11 @@ int main(int argc, char** argv) {
     std::atomic<long long> other_module{0};   // hits dropped by --module (Receiver)
     std::atomic<long long> late{0};           // hits behind the emitted core (Sorter)
     std::atomic<bool> writing{false};         // stream run state (status line)
+    std::atomic<int> toff_entries{-1};        // time offsets in force (-1 = off)
+    std::atomic<bool> toff_stale{false};      // last run-start reload failed
+    std::atomic<long long> toff_unmapped{0};  // keys without an entry, this run
   } counters;
+  if (toff_enabled) counters.toff_entries = static_cast<int>(toff_boot.table.abs_ns.size());
 
   const int n_workers = opt.workers;
 
@@ -1145,6 +1261,10 @@ int main(int argc, char** argv) {
   auto receiver_loop = [&] {
     RunState run_state;
     std::set<std::string> warned;
+    // Time offsets in force — owned by this thread from here on. Re-read at
+    // every RunOpen and frozen for the run (SPEC §4.3.1).
+    ActiveOffsets toff = toff_boot;
+    std::set<uint16_t> toff_reported;
     auto process = [&](const uint8_t* data, size_t size) {
       Envelope env = parse_envelope(data, size);
       switch (env.kind) {
@@ -1162,6 +1282,31 @@ int main(int argc, char** argv) {
             counters.writing = true;
             eb::SorterMsg m;
             m.ctrl = eb::Ctrl::RunOpen;
+            if (toff_enabled) {
+              bool was_stale = toff.stale;
+              std::vector<std::string> errs;
+              if (!load_offsets_file(opt.time_calib, toff, safe_horizon_ns, errs)) {
+                std::fprintf(stderr,
+                             "root_sink: ERROR time offsets reload failed at run start — "
+                             "KEEPING THE PREVIOUS TABLE for this run:\n");
+                for (const auto& e : errs) std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+              } else if (was_stale) {
+                std::printf("root_sink: time offsets reloaded OK (was STALE)\n");
+              }
+              toff_reported.clear();
+              counters.toff_unmapped = 0;
+              counters.toff_stale = toff.stale;
+              counters.toff_entries = static_cast<int>(toff.table.abs_ns.size());
+              std::printf("root_sink: run time offsets [%s%s]: %s\n",
+                          offsets_summary(toff).c_str(), toff.stale ? ", STALE" : "",
+                          format_offsets_line(toff.table).c_str());
+              for (const auto& w : toff.table.warnings)
+                std::fprintf(stderr, "root_sink: WARNING time offsets: %s\n", w.c_str());
+              m.prov.time_offsets_meta = offsets_provenance_json(toff);
+              m.prov.time_offsets_source = toff.source_text;
+            } else {
+              m.prov.time_offsets_meta = offsets_disabled_json();
+            }
             to_sorter.push(std::move(m));
             eb::DisplayMsg d;
             d.ctrl = eb::Ctrl::RunOpen;
@@ -1169,11 +1314,24 @@ int main(int argc, char** argv) {
             std::printf("root_sink: run started (source %u)\n", sid);
             std::fflush(stdout);
           });
-          // --module: before ANY consumer — the matchers key on channel alone and
-          // the Sorter / watermarks assume one time base (sink_core.hpp).
+          // --module, then time alignment: both before ANY consumer. The matchers
+          // key on channel alone and the Sorter / watermarks assume one time base
+          // (sink_core.hpp); aligning here puts the Sorter, the hits tree, the
+          // builder and the display matchers on ONE aligned axis
+          // (time_offsets.hpp). The Sorter sorts on timestamp_ns, so this must
+          // never move after it.
           std::size_t decoded = hits.size();
           keep_module(hits, opt.module);
           counters.other_module += static_cast<long long>(decoded - hits.size());
+          if (toff_enabled)
+            apply_time_offsets(hits, toff.table, toff_reported, [&](uint16_t k) {
+              ++counters.toff_unmapped;
+              std::fprintf(stderr,
+                           "root_sink: WARNING time offsets: module %u channel %u has no entry "
+                           "in %s — recorded with offset 0 (reported once per run)\n",
+                           static_cast<unsigned>(k >> 8), static_cast<unsigned>(k & 0xFF),
+                           toff.source_path.c_str());
+            });
           counters.received += static_cast<long long>(hits.size());
           if (http_enabled) {
             eb::DisplayMsg d;
@@ -1296,6 +1454,7 @@ int main(int argc, char** argv) {
           eb::WorkMsg m;
           m.ctrl = eb::Ctrl::RunOpen;
           m.seq = seq++;
+          m.prov = std::move(in.prov);  // time-offset record -> Writer (UserInfo)
           work_q.push(std::move(m));
           break;
         }
@@ -1378,7 +1537,7 @@ int main(int argc, char** argv) {
               // bounded (~2 s) HTTP fetch only delays file naming while the
               // unbounded queues upstream absorb the stream.
               std::string exp = resolve_exp_name(opt);
-              if (!recorder.open_run(opt.out_dir, opt.tree, exp, opt.built_tree))
+              if (!recorder.open_run(opt.out_dir, opt.tree, exp, opt.built_tree, r.prov))
                 std::fprintf(stderr,
                              "root_sink: run start FAILED — dropping this run's events\n");
               else
@@ -1400,6 +1559,14 @@ int main(int argc, char** argv) {
                 std::printf("root_sink: run %u finalized -> %s (%lld events)\n",
                             r.run_number, fn.c_str(), ev);
               if (use_hists) copy_hists_sidecar(opt.hists_file, recorder.final_path());
+              // The FROZEN RunOpen snapshot (unlike _hists.json, which re-reads
+              // the live file here): a re-loadable timeSettings.json, also for
+              // the Rust EB.
+              if (!recorder.provenance().time_offsets_source.empty()) {
+                std::string ts = write_text_sidecar(recorder.final_path(), "_timeSettings.json",
+                                                    recorder.provenance().time_offsets_source);
+                if (!ts.empty()) std::printf("root_sink: time settings snapshot -> %s\n", ts.c_str());
+              }
               if (http_enabled)
                 std::printf("root_sink: (monitor histograms kept across the run boundary)\n");
               std::fflush(stdout);
@@ -1570,16 +1737,30 @@ int main(int argc, char** argv) {
       double dt = duration_cast<duration<double>>(now - t_last_status).count();
       long long rec = counters.received;
       double rate = dt > 0 ? (double)(rec - last_received) / dt : 0.0;
+      // toff=off | N | N STALE | N (k unmapped)
+      char toff_s[64];
+      int te = counters.toff_entries;
+      if (te < 0) {
+        std::snprintf(toff_s, sizeof toff_s, "off");
+      } else {
+        long long um = counters.toff_unmapped;
+        std::snprintf(toff_s, sizeof toff_s, "%d%s", te, counters.toff_stale ? " STALE" : "");
+        if (um > 0) {
+          std::size_t used = std::strlen(toff_s);
+          std::snprintf(toff_s + used, sizeof toff_s - used, " (%lld unmapped)", um);
+        }
+      }
       std::printf(
           "root_sink: %s | events=%lld (written=%lld) | %.0f ev/s | chunks=%lld | "
           "built=%lld | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "
-          "write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | late=%lld\n",
+          "write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | late=%lld | "
+          "toff=%s\n",
           counters.writing ? "WRITING" : "idle", rec, (long long)counters.written,
           rate, (long long)counters.chunks, (long long)counters.built,
           (long long)counters.matcher_fills, (long long)counters.xy_fills,
           to_sorter.size(), work_q.size(), writer_q.size(), display_q.size(),
           (long long)counters.display_drops, (long long)counters.other_module,
-          (long long)counters.late);
+          (long long)counters.late, toff_s);
       std::fflush(stdout);
       t_last_status = now;
       last_received = rec;

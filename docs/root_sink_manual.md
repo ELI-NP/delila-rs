@@ -67,6 +67,7 @@ window_ns  = 10000
 # built_tree      = "events"   # 要 xy1_ch(+任意で xy2_ch / gamma_ch)
 # 2026-10 追加:
 # module          = 0          # デジタイザ 2 台以上なら必須(下記)
+# time_calib_file = "config/time_settings_thgem.json"  # 時刻オフセット(TODO 70、後述)
 ```
 
 - **デジタイザが 2 台以上なら `module` を指定する。** Δt / XY マッチャーと built tree は
@@ -82,7 +83,8 @@ window_ns  = 10000
 - セクションがあれば `start_daq.sh` が自動起動、無ければ従来どおり(手動起動)。
 - `--operator` は `[operator]` の `port` から自動導出される(明示不要)。
 - キー名は CLI フラグと同じ(ハイフン→アンダースコア。例 `--out-dir` →
-  `output_dir`)。指定したキーだけがフラグになり、残りは root_sink の既定値。
+  `output_dir`)。例外は `subscribe` → `--zmq` と `time_calib_file` → `--time-calib`
+  (後者は Rust EB の TOML キーと同名)。指定したキーだけがフラグになり、残りは root_sink の既定値。
 - バイナリ探索順: `ROOT_SINK_BIN`(環境変数) > PATH > `~/.local/bin/root_sink`
   > `tools/root_sink/root_sink`。見つからなければ黄色い警告を出してスキップ
   (致命ではない)。
@@ -150,6 +152,7 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 | `--chunk-span-ms X` | 100 | Sorter のチャンク幅(**データ内時刻**基準。レートに依らず一定幅) |
 | `--safe-horizon-ms X` | 50 | Sorter の到着乱れ吸収幅。**ストリームの最大乱れより大きいこと**(side3 実測 ~8 ms) |
 | `--built-tree NAME` | (なし) | 統合 built-event TTree を同一ファイルに追加。**`--xy1-ch` 必須**(無ければ起動エラー)。`--xy2-ch` で第 2 面、`--gamma-ch` で LaBr3/TOF、窓は `--window-ns` 共用 |
+| `--time-calib FILE` | (なし) | (module, channel) ごとの時刻オフセット(`timeSettings.json`、旧 time-calib 形式も可)。**全ての出力・モニタが補正後の時刻**(raw − offset_ns)。ラン開始ごとに読み直してラン中は固定。後述「時刻オフセット」 |
 
 **2026-08 マルチスレッド化について**: root_sink は Receiver → Sorter →
 Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TODO 66 §5)。
@@ -167,6 +170,7 @@ Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TOD
 | ラン中(暫定) | `run_inprogress_<unixtime>.root` |
 | ラン終了(確定) | `run%04u_0000_<exp>.root` |
 | ヒスト設定の控え | `run%04u_0000_<exp>_hists.json`(`--hists` 使用時) |
+| 時刻オフセットの控え | `run%04u_0000_<exp>_timeSettings.json`(`--time-calib` 使用時。**ラン開始時に固定した表**そのもの) |
 
 - 確定名は **Rust Recorder の `.delila` と拡張子以外完全一致**
   (例: `run0013_0000_X730_ThGEM_Test.delila` ↔ 同 `.root`)。
@@ -197,7 +201,7 @@ Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TOD
 | `channel` | `b` (UChar_t) | チャンネル |
 | `energy` | `s` (UShort_t) | エネルギー |
 | `energy_short` | `s` (UShort_t) | ショートゲート(PSD) |
-| `timestamp_ns` | `D` (Double_t) | タイムスタンプ [ns] |
+| `timestamp_ns` | `D` (Double_t) | タイムスタンプ [ns]。**`--time-calib` 使用時は補正後**(raw − offset_ns。`.delila` は常に生の時刻) |
 
 ```cpp
 // 解析例
@@ -336,6 +340,41 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
 
 ---
 
+## 時刻オフセット(`--time-calib`、TODO 70)
+
+ケーブルやディレイラインの長さで生じる **(module, channel) ごとの一定の遅れ**を、
+root_sink の入口(Receiver、`--module` の直後・Sorter の前)で 1 回だけ差し引く。
+hits ツリー・built ツリー・Δt/XY モニタ・ヒストグラムが全て同じ補正後の時間軸で動く。
+`.delila`(Recorder)は常に生の時刻のまま。
+
+- **形式**: Rust EB と同じ `timeSettings.json`(`schemas/timeSettings.schema.json`)。
+  `{"version":"1.0","entries":[{"module":0,"channel":2,"ref":[0,1],"offset_ns":8.752}, ...]}`。
+  絶対オフセット = root までの `ref` 経路上の `offset_ns` の合計(root 自身の値も含む)。
+  `event_builder time-calib` の旧形式 `{"ref_module","ref_channel","offsets":{"00_02":8.7}}` も可。
+- **符号**: `aligned_ts = raw_ts − offset_ns`。**正 = その ch は遅れて届く**。
+- **測り方(ThGEM の XY 中心合わせ)**: delila2root した生データに
+  `tools/root_sink/delayline_offsets.C` を掛ける。表示する x・y の中心(1/99 % 点の中点)を
+  各軸の 2 本の腕に半分ずつ振り分け、トリガーと LaBr3 は 0(TOF は変わらない)。
+  ```
+  root -l -b -q 'tools/root_sink/delayline_offsets.C("/tmp/run0056_*.root","1,2,3,5,4","6,7,8,9,10","config/time_settings_thgem.json","run 56")'
+  ```
+- **書き換え**: 次のラン開始から有効(root_sink の再起動不要)。書きかけを読まれないよう
+  **一時ファイルに書いてから `mv`** で置き換える。
+- **確認**: `root -l -b -q -e '.L tools/root_sink/delayline_offsets.C' -e 'delayline_centres_built("runNNNN_0000_<exp>.root")'`
+  で built ツリーの像の中心を表示。補正済みの `.root` に `delayline_offsets.C` を掛けると
+  「残差」が出る(正しい表なら |残差| < 0.5 ns)。
+- **記録**: 両ツリーの UserInfo に `TNamed "timeSettings"`(使った表・`applied`・`status`・原文)。
+  補正時は hits ツリーのタイトルに `ALIGNED`。sidecar `_timeSettings.json` はそのまま再利用できる。
+- **安全装置**: 起動時にファイルが不正なら起動しない(全エラーを列挙)。ラン開始時の読み直しに
+  失敗したら **前の表のまま** ラン(ERROR、status 行 `toff=N STALE`、UserInfo `stale`)——
+  黙って「補正なし」に戻ることはない。オフセットの最大−最小が `safe_horizon_ms` 以上はエラー
+  (並べ替えで取りこぼすため)。表に無い ch は生の時刻のまま、ランごとに 1 回 WARNING。
+- **限界**: 直せるのは一定の遅れだけ。独立にスタートしたボード同士は時計がずれていくので、
+  ボード間の相関にはハードウェアのクロック同期が前提(TODO 70 Phase 2)。トリガーや LaBr3 の
+  オフセットを動かすと TOF が変わる(マクロ側の TOF オフセット定数は再導出が必要)。
+
+---
+
 ## トラブルシューティング
 
 | 症状 | 原因と対処 |
@@ -350,16 +389,22 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
 | イベント数が Recorder と合わない | ラン途中から購読した/途中で kill した場合は当然合わない。フルランで一致しないなら異常(gant/side3 検証では 3 ラン連続で完全一致) |
 | ssh 切断で sink が死ぬ | 旧バイナリ。`gROOT->SetBatch(kTRUE)`(`6f65ef1`)以降は起きない。`nohup` 併用を推奨 |
 | ブラウザで開けない | `--http-port 0` で起動していないか、FW でポートが塞がれていないか確認 |
-| root_sink が起動しない | `start_daq.sh` の summary table で **DEAD**、または `binary not found` 警告が出る → バイナリ未配備か、ROOT 実行環境(`LD_LIBRARY_PATH`)が無い |
+| root_sink が起動しない | `start_daq.sh` の summary table で **DEAD**、または `binary not found` 警告が出る → バイナリ未配備か、ROOT 実行環境(`LD_LIBRARY_PATH`)が無い。`--time-calib` のファイルが不正でも起動しない(sink.log に全エラーが出る) |
+| `ERROR time offsets reload failed at run start` / status 行 `toff=N STALE` | ラン開始時の読み直しに失敗(書きかけ・JSON の誤り・ファイル消失)。**そのランは前の表で補正済み**。ファイルを直せば次のランで `reloaded OK (was STALE)` |
+| `WARNING time offsets: module M channel C has no entry` | 表に無い ch のヒット。その ch は生の時刻のまま。新しく配線した ch なら表に追加する(ランごとに 1 回だけ出る) |
+| XY 像が中心にない | 配線変更でケーブル長が変わった。`delayline_offsets.C` で測り直して `time_calib_file` を更新(次のランから反映) |
 
 ログの正常パターン(sink.log):
 
 ```
+root_sink: time offsets: /home/daq/delila-rs/config/time_settings_thgem.json (tree, 11 entries, 1 root(s), depth 2, spread 29.801 ns) — ...
+root_sink: run time offsets [tree, 11 entries, ...]: m0c0=+0.000 m0c1=+0.000 m0c2=+8.752 ...
 root_sink: experiment_name = "X730_ThGEM_Test" (source: http://localhost:9092/api/status)
 root_sink: run started (source 0) -> .../run_inprogress_1784618933.root
 root_sink: WRITING | events=524136 | 30236 ev/s | matcher_fills=174711
 root_sink: run 13 finalized -> .../run0013_0000_X730_ThGEM_Test.root (755250 events)
 root_sink: histogram config copied -> .../run0013_0000_X730_ThGEM_Test_hists.json
+root_sink: time settings snapshot -> .../run0013_0000_X730_ThGEM_Test_timeSettings.json
 ```
 
 ---

@@ -20,6 +20,7 @@
 
 #include "hist_config.hpp"
 #include "sink_core.hpp"
+#include "time_offsets.hpp"
 
 using namespace rootsink;
 
@@ -295,6 +296,287 @@ static void test_foreign_module_hits_do_not_reach_the_matcher() {
   auto filtered = run(0);
   CHECK(filtered.size() == 1);
   CHECK(filtered[0].has_dt1 && filtered[0].thgem1_energy == 42 && near(filtered[0].dt1, 60.0));
+}
+
+// ---------------------------------------------------------------------------
+// Time offsets (time_offsets.hpp, TODO 70): timeSettings.json, aligned = raw - offset
+// ---------------------------------------------------------------------------
+static bool any_contains(const std::vector<std::string>& v, const char* needle) {
+  for (const std::string& s : v)
+    if (s.find(needle) != std::string::npos) return true;
+  return false;
+}
+
+static OffsetTable table_of(std::initializer_list<std::pair<uint16_t, double>> kv) {
+  OffsetTable t;
+  t.format = "tree";
+  for (const auto& p : kv) t.abs_ns[p.first] = p.second;
+  return t;
+}
+
+static void test_toff_sign_convention() {
+  // Positive offset = the channel arrives LATE, so it is subtracted (the Rust EB
+  // convention, src/event_builder/hit.rs: aligned_ts = raw_ts - offset_ns).
+  OffsetTable t = table_of({{mc_key(0, 1), 0.0}, {mc_key(0, 2), 30.0}, {mc_key(0, 3), -5.0}});
+  std::vector<ScalarHit> h = {mod_hit(0, 1, 1000.0), mod_hit(0, 2, 1030.0), mod_hit(0, 3, 995.0)};
+  std::set<uint16_t> reported;
+  int missing = 0;
+  apply_time_offsets(h, t, reported, [&](uint16_t) { ++missing; });
+  CHECK(missing == 0);
+  CHECK(near(h[0].timestamp_ns, 1000.0) && near(h[1].timestamp_ns, 1000.0) &&
+        near(h[2].timestamp_ns, 1000.0));
+  CHECK(mc_key(1, 2) == 0x0102 && mc_name(mc_key(3, 15)) == "m3c15");
+}
+
+static void test_toff_tree_resolves() {
+  // The Rust single_root_resolves fixture, listed child-first on purpose:
+  // resolution must not depend on entry order.
+  const char* j = R"({"version":"1.0","entries":[
+      {"module":5,"channel":0,"ref":[0,0],"offset_ns":12.3},
+      {"module":0,"channel":0,"ref":[9,0],"offset_ns":46.75},
+      {"module":9,"channel":1,"ref":[9,0],"offset_ns":0.05},
+      {"module":9,"channel":0,"ref":null,"offset_ns":0.0}]})";
+  OffsetParseResult r = parse_time_offsets(j);
+  CHECK(r.errors.empty());
+  CHECK(r.table.format == "tree");
+  CHECK(r.table.abs_ns.size() == 4);
+  CHECK(near(r.table.abs_ns[mc_key(5, 0)], 59.05, 1e-9));
+  CHECK(near(r.table.abs_ns[mc_key(0, 0)], 46.75));
+  CHECK(near(r.table.abs_ns[mc_key(9, 1)], 0.05));
+  CHECK(near(r.table.abs_ns[mc_key(9, 0)], 0.0));
+  CHECK(r.table.roots == 1 && r.table.max_depth == 2);
+  CHECK(r.table.warnings.empty());
+  CHECK(near(r.table.spread_ns(), 59.05, 1e-9));
+}
+
+static void test_toff_root_offset_applied() {
+  // The root's own offset counts too (Rust root_offset_is_applied).
+  OffsetParseResult r = parse_time_offsets(
+      R"({"version":"1.0","entries":[{"module":0,"channel":0,"ref":null,"offset_ns":100},
+                                     {"module":0,"channel":1,"ref":[0,0],"offset_ns":5}]})");
+  CHECK(r.errors.empty());
+  CHECK(near(r.table.abs_ns[mc_key(0, 0)], 100.0) && near(r.table.abs_ns[mc_key(0, 1)], 105.0));
+}
+
+static void test_toff_tree_errors() {
+  auto errs = [](const std::string& entries) {
+    return parse_time_offsets(R"({"version":"1.0","entries":[)" + entries + "]}").errors;
+  };
+  const std::string root = R"({"module":0,"channel":0,"ref":null,"offset_ns":0})";
+  CHECK(any_contains(errs(root + "," + root), "duplicate"));
+  CHECK(any_contains(errs(root + R"(,{"module":0,"channel":1,"ref":[9,9],"offset_ns":1})"),
+                     "missing parent"));
+  CHECK(any_contains(errs(root + R"(,{"module":0,"channel":1,"ref":[0,2],"offset_ns":1},
+                                    {"module":0,"channel":2,"ref":[0,1],"offset_ns":1})"),
+                     "cycle"));
+  CHECK(any_contains(errs(R"({"module":0,"channel":1,"ref":[0,1],"offset_ns":1})"), "cycle"));
+  CHECK(!errs(R"({"module":256,"channel":0,"ref":null,"offset_ns":0})").empty());
+  CHECK(!errs(R"({"module":0,"channel":1.5,"ref":null,"offset_ns":0})").empty());
+  CHECK(!errs(R"({"module":0,"channel":1,"ref":[1,2,3],"offset_ns":0})").empty());
+  CHECK(!errs(R"({"module":0,"channel":1,"ref":null,"offset_ns":"8.7"})").empty());
+  CHECK(any_contains(errs(R"({"module":0,"channel":1,"offset_ns":0})"), "ref"));
+  CHECK(any_contains(errs(R"({"module":0,"channel":1,"Ref":null,"ref":null,"offset_ns":0})"),
+                     "Ref"));
+  // Top level: unknown key, missing version, malformed JSON.
+  CHECK(any_contains(parse_time_offsets(R"({"version":"1.0","entries":[],"entires":[]})").errors,
+                     "entires"));
+  CHECK(any_contains(parse_time_offsets(R"({"entries":[]})").errors, "version"));
+  CHECK(parse_time_offsets("{").errors.size() == 1);
+  CHECK(any_contains(parse_time_offsets("").errors, "empty"));
+  CHECK(any_contains(parse_time_offsets(" \n\t").errors, "empty"));
+  CHECK(!parse_time_offsets("[1,2]").errors.empty());
+  // Collect-all: two bad entries -> two errors.
+  CHECK(errs(R"({"module":300,"channel":0,"ref":null,"offset_ns":0},
+                {"module":0,"channel":0,"ref":null,"offset_ns":"x"})").size() == 2);
+  // Detection is explicit: both or neither form key is an error, never a guess.
+  CHECK(any_contains(parse_time_offsets(R"({"version":"1.0","entries":[],"offsets":{}})").errors,
+                     "ambiguous"));
+  CHECK(!parse_time_offsets(R"({"version":"1.0"})").errors.empty());
+  // _comment and $schema are accepted (repo convention; Rust serde ignores them).
+  OffsetParseResult ok = parse_time_offsets(
+      R"({"$schema":"x","_comment":["a","b"],"version":"1.0","entries":[)" + root + "]}");
+  CHECK(ok.errors.empty());
+  CHECK(!parse_time_offsets(R"({"_comment":5,"version":"1.0","entries":[]})").errors.empty());
+}
+
+static void test_toff_tree_warnings() {
+  OffsetParseResult two = parse_time_offsets(
+      R"({"version":"1.0","entries":[{"module":0,"channel":0,"ref":null,"offset_ns":0},
+                                     {"module":5,"channel":0,"ref":null,"offset_ns":0}]})");
+  CHECK(two.errors.empty() && two.table.roots == 2 && any_contains(two.table.warnings, "disconnected"));
+  std::string chain = R"({"module":0,"channel":0,"ref":null,"offset_ns":0})";
+  for (int c = 1; c <= 7; ++c)
+    chain += R"(,{"module":0,"channel":)" + std::to_string(c) + R"(,"ref":[0,)" +
+             std::to_string(c - 1) + R"(],"offset_ns":1})";
+  OffsetParseResult deep = parse_time_offsets(R"({"version":"1.0","entries":[)" + chain + "]}");
+  CHECK(deep.errors.empty() && deep.table.max_depth == 7 && any_contains(deep.table.warnings, "depth"));
+  CHECK(near(deep.table.abs_ns[mc_key(0, 7)], 7.0));
+  OffsetParseResult v2 = parse_time_offsets(R"({"version":"2.0","entries":[]})");
+  CHECK(v2.errors.empty() && any_contains(v2.table.warnings, "version"));
+}
+
+static void test_toff_legacy() {
+  // `event_builder time-calib` output (src/event_builder/config.rs): already absolute.
+  OffsetParseResult r = parse_time_offsets(
+      R"({"ref_module":0,"ref_channel":1,"offsets":{"00_02":8.7,"0_3":-8.7,"01_02":4}})");
+  CHECK(r.errors.empty());
+  CHECK(r.table.format == "legacy" && r.table.roots == 1 && r.table.max_depth == 0);
+  CHECK(near(r.table.abs_ns[mc_key(0, 2)], 8.7) && near(r.table.abs_ns[mc_key(0, 3)], -8.7) &&
+        near(r.table.abs_ns[mc_key(1, 2)], 4.0));
+  // Stricter than Rust's warn-and-ignore: a skipped key would be a silent 0 offset.
+  CHECK(!parse_time_offsets(R"({"ref_module":0,"ref_channel":0,"offsets":{"O_3":1}})").errors.empty());
+  CHECK(!parse_time_offsets(R"({"ref_module":0,"ref_channel":0,"offsets":{"0-3":1}})").errors.empty());
+  CHECK(!parse_time_offsets(R"({"ref_module":0,"ref_channel":0,"offsets":{"0_3_1":1}})").errors.empty());
+  CHECK(!parse_time_offsets(R"({"ref_module":0,"ref_channel":0,"offsets":{"0_256":1}})").errors.empty());
+  CHECK(any_contains(parse_time_offsets(
+                         R"({"ref_module":0,"ref_channel":0,"offsets":{"00_02":1,"0_2":2}})").errors,
+                     "duplicate"));
+  CHECK(!parse_time_offsets(R"({"ref_module":0,"offsets":{}})").errors.empty());
+}
+
+static void test_toff_module_specific() {
+  OffsetTable t = table_of({{mc_key(0, 2), 10.0}, {mc_key(1, 2), -20.0}});
+  std::vector<ScalarHit> h = {mod_hit(0, 2, 1000.0), mod_hit(1, 2, 1000.0), mod_hit(2, 2, 1000.0)};
+  std::set<uint16_t> reported;
+  std::vector<uint16_t> missing;
+  apply_time_offsets(h, t, reported, [&](uint16_t k) { missing.push_back(k); });
+  CHECK(near(h[0].timestamp_ns, 990.0) && near(h[1].timestamp_ns, 1020.0));
+  CHECK(near(h[2].timestamp_ns, 1000.0));  // no entry: raw, and reported
+  CHECK(missing.size() == 1 && missing[0] == mc_key(2, 2));
+}
+
+static void test_toff_missing_once_per_run() {
+  OffsetTable t = table_of({{mc_key(0, 1), 0.0}});
+  std::set<uint16_t> reported;
+  std::vector<uint16_t> missing;
+  auto on_missing = [&](uint16_t k) { missing.push_back(k); };
+  std::vector<ScalarHit> b1 = {mod_hit(0, 1, 1.0), mod_hit(0, 7, 2.0), mod_hit(0, 7, 3.0),
+                               mod_hit(1, 7, 4.0)};
+  apply_time_offsets(b1, t, reported, on_missing);
+  CHECK(missing.size() == 2 && missing[0] == mc_key(0, 7) && missing[1] == mc_key(1, 7));
+  CHECK(near(b1[1].timestamp_ns, 2.0));  // unmapped stays raw
+  std::vector<ScalarHit> b2 = {mod_hit(0, 7, 5.0)};
+  apply_time_offsets(b2, t, reported, on_missing);
+  CHECK(missing.size() == 2);  // same run: not again
+  reported.clear();            // RunOpen
+  std::vector<ScalarHit> b3 = {mod_hit(0, 7, 6.0)};
+  apply_time_offsets(b3, t, reported, on_missing);
+  CHECK(missing.size() == 3);
+}
+
+static void test_toff_reload_policy() {
+  const std::string A = R"({"version":"1.0","entries":[{"module":0,"channel":1,"ref":null,"offset_ns":0},
+                                                        {"module":0,"channel":2,"ref":[0,1],"offset_ns":8}]})";
+  const std::string B = R"({"version":"1.0","entries":[{"module":0,"channel":1,"ref":null,"offset_ns":0},
+                                                        {"module":0,"channel":2,"ref":[0,1],"offset_ns":9}]})";
+  const std::string bad = R"({"version":"1.0","entries":[{"module":0}]})";
+  const std::string huge = R"({"version":"1.0","entries":[{"module":0,"channel":1,"ref":null,"offset_ns":0},
+                                                           {"module":0,"channel":2,"ref":[0,1],"offset_ns":2e9}]})";
+  ActiveOffsets a;
+  std::vector<std::string> errors;
+  CHECK(reload_offsets(a, &A, "", "/x/ts.json", 1e9, "t0", errors));
+  CHECK(errors.empty() && a.loaded && !a.stale && near(a.table.abs_ns[mc_key(0, 2)], 8.0));
+  CHECK(a.source_text == A && a.source_path == "/x/ts.json" && a.loaded_at == "t0");
+  // Invalid file at a run boundary: keep the previous table AND text, go stale.
+  CHECK(!reload_offsets(a, &bad, "", "/x/ts.json", 1e9, "t1", errors));
+  CHECK(!errors.empty() && a.stale && near(a.table.abs_ns[mc_key(0, 2)], 8.0) &&
+        a.source_text == A && a.loaded_at == "t0" && !a.stale_error.empty());
+  // Unreadable file.
+  CHECK(!reload_offsets(a, nullptr, "No such file or directory", "/x/ts.json", 1e9, "t2", errors));
+  CHECK(a.stale && any_contains(errors, "No such file"));
+  // Recovery clears stale.
+  CHECK(reload_offsets(a, &B, "", "/x/ts.json", 1e9, "t3", errors));
+  CHECK(!a.stale && a.stale_error.empty() && near(a.table.abs_ns[mc_key(0, 2)], 9.0));
+  // Spread >= max (the Sorter's safe horizon) would push hits behind emitted cores.
+  CHECK(!reload_offsets(a, &huge, "", "/x/ts.json", 1e9, "t4", errors));
+  CHECK(any_contains(errors, "spread") && near(a.table.abs_ns[mc_key(0, 2)], 9.0));
+  // First load failing leaves nothing loaded (the caller exits at startup).
+  ActiveOffsets fresh;
+  CHECK(!reload_offsets(fresh, &bad, "", "p", 1e9, "t", errors) && !fresh.loaded);
+}
+
+static void test_toff_provenance_json() {
+  const std::string src = "{\"version\":\"1.0\",\"_comment\":\"tab\\t \\\"quoted\\\" back\\\\slash\",\n"
+                          "\"entries\":[{\"module\":0,\"channel\":2,\"ref\":null,\"offset_ns\":8.7}]}";
+  ActiveOffsets a;
+  std::vector<std::string> errors;
+  CHECK(reload_offsets(a, &src, "", "/p/ts.json", 1e9, "2026-10-07T00:00:00Z", errors));
+  using JV = tdelila::json::Value;
+  JV v = tdelila::json::Parser(offsets_provenance_json(a)).parse();
+  CHECK(v.find("applied") && v.find("applied")->b);
+  CHECK(v.find("format") && v.find("format")->str == "tree");
+  CHECK(v.find("status") && v.find("status")->str == "ok");
+  CHECK(v.find("source_text") && v.find("source_text")->str == src);  // round-trips exactly
+  const JV* res = v.find("resolved_abs_ns");
+  CHECK(res && res->t == JV::T::Arr && res->arr.size() == 1);
+  CHECK(res && res->arr[0].find("offset_ns") && res->arr[0].find("offset_ns")->num == 8.7);
+  const std::string bad = "{";
+  reload_offsets(a, &bad, "", "/p/ts.json", 1e9, "later", errors);
+  JV s = tdelila::json::Parser(offsets_provenance_json(a)).parse();
+  CHECK(s.find("status") && s.find("status")->str.find("stale") != std::string::npos);
+  CHECK(s.find("reload_error") && !s.find("reload_error")->str.empty());
+  JV off = tdelila::json::Parser(offsets_disabled_json()).parse();
+  CHECK(off.find("applied") && !off.find("applied")->b);
+  CHECK(format_offsets_line(a.table) == "m0c2=+8.700");
+}
+
+static void test_toff_run56_centres_xy() {
+  // pf-qaq run 56 (2026-10-06): trigger -> arm delays (mid of 1/99 % edges) after
+  // the move changed the cables. ThGEM1 xy1 = "1,2,3,5,4" (YU = ch5 up),
+  // ThGEM2 xy2 = "6,7,8,9,10" (its Y wires taken reversed to match ThGEM1).
+  // The offsets split each axis' raw centre symmetrically (delayline_offsets.C):
+  // XL = -cx/2, XR = +cx/2, YU = +cy/2, YD = -cy/2; triggers stay 0.
+  const char* j = R"({"version":"1.0","entries":[
+      {"module":0,"channel":1,"ref":null,"offset_ns":0},
+      {"module":0,"channel":0,"ref":[0,1],"offset_ns":0},
+      {"module":0,"channel":6,"ref":[0,1],"offset_ns":0},
+      {"module":0,"channel":2,"ref":[0,1],"offset_ns":8.7},
+      {"module":0,"channel":3,"ref":[0,1],"offset_ns":-8.7},
+      {"module":0,"channel":4,"ref":[0,1],"offset_ns":13.35},
+      {"module":0,"channel":5,"ref":[0,1],"offset_ns":-13.35},
+      {"module":0,"channel":7,"ref":[0,6],"offset_ns":1.5},
+      {"module":0,"channel":8,"ref":[0,6],"offset_ns":-1.5},
+      {"module":0,"channel":9,"ref":[0,6],"offset_ns":-5.9},
+      {"module":0,"channel":10,"ref":[0,6],"offset_ns":5.9}]})";
+  OffsetParseResult r = parse_time_offsets(j);
+  CHECK(r.errors.empty() && r.table.warnings.empty() && r.table.max_depth == 2);
+  auto event = [](double T) {
+    return std::vector<ScalarHit>{
+        mod_hit(0, 1, T),         mod_hit(0, 2, T + 140.6),       mod_hit(0, 3, T + 123.2),
+        mod_hit(0, 4, T + 145.7), mod_hit(0, 5, T + 119.0),       mod_hit(0, 6, T + 5.0),
+        mod_hit(0, 7, T + 5.0 + 129.2), mod_hit(0, 8, T + 5.0 + 126.2),
+        mod_hit(0, 9, T + 5.0 + 119.7), mod_hit(0, 10, T + 5.0 + 131.5)};
+  };
+  auto image = [&](bool aligned, double& x1, double& y1, double& x2, double& y2) {
+    PositionMatcher::Config c1;
+    c1.trig_ch = 1; c1.xl_ch = 2; c1.xr_ch = 3; c1.yu_ch = 5; c1.yd_ch = 4;
+    c1.window_ns = 1000.0; c1.margin_ns = 1000.0;
+    PositionMatcher::Config c2 = c1;
+    c2.trig_ch = 6; c2.xl_ch = 7; c2.xr_ch = 8; c2.yu_ch = 9; c2.yd_ch = 10;
+    PositionMatcher m1(c1), m2(c2);
+    std::vector<PosResult> o1, o2;
+    std::vector<ScalarHit> h = event(10000.0);
+    std::set<uint16_t> reported;
+    if (aligned) apply_time_offsets(h, r.table, reported, [](uint16_t) {});
+    for (const ScalarHit& x : h) {
+      m1.push(x, [&](const PosResult& p) { o1.push_back(p); });
+      m2.push(x, [&](const PosResult& p) { o2.push_back(p); });
+    }
+    m1.flush([&](const PosResult& p) { o1.push_back(p); });
+    m2.flush([&](const PosResult& p) { o2.push_back(p); });
+    if (o1.size() != 1 || o2.size() != 1) return false;
+    x1 = o1[0].dt_xr - o1[0].dt_xl;
+    y1 = o1[0].dt_yu - o1[0].dt_yd;
+    x2 = o2[0].dt_xr - o2[0].dt_xl;
+    y2 = o2[0].dt_yu - o2[0].dt_yd;
+    return true;
+  };
+  double x1, y1, x2, y2;
+  CHECK(image(false, x1, y1, x2, y2));
+  CHECK(near(x1, -17.4, 1e-6) && near(y1, -26.7, 1e-6) && near(x2, -3.0, 1e-6) &&
+        near(y2, -11.8, 1e-6));
+  CHECK(image(true, x1, y1, x2, y2));
+  CHECK(near(x1, 0.0) && near(y1, 0.0) && near(x2, 0.0) && near(y2, 0.0));
 }
 
 // ---------------------------------------------------------------------------
@@ -923,6 +1205,17 @@ int main() {
   test_value_and_cut();
   test_hist_config_pos();
   test_pos_value_and_cut();
+  test_toff_sign_convention();
+  test_toff_tree_resolves();
+  test_toff_root_offset_applied();
+  test_toff_tree_errors();
+  test_toff_tree_warnings();
+  test_toff_legacy();
+  test_toff_module_specific();
+  test_toff_missing_once_per_run();
+  test_toff_reload_policy();
+  test_toff_provenance_json();
+  test_toff_run56_centres_xy();
 
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;

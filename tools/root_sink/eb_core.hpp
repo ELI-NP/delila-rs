@@ -388,7 +388,10 @@ class Sorter {
 // convention is x = t_XR - t_XL, y = t_YU - t_YD in raw ns — LiveEventBuilder's
 // X=(t4-t5) is that macro's deliberate 90-degree rotation; do not copy it, and
 // do not bake the mm calibration or the -70 ns TOF offset in here (analysis
-// constants live in macros).
+// constants live in macros). Per-channel cable/delay offsets are a different
+// thing: they correct the data time axis itself, so the Receiver applies them
+// to every hit before the Sorter (time_offsets.hpp, --time-calib) and all
+// times below are on that aligned axis (= raw when no offsets are configured).
 //
 // Cross-plane pairing (the "integrated event"): both trigger channels are
 // scanned as one time-ordered sequence; a trigger pairs with the IMMEDIATELY
@@ -409,7 +412,8 @@ class Sorter {
 // safe_horizon_ns >= 2*window_ns (trivially true at 50 ms vs ~us windows).
 
 struct BuiltEvent {
-  // Times are digitizer-clock ns. NaN = that piece is absent from the event.
+  // Times are digitizer-clock ns on the ALIGNED axis (raw - timeSettings offset,
+  // applied by the Receiver; raw if none). NaN = that piece is absent.
   double trig1_t = std::numeric_limits<double>::quiet_NaN();
   double trig2_t = std::numeric_limits<double>::quiet_NaN();
   double labr_t = std::numeric_limits<double>::quiet_NaN();
@@ -615,11 +619,21 @@ inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
 
 enum class Ctrl : uint8_t { None, RunOpen, RunClose, Shutdown };
 
+// Frozen per-run metadata riding the RunOpen marker to the Writer (the only
+// thread that may touch the TFile). In-band, so it is seq-ordered with the
+// run's chunks. Plain strings keep this core ignorant of what they describe;
+// empty = nothing to record.
+struct RunProvenance {
+  std::string time_offsets_meta;    // provenance JSON -> TTree UserInfo TNamed "timeSettings"
+  std::string time_offsets_source;  // verbatim file applied -> <stem>_timeSettings.json
+};
+
 // Receiver -> Sorter. None carries a decoded batch; markers carry no hits.
 struct SorterMsg {
   Ctrl ctrl = Ctrl::None;
   std::vector<ScalarHit> hits;
   uint32_t run_number = 0;  // RunClose: from the EOS envelope
+  RunProvenance prov;       // RunOpen only
 };
 
 // Sorter -> Workers -> Writer. Every message (data AND control) gets a seq.
@@ -629,6 +643,7 @@ struct WorkMsg {
   SortedChunk chunk;             // None: the sorted chunk
   std::vector<BuiltEvent> built; // filled by a worker when building is on
   uint32_t run_number = 0;       // RunClose
+  RunProvenance prov;            // RunOpen only
 };
 
 // Receiver -> Display (bounded tee). Data may be dropped-and-counted; control

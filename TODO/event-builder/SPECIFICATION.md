@@ -266,9 +266,10 @@ Reader → Merger ┬─→ Recorder
 
 #### 4.3.1 セマンティクス
 
-- **符号:** `aligned_ts = raw_ts - offset_ns`（親より遅延している量を負値で書く）
-  - `offset_ns > 0` → この ch は親より早く届く（aligned 化で時間軸が後退）
-  - 現行 `Hit::apply_offset` ([src/event_builder/hit.rs:67](src/event_builder/hit.rs#L67)) と一致
+- **符号:** `aligned_ts = raw_ts - offset_ns`（親より遅れて届く量を正値で書く）
+  - `offset_ns > 0` → この ch は親より遅れて届く（aligned 化で timestamp を offset_ns だけ前に戻す）
+  - 現行 `Hit::apply_offset` ([src/event_builder/hit.rs:92](src/event_builder/hit.rs#L92)) と一致。`time_calibrator.rs` も同じ向き（遅れて届く ch の peak が +15 ns なら offset +15）
+  - 2026-10-07 訂正: 以前の版はこの 2 行の符号説明がコードと逆だった（TODO 70 で発見）。root_sink の `--time-calib`（TODO 70）も同じ規約
 - **絶対 offset:** root から目的 ch までの path 上の `offset_ns` 合計
 - **適用タイミング:** HitSource 入口で 1 回のみ。以降 pipeline は **aligned space** で動作（raw/aligned の二重管理なし）
 - **多 root の扱い:** EB は root 群を区別せず、各 ch の絶対 offset だけ使って同一 timeline として coincidence 判定する（root 単位の reject なし）

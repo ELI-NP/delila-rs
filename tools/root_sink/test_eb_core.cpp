@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "eb_core.hpp"
+#include "time_offsets.hpp"
 
 using namespace rootsink;
 using namespace rootsink::eb;
@@ -839,6 +840,94 @@ static void test_builder_through_sorter() {
 }
 
 // ---------------------------------------------------------------------------
+// Time offsets upstream of the Sorter (TODO 70)
+// ---------------------------------------------------------------------------
+
+static void test_sorter_orders_on_aligned_time() {
+  // The Receiver aligns every batch BEFORE the Sorter, so the Sorter, its core
+  // ranges and the builder all see one aligned axis. ch2 runs 30 ns late
+  // (offset +30): raw ch2 sorts 20 ns AFTER its trigger, aligned 10 ns BEFORE.
+  // Each event's ch2 arrives one batch after its trigger (real arrival disorder).
+  OffsetTable t;
+  t.format = "tree";
+  t.abs_ns[mc_key(0, 1)] = 0.0;
+  t.abs_ns[mc_key(0, 2)] = 30.0;
+  BuilderConfig bcfg = side3_cfg(500.0);  // xl1 = ch2
+  Sorter::Config scfg;
+  scfg.chunk_span_ns = 10000.0;
+  scfg.safe_horizon_ns = 5000.0;
+  scfg.lookback_ns = bcfg.window_ns;
+  Sorter s(scfg);
+  std::vector<SortedChunk> chunks;
+  std::vector<BuiltEvent> events;
+  auto grab = [&](SortedChunk&& c) {
+    auto ev = build_events_from_chunk(c, bcfg);
+    events.insert(events.end(), ev.begin(), ev.end());
+    chunks.push_back(std::move(c));
+  };
+  std::set<uint16_t> reported;
+  int missing = 0;
+  const int n = 20;
+  for (int i = 0; i <= n; ++i) {
+    std::vector<ScalarHit> batch;
+    if (i < n) batch.push_back(hit(1, 1000.0 + 3000.0 * i, static_cast<uint16_t>(i)));
+    if (i > 0) batch.push_back(hit(2, 1000.0 + 3000.0 * (i - 1) + 20.0, 1));
+    apply_time_offsets(batch, t, reported, [&](uint16_t) { ++missing; });
+    s.push_batch(std::move(batch), grab);
+  }
+  s.flush(grab);
+  CHECK(missing == 0);
+  std::vector<ScalarHit> emitted;
+  for (const SortedChunk& c : chunks) {
+    auto r = core_range(c);
+    for (std::size_t i = r.first; i < r.second; ++i) emitted.push_back(c.hits[i]);
+  }
+  CHECK(emitted.size() == 2u * n);  // each hit exactly once
+  bool monotone = true, paired = true;
+  for (std::size_t i = 1; i < emitted.size(); ++i)
+    if (emitted[i].timestamp_ns < emitted[i - 1].timestamp_ns) monotone = false;
+  for (int i = 0; i < n && emitted.size() == 2u * n; ++i) {
+    const ScalarHit& a = emitted[2 * i];
+    const ScalarHit& b = emitted[2 * i + 1];
+    double T = 1000.0 + 3000.0 * i;
+    if (!(a.channel == 2 && near(a.timestamp_ns, T - 10.0) && b.channel == 1 &&
+          near(b.timestamp_ns, T)))
+      paired = false;
+  }
+  CHECK(monotone);
+  CHECK(paired);
+  CHECK(s.late_hits() == 0);
+  CHECK(events.size() == static_cast<std::size_t>(n));
+  bool aligned_dt = true;
+  for (const BuiltEvent& e : events)
+    if (std::isnan(e.dt_xl1) || !near(e.dt_xl1, -10.0)) aligned_dt = false;  // raw would be +20
+  CHECK(aligned_dt);
+}
+
+static void test_sorter_offset_spread_beyond_horizon_counts_late() {
+  // Why reload_offsets rejects spread >= safe_horizon: aligning shifts ch2 by
+  // 20 us while the Sorter only waits 5 us, so aligned ch2 hits land behind
+  // chunk cores that were already emitted -> counted late (= missing from the
+  // .root). Spread far below the horizon (tens of ns of cable) is harmless.
+  OffsetTable t;
+  t.format = "tree";
+  t.abs_ns[mc_key(0, 1)] = 0.0;
+  t.abs_ns[mc_key(0, 2)] = 20000.0;
+  Sorter s(small_cfg());  // horizon 5000
+  std::set<uint16_t> reported;
+  for (int i = 0; i < 100; i += 5) {
+    std::vector<ScalarHit> batch;
+    for (int k = i; k < i + 5; ++k) {
+      batch.push_back(hit(1, 1000.0 * k));
+      batch.push_back(hit(2, 1000.0 * k));  // raw: simultaneous
+    }
+    apply_time_offsets(batch, t, reported, [](uint16_t) {});
+    s.push_batch(std::move(batch), [](SortedChunk&&) {});
+  }
+  CHECK(s.late_hits() > 0);
+}
+
+// ---------------------------------------------------------------------------
 // Worker-pool determinism (Channel + SeqReorder + builder end-to-end)
 // ---------------------------------------------------------------------------
 
@@ -979,6 +1068,8 @@ int main() {
   test_builder_chain();
   test_builder_boundary_pair();
   test_builder_through_sorter();
+  test_sorter_orders_on_aligned_time();
+  test_sorter_offset_spread_beyond_horizon_counts_late();
   test_pool_determinism();
   std::printf("test_eb_core: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;

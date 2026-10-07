@@ -87,6 +87,10 @@ root_sink [options]
   --built-tree NAME   also write the integrated built-event TTree (requires
                       --xy1-ch; --xy2-ch adds the 2nd plane, --gamma-ch adds
                       LaBr3/TOF; window = --window-ns)
+  --time-calib FILE   per-(module,channel) time offsets (timeSettings.json, or
+                      legacy time-calib output); aligned = raw - offset_ns for
+                      EVERY consumer. Re-read at every run start, frozen per run
+                      (see "Time offsets" below)
   --help
 ```
 
@@ -109,7 +113,9 @@ root_sink --out-dir /data --http-port 0
 When the DAQ config has a `[network.root_sink]` section, `scripts/start_daq.sh`
 launches root_sink automatically alongside the other components. The section keys
 are the CLI flag names with hyphens turned into underscores (`--out-dir` →
-`output_dir`); only present keys are passed, and `--operator` is derived from the
+`output_dir`; exceptions: `subscribe` → `--zmq` and `time_calib_file` →
+`--time-calib`, the latter named like the Rust event builder's key); only
+present keys are passed, and `--operator` is derived from the
 `[operator]` port. The binary is resolved in the order `ROOT_SINK_BIN` (env) >
 `PATH` > `~/.local/bin/root_sink` > `tools/root_sink/root_sink`; if none is found
 it warns and skips (not fatal). It is managed symmetrically: both
@@ -172,6 +178,22 @@ The tree has exactly:
 If the process is stopped mid-run (Ctrl-C / SIGTERM), the file is written and
 closed but **keeps its `run_inprogress_*` name** (it was never finalized) — a log
 line reports it.
+
+**Time offsets.** With `--time-calib` the `timestamp_ns` written here (and every
+time in the built tree) is **aligned**: `raw - offset_ns`. The `.delila` stays
+raw, so a delila2root tree of the same run differs on the offset channels. Every
+file says which applies:
+
+- both trees carry a `TNamed "timeSettings"` in their **UserInfo**
+  (`tree->GetUserInfo()->FindObject("timeSettings")->GetTitle()`): a JSON with
+  `applied` (true/false), the convention, the source path, `status` (`ok` or
+  `stale: …`), the resolved absolute offsets (`%.17g`) and the verbatim source.
+  It is part of the tree, so it is in every AutoSave and every rollover part;
+- with offsets applied, the hits-tree title says `timestamp_ns ALIGNED`;
+- at finalize, `<run file stem>_timeSettings.json` is written next to the run
+  file: the table **frozen at that run's start** (unlike `_hists.json`, which
+  copies the live file at finalize), directly re-loadable by root_sink or the
+  Rust EB.
 
 ## Live monitor (THttpServer / JSROOT)
 
@@ -421,7 +443,8 @@ reload can safely delete and rebuild the live objects.
   or `0` (energies). Completeness is an offline cut, never a build condition —
   partial and trigger-only rows are kept on purpose (they ARE the
   arm-efficiency measurement). Branches: `trig1_t/D trig2_t/D labr_t/D`,
-  `x1 y1 x2 y2 /F` (raw ns; `x = t_XR − t_XL`, `y = t_YU − t_YD`),
+  `x1 y1 x2 y2 /F` (ns on the aligned axis — raw without `--time-calib`;
+  `x = t_XR − t_XL`, `y = t_YU − t_YD`),
   per-arm `dt_* /F` + `e_* /s`, `dt_trig/F` (= `t(det2) − t(det1)`, the
   plane-to-plane TOF), `tof1 tof2 /F` (raw `t(trig) − t(labr)`, no analysis
   offset), `e_trig* e_labr /s`, `e_sum1 e_sum2 /i`, `n_arms1 n_arms2 /b`.
@@ -430,6 +453,41 @@ reload can safely delete and rebuild the live objects.
   into ONE row (greedy, anchored on the earlier trigger). Typical cuts:
   4-fold plane 1 = `!TMath::IsNaN(x1) && !TMath::IsNaN(y1)`; both-plane track
   = `!TMath::IsNaN(dt_trig)`.
+- **Time offsets (`--time-calib`, TODO 70).** A constant propagation delay per
+  `(module, channel)` (cables, delay lines) is removed once, in the Receiver,
+  right after `--module` and BEFORE the Sorter, the display tee, the builder and
+  the hits tree — so all of them work on one aligned axis. It must stay before
+  the Sorter: it sorts on `timestamp_ns`, and its core ranges / H10 gates use the
+  same field. Format = the Rust EB's `timeSettings.json`
+  (`src/event_builder/time_offsets.rs`, `schemas/timeSettings.schema.json`):
+  tree form, absolute offset = sum along the `ref` path to the root (the root's
+  own value included); the legacy `event_builder time-calib` output
+  `{"ref_module","ref_channel","offsets":{"MM_CC":ns}}` is accepted too, chosen by
+  which key is present (never by silent fallback). Convention
+  `aligned_ts = raw_ts - offset_ns` — **positive = the channel arrives late**
+  (as `src/event_builder/hit.rs`). Policy:
+  - every error is collected and listed (duplicate / dangling ref / cycle /
+    bad types / unknown keys / bad legacy keys); at startup any error is fatal
+    (exit 2);
+  - the file is re-read at every run start and frozen for the run, so an edit
+    takes effect at the next run without a restart (write a temp file + `mv`);
+    if that reload fails, the PREVIOUS table is kept for the run, an ERROR is
+    logged, the status line shows `toff=N STALE` and the run's UserInfo says
+    `stale` — never a silent fall back to "no offsets";
+  - a spread (max − min offset) ≥ `--safe-horizon-ms` is an error: aligning adds
+    that much arrival disorder, and the Sorter would drop hits as late (spread ≥
+    `--margin-ns` only warns — display matchers);
+  - a channel with no entry keeps its raw time and is reported once per run
+    (WARNING + `toff=N (k unmapped)`).
+  This is a correction of the data time axis, not an analysis constant (those —
+  mm calibration, the −70 ns TOF display offset — stay in macros); note that
+  moving a trigger's or the LaBr3 channel's offset shifts TOF. Offsets fix a
+  CONSTANT delay only: independently started boards drift, which no table can
+  correct (hardware clock sync, TODO 70 Phase 2).
+  `delayline_offsets.C` measures the offsets that centre each delay-line image
+  (split each axis' raw mid-of-edges centre over its two arms; triggers 0) and
+  writes a ready-to-use file; run it on a root_sink `.root` to see the
+  residuals.
 - **Reuses `TDelila.hpp`.** The MessagePack reader (`tdelila::mp::Reader`, typed
   fast-path decode) is shared by `#include`, not copied. `sink_core.hpp`'s event
   decoder must stay in sync with `TDelila`'s `Schema::build_default()` and with
@@ -472,7 +530,30 @@ g++ -O2 -std=c++17 test_publisher.cxx $(root-config --cflags --libs) -lzmq -o te
 `compare_hits.C` is the matching order-INDEPENDENT equality check between two
 hits trees (per-channel counts, energy sums, timestamp XOR + monotonicity) —
 the multithreaded sink writes the same hit SET as the old one but time-sorted,
-so entry-by-entry diffing is useless.
+so entry-by-entry diffing is useless. A sink run with `--time-calib` writes
+aligned times: pass the same file as the 4th argument to align the raw tree
+first (bit-identical for a correct run); without it the offset channels show
+`tsxor` MISMATCH while counts and energy sums still agree:
+
+```sh
+root -l -b -q 'compare_hits.C("raw.root","aligned.root","delila","ts.json")'
+```
+
+The time-offset logic (`time_offsets.hpp`: parse/resolve/validate both formats,
+apply, reload/STALE policy, provenance JSON) is covered in `test_sink_core.cpp`
+(incl. a run-56 fixture that centres both ThGEM images), and its Sorter contract
+(aligned before the Sorter, spread vs horizon) in `test_eb_core.cpp`. E2E
+(2026-10-07, replay of pf-qaq run 56): no flag / all-zero file → IDENTICAL;
+`delayline_offsets.C` table → IDENTICAL after alignment and both images centred
+at (0.000, 0.000) ns with unchanged 4-fold counts; UserInfo in both trees and in
+all 6 parts of a forced rollover; a run-start reload picks up an edit and a bad
+edit keeps the previous table (STALE); resolved tables equal the Rust
+`eb_offsets` output (incl. the 208-entry `tools/p91zr_test/timeSettings.json`).
+
+```sh
+root -l -b -q 'delayline_offsets.C("run0056_*.root","1,2,3,5,4","6,7,8,9,10","ts.json","run 56")'
+root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X.root")'
+```
 
 The `--operator` HTTP client and the remaining ROOT wiring in `root_sink.cxx`
 are not unit-tested (they need sockets / ROOT); they are covered by the

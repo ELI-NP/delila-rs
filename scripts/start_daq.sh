@@ -418,6 +418,7 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg chunk_span_ms --chunk-span-ms
         rs_add_arg safe_horizon_ms --safe-horizon-ms
         rs_add_arg built_tree   --built-tree
+        rs_add_arg time_calib_file --time-calib
         # Always derive --operator from [operator] port; an explicit exp_name key
         # still wins inside root_sink, so this default is always safe and yields
         # Recorder-matching filenames.
