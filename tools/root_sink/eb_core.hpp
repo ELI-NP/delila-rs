@@ -494,6 +494,86 @@ inline bool nearest_in(const ChView& v, double t0, double window, double& dt,
   return true;
 }
 
+// The ThGEM channel columns, filled hit by hit in time order (so each column
+// stays sorted). Shared by build_events_from_chunk and thgem_from_event.
+struct ThgemViews {
+  ChView t1, xl1, xr1, yu1, yd1;
+  ChView t2, xl2, xr2, yu2, yd2;
+  ChView labr;
+  void add(int ch, double t, uint16_t e, const BuilderConfig& cfg) {
+    ChView* v = nullptr;
+    if (ch == cfg.trig1) v = &t1;
+    else if (ch == cfg.xl1) v = &xl1;
+    else if (ch == cfg.xr1) v = &xr1;
+    else if (ch == cfg.yu1) v = &yu1;
+    else if (ch == cfg.yd1) v = &yd1;
+    else if (ch == cfg.trig2) v = &t2;
+    else if (ch == cfg.xl2) v = &xl2;
+    else if (ch == cfg.xr2) v = &xr2;
+    else if (ch == cfg.yu2) v = &yu2;
+    else if (ch == cfg.yd2) v = &yd2;
+    else if (ch == cfg.labr_ch) v = &labr;
+    if (!v) return;
+    v->t.push_back(t);
+    v->e.push_back(e);
+  }
+};
+
+// Match one detector side of an event: arms nearest to that plane's own
+// trigger, x/y from complete axes, energy sum over present arms.
+inline void fill_plane(BuiltEvent& ev, int plane, double trig_t, uint16_t trig_e,
+                       const ThgemViews& v, double window) {
+  const bool p1 = plane == 1;
+  const ChView& xl = p1 ? v.xl1 : v.xl2;
+  const ChView& xr = p1 ? v.xr1 : v.xr2;
+  const ChView& yu = p1 ? v.yu1 : v.yu2;
+  const ChView& yd = p1 ? v.yd1 : v.yd2;
+  float& dxl = p1 ? ev.dt_xl1 : ev.dt_xl2;
+  float& dxr = p1 ? ev.dt_xr1 : ev.dt_xr2;
+  float& dyu = p1 ? ev.dt_yu1 : ev.dt_yu2;
+  float& dyd = p1 ? ev.dt_yd1 : ev.dt_yd2;
+  uint16_t& exl = p1 ? ev.e_xl1 : ev.e_xl2;
+  uint16_t& exr = p1 ? ev.e_xr1 : ev.e_xr2;
+  uint16_t& eyu = p1 ? ev.e_yu1 : ev.e_yu2;
+  uint16_t& eyd = p1 ? ev.e_yd1 : ev.e_yd2;
+  uint32_t& e_sum = p1 ? ev.e_sum1 : ev.e_sum2;
+  uint8_t& n_arms = p1 ? ev.n_arms1 : ev.n_arms2;
+  (p1 ? ev.trig1_t : ev.trig2_t) = trig_t;
+  (p1 ? ev.e_trig1 : ev.e_trig2) = trig_e;
+  double d = 0.0;
+  uint16_t en = 0;
+  if (nearest_in(xl, trig_t, window, d, en)) {
+    dxl = static_cast<float>(d); exl = en; e_sum += en; ++n_arms;
+  }
+  if (nearest_in(xr, trig_t, window, d, en)) {
+    dxr = static_cast<float>(d); exr = en; e_sum += en; ++n_arms;
+  }
+  if (nearest_in(yu, trig_t, window, d, en)) {
+    dyu = static_cast<float>(d); eyu = en; e_sum += en; ++n_arms;
+  }
+  if (nearest_in(yd, trig_t, window, d, en)) {
+    dyd = static_cast<float>(d); eyd = en; e_sum += en; ++n_arms;
+  }
+  if (!std::isnan(dxl) && !std::isnan(dxr)) (p1 ? ev.x1 : ev.x2) = dxr - dxl;
+  if (!std::isnan(dyu) && !std::isnan(dyd)) (p1 ? ev.y1 : ev.y2) = dyu - dyd;
+}
+
+// Both planes filled: plane-to-plane dt, then ONE gamma per event — the
+// nearest LaBr3 hit to the anchor (the earlier trigger); both TOFs come from
+// that same hit, so tof2 - tof1 == dt_trig by construction.
+inline void fill_cross(BuiltEvent& ev, bool has1, bool has2, double anchor, const ThgemViews& v,
+                       double window) {
+  if (has1 && has2) ev.dt_trig = static_cast<float>(ev.trig2_t - ev.trig1_t);
+  double dl = 0.0;
+  uint16_t el = 0;
+  if (nearest_in(v.labr, anchor, window, dl, el)) {
+    ev.labr_t = anchor + dl;
+    ev.e_labr = el;
+    if (has1) ev.tof1 = static_cast<float>(ev.trig1_t - ev.labr_t);
+    if (has2) ev.tof2 = static_cast<float>(ev.trig2_t - ev.labr_t);
+  }
+}
+
 }  // namespace detail
 
 inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
@@ -502,27 +582,11 @@ inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
   if (chunk.hits.empty()) return out;
 
   // Distribute the sorted chunk into per-channel columns (sorted for free).
-  detail::ChView vt1, vxl1, vxr1, vyu1, vyd1;
-  detail::ChView vt2, vxl2, vxr2, vyu2, vyd2;
-  detail::ChView vlabr;
-  auto grab = [](detail::ChView& v, const ScalarHit& h) {
-    v.t.push_back(h.timestamp_ns);
-    v.e.push_back(h.energy);
-  };
-  for (const ScalarHit& h : chunk.hits) {
-    int ch = static_cast<int>(h.channel);
-    if (ch == cfg.trig1) grab(vt1, h);
-    else if (ch == cfg.xl1) grab(vxl1, h);
-    else if (ch == cfg.xr1) grab(vxr1, h);
-    else if (ch == cfg.yu1) grab(vyu1, h);
-    else if (ch == cfg.yd1) grab(vyd1, h);
-    else if (ch == cfg.trig2) grab(vt2, h);
-    else if (ch == cfg.xl2) grab(vxl2, h);
-    else if (ch == cfg.xr2) grab(vxr2, h);
-    else if (ch == cfg.yu2) grab(vyu2, h);
-    else if (ch == cfg.yd2) grab(vyd2, h);
-    else if (ch == cfg.labr_ch) grab(vlabr, h);
-  }
+  detail::ThgemViews v;
+  for (const ScalarHit& h : chunk.hits)
+    v.add(static_cast<int>(h.channel), h.timestamp_ns, h.energy, cfg);
+  const detail::ChView& vt1 = v.t1;
+  const detail::ChView& vt2 = v.t2;
 
   // Merge both trigger columns into one time-ordered sequence (ties: det1
   // first — deterministic).
@@ -548,34 +612,6 @@ inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
     }
   }
 
-  // Match one detector side of an event: arms nearest to that detector's own
-  // trigger, x/y from complete axes, energy sum over present arms.
-  auto fill_det = [&](const Trig& tr, const detail::ChView& xl,
-                      const detail::ChView& xr, const detail::ChView& yu,
-                      const detail::ChView& yd, double& trig_t, uint16_t& e_trig,
-                      float& dxl, float& dxr, float& dyu, float& dyd, float& x,
-                      float& y, uint16_t& exl, uint16_t& exr, uint16_t& eyu,
-                      uint16_t& eyd, uint32_t& e_sum, uint8_t& n_arms) {
-    trig_t = tr.t;
-    e_trig = tr.e;
-    double d = 0.0;
-    uint16_t en = 0;
-    if (detail::nearest_in(xl, tr.t, cfg.window_ns, d, en)) {
-      dxl = static_cast<float>(d); exl = en; e_sum += en; ++n_arms;
-    }
-    if (detail::nearest_in(xr, tr.t, cfg.window_ns, d, en)) {
-      dxr = static_cast<float>(d); exr = en; e_sum += en; ++n_arms;
-    }
-    if (detail::nearest_in(yu, tr.t, cfg.window_ns, d, en)) {
-      dyu = static_cast<float>(d); eyu = en; e_sum += en; ++n_arms;
-    }
-    if (detail::nearest_in(yd, tr.t, cfg.window_ns, d, en)) {
-      dyd = static_cast<float>(d); eyd = en; e_sum += en; ++n_arms;
-    }
-    if (!std::isnan(dxl) && !std::isnan(dxr)) x = dxr - dxl;
-    if (!std::isnan(dyu) && !std::isnan(dyd)) y = dyu - dyd;
-  };
-
   // Greedy pairing scan + emission gate on the ANCHOR time (H10 gates).
   std::size_t k = 0;
   while (k < trigs.size()) {
@@ -590,27 +626,9 @@ inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
       BuiltEvent ev;
       const Trig* t1 = (a.det == 1) ? &a : b;
       const Trig* t2 = (a.det == 2) ? &a : b;
-      if (t1) {
-        fill_det(*t1, vxl1, vxr1, vyu1, vyd1, ev.trig1_t, ev.e_trig1, ev.dt_xl1,
-                 ev.dt_xr1, ev.dt_yu1, ev.dt_yd1, ev.x1, ev.y1, ev.e_xl1,
-                 ev.e_xr1, ev.e_yu1, ev.e_yd1, ev.e_sum1, ev.n_arms1);
-      }
-      if (t2) {
-        fill_det(*t2, vxl2, vxr2, vyu2, vyd2, ev.trig2_t, ev.e_trig2, ev.dt_xl2,
-                 ev.dt_xr2, ev.dt_yu2, ev.dt_yd2, ev.x2, ev.y2, ev.e_xl2,
-                 ev.e_xr2, ev.e_yu2, ev.e_yd2, ev.e_sum2, ev.n_arms2);
-      }
-      if (t1 && t2) ev.dt_trig = static_cast<float>(t2->t - t1->t);
-      // One gamma per event: nearest LaBr3 hit to the anchor; both TOFs come
-      // from that same hit (so tof2 - tof1 == dt_trig by construction).
-      double dl = 0.0;
-      uint16_t el = 0;
-      if (detail::nearest_in(vlabr, a.t, cfg.window_ns, dl, el)) {
-        ev.labr_t = a.t + dl;
-        ev.e_labr = el;
-        if (t1) ev.tof1 = static_cast<float>(t1->t - ev.labr_t);
-        if (t2) ev.tof2 = static_cast<float>(t2->t - ev.labr_t);
-      }
+      if (t1) detail::fill_plane(ev, 1, t1->t, t1->e, v, cfg.window_ns);
+      if (t2) detail::fill_plane(ev, 2, t2->t, t2->e, v, cfg.window_ns);
+      detail::fill_cross(ev, t1 != nullptr, t2 != nullptr, a.t, v, cfg.window_ns);
       out.push_back(ev);
     }
     k += consumed;
@@ -894,6 +912,39 @@ inline std::vector<GenericEvent> build_generic_events(const SortedChunk& c,
     if (m > 0) ++stats.ntrig[m - 1];
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 8. ThGEM reconstruction on the generic layer (TODO 71 Phase B)
+// ---------------------------------------------------------------------------
+//
+// The first per-experiment reconstruction layer, rebuilt on top of section 7:
+// one BuiltEvent from one GenericEvent, with exactly build_events_from_chunk's
+// matching rules (detail::fill_plane / fill_cross: per plane the arm hit
+// nearest to that plane's own trigger within ±window_ns, ties to the
+// successor; one LaBr3 hit nearest to the anchor = the earlier plane trigger).
+// Only the CANDIDATES change: the event's own hits instead of the whole chunk,
+// so a hit is never used by two rows (rule 4 gave it to its nearest reference).
+//
+// Equal to the chunk builder row by row when no hit is contested AND the event
+// window covers group_ns + window_ns on both sides (a plane-2 trigger can sit
+// up to G from the reference, its arms up to window_ns from that trigger);
+// tested. By construction it differs when two triggers of the SAME plane fall
+// in one group: one row here (the earliest), two rows in the chunk builder.
+// Returns false when the event holds no ThGEM trigger (e.g. a definition that
+// also triggers on LaBr3).
+inline bool thgem_from_event(const GenericEvent& ev, const BuilderConfig& cfg, BuiltEvent& out) {
+  detail::ThgemViews v;
+  for (const EventHit& h : ev.hits) v.add(static_cast<int>(h.ch), ev.t + h.dt, h.energy, cfg);
+  const bool has1 = !v.t1.t.empty();
+  const bool has2 = cfg.trig2 >= 0 && !v.t2.t.empty();
+  if (!has1 && !has2) return false;
+  out = BuiltEvent();
+  if (has1) detail::fill_plane(out, 1, v.t1.t[0], v.t1.e[0], v, cfg.window_ns);
+  if (has2) detail::fill_plane(out, 2, v.t2.t[0], v.t2.e[0], v, cfg.window_ns);
+  double anchor = !has2 ? v.t1.t[0] : !has1 ? v.t2.t[0] : std::min(v.t1.t[0], v.t2.t[0]);
+  detail::fill_cross(out, has1, has2, anchor, v, cfg.window_ns);
+  return true;
 }
 
 // ---------------------------------------------------------------------------

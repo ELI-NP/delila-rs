@@ -658,6 +658,31 @@ root -l -b -q 'delayline_offsets.C("run0056_*.root","1,2,3,5,4","6,7,8,9,10","ts
 root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X.root")'
 ```
 
+Generic events (TODO 71) have two run-file checks, both ACLiC-compiled against
+`eb_core.hpp`:
+
+- `check_events.C` rebuilds the run's events from its hits tree in ONE chunk
+  (no chunk boundary at all) with the run's own `_eventDef.json` and compares
+  them entry by entry with the `events` tree; it also checks hits in events +
+  orphans == hits. Needs `--hits-tree`. Use it after a deployment's first run.
+- `compare_built.C` rebuilds the ThGEM `built` rows from the `events` tree
+  (`thgem_from_event`, Phase B) and compares them row by row with the `built`
+  tree of the same file. Equality needs an event window of at least
+  `group_ns + --window-ns` on both sides and no contested hits (see
+  `eb_core.hpp` §8).
+
+```sh
+root -l -b -q 'check_events.C+("run0056_0000_X.root")'
+root -l -b -q 'compare_built.C+("run0023_0000_X.root","1,2,3,5,4","6,7,8,9,10",0,500)'
+```
+
+E2E (2026-10-07): run 56 (pf-qaq, offsets) and run0023 (side3) replays are
+IDENTICAL to the single-chunk rebuild for workers 1/3/8, 0.2 ms chunks and
+~130k chunks, also with LaBr3 as a 3rd trigger (7,177 two-trigger events, 44
+contested hits); `compare_built.C` reproduces run0023's 15,644 four-fold events
+with all 40,045 rows identical (window 500, events ±1000 / G 500) and run 56's
+33,463 rows under the production settings.
+
 The `--event-def` wiring (E2E, 2026-10-07, replay of run 56 with `--hits-tree
 --built-tree built --event-def config/event_def_thgem.json`): hits / built
 entries unchanged (205,950 / 33,463); the `events` tree has the branches above,

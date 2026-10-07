@@ -15,6 +15,7 @@
 // touched by eb work).
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -1614,6 +1615,148 @@ static void test_generic_pool_determinism() {
 }
 
 // ---------------------------------------------------------------------------
+// ThGEM reconstruction on generic events (TODO 71 Phase B): thgem_from_event
+// ---------------------------------------------------------------------------
+
+// A generic event by hand: reference at t_ref, hits given in ABSOLUTE time.
+static GenericEvent gev(double t_ref, int ref_ch, std::vector<ScalarHit> hits,
+                        const BuilderConfig& cfg) {
+  std::sort(hits.begin(), hits.end(), [](const ScalarHit& a, const ScalarHit& b) {
+    return a.timestamp_ns < b.timestamp_ns;
+  });
+  GenericEvent e;
+  e.t = t_ref;
+  e.ch = static_cast<uint8_t>(ref_ch);
+  for (const ScalarHit& h : hits) {
+    EventHit eh;
+    eh.mod = h.module;
+    eh.ch = h.channel;
+    eh.energy = h.energy;
+    eh.dt = h.timestamp_ns - t_ref;
+    eh.is_trigger = h.channel == cfg.trig1 || h.channel == cfg.trig2;
+    if (eh.is_trigger) ++e.n_triggers;
+    e.hits.push_back(eh);
+  }
+  return e;
+}
+
+static void test_thgem_from_event_plane1() {
+  BuilderConfig cfg = side3_cfg(500.0);
+  GenericEvent e = gev(10000.0, 1,
+                       {hit(1, 10000.0, 100), hit(2, 10040.0, 11), hit(3, 10010.0, 12),
+                        hit(4, 10200.0, 13), hit(5, 10150.0, 14), hit(0, 9900.0, 50)},
+                       cfg);
+  BuiltEvent b;
+  CHECK(thgem_from_event(e, cfg, b));
+  CHECK(near(b.trig1_t, 10000.0) && std::isnan(b.trig2_t) && b.e_trig1 == 100);
+  CHECK(near(b.x1, 10.0 - 40.0) && near(b.y1, 200.0 - 150.0));
+  CHECK(b.n_arms1 == 4 && b.e_sum1 == 11u + 12u + 13u + 14u);
+  CHECK(near(b.dt_xl1, 40.0) && near(b.dt_yd1, 150.0));
+  CHECK(near(b.labr_t, 9900.0) && near(b.tof1, 100.0) && b.e_labr == 50);
+  CHECK(std::isnan(b.tof2) && std::isnan(b.dt_trig) && b.n_arms2 == 0);
+}
+
+static void test_thgem_from_event_both_planes() {
+  // Reference = ThGEM1 (priority), but ThGEM2 fired 30 ns EARLIER: the LaBr3
+  // match is anchored on the earlier trigger, as in build_events_from_chunk.
+  BuilderConfig cfg = side3_cfg(500.0);
+  GenericEvent e = gev(5030.0, 1,
+                       {hit(6, 5000.0, 7), hit(1, 5030.0, 8), hit(7, 5060.0, 1),
+                        hit(8, 5080.0, 2), hit(0, 4500.0, 3), hit(0, 5530.0, 4)},
+                       cfg);
+  BuiltEvent b;
+  CHECK(thgem_from_event(e, cfg, b));
+  CHECK(near(b.trig1_t, 5030.0) && near(b.trig2_t, 5000.0));
+  CHECK(near(b.dt_trig, -30.0));
+  CHECK(near(b.x2, 80.0 - 60.0) && b.n_arms2 == 2 && b.n_arms1 == 0);
+  // LaBr3 at 4500 is 500 from the anchor 5000 (inclusive), 5530 is 530: 4500.
+  CHECK(near(b.labr_t, 4500.0) && b.e_labr == 3);
+  CHECK(near(b.tof1, 530.0) && near(b.tof2, 500.0));
+}
+
+static void test_thgem_from_event_window_and_ties() {
+  // The generic window (±1000) is wider than the builder's ±500: an arm 600
+  // away is in the event but must not match. Two candidates at ±20: the tie
+  // goes to the successor (nearest_in rule).
+  BuilderConfig cfg = side3_cfg(500.0);
+  GenericEvent e = gev(0.0, 1,
+                       {hit(1, 0.0), hit(2, 600.0), hit(3, -20.0, 1), hit(3, 20.0, 2),
+                        hit(4, -500.0, 9)},
+                       cfg);
+  BuiltEvent b;
+  CHECK(thgem_from_event(e, cfg, b));
+  CHECK(std::isnan(b.dt_xl1));
+  CHECK(near(b.dt_xr1, 20.0) && b.e_xr1 == 2);
+  CHECK(near(b.dt_yu1, -500.0));  // window inclusive
+  CHECK(b.n_arms1 == 2);
+}
+
+static void test_thgem_from_event_no_thgem_trigger() {
+  // An event whose triggers are none of the ThGEM planes (e.g. a LaBr3
+  // trigger in a wider definition) has no built row.
+  BuilderConfig cfg = side3_cfg(500.0);
+  GenericEvent e = gev(0.0, 0, {hit(0, 0.0), hit(2, 30.0)}, cfg);
+  BuiltEvent b;
+  CHECK(!thgem_from_event(e, cfg, b));
+}
+
+static void test_thgem_from_event_matches_chunk_builder() {
+  // Sparse triggers (>> 2 windows apart, so no hit can be contested): the
+  // generic-layer reconstruction must equal build_events_from_chunk row by
+  // row, including partial planes, LaBr3 and plane pairs. Precondition for
+  // equality: the event window covers group + builder window on both sides
+  // (a plane-2 trigger up to G from the reference, its arms up to window_ns
+  // from it) — here ±1000 >= 500 + 500.
+  BuilderConfig cfg = side3_cfg(500.0);
+  auto def = mkdef(1000.0, 1000.0, 500.0,
+                   {{"ThGEM1", 1, {{0, 1}}}, {"ThGEM2", 2, {{0, 6}}}});
+  std::mt19937 rng(2071);
+  std::uniform_int_distribution<int> u(0, 1000000);
+  std::vector<ScalarHit> hits;
+  for (int i = 0; i < 2000; ++i) {
+    double t = 10000.0 + i * 5000.0;
+    int kind = u(rng) % 3;  // 0 plane1, 1 plane2, 2 both
+    double t1 = t, t2 = t + (u(rng) % 400) - 200.0;
+    if (kind != 1) hits.push_back(hit(1, t1, static_cast<uint16_t>(u(rng) & 0xffff)));
+    if (kind != 0) hits.push_back(hit(6, t2, static_cast<uint16_t>(u(rng) & 0xffff)));
+    for (int arm = 2; arm <= 10; ++arm) {
+      if (arm == 6) continue;
+      if (u(rng) % 4 == 0) continue;  // missing arm
+      double base = arm <= 5 ? t1 : t2;
+      hits.push_back(hit(arm, base + (u(rng) % 1300) - 400.0, static_cast<uint16_t>(u(rng) & 0xffff)));
+    }
+    if (u(rng) % 2) hits.push_back(hit(0, t - (u(rng) % 900), static_cast<uint16_t>(u(rng) & 0xffff)));
+  }
+  SortedChunk c = mkchunk(hits);
+  std::vector<BuiltEvent> legacy = build_events_from_chunk(c, cfg);
+  GenericStats st;
+  std::vector<GenericEvent> evs = one_chunk(hits, def, st);
+  std::vector<BuiltEvent> mine;
+  for (const GenericEvent& e : evs) {
+    BuiltEvent b;
+    if (thgem_from_event(e, cfg, b)) mine.push_back(b);
+  }
+  CHECK(legacy.size() == 2000);
+  CHECK(mine.size() == legacy.size());
+  auto same_f = [](float a, float b) { return (std::isnan(a) && std::isnan(b)) || a == b; };
+  auto same_d = [](double a, double b) { return (std::isnan(a) && std::isnan(b)) || a == b; };
+  int diff = 0;
+  for (std::size_t i = 0; i < std::min(mine.size(), legacy.size()); ++i) {
+    const BuiltEvent& a = mine[i];
+    const BuiltEvent& b = legacy[i];
+    bool ok = same_d(a.trig1_t, b.trig1_t) && same_d(a.trig2_t, b.trig2_t) &&
+              same_d(a.labr_t, b.labr_t) && same_f(a.x1, b.x1) && same_f(a.y1, b.y1) &&
+              same_f(a.x2, b.x2) && same_f(a.y2, b.y2) && same_f(a.dt_trig, b.dt_trig) &&
+              same_f(a.tof1, b.tof1) && same_f(a.tof2, b.tof2) && a.n_arms1 == b.n_arms1 &&
+              a.n_arms2 == b.n_arms2 && a.e_sum1 == b.e_sum1 && a.e_sum2 == b.e_sum2 &&
+              a.e_labr == b.e_labr && a.e_trig1 == b.e_trig1 && a.e_trig2 == b.e_trig2;
+    if (!ok) ++diff;
+  }
+  if (diff) std::printf("  thgem_from_event vs chunk builder: %d differing rows\n", diff);
+  CHECK(diff == 0);
+}
+
+// ---------------------------------------------------------------------------
 // Worker-pool determinism (Channel + SeqReorder + builder end-to-end)
 // ---------------------------------------------------------------------------
 
@@ -1777,6 +1920,11 @@ int main() {
   test_generic_matches_reference_randomized();
   test_generic_group_span_ends_at_core_end();
   test_generic_pool_determinism();
+  test_thgem_from_event_plane1();
+  test_thgem_from_event_both_planes();
+  test_thgem_from_event_window_and_ties();
+  test_thgem_from_event_no_thgem_trigger();
+  test_thgem_from_event_matches_chunk_builder();
   std::printf("test_eb_core: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
 }
