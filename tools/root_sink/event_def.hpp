@@ -395,8 +395,21 @@ inline std::string format_event_def_line(const EventDef& d) {
   for (const TriggerDef& t : d.triggers) {
     s += ' ' + t.name + '(';
     if (d.priorities_given) s += 'p' + std::to_string(t.priority) + ": ";
-    for (std::size_t i = 0; i < t.channels.size(); ++i)
-      s += (i ? "," : "") + mc_name(t.channels[i]);
+    // Runs of >= 3 consecutive channels on one module (file order) collapse
+    // to "m1c0-14": a 45-ring Si trigger stays one readable log line.
+    const std::vector<uint16_t>& c = t.channels;
+    for (std::size_t i = 0; i < c.size();) {
+      std::size_t j = i;
+      while (j + 1 < c.size() && c[j + 1] == c[j] + 1 && (c[j + 1] >> 8) == (c[i] >> 8)) ++j;
+      if (i) s += ',';
+      if (j - i >= 2) {
+        s += mc_name(c[i]) + '-' + std::to_string(c[j] & 0xFF);
+        i = j + 1;
+      } else {
+        s += mc_name(c[i]);
+        ++i;
+      }
+    }
     s += ')';
   }
   return s;

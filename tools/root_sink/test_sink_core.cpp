@@ -696,6 +696,22 @@ static void test_edef_no_priority() {
   CHECK(format_event_def_line(p.def) ==
         "window [-1000, +1000] ns, group 100 ns, 3 trigger(s): Si(p-1: m0c0,m0c1) Ge(p5: m1c4) "
         "PMT(p5: m2c0)");
+  // Consecutive channels collapse to ranges (>= 3 in a run, per module).
+  {
+    std::string chs;
+    for (int m = 1; m <= 3; ++m)
+      for (int c = 0; c <= 14; ++c)
+        chs += std::string(chs.empty() ? "" : ",") + "[" + std::to_string(m) + "," +
+               std::to_string(c) + "]";
+    EventDefParseResult rr = parse_event_def(
+        edef_json(R"({"pre":2000,"post":2000})", "2000",
+                  "[{\"name\":\"Ring\",\"channels\":[" + chs + "]},"
+                  "{\"name\":\"X\",\"channels\":[[0,1],[0,2],[0,3],[0,5],[0,6],[4,7]]}]"),
+        kEdefHorizon);
+    CHECK(rr.errors.empty());
+    CHECK(format_event_def_line(rr.def).find("Ring(m1c0-14,m2c0-14,m3c0-14)") != std::string::npos);
+    CHECK(format_event_def_line(rr.def).find("X(m0c1-3,m0c5,m0c6,m4c7)") != std::string::npos);
+  }
 }
 
 static void test_edef_priority_rules() {
