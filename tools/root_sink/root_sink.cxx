@@ -15,6 +15,8 @@
 //     The ThGEM `built` tree (--built-tree) was retired in TODO 71: its rows
 //     are rebuilt offline from the events tree by thgem_events.C
 //     (thgem_reco.hpp), with the same branches.
+//     A write failure (disk full, I/O error) is loud, latched per run and
+//     stops writing that run's file (TODO 69 Phase 3, see class Recorder).
 //
 //   Role 2 (monitor): a coincidence Δt monitor for the ThGEM test (single
 //     digitizer, gamma + ThGEM1 + ThGEM2 on configurable channels). Three
@@ -53,6 +55,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -582,9 +585,37 @@ static long long unix_nanos() {
       .count();
 }
 
+// "0.0 MB free in /data" — for the write-failure ERROR (disk full vs I/O error).
+static std::string free_space_str(const std::string& dir) {
+  struct statvfs sv;
+  if (::statvfs(dir.c_str(), &sv) != 0) return "free space in " + dir + " unknown";
+  char buf[64];
+  std::snprintf(buf, sizeof buf, "%.1f MB free in ",
+                static_cast<double>(sv.f_bavail) * static_cast<double>(sv.f_frsize) / 1e6);
+  return buf + dir;
+}
+
+// Write failures (TODO 69 Phase 3). ROOT never throws on an I/O error: TTree::Fill
+// returns -1 when a basket write fails, and TFile sets kWriteError at the first
+// failed write — also for a SHORT write (the usual first symptom of a full disk:
+// errno stays 0 and the file still claims to be writable). On the first failure
+// of a run the Recorder prints one ERROR, latches write_failed_ and stops
+// writing the run file for the rest of the run: every further Fill would fail
+// again (3 ROOT error lines per basket) and only make the file harder to
+// recover. Hits/events offered after that are counted as unwritten; the stream,
+// the event build and the monitor carry on. The file is still closed (no
+// TTree::Write) and finalized under its normal name; opening it recovers the
+// trees as of the last AutoSave before the failure (TFile::Recover). There is
+// no Operator stop from here: the .delila is the authoritative record, and the
+// Operator stops the run on the Rust Recorder's own write failure (Phase 1).
 class Recorder {
  public:
   bool is_open() const { return file_ != nullptr; }
+  // This run's write-failure latch and what was not written after it — kept
+  // after finalize for the run summary, reset by the next open_run.
+  bool write_failed() const { return write_failed_; }
+  long long unwritten_hits() const { return unwritten_hits_; }
+  long long unwritten_events() const { return unwritten_events_; }
   const std::string& provisional() const { return provisional_; }
   long long entries() const { return entries_; }
   // The path chosen by the last finalize() (for pairing the hists-config copy).
@@ -613,12 +644,19 @@ class Recorder {
     entries_ = 0;
     events_entries_ = 0;
     final_path_.clear();
+    hits_on_ = !hits_tree_name.empty();
+    events_on_ = event_def_ != nullptr;
+    write_failed_ = false;
+    fail_op_.clear();
+    unwritten_hits_ = 0;
+    unwritten_events_ = 0;
     provisional_ = dir + "/run_inprogress_" + std::to_string((long long)::time(nullptr)) + ".root";
     file_ = TFile::Open(provisional_.c_str(), "RECREATE", "", kDelilaCompression);
     if (!file_ || file_->IsZombie()) {
-      std::fprintf(stderr, "root_sink: ERROR cannot create %s\n", provisional_.c_str());
       delete file_;
       file_ = nullptr;
+      // No file at all: the whole run is unwritten (fill/fill_event count it).
+      mark_failed("TFile::Open", provisional_);
       return false;
     }
     const bool aligned = !prov_.time_offsets_source.empty();
@@ -672,25 +710,43 @@ class Recorder {
     }
     if (events_ && !prov_.event_def_meta.empty())
       events_->GetUserInfo()->Add(new TNamed("eventDef", prov_.event_def_meta.c_str()));
+    // A full disk can already fail the header write inside TFile::Open (the
+    // file then exists but carries kWriteError): the run starts failed.
+    check_file("TFile::Open");
     return true;
   }
 
-  void fill(const ScalarHit& h) {
-    if (!tree_) return;
+  // Returns true when the hit went into the tree. After a write failure (or
+  // without a run file) the hit is only counted as unwritten.
+  bool fill(const ScalarHit& h) {
+    if (!hits_on_) return false;
+    if (write_failed_ || !tree_) {
+      ++unwritten_hits_;
+      return false;
+    }
     module_ = h.module;
     channel_ = h.channel;
     energy_ = h.energy;
     energy_short_ = h.energy_short;
     timestamp_ns_ = h.timestamp_ns;
-    tree_->Fill();
+    if (tree_->Fill() < 0) {  // a basket write failed (ROOT printed why just above)
+      ++unwritten_hits_;
+      mark_failed("TTree::Fill (hits tree)", current_file_name());
+      return false;
+    }
     ++entries_;
+    return true;
   }
 
   // One generic event -> one entry. EventID is a per-run counter from 0 (it
   // keeps counting across ROOT rollover parts). Never truncates: an event with
   // more hits than the buffers hold grows them first.
   void fill_event(const eb::GenericEvent& e) {
-    if (!events_) return;
+    if (!events_on_) return;
+    if (write_failed_ || !events_) {
+      ++unwritten_events_;
+      return;
+    }
     ensure_hit_capacity(e.hits.size());
     ev_id_ = static_cast<ULong64_t>(events_entries_);
     ev_t_ = e.t;
@@ -725,15 +781,37 @@ class Recorder {
       for (std::size_t i = 0; i < n_l2_accepts_; ++i) l2_accepts_[i] = (e.l2_accepts >> i) & 1u;
       l2_accept_ = e.l2_accept;
     }
-    events_->Fill();
+    if (events_->Fill() < 0) {
+      ++unwritten_events_;
+      mark_failed("TTree::Fill (events tree)", current_file_name());
+      return;
+    }
     ++events_entries_;
   }
 
   // Flush the current tree(s) so the in-progress file is openable in ROOT while
   // the run is still going (SaveSelf writes tree + keys without closing).
+  // Never on a failed file: the last good AutoSave is what a recovery reads.
   void autosave() {
-    for (TTree* t : {tree_, events_})
-      if (t) t->AutoSave("SaveSelf");
+    for (TTree* t : {tree_, events_}) {
+      if (!t || write_failed_) continue;
+      t->AutoSave("SaveSelf");
+      check_file("TTree::AutoSave");
+    }
+  }
+
+  // kWriteError / zombie on the CURRENT file (a MaxTreeSize rollover replaces
+  // it). Called once per written chunk as well: it also catches a failure
+  // ROOT did not report through Fill's return value (e.g. inside an
+  // auto-flush), at the cost of a few pointer loads.
+  void check_file(const char* op) {
+    if (write_failed_ || !file_) return;
+    TFile* cur = current_file();
+    if (!cur) {  // a failed rollover leaves the tree without a file
+      mark_failed(op, provisional_ + " (ROOT lost the current file)");
+      return;
+    }
+    if (cur->TestBit(TFile::kWriteError) || cur->IsZombie()) mark_failed(op, cur->GetName());
   }
 
   // Close and rename to run%04u_<seq>_<exp>.root — identical to the Rust
@@ -775,9 +853,22 @@ class Recorder {
     int parts = close_all_parts();
     std::printf("root_sink: shutdown mid-run — kept provisional %s (%s, NOT finalized)\n",
                 provisional_.c_str(), counts.c_str());
+    if (write_failed_)
+      std::printf("root_sink: ... and INCOMPLETE — %s\n", failure_summary().c_str());
     if (parts > 0)
       std::printf("root_sink: (plus %d ROOT rollover part(s) kept as %s_*.root)\n", parts,
                   provisional_.substr(0, provisional_.size() - 5).c_str());
+  }
+
+  // "WRITE FAILED (TTree::Fill (hits tree)): not written after the failure:
+  // 123 hits, 4 events" — the run summary's verdict ("" for a healthy run).
+  std::string failure_summary() const {
+    if (!write_failed_) return "";
+    std::string s = "WRITE FAILED (" + fail_op_ + "): not written after the failure:";
+    if (hits_on_) s += " " + std::to_string(unwritten_hits_) + " hits";
+    if (hits_on_ && events_on_) s += ",";
+    if (events_on_) s += " " + std::to_string(unwritten_events_) + " events";
+    return s;
   }
 
   // "205950 hits, 30120 events" — only the trees that exist.
@@ -892,12 +983,20 @@ class Recorder {
   // current file; which trees exist is a per-run choice (all optional), so
   // ask the first one present.
   // Returns the number of continuation parts (0 = the normal single-file case).
+  // A failed file (write_failed_) is closed WITHOUT TTree::Write — ROOT still
+  // writes its keys + header if it can, and the trees stay as of the last
+  // good AutoSave, which is what a recovery reads.
   int close_all_parts() {
-    TTree* lead = tree_ ? tree_ : events_;
-    // lead is never null in practice (main() refuses to start without a
-    // tree); without one there was no rollover either, so file_ is current.
-    TFile* cur = lead ? lead->GetCurrentFile() : file_;
-    bool rolled = cur && provisional_ != cur->GetName();
+    TFile* cur = current_file();
+    if (!cur) {
+      // A failed rollover (ROOT could not create the next part) leaves the
+      // trees without a file: nothing to write or close, and their ownership
+      // is ROOT's — abandon them rather than risk a double delete.
+      mark_failed("close", provisional_ + " (ROOT lost the current file)");
+      reset_file_pointers();
+      return 0;
+    }
+    bool rolled = provisional_ != cur->GetName();
     int parts = 0;
     if (rolled) {
       // Count <stem>_1.root ... — earlier parts were already closed by ROOT.
@@ -909,16 +1008,57 @@ class Recorder {
                    parts);
     }
     cur->cd();
-    for (TTree* t : {tree_, events_})
-      if (t) t->Write();  // all trees live in the same (current) file
-    cur->Close();
+    if (!write_failed_) {
+      for (TTree* t : {tree_, events_})
+        if (t) t->Write();  // all trees live in the same (current) file
+      check_file("TTree::Write");
+    }
+    const bool failed_before_close = write_failed_;
+    cur->Close();  // deletes the trees: only `cur` may be looked at from here
+    if (!failed_before_close && (cur->TestBit(TFile::kWriteError) || cur->IsZombie()))
+      mark_failed("TFile::Close", cur->GetName());
     delete cur;  // == file_ only in the un-rolled case; file_ may be dangling
+    reset_file_pointers();
+    return parts;
+  }
+
+  void reset_file_pointers() {
     file_ = nullptr;
     tree_ = nullptr;
     events_ = nullptr;
     br_hit_mod_ = br_hit_ch_ = br_hit_e_ = br_hit_es_ = br_hit_t_ = br_hit_trig_ = nullptr;
     br_hit_ac_ = nullptr;
-    return parts;
+  }
+
+  // The file the trees write to NOW: after a MaxTreeSize rollover `file_` is
+  // dangling (see close_all_parts). All trees move together, so any existing
+  // one reports it; lead is never null in practice (main() refuses to start
+  // without a tree), and without one there was no rollover either.
+  TFile* current_file() const {
+    TTree* lead = tree_ ? tree_ : events_;
+    return lead ? lead->GetCurrentFile() : file_;
+  }
+  std::string current_file_name() const {
+    TFile* f = current_file();
+    return f ? std::string(f->GetName()) : provisional_;
+  }
+
+  // The first failure of the run: ONE loud line, then the latch (fill /
+  // fill_event / autosave / close_all_parts all honour it). No errno here: the
+  // first symptom of a full disk is a SHORT write, which leaves a stale errno
+  // behind (E2E: "No such file or directory" from an earlier stat). ROOT's own
+  // (Sys)Error line, printed just before, has the cause; the free space tells
+  // a full disk from an I/O error.
+  void mark_failed(const char* op, const std::string& path) {
+    if (write_failed_) return;
+    write_failed_ = true;
+    fail_op_ = op;
+    std::fprintf(stderr,
+                 "root_sink: ERROR run file write FAILED (%s) on %s (cause: ROOT's error just "
+                 "above; %s). Nothing more is written to this run's .root, which is INCOMPLETE; "
+                 "receiving, event building and the monitor go on, and the hits/events not "
+                 "written are counted. The .delila is the authoritative record\n",
+                 op, path.c_str(), free_space_str(out_dir_).c_str());
   }
 
   std::string pick_final_name(uint32_t run, int seq) const {
@@ -938,8 +1078,16 @@ class Recorder {
   std::string exp_name_ = "data";
   std::string provisional_;
   std::string final_path_;
-  long long entries_ = 0;
+  long long entries_ = 0;         // successful Fills only
   long long events_entries_ = 0;
+  // Which trees this run asked for (open_run) — they count unwritten entries
+  // even when open_run could not create the file.
+  bool hits_on_ = false;
+  bool events_on_ = false;
+  bool write_failed_ = false;  // this run's latch (mark_failed), reset by open_run
+  std::string fail_op_;        // the operation that failed first
+  long long unwritten_hits_ = 0;
+  long long unwritten_events_ = 0;
   // Branch buffers (types match the leaflist: /b UChar_t, /s UShort_t, /D Double_t).
   UChar_t module_ = 0, channel_ = 0;
   UShort_t energy_ = 0, energy_short_ = 0;
@@ -1567,6 +1715,14 @@ int main(int argc, char** argv) {
     server->RegisterCommand(
         "/Reset", Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reset)),
         "button;Reset histograms");
+    // /WriteStatus: the run file's write state ("OK" / "WRITE FAILED ..."),
+    // kept current by the display loop and refreshed in the browser by the
+    // same monitoring as the histograms; scripts read <url>/WriteStatus/item.json.
+    // A Text item, not a TObjString: the sniffer names an object by GetName(),
+    // which for a TObjString is its (changing) content.
+    server->CreateItem("/WriteStatus", "run file write status (TODO 69)");
+    server->SetItemField("/WriteStatus", "_kind", "Text");
+    server->SetItemField("/WriteStatus", "value", "OK");
     std::printf("root_sink: THttpServer on http://<host>:%d/  (open in a browser; JSROOT)\n",
                 opt.http_port);
   }
@@ -1630,6 +1786,11 @@ int main(int argc, char** argv) {
   struct Counters {
     std::atomic<long long> received{0};       // decoded hits (Receiver)
     std::atomic<long long> written{0};        // hits filled to the tree (Writer)
+    // Run-file write failure of the current (or, until the next run starts,
+    // the last) run — TODO 69 Phase 3, published by the Writer.
+    std::atomic<bool> write_failed{false};
+    std::atomic<long long> unwritten_hits{0};
+    std::atomic<long long> unwritten_events{0};
     std::atomic<long long> chunks{0};         // Sorter emissions
     std::atomic<long long> matcher_fills{0};  // Display
     std::atomic<long long> xy_fills{0};       // Display
@@ -2074,9 +2235,10 @@ int main(int argc, char** argv) {
               auto range = eb::core_range(r.chunk);
               const long long n_core = static_cast<long long>(range.second - range.first);
               if (opt.hits_tree) {
+                long long filled = 0;
                 for (std::size_t i = range.first; i < range.second; ++i)
-                  recorder.fill(r.chunk.hits[i]);
-                counters.written += n_core;
+                  if (recorder.fill(r.chunk.hits[i])) ++filled;
+                counters.written += filled;
               }
               if (r.plan.def) {
                 for (const eb::GenericEvent& ev : r.events) recorder.fill_event(ev);
@@ -2088,6 +2250,7 @@ int main(int argc, char** argv) {
                 counters.ev_ac += static_cast<long long>(r.gstats.ac_flagged);
                 counters.ev_l2acc += static_cast<long long>(r.gstats.l2_accepted);
               }
+              recorder.check_file("TTree::Fill");  // what Fill's return did not report
               break;
             }
             case eb::Ctrl::RunOpen: {
@@ -2107,7 +2270,8 @@ int main(int argc, char** argv) {
               if (!recorder.open_run(opt.out_dir, opt.hits_tree ? opt.tree : std::string(), exp,
                                      run_def, r.prov))
                 std::fprintf(stderr,
-                             "root_sink: run start FAILED — dropping this run's events\n");
+                             "root_sink: run start FAILED — this run is NOT recorded to .root "
+                             "(counted as unwritten)\n");
               else
                 std::printf("root_sink: run file -> %s\n", recorder.provisional().c_str());
               std::fflush(stdout);
@@ -2118,8 +2282,21 @@ int main(int argc, char** argv) {
               // run has already been written when the marker pops.
               std::string counts = recorder.entry_counts();  // before finalize closes
               std::string fn = recorder.finalize(r.run_number);
-              std::printf("root_sink: run %u finalized -> %s (%s)\n", r.run_number, fn.c_str(),
-                          counts.c_str());
+              // finalize itself may fail (TTree::Write / TFile::Close), so the
+              // verdict is read after it.
+              if (!recorder.write_failed())
+                std::printf("root_sink: run %u finalized -> %s (%s)\n", r.run_number, fn.c_str(),
+                            counts.c_str());
+              else if (fn.empty())
+                std::printf("root_sink: run %u NOT recorded (no run file) — %s. The .delila is "
+                            "the authoritative record\n",
+                            r.run_number, recorder.failure_summary().c_str());
+              else
+                std::printf("root_sink: run %u finalized -> %s INCOMPLETE (%s filled) — %s. "
+                            "Opening it recovers the trees as of the last AutoSave before the "
+                            "failure (TFile::Recover); the .delila is the authoritative record\n",
+                            r.run_number, fn.c_str(), counts.c_str(),
+                            recorder.failure_summary().c_str());
               if (events_enabled) report_events("run " + std::to_string(r.run_number));
               if (use_hists) copy_hists_sidecar(opt.hists_file, recorder.final_path());
               // The FROZEN RunOpen snapshots (unlike _hists.json, which re-reads
@@ -2154,6 +2331,11 @@ int main(int argc, char** argv) {
         recorder.autosave();
         t_last_autosave = now;
       }
+      // Publish the run's write state for the status line + JSROOT (RunOpen
+      // resets it, so a failure stays visible until the next run starts).
+      counters.write_failed = recorder.write_failed();
+      counters.unwritten_hits = recorder.unwritten_hits();
+      counters.unwritten_events = recorder.unwritten_events();
     }
     if (recorder.is_open()) {
       recorder.close_unfinalized();
@@ -2267,6 +2449,18 @@ int main(int argc, char** argv) {
   auto t_last_status = Clock::now();
   long long last_received = 0;
 
+  // "" while the run file is healthy, else "WRITE FAILED: run file INCOMPLETE,
+  // unwritten hits=N events=M" (the trees that exist) — shared by the status
+  // line and /WriteStatus.
+  auto write_failure_text = [&]() -> std::string {
+    if (!counters.write_failed) return "";
+    std::string s = "WRITE FAILED: run file INCOMPLETE, unwritten";
+    if (opt.hits_tree) s += " hits=" + std::to_string((long long)counters.unwritten_hits);
+    if (events_enabled) s += " events=" + std::to_string((long long)counters.unwritten_events);
+    return s;
+  };
+  std::string shown_write_status = "OK";
+
   while (!display_done) {
     eb::DisplayMsg d;
     auto got = display_q.pop_for(d, 100);
@@ -2280,8 +2474,17 @@ int main(int argc, char** argv) {
     if (got == eb::PopResult::Closed) display_done = true;
 
     // Service HTTP requests on this thread (the histograms' owner, so the
-    // no-lock invariant of the single-threaded design carries over 1:1).
-    if (server) gSystem->ProcessEvents();
+    // no-lock invariant of the single-threaded design carries over 1:1) —
+    // after bringing /WriteStatus up to date (the sniffer is ours too).
+    if (server) {
+      std::string ws = write_failure_text();
+      ws = ws.empty() ? "OK" : ws + " (see the root_sink log; the .delila is the authoritative record)";
+      if (ws != shown_write_status) {
+        server->SetItemField("/WriteStatus", "value", ws.c_str());
+        shown_write_status = ws;
+      }
+      gSystem->ProcessEvents();
+    }
 
     // Apply any HTTP command that fired during ProcessEvents. Doing the work here
     // (not inside the Cling call) lets a reload safely delete the live objects.
@@ -2377,12 +2580,15 @@ int main(int argc, char** argv) {
                       (long long)counters.ev_orphans, extra,
                       counters.evdef_stale ? " STALE" : "");
       }
+      // | WRITE FAILED: ... — only after a write failure (until the next run)
+      std::string wf = write_failure_text();
+      if (!wf.empty()) wf = " | " + wf;
       std::printf(
-          "root_sink: %s | events=%lld (%s) | %.0f ev/s | chunks=%lld | "
+          "root_sink: %s%s | events=%lld (%s) | %.0f ev/s | chunks=%lld | "
           "ev=%s | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "
           "write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | late=%lld | "
           "toff=%s\n",
-          counters.writing ? "WRITING" : "idle", rec, written_s,
+          counters.writing ? "WRITING" : "idle", wf.c_str(), rec, written_s,
           rate, (long long)counters.chunks, ev_s,
           (long long)counters.matcher_fills, (long long)counters.xy_fills,
           to_sorter.size(), work_q.size(), writer_q.size(), display_q.size(),

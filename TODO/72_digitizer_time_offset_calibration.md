@@ -155,3 +155,4 @@ ELIFANT-Event の TimeAlignment(同、C++) /
 - **実機での確認:** パルサーを各ボードの最後の ch に入れた複数ボードの構成(例: SN05 の V1725 × 3、ELIADE)で、計画 → `start_delay` を変える → 確認ラン → `time_map_verify`。ここで遅延の向きが確定する。
 - **AC の窓がペアごとに 1 つ:** event_def v1.1 の AC の窓は全ペア共通。HPGe と LaBr3 を混ぜると幅広くなる。ELIADE は Ge だけなので当面は問題にならない。必要になればペアごとの窓を足す。
 - **Operator からの自動化**(§3.3): 較正ランの指定、解析、提案、人の確認の後の適用、MongoDB / eLog への記録。
+- **適用時の範囲(2026-10-07 調査):** DIG1 の `start_delay` は DevTree で **0〜4080 ns、16 ns 刻み**(`docs/devtree_examples/dt5730b_psd1_sn990.json`、デジタイザ JSON では `board.start_delay`、SetInRun 可)。負の値は入らないので、提案の変更量を今の値に足したあと、**全ボードを同じ量だけずらして最小を 0 にする**必要がある(相対的なずれだけが意味を持つ)。¹⁴⁰Ce の幅 524 ns なら収まる。DIG2 の `rundelay` はデジタイザ JSON の型にまだ無い(`extra` で渡すか、型に足す)。

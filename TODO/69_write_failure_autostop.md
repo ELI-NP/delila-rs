@@ -1,6 +1,6 @@
 # TODO 69 — ディスク書き込み失敗でランを止める (Recorder / root_sink)
 
-**Status: 📋 OPEN (2026-10-06) — Phase 1 はデフォルト ON で決定(§4)、未着手**
+**Status: ✅ Phase 1〜3 実装・E2E 合格 (2026-10-07)** — Phase 1+2 = 18357a9(Rust)、Phase 3 = root_sink。実装の記録は §6
 
 **関連:** CLAUDE.md 絶対ルール(落とすくらいなら止める) /
 TODO 58 H7(`write_failed` ラッチ、[archive](archive/58_code_review_2026-06-10.md)) /
@@ -80,10 +80,30 @@ pf-qaq の `scripts/archive_sync.sh`(cron 15 分): `/data` が 80 % を超えた
 
 ### Phase 3 — root_sink の書き込み失敗検知
 
-- `AutoSave` / `Write` 後に `TFile::TestBit(TFile::kWriteError)`(または戻り値)を確認し、
-  大声で出す(stderr + JSROOT HTTP の状態表示)。
-- Operator 連携は root_sink にコマンド経路が無いので別途設計(HTTP status を Operator が読む等)。
-  `.delila` が正本なので優先度は Phase 1/2 より下。
+**✅ 実装済み (2026-10-07)** — `tools/root_sink/root_sink.cxx` の `Recorder`。
+詳細は `tools/root_sink/README.md`「Write failures」/ `docs/root_sink_manual.md`「書き込み失敗」。
+
+- 検知: 全 `TTree::Fill` の戻り値(< 0)+ 現在のファイル(`GetCurrentFile()`)の `kWriteError` /
+  `IsZombie` を `TFile::Open` 後・チャンクごと・`AutoSave`・`Write`・`Close` 後に確認。
+  ディスク満杯の初発は short write(errno は古いまま、ファイルは writable のまま)なので
+  ERROR 行に errno は出さず、直前の ROOT の行 + `MB free`(statvfs)で原因を示す。
+- 最初の失敗で ERROR 1 行 + ラン単位のラッチ。以後そのランのファイルには Fill/AutoSave しない
+  (受信・ソート・EB・モニタは継続、書かなかった hits/events を数える)。ラン終了時は
+  `TTree::Write` なしで Close → 通常名にリネーム(消さない)、まとめ行に `INCOMPLETE`。
+  開けば ROOT の自動復旧で最後の AutoSave 時点のツリーが読める。
+- 表示: status 行 `| WRITE FAILED: run file INCOMPLETE, unwritten hits=N events=M`、
+  JSROOT のテキスト項目 `/WriteStatus`(`OK` / `WRITE FAILED ...`、`/WriteStatus/item.json`)。
+  次のランがファイルを開くとリセット。`TFile::Open` 失敗も同じ扱い(`NOT recorded`)。
+- **Operator 連携はしない(決定)**: `.delila` が正本で、ランを止めるのは Phase 1 の watcher。
+- E2E(macOS、8 MB HFS+ の hdiutil イメージ): 2.5 M ヒットを 50 kHz で流し 1,081,018 ヒットで満杯 →
+  ERROR 1 行(ROOT のエラーはラン全体で 4 行。失敗後も Fill し続ける単体プローブでは約 12,500 行)、
+  status 行の unwritten が増加、モニタ継続、finalize 正常。残したファイルは 1,018,685 ヒット / 14,857 イベント(最後の AutoSave)を
+  全エントリ読める。空き 20 KB でのラン開始 → 最初の AutoSave で検知。SIGTERM → provisional 保持 +
+  INCOMPLETE 行。空きを戻した次のランは `OK`。読み取り専用ディレクトリ → `TFile::Open` で検知、
+  全 146,375 ヒットを unwritten に計上。健全ラン(pf-qaq run 56 リプレイ)は旧ビルドと hits IDENTICAL・
+  events digest 一致・sidecar 一致。単体テスト 754 / 257 / 244 全パス。
+- 限界: ランの最初の AutoSave(既定 30 秒)より前に失敗するとツリーは空で復旧される
+  (basket はファイルにあるがツリーから参照されない)。
 
 ## 5. テスト計画
 
@@ -95,3 +115,38 @@ pf-qaq の `scripts/archive_sync.sh`(cron 15 分): `/data` が 80 % を超えた
   footer 付きの正常ファイルになることを確認。
 - §2 の「途中ブロック」問題: 故障注入後に空きを戻して書き込み再開 → `recover` / `validate` で
   どこまで読めるか確認。読めなくなるなら、失敗後は書き込みを再開せず止めるのが正しい。
+
+## 6. Phase 1 + 2 の実装 (2026-10-07、18357a9)
+
+§4 の「実装時に決めること」への答え: ① opt-out は作らない(誤検知の余地が無く、障害解析でもランを続ける意味が無い)、
+② ポーリングは 2 秒固定、backlog watcher とは別タスク(backlog は opt-in のまま触らない)、
+③ 複数の書き手のどれか 1 つでも失敗したら止める。
+
+**Recorder** (`src/recorder/mod.rs`):
+- バッチごとに flush する。`current_file_size` は「カーネルに渡った完全な単位(ヘッダと丸ごとのブロック)」だけを数える。
+- 書き込み失敗時(`abandon_after_failure`): 途中まで書かれたブロックを切り落とし、フッタを付けて閉じる → **正常なファイル**として読める。
+  そのランではそれ以上書かず(次のファイルも開かない)、届いたバッチは `unwritten_events` に数える。
+  フッタも書けなければ最後の完全なブロックで切って残す(`recover` で全部読める)。ヘッダすら書けなかったファイルは消す。
+- §2 の「途中ブロック」問題は実在した: BufWriter は失敗したブロックの長さ 4 バイトをバッファに残し、空きが戻ると次のブロックの前に書き出す → そこから後ろが読めなくなる。上記の切り落としと「失敗後は書かない」で解消。
+- 空き容量: `output_dir` を statvfs(rustix、unsafe なし)。TOML `disk_soft_free_mb`(既定 20 GiB)/ `disk_hard_free_mb`(既定 2 GiB)、0 で無効。
+- metrics: `write_failed`、`unwritten_events`、`disk_free_bytes`、`disk_level`。状態表示に `WRITE FAILED (N events not written)` / `DISK LOW`。InfluxDB に `disk` 測定。
+- テスト用フック `DELILA_TEST_FAIL_WRITE_AT_BYTES`(ブロックの半分まで書いて満杯のふり、起動時に警告)。
+
+**Operator** (`src/operator/run_guard.rs`、常時動作):
+- `write_failed` → 即時停止(`failure_stop`: ソースから `stop_all`、ラン履歴は Error、停止理由に最終的な未書き込みイベント数)。
+- `disk_level == 2` → drain-first 停止(TODO 68 の仕組み、ラン履歴は Completed + 理由)。
+- Start 拒否(HTTP 507): 空きが hard 未満のとき(`/api/start`・`/api/run/start`)、書き込み失敗のラッチが残っているとき(`/api/start` のみ。`/api/run/start` は Reset/Configure で解除するので通す)。
+
+**読み手の既存バグ(同時に修正):** フッタの無いファイル(クラッシュ・上記の切り落とし)でも末尾 64 バイトをフッタ扱いし、最後のブロックを読み落としていた。
+Rust の `DataFileReader` と C++ の `TDelila.hpp` の両方。旧 delila2root はフッタを外したファイルで 27,100 / 27,200 イベント、修正後 27,200。
+
+**E2E** (`scripts/write_failure_test.sh`、macOS):
+
+| モード | 内容 | 結果 |
+|---|---|---|
+| hook | 5 MB で満杯のふり | 失敗から 1.7 秒で停止。送信 372,000 = 書けた 200,000 + 未書き込み 172,000。ファイルは正常(200,000) |
+| disk | 32 MB のイメージで本物の ENOSPC | 途中ブロック 48 KB を切り落とし、正常なファイル(1,310,000)。未書き込み 150,000 |
+| lowdisk | 64 MB のイメージ、soft 40 / hard 24 MB | hard を割って drain-first 停止、送信 1,656,000 を全部書いた正常なファイル。次の Start は 507 |
+
+単体: Recorder の失敗経路 3 本 + 読み手 2 本 + `disk_space` 4 本 + `run_guard` 7 本(切り落としと読み手の修正は、外すと落ちることを確認)。全体 771 テスト。
+

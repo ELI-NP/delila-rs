@@ -219,6 +219,60 @@ file says which applies:
   copies the live file at finalize), directly re-loadable by root_sink or the
   Rust EB.
 
+### Write failures (disk full, I/O error — TODO 69 Phase 3)
+
+ROOT never throws on an I/O error, so root_sink checks it explicitly: the
+return value of every `TTree::Fill` (−1 when a basket write failed; one compare
+per entry), and `TFile::kWriteError` / `IsZombie` of the trees' **current**
+file (`GetCurrentFile()` — a rollover replaces it) after `TFile::Open` (a full
+disk can already fail the header write), after every written chunk, every
+`AutoSave`, `TTree::Write` and `TFile::Close`. On a full disk the first symptom
+is a short write: `kWriteError` is set, errno is untouched and the file still
+claims to be writable.
+
+On the first failure of a run:
+
+- one ERROR line on stderr, right after ROOT's own message:
+
+  ```
+  root_sink: ERROR run file write FAILED (TTree::Fill (hits tree)) on /data/run_inprogress_1791375060.root (cause: ROOT's error just above; 0.0 MB free in /data). Nothing more is written to this run's .root, which is INCOMPLETE; ...
+  ```
+
+  No errno: after a short write it is stale (the E2E printed "No such file or
+  directory" from an earlier `stat`). ROOT's line has the cause; the free
+  space tells a full disk from an I/O error.
+- the run's file is **not written any more** (no `Fill`, no `AutoSave`): every
+  further basket write would fail again (three ROOT error lines each) and only
+  make the file harder to recover. Receiving, sorting, event building and the
+  monitor go on, and what is not written is counted.
+- the 10 s status line gains `| WRITE FAILED: run file INCOMPLETE, unwritten
+  hits=N events=M` (only the trees that exist; `written=` stops growing), and
+  the JSROOT item `/WriteStatus` turns from `OK` into the same text (scripts:
+  `curl http://<host>:8090/WriteStatus/item.json`, field `value`). Both stay
+  until the next run opens its file.
+- at the run end the file is closed **without** `TTree::Write` (ROOT still
+  writes its keys + header if it can), renamed as usual and never deleted. The
+  summary says so:
+
+  ```
+  root_sink: run 101 finalized -> /data/run0101_0000_X.root INCOMPLETE (1081018 hits, 15800 events filled) — WRITE FAILED (TTree::Fill (hits tree)): not written after the failure: 1418982 hits, 20987 events. Opening it recovers the trees as of the last AutoSave before the failure (TFile::Recover); the .delila is the authoritative record
+  ```
+
+  Opening the file recovers it automatically ("trying to recover"): the trees
+  **as of the last AutoSave before the failure** (`--autosave-sec`, default
+  30 s), every entry readable. A failure before the run's first AutoSave
+  leaves empty trees. If the file could not be created at all the line reads
+  `run N NOT recorded (no run file) — WRITE FAILED (TFile::Open): ...`; a
+  mid-run shutdown adds `... and INCOMPLETE — WRITE FAILED ...` to its "kept
+  provisional" line.
+
+**No Operator integration, by decision.** root_sink has no control path to the
+Operator and needs none: the `.delila` is the authoritative record, and the
+Operator stops the run on the Rust Recorder's own write failure (TODO 69 Phase
+1). A failed `.root` can be rebuilt from the `.delila` (`delila2root`, then a
+`test_publisher` replay for the events tree) as far as the `.delila` itself
+was written (on the same disk it fails too).
+
 ## Generic events (`--event-def`, TODO 71)
 
 The experiment-independent "grouping" layer of event building: triggers and a
@@ -451,6 +505,9 @@ draws with `colz` by default (`_drawopt`). The default (no `--hists`) objects:
 - **`dt2_vs_dt1`** — 2D, X = Δt₁, Y = Δt₂ (each axis capped at 500 bins)
 - **`channels`** — channel occupancy 0..63 (a freebie; filled for every event)
 - **`/Reset`** — a command button that zeroes every currently live histogram
+- **`/WriteStatus`** — a text item: `OK`, or `WRITE FAILED: ...` while the
+  current (or last) run's file has lost data (see *Write failures*); present
+  with or without `--hists`
 
 Histograms are **never auto-cleared on a run boundary** — they accumulate physics
 across runs until you hit `/Reset` (a log line marks each boundary). The
@@ -873,6 +930,23 @@ change and the RunClose list of keys without an entry.
 The `--operator` HTTP client and the remaining ROOT wiring in `root_sink.cxx`
 are not unit-tested (they need sockets / ROOT); they are covered by the
 replay-based E2E gates and the live runs on gant and side3.
+
+Write failures (TODO 69 Phase 3, E2E 2026-10-07 on macOS): `--out-dir` on an
+8 MB HFS+ image (`hdiutil create -size 8m -fs HFS+ -volname rsfull x.dmg &&
+hdiutil attach x.dmg`), hits + events trees, `--autosave-sec 5`, one sink
+process for all runs. A 2.5 M-hit replay at 50 kHz filled the volume after
+1,081,018 hits: ONE ERROR line (ROOT printed 4 lines for the whole run; a
+standalone writer that kept filling printed ~12,500), `WRITE FAILED` with growing unwritten
+counts in every status line and in `/WriteStatus`, matcher fills and `dt1`
+still growing, a clean finalize; the kept file recovered to 1,018,685 hits /
+14,857 events (the last AutoSave), 0 unreadable. A start on a volume with
+20 KB free failed at the first `AutoSave`; a SIGTERM after a failure kept the
+provisional file with the INCOMPLETE line; the healthy runs in between, after
+freeing space, were `OK` again. A read-only `--out-dir` (separate process)
+failed at `TFile::Open`: `NOT recorded`, all 146,375 hits counted. A healthy replay of pf-qaq
+run 56 (the pf-qaq flags) with the previous build and this one: hits tree
+IDENTICAL (`compare_hits`), events digest and all sidecars equal, logs equal
+but for the counters.
 
 The MaxTreeSize rollover path can be E2E-tested by compiling with a tiny
 threshold and running any emulator stack:

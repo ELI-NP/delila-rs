@@ -230,6 +230,8 @@ Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TOD
 - ラン中に kill した場合、書きかけは `run_inprogress_*.root` のまま残る
   (未完了ランを完成品に見せないための仕様)。AutoSave 済みなので
   ROOT で開いて中身を確認できる。不要なら手で消してよい。
+- ラン中にディスクが満杯になった(書き込みに失敗した)ランのファイルも同じ確定名になるが、
+  中身は途中まで。ログのまとめ行に `INCOMPLETE` が出る(後述「書き込み失敗」)。
 
 ### hits ツリーの構造(`--hits-tree`)
 
@@ -435,6 +437,8 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
   (ラン跨ぎで積算する)設計なので、新しい測定条件の前に手動で Reset する。
 - コインシデンスの時刻状態だけはラン毎に自動リセットされる
   (クロック巻き戻り対策)。
+- **/WriteStatus**(テキスト項目)— 普段は `OK`。ランの `.root` の書き込みに失敗すると
+  `WRITE FAILED: ...` になり、次のランが始まるまで残る(後述「書き込み失敗」)。
 
 ---
 
@@ -562,6 +566,55 @@ hits ツリー・events ツリー・Δt/XY モニタ・ヒストグラムが全�
 
 ---
 
+## 書き込み失敗(ディスク満杯・I/O エラー、TODO 69 Phase 3)
+
+ROOT は I/O エラーで例外を投げないので、root_sink が自分で確かめる:
+全 `TTree::Fill` の戻り値(basket の書き込み失敗で −1。エントリごとに比較 1 回)と、
+ツリーの**現在の**ファイル(`GetCurrentFile()`。ROOT の自動分割で替わる)の
+`kWriteError` / `IsZombie` を `TFile::Open` 直後・チャンクを書くたび・`AutoSave`・
+`TTree::Write`・`TFile::Close` の後に見る。ディスク満杯の最初の症状は「書き込みが途中で切れる」
+(short write)で、このとき errno は変わらず、ファイルも書き込み可能のまま見える。
+
+ランで最初の失敗が起きると:
+
+- stderr に **ERROR が 1 行**(ROOT 自身のエラー行の直後):
+
+  ```
+  root_sink: ERROR run file write FAILED (TTree::Fill (hits tree)) on /data/DELILA_data/run_inprogress_1791375060.root (cause: ROOT's error just above; 0.0 MB free in /data/DELILA_data). Nothing more is written to this run's .root, which is INCOMPLETE; ...
+  ```
+
+  errno は出さない(short write の後の errno は古い値で、E2E では無関係な
+  `No such file or directory` が出た)。原因は直前の ROOT の行、`MB free` で満杯か I/O エラーかが分かる。
+- **そのランの `.root` にはもう書かない**(Fill も AutoSave もしない)。書き続けても basket ごとに
+  失敗して ROOT のエラーが 3 行ずつ出るだけで、ファイルの復旧も難しくなる。受信・並べ替え・
+  イベントビルド・モニタは続き、書かなかったヒット/イベントは数える。
+- 10 秒ステータス行に `| WRITE FAILED: run file INCOMPLETE, unwritten hits=N events=M` が付き
+  (あるツリーの分だけ。`written=` は増えなくなる)、JSROOT の `/WriteStatus` が `OK` から同じ文面に
+  変わる(スクリプトからは `curl http://<ホスト>:8090/WriteStatus/item.json` の `value`)。
+  どちらも**次のランがファイルを開くまで**残る。
+- ラン終了時は `TTree::Write` をせずに閉じ(ROOT は書ければ key 一覧とヘッダを書く)、
+  通常どおり `run%04u_0000_<exp>.root` にリネームする。**消さない。** まとめ行がそう言う:
+
+  ```
+  root_sink: run 101 finalized -> /data/DELILA_data/run0101_0000_X.root INCOMPLETE (1081018 hits, 15800 events filled) — WRITE FAILED (TTree::Fill (hits tree)): not written after the failure: 1418982 hits, 20987 events. Opening it recovers ...
+  ```
+
+  ROOT で開くと自動で復旧する(`trying to recover`)。中身は**失敗直前の AutoSave 時点の
+  ツリー**(`autosave_sec`、既定 30 秒間隔)で、全エントリ読める。ランの最初の AutoSave より前に
+  失敗した場合はツリーが空になる。ファイル自体を作れなかったときは
+  `run N NOT recorded (no run file) — WRITE FAILED (TFile::Open): ...`、
+  ラン途中で止めた場合は `kept provisional` 行の後に `... and INCOMPLETE — WRITE FAILED ...` が出る。
+
+**Operator には知らせない(決定事項)。** root_sink には Operator への制御経路が無く、要らない:
+正の記録は `.delila` で、ランを止めるのは Rust Recorder の書き込み失敗を見る Operator 側
+(TODO 69 Phase 1)。失敗した `.root` は `.delila` から作り直せる(`delila2root`、events ツリーは
+`test_publisher` でのリプレイ)。ただし同じディスクなら `.delila` も同じ所で切れている。
+
+対処: 空きを作る(pf-qaq なら `/data` → `/archive` の退避、`scripts/archive_sync.sh`)。
+root_sink の再起動は不要で、次のランから `OK` に戻る。
+
+---
+
 ## トラブルシューティング
 
 | 症状 | 原因と対処 |
@@ -586,6 +639,7 @@ hits ツリー・events ツリー・Δt/XY モニタ・ヒストグラムが全�
 | `WARNING bare channel C (...) arrived from modules A and B this run` | `M:C` でなく数字だけで指定した ch に、2 つ以上のモジュールからヒットが来ている(モニタがボードを混ぜている)。その指定を `M:C` で書き直すか `module` で絞る(ランごとに 1 回) |
 | `WARNING time offsets: module M channel C has no entry` | 表に無い ch のヒット。その ch は生の時刻のまま。新しく配線した ch なら表に追加する(ランごとに 1 回だけ出る) |
 | XY 像が中心にない | 配線変更でケーブル長が変わった。`delayline_offsets.C` で測り直して `time_calib_file` を更新(次のランから反映) |
+| `ERROR run file write FAILED` / status 行 `WRITE FAILED` / `/WriteStatus` が `OK` でない | `.root` の書き込みに失敗(`MB free` が 0 ならディスク満杯、空きがあれば I/O エラーか権限)。そのランの `.root` は途中まで(**消さない**。開けば最後の AutoSave まで読める)。空きを作れば次のランから `OK`、再起動不要。`.delila` が正(上記「書き込み失敗」)|
 
 ログの正常パターン(sink.log):
 
