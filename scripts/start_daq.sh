@@ -417,7 +417,11 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg workers      --workers
         rs_add_arg chunk_span_ms --chunk-span-ms
         rs_add_arg safe_horizon_ms --safe-horizon-ms
-        rs_add_arg built_tree   --built-tree
+        # built_tree was retired in TODO 71 (root_sink exits on --built-tree):
+        # say so instead of passing it, so an old TOML still starts.
+        if [ -n "$(get_root_sink_key built_tree)" ]; then
+            echo -e "  ${YELLOW}[network.root_sink] built_tree is retired (TODO 71) — ignored. Record events with event_def_file and rebuild ThGEM rows with tools/root_sink/thgem_events.C${NC}"
+        fi
         rs_add_arg time_calib_file --time-calib
         rs_add_arg event_def_file  --event-def
         # hits_tree is a plain flag (no value), so rs_add_arg would pass

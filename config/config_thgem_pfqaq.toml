@@ -152,23 +152,23 @@ xy2_ch = "6,7,8,9,10"
 window_ns = 1000
 margin_ns = 20000000
 autosave_sec = 30
-# MT root_sink (TODO 66): worker threads + the integrated built-event tree
-# (both ThGEM planes + LaBr3 per trigger; NaN = arm missing).
+# MT root_sink (TODO 66): event-building worker threads.
 workers = 3
-built_tree = "built"
 # Sorter disorder absorption. The default 50 ms is too short for this board:
 # run 52 (2026-10-06, VX1730B alone, 3.4 kHz) arrived up to 82 ms out of time
 # order (DIG1 reads out per channel-pair aggregates) and root_sink dropped
 # 436 of 86054 hits (0.5 %, all channels, scattered over the run) as late.
 safe_horizon_ms = 1000
 # Per-(module,channel) cable/delay offsets (TODO 70): aligned = raw - offset_ns
-# for the hits tree, built events and monitors (the .delila stays raw). The move
+# for the hits tree, generic events and monitors (the .delila stays raw). The move
 # to the site changed the ThGEM cables — without this the XY images sat at
 # (-17.5, -29.8) / (-2.5, -15.2) ns. Re-read at every run start (edit via a temp
 # file + mv); regenerate with tools/root_sink/delayline_offsets.C after recabling.
 time_calib_file = "config/time_settings_thgem.json"
-# TODO 71 — deploy root_sink AND scripts/start_daq.sh AND config/event_def_thgem.json
-# together (c121318+): an older start_daq.sh silently ignores both keys (the new
-# binary then runs without the hits tree), an older root_sink exits on the flags.
-# hits_tree = true                                  # the per-hit tree is now opt-in — keep it on pf-qaq
-# event_def_file = "config/event_def_thgem.json"    # generic events tree
+# TODO 71 — needs root_sink, scripts/start_daq.sh and config/event_def_thgem.json
+# from the same commit: an older start_daq.sh silently ignores these keys (the
+# new binary would then run without the hits tree), an older root_sink exits on
+# the flags. The ThGEM `built` tree is retired: rebuild its rows offline from
+# the events tree with tools/root_sink/thgem_events.C (same branches).
+hits_tree = true                                  # the per-hit tree is opt-in since TODO 71
+event_def_file = "config/event_def_thgem.json"    # generic events tree (ThGEM1 > ThGEM2, +-1000 ns)

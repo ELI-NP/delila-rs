@@ -187,7 +187,14 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
 | run0023 | built window 500、イベント ±1000 / G 500 | **4 本そろい 15,644 を再現**、40,045 行すべて一致 |
 | run 56 | 本番設定(built window 1000、イベント ±1000 / G 1000、時刻オフセットあり) | 33,463 行すべて一致(4 本そろい 14,660) |
 
-### 未決: `built` をどうするか(ユーザー判断)
+### 決定 (2026-10-07、ユーザー): `built` ツリーはお役御免 → 案 3
+
+- root_sink から `--built-tree` を削除(指定すると代わりの方法を示して exit 2)。TOML の `built_tree` は `start_daq.sh` が警告して無視する。
+- チャンク単位のビルダー `build_events_from_chunk` を削除。ThGEM の再構成(`BuiltEvent`、`thgem_from_event`)は `thgem_reco.hpp` に移した。
+- **`thgem_events.C`**(新規): `events` ツリーから、同じブランチの `built` ツリーを別ファイルに書き出す(UserInfo も写す)。run 56 と run0023 で、**以前の root_sink の built ツリーとハッシュが一致**(15,644 / 40,045 行、33,463 行)。`delayline_offsets.C` の `delayline_centres_built()` はその出力をそのまま読める。
+- `compare_built.C` は比べる相手が無くなったので削除。
+
+### (参考)検討した案
 
 1. 今のまま(2 つのビルダーを並べて持つ)。
 2. `--event-def` があるときは `built` を events から作る(Worker で `thgem_from_event`)。今のビルダーは後で削除。ヒットの二重使用がなくなる。ただし本番設定(±1000 / G 1000 / window 1000)は「窓 ≥ G + window」を満たさないので、両面が同時に鳴るビームでは ThGEM2 の腕が欠けうる → イベント窓を ±2000 にするか G を小さくする。

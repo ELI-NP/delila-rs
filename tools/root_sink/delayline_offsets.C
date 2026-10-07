@@ -9,7 +9,8 @@
 //
 //   root -l -b -q 'delayline_offsets.C("run0056_*.root","1,2,3,5,4","6,7,8,9,10","ts.json","run 56")'
 //   root -l -b -q 'delayline_offsets.C+(...)'           (compiled, faster on big runs)
-//   root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X.root")'
+//   root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X_built.root")'
+//   (the `built` tree now comes from thgem_events.C — the in-sink one was retired in TODO 71)
 //
 // Channel lists use root_sink's --xy1-ch/--xy2-ch order T,XL,XR,YU,YD; an empty
 // xy2 means a single plane.
@@ -276,7 +277,8 @@ void delayline_offsets(const char* pattern, const char* xy1 = "1,2,3,5,4",
   }
 }
 
-// Mid-of-edges image centres from a root_sink built tree (4-fold per plane).
+// Mid-of-edges image centres from a `built` tree (thgem_events.C output, or an
+// older root_sink run file) — 4-fold per plane.
 void delayline_centres_built(const char* file, const char* tree = "built") {
   TFile* f = TFile::Open(file, "READ");
   TTree* b = f ? dynamic_cast<TTree*>(f->Get(tree)) : nullptr;
