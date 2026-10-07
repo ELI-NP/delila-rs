@@ -631,10 +631,12 @@ static bool read_text(const std::string& path, std::string& out) {
   return true;
 }
 
-static void check_thgem_def(const EventDefParseResult& r) {
+// `win` = pre = post: 1000 in the inline example, 2000 in the shipped file
+// (widened so thgem_events.C sees a ThGEM2 trigger's arms, TODO 71 §9).
+static void check_thgem_def(const EventDefParseResult& r, double win = 1000.0) {
   CHECK(r.errors.empty() && r.warnings.empty());
   const EventDef& d = r.def;
-  CHECK(near(d.pre_ns, 1000.0) && near(d.post_ns, 1000.0) && near(d.group_ns, 1000.0));
+  CHECK(near(d.pre_ns, win) && near(d.post_ns, win) && near(d.group_ns, 1000.0));
   CHECK(d.priorities_given);
   CHECK(d.triggers.size() == 2);
   if (d.triggers.size() != 2) return;
@@ -646,7 +648,7 @@ static void check_thgem_def(const EventDefParseResult& r) {
   CHECK(d.trigger_index(0, 1) == 0 && d.trigger_index(0, 6) == 1);
   CHECK(d.trigger_index(0, 2) == -1 && d.trigger_index(0, 0) == -1);  // arm, LaBr3
   CHECK(d.trigger_index(1, 1) == -1);                                 // other module
-  CHECK(near(d.lookback_ns(), 4000.0));                               // G + 2 pre + post
+  CHECK(near(d.lookback_ns(), 1000.0 + 3.0 * win));                   // G + 2 pre + post
 }
 
 static void test_edef_thgem_example() {
@@ -663,9 +665,9 @@ static void test_edef_thgem_file() {
   std::string text;
   CHECK(read_text(repo_path("config/event_def_thgem.json"), text));
   EventDefParseResult r = parse_event_def(text, kEdefHorizon);
-  check_thgem_def(r);
+  check_thgem_def(r, 2000.0);
   CHECK(format_event_def_line(r.def) ==
-        "window [-1000, +1000] ns, group 1000 ns, 2 trigger(s): ThGEM1(p1: m0c1) ThGEM2(p2: m0c6)");
+        "window [-2000, +2000] ns, group 1000 ns, 2 trigger(s): ThGEM1(p1: m0c1) ThGEM2(p2: m0c6)");
 }
 
 static void test_edef_no_priority() {

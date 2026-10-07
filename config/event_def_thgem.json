@@ -2,11 +2,11 @@
   "_comment": [
     "root_sink generic event definition (--event-def / TOML event_def_file, TODO 71) for the ThGEM setup, single digitizer = module 0: ThGEM1 (ch1) and ThGEM2 (ch6) are the triggers, ThGEM1 is the preferred reference of a group.",
     "All times are on the ALIGNED axis: config/time_settings_thgem.json is applied first, so the window is around the aligned reference trigger time.",
-    "The ThGEM delay-line arms arrive ~+20..+260 ns after their trigger and the LaBr3 ~70..190 ns before it, so +-1000 ns covers them. group_ns must stay <= min(pre, post).",
+    "The ThGEM delay-line arms arrive ~+20..+260 ns after their trigger and the LaBr3 ~70..190 ns before it. The window is +-2000 ns, not +-1000: the ThGEM rows are rebuilt offline from this tree (thgem_events.C, window 1000 ns around EACH plane's trigger), and a ThGEM2 trigger can sit up to group_ns (1000) from a ThGEM1 reference, so the event must cover group_ns + 1000 on both sides (TODO 71 section 9). group_ns must stay <= min(pre, post).",
     "Rules (grouping, reference, window, nearest-reference assignment): TODO/71_generic_event_building.md section 4. root_sink re-reads this file at every run start: write a temp file and mv it into place."
   ],
   "version": "1.0",
-  "window_ns": {"pre": 1000, "post": 1000},
+  "window_ns": {"pre": 2000, "post": 2000},
   "group_ns": 1000,
   "triggers": [
     {"name": "ThGEM1", "priority": 1, "channels": [[0, 1]]},

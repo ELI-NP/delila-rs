@@ -171,4 +171,4 @@ time_calib_file = "config/time_settings_thgem.json"
 # the flags. The ThGEM `built` tree is retired: rebuild its rows offline from
 # the events tree with tools/root_sink/thgem_events.C (same branches).
 hits_tree = true                                  # the per-hit tree is opt-in since TODO 71
-event_def_file = "config/event_def_thgem.json"    # generic events tree (ThGEM1 > ThGEM2, +-1000 ns)
+event_def_file = "config/event_def_thgem.json"    # generic events tree (ThGEM1 > ThGEM2, +-2000 ns)
