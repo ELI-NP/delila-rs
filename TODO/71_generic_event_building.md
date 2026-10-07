@@ -106,7 +106,7 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
   - E2E: run 56 の再生、ThGEM 設定で events を作る。
 - **Phase B — ThGEM の `built` をこの層の上に作り直す:** ✅ 2026-10-07 再構成関数と検証まで済み(§9)。`built` の扱いはユーザー判断待ち run0023 の 4 本そろったイベント数 15,644 を再現できるかで検証(まとめる層の正しさの検証も兼ねる)。そのあと `built` の扱いを決める。
 - **Phase C — ELIFANT からの移植(ELIADE の準備):** 調査と設計案 → [71_phase_c_proposal.md](71_phase_c_proposal.md)(2026-10-07、ユーザーへの質問 11 個つき)。✅ 2026-10-07 推奨案で実装・検証済み(§11)。質問への回答しだいで直す。 タグ付きのチャンネル表、AC の印(`HitWithAC`)、L2(Counter → Flag → Accept、出力に数えた値と判定結果)。
-- **Phase D — マルチデジタイザ:** D1(ソフト側の `M:C` 対応、TODO 70 Phase 2)✅ 2026-10-07([TODO 70 の Phase 2 実装記録](70_root_sink_time_offsets.md))。汎用層そのものはモジュールをまたいで ¹⁴⁰Ce で検証済み(§10)。D2(ボード間の較正ツール、TODO 72)は進行中。 TODO 70 Phase 2(`M:C` 指定、`--module` の扱い)と TODO 72(ボード間の時刻合わせ)と合わせて行う。
+- **Phase D — マルチデジタイザ:** D1(ソフト側の `M:C` 対応、TODO 70 Phase 2)✅ 2026-10-07([TODO 70 の Phase 2 実装記録](70_root_sink_time_offsets.md))。汎用層そのものはモジュールをまたいで ¹⁴⁰Ce で検証済み(§10)。D2(ボード間の較正ツール、TODO 72)✅ 2026-10-07 `time_map.C`([TODO 72 §6](72_digitizer_time_offset_calibration.md)):¹⁴⁰Ce で AC の担当を ELIFANT と 24/24 一致、ボード間のずれを測定。残りは実機(パルサー)での確認。 TODO 70 Phase 2(`M:C` 指定、`--module` の扱い)と TODO 72(ボード間の時刻合わせ)と合わせて行う。
 
 ## 7. 未決事項
 
@@ -227,7 +227,8 @@ ThGEM は線源だけで重なりが無いので、ELIFANT p+¹⁴⁰Ce(2025、1
 
 ## 11. Phase C 実装記録 (2026-10-07)
 
-設計案([71_phase_c_proposal.md](71_phase_c_proposal.md))の**推奨案**で実装した。§2.7 の質問 11 個は未回答 — 回答が違えば該当部分だけ直す。
+設計案([71_phase_c_proposal.md](71_phase_c_proposal.md))の**推奨案**で実装した。
+- **ユーザーの回答 (2026-10-07):** 質問 3 = ELIADE の BGO は**クローバーごとに最低 3 つ(前・横・後ろ)、別の DPP-PSD ボード**に入る → **時間差と、どの BGO がどのクローバーの担当かを明確にする必要がある** → `time_map_ac`(TODO 72 §6)で、実データから担当と Δt を出し、`anti_compton` のブロックを書き出すようにした。ほかの質問は「おまかせ」= 推奨案のまま。
 
 ### 何を作ったか
 

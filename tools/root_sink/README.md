@@ -403,6 +403,43 @@ window_ns` on both sides and no hit is contested; two triggers of one plane in
 one event make one row (the earliest). `delayline_offsets.C`'s
 `delayline_centres_built()` reads its output file directly.
 
+## Time offsets & anti-Compton map (`time_map.C`, TODO 72 / TODO 71 Phase D)
+
+`time_map.C` measures timing from a hits tree (delila2root output or a
+`--hits-tree` run file); the logic is in `time_map.hpp` (no ROOT, unit-tested by
+`test_time_map.cpp`). Δt peaks are background-subtracted (flat side bands) and
+reported as median (the default — robust on flat-topped HPGe / Si peaks), mode
+and centroid.
+
+- `time_map_offsets(file, "M:C", window, "ts.json")` — every channel's Δt peak
+  against the reference → a timeSettings.json tree, plus per-board medians and
+  summed-board peaks. Channels without a significant peak are listed, never
+  dropped silently.
+- `time_map_boards(file, ref, window, pulser_spec, step_spec, "plan.json")` —
+  the TODO 72 §5 procedure (last channel of each board = common pulser): plans
+  each board's hardware delay change from its DETECTOR offset, rounded to the
+  step (16 ns `start_delay`, 8 ns `rundelay`, e.g. `"16,10=8"`), and the pulser
+  Δt expected afterwards.
+- `time_map_verify(before, after, "plan.json")` — on the next run, checks per
+  board that the pulser Δt moved by exactly the applied change (PASS/FAIL).
+- `time_map_ac(file, "pos=M:C;…", "8:*", window, "ac.json")` — which shield
+  belongs to which detector group (prompt-coincidence veto fraction with a
+  dominance rule; AMBIGUOUS / SILENT / NO HITS are reported) and the Δt per
+  pair; emits an event_def v1.1 `tags` + `anti_compton` block.
+
+Sign convention (`sign=+1`): raising a board's delay by D lowers its
+timestamps by D — taken from the CAEN description, **not yet confirmed on
+hardware**; the first verify run settles it (`sign=-1` flips it).
+
+```sh
+root -l -b -q -e 'gSystem->SetBuildDir("/tmp/aclic",kTRUE)' -e '.L time_map.C+' \
+     -e 'time_map_boards("run.root","9:0",2000,"","","plan.json")'
+```
+
+On ELIFANT p+140Ce run 112 (11 boards, 41 M hits, ~10 s per call) the AC map
+reproduces ELIFANT's own detector↔BGO pairing 24/24, and the boards turn out
+NOT aligned (−418 … +106 ns against a LaBr3) — details in TODO 72 §6.
+
 ## Live monitor (THttpServer / JSROOT)
 
 Point a browser at `http://<host>:8090/`. ROOT serves the built-in JSROOT UI;
