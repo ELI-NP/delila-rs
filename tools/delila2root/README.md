@@ -66,6 +66,36 @@ g++ -O2 -std=c++17 delila2root.C $(root-config --cflags --libs) -o delila2root
 The default tree name is `delila`; `--tree` overrides it (existing converter
 scripts written for the old Rust tool passed `--tree tr`).
 
+### Time offsets (`--time-calib`)
+
+```sh
+./delila2root --time-calib config/time_settings_thgem.json -o run56_aligned.root run0056_0000_X.delila
+root -l -b -q 'delila2root.C("in.delila","out.root",{},"delila","ts.json")'   # macro form
+```
+
+Applies root_sink's per-(module, channel) time offsets (the Rust EB's
+`timeSettings.json`, parsed by `../root_sink/time_offsets.hpp` — same rules,
+same errors) to every event: `timestamp_ns = raw − offset_ns` (positive = that
+channel arrives late), so the converted tree sits on the same aligned axis as
+root_sink's trees. A (module, channel) without an entry keeps its raw time
+(one WARNING per key, and a list at the end). The table is recorded in the
+tree's UserInfo (`TNamed "timeSettings"`, the same JSON root_sink writes) and
+the tree title says `ALIGNED`. Any error in the file is fatal before an
+output file is created. Without the flag the times stay RAW, as in the
+`.delila`.
+
+Check against a raw conversion with root_sink's `compare_hits.C` (aligns the
+raw tree with the same file; keyed on (module, channel)):
+
+```sh
+root -l -b -q '../root_sink/compare_hits.C("raw.root","aligned.root","delila","ts.json")'
+```
+
+Verified 2026-10-07 on a 12-module replay file (4.46 M events, 185 offset
+entries, module 11 left out): every event's aligned time equals raw − offset
+bit for bit (4,426,842 shifted, 35,666 kept raw with 16 WARNINGs),
+`compare_hits` IDENTICAL; macro and compiled forms agree.
+
 The output tree `delila` has a branch per event field: scalars
 (`module`, `channel`, `energy`, `energy_short`, `timestamp_ns`, `flags`,
 `user_info[4]`, `has_waveform`) plus the waveform fields

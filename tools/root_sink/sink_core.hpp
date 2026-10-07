@@ -9,6 +9,8 @@
 // What lives here:
 //   1. Envelope parser  — split a ZMQ message into Data / EndOfStream / Heartbeat.
 //   2. Batch decoder    — walk an EventDataBatch into flat ScalarHit records.
+//   2b. Channel specs   — "C" / "M:C" parsing, the --module filter, the
+//                         bare-channel ambiguity watch (TODO 70 Phase 2).
 //   3. CoincidenceMatcher — pure Δt logic (gamma vs ThGEM1/ThGEM2), no histograms.
 //   3b. PositionMatcher — delay-line XY (trigger + XL/XR/YU/YD arms), no histograms.
 //   4. RunState         — Idle→Writing state machine driven by Data/EOS.
@@ -31,8 +33,10 @@
 #define ROOTSINK_SINK_CORE_HPP
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <set>
@@ -179,6 +183,201 @@ inline long decode_batch_into(const uint8_t* payload, std::size_t size,
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Channel specs ("C" / "M:C") and the module filter (TODO 70 Phase 2)
+// ---------------------------------------------------------------------------
+//
+// Every channel a consumer selects (--gamma-ch, --thgem*-ch, --xy*-ch, a hist
+// "channel" cut) is a ChSpec. "M:C" names one digitizer's channel; a bare "C"
+// matches channel C on ANY module — exactly the pre-Phase-2 meaning, so every
+// existing single-board command line, TOML and --hists file keeps working
+// unchanged. A bare spec is unambiguous whenever only one module reaches the
+// consumer (one board, or --module M); with several boards it would mix them,
+// so root_sink watches the bare channels (BareChannelWatch) and WARNs once per
+// run when one shows up on a second module. Why not "bare = module 0" (or
+// "= --module")? A single board whose module id is not 0 would then silently
+// match nothing; "any" is never silently empty, and its one failure mode is
+// reported.
+
+struct ChSpec {
+  int module = -1;   // -1 = any module (a bare "C")
+  int channel = -1;  // -1 = unset: never matches (a u8 channel can't be -1)
+  ChSpec() = default;
+  // Implicit on purpose: a plain channel number IS a bare spec, so a matcher
+  // Config field can still be set from an int.
+  ChSpec(int ch) : channel(ch) {}  // NOLINT(google-explicit-constructor)
+  ChSpec(int mod, int ch) : module(mod), channel(ch) {}
+  bool set() const { return channel >= 0; }
+  bool bare() const { return module < 0; }
+  bool matches(const ScalarHit& h) const {
+    return channel >= 0 && h.channel == channel && (module < 0 || h.module == module);
+  }
+  // Could one hit match both? Same channel, and the modules don't exclude it.
+  bool overlaps(const ChSpec& o) const {
+    return set() && o.set() && channel == o.channel &&
+           (module < 0 || o.module < 0 || module == o.module);
+  }
+};
+
+// "C" or "M:C", the CLI / log spelling.
+inline std::string ch_spec_name(const ChSpec& c) {
+  if (!c.set()) return "-";
+  return c.bare() ? std::to_string(c.channel)
+                  : std::to_string(c.module) + ":" + std::to_string(c.channel);
+}
+
+namespace detail {
+// A decimal integer 0..255 occupying exactly [p, end).
+inline bool parse_u8_span(const char* p, const char* end, int& out) {
+  if (p == end || end - p > 3) return false;
+  int v = 0;
+  for (const char* q = p; q < end; ++q) {
+    if (*q < '0' || *q > '9') return false;
+    v = v * 10 + (*q - '0');
+  }
+  if (v > 255) return false;
+  out = v;
+  return true;
+}
+}  // namespace detail
+
+// Parse one "C" or "M:C" (each 0..255, decimal, nothing else). `why` (optional)
+// receives a one-line reason on failure.
+inline bool parse_ch_spec(const std::string& s, ChSpec& out, std::string* why = nullptr) {
+  const char* b = s.c_str();
+  const char* e = b + s.size();
+  const char* colon = static_cast<const char*>(std::memchr(b, ':', s.size()));
+  int m = -1, c = -1;
+  bool ok = colon ? detail::parse_u8_span(b, colon, m) && detail::parse_u8_span(colon + 1, e, c)
+                  : detail::parse_u8_span(b, e, c);
+  if (!ok) {
+    if (why) *why = "'" + s + "' is not a channel: want C or M:C, integers 0..255";
+    return false;
+  }
+  out = colon ? ChSpec(m, c) : ChSpec(c);
+  return true;
+}
+
+// Parse a "T,XL,XR,YU,YD"-style list into exactly `expect` specs (each "C" or
+// "M:C") that pairwise cannot match the same hit. Backs --xy1-ch/--xy2-ch.
+// Returns false (with `why`) on a wrong count, a bad token, an empty element or
+// an overlap — an overlapping spec would otherwise be claimed silently by
+// whichever deque tests first in push(). "1,0:1" overlaps ("1" = any module).
+inline bool parse_ch_list(const std::string& s, std::size_t expect, std::vector<ChSpec>& out,
+                          std::string* why = nullptr) {
+  out.clear();
+  std::size_t start = 0;
+  while (true) {
+    std::size_t comma = s.find(',', start);
+    std::string tok = s.substr(start, comma == std::string::npos ? std::string::npos
+                                                                 : comma - start);
+    ChSpec c;
+    if (!parse_ch_spec(tok, c, why)) return false;
+    out.push_back(c);
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  if (out.size() != expect) {
+    if (why) *why = "want " + std::to_string(expect) + " channels, got " + std::to_string(out.size());
+    return false;
+  }
+  for (std::size_t i = 0; i < out.size(); ++i)
+    for (std::size_t j = i + 1; j < out.size(); ++j)
+      if (out[i].overlaps(out[j])) {
+        if (why)
+          *why = "'" + ch_spec_name(out[i]) + "' and '" + ch_spec_name(out[j]) +
+                 "' can match the same hit";
+        return false;
+      }
+  return true;
+}
+
+// --module "M" or "M1,M2,...": distinct 0..255. Empty list = no filter.
+inline bool parse_module_list(const std::string& s, std::vector<int>& out,
+                              std::string* why = nullptr) {
+  out.clear();
+  std::size_t start = 0;
+  while (true) {
+    std::size_t comma = s.find(',', start);
+    std::size_t end = comma == std::string::npos ? s.size() : comma;
+    int m = 0;
+    if (!detail::parse_u8_span(s.c_str() + start, s.c_str() + end, m)) {
+      if (why) *why = "'" + s + "' is not a module list: want M or M1,M2,... (0..255)";
+      return false;
+    }
+    if (std::find(out.begin(), out.end(), m) != out.end()) {
+      if (why) *why = "module " + std::to_string(m) + " listed twice in '" + s + "'";
+      return false;
+    }
+    out.push_back(m);
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return true;
+}
+
+// Keep only the hits of the listed digitizers (in order); an empty list keeps
+// every hit. Applied to each decoded batch before anything else sees it
+// (--module): the Sorter and the watermark matchers assume ONE time base,
+// which independently started boards do not share, and a bare channel spec
+// matches on any module.
+inline void keep_modules(std::vector<ScalarHit>& hits, const std::vector<int>& modules) {
+  if (modules.empty()) return;
+  hits.erase(std::remove_if(hits.begin(), hits.end(),
+                            [&](const ScalarHit& h) {
+                              return std::find(modules.begin(), modules.end(),
+                                               static_cast<int>(h.module)) == modules.end();
+                            }),
+             hits.end());
+}
+
+// Single-module form (`module` < 0 keeps every hit).
+inline void keep_module(std::vector<ScalarHit>& hits, int module) {
+  if (module < 0) return;
+  keep_modules(hits, std::vector<int>{module});
+}
+
+// Watches the channel numbers that bare specs use: a bare "C" matches channel
+// C on any module, which is exactly right while only one module carries it.
+// `see` reports (once per channel per run) the first time a watched channel
+// number arrives from a SECOND module — the moment a bare spec starts mixing
+// boards. reset() at every run start. O(1) per hit.
+class BareChannelWatch {
+ public:
+  BareChannelWatch() { reset(); watched_.fill(false); }
+  void watch(const ChSpec& c) {
+    if (c.set() && c.bare()) watched_[static_cast<std::size_t>(c.channel)] = true;
+  }
+  void clear_watched() { watched_.fill(false); }
+  bool any() const {
+    for (bool w : watched_)
+      if (w) return true;
+    return false;
+  }
+  // on_ambiguous(int channel, int first_module, int other_module)
+  template <class F>
+  void see(const ScalarHit& h, F on_ambiguous) {
+    if (!watched_[h.channel]) return;
+    int16_t& f = first_[h.channel];
+    if (f < 0) {
+      f = h.module;
+    } else if (f != h.module && !reported_[h.channel]) {
+      reported_[h.channel] = true;
+      on_ambiguous(static_cast<int>(h.channel), static_cast<int>(f),
+                   static_cast<int>(h.module));
+    }
+  }
+  void reset() {
+    first_.fill(-1);
+    reported_.fill(false);
+  }
+
+ private:
+  std::array<bool, 256> watched_{};
+  std::array<int16_t, 256> first_{};
+  std::array<bool, 256> reported_{};
+};
+
+// ---------------------------------------------------------------------------
 // 3. Coincidence matcher (pure logic — no ROOT)
 // ---------------------------------------------------------------------------
 
@@ -210,10 +409,11 @@ struct CoincResult {
 // timestamp is <= watermark are matched against every ThGEM1/ThGEM2 hit currently
 // buffered, picking the CLOSEST within ±window_ns.
 //
-// Channel identity: hits are matched on `channel` alone (module ignored). With
-// more than one digitizer, restrict the stream to the ThGEM board first with
-// keep_module (--module) — that also keeps a second board's independent clock
-// out of the watermark.
+// Channel identity: each role is a ChSpec — "M:C" matches that digitizer's
+// channel, a bare "C" matches C on any module (section 2b). The watermark
+// (max timestamp seen) is shared by every module that reaches the matcher, so
+// several boards need synchronized clocks; otherwise restrict the stream with
+// keep_modules (--module), which also keeps an independent clock out of it.
 //
 // Cost: each hit is pushed once and pruned once; find_closest scans only the
 // partners still inside the active window, which is bounded by rate*margin. So
@@ -221,9 +421,9 @@ struct CoincResult {
 class CoincidenceMatcher {
  public:
   struct Config {
-    int gamma_ch = -1;    // -1 => disabled (channel 0..255 never equals -1)
-    int thgem1_ch = -1;
-    int thgem2_ch = -1;
+    ChSpec gamma_ch;   // unset => disabled (never matches)
+    ChSpec thgem1_ch;
+    ChSpec thgem2_ch;
     double window_ns = 1000.0;
     double margin_ns = 10000.0;
   };
@@ -236,12 +436,11 @@ class CoincidenceMatcher {
   void push(const ScalarHit& h, ResultF on_result) {
     double t = h.timestamp_ns;
     if (t > max_ts_) max_ts_ = t;
-    int ch = static_cast<int>(h.channel);
-    if (ch == cfg_.gamma_ch) {
+    if (cfg_.gamma_ch.matches(h)) {
       gamma_.push_back({t, h.energy});
-    } else if (ch == cfg_.thgem1_ch) {
+    } else if (cfg_.thgem1_ch.matches(h)) {
       t1_.push_back({t, h.energy});
-    } else if (ch == cfg_.thgem2_ch) {
+    } else if (cfg_.thgem2_ch.matches(h)) {
       t2_.push_back({t, h.energy});
     } else {
       return;  // not a monitored channel — nothing to buffer or ripen
@@ -325,18 +524,6 @@ class CoincidenceMatcher {
   std::deque<TimedHit> gamma_, t1_, t2_;
 };
 
-// Keep only the hits of digitizer `module` (in order); `module` < 0 keeps every
-// hit. Applied to each decoded batch before anything else sees it (--module):
-// the matchers key on channel alone, and every downstream stage — Sorter,
-// built-event builder, watermark matchers — assumes ONE time base, which
-// independently started boards do not share.
-inline void keep_module(std::vector<ScalarHit>& hits, int module) {
-  if (module < 0) return;
-  hits.erase(std::remove_if(hits.begin(), hits.end(),
-                            [module](const ScalarHit& h) { return h.module != module; }),
-             hits.end());
-}
-
 // ---------------------------------------------------------------------------
 // 3b. Position matcher (delay-line XY — pure logic, no ROOT)
 // ---------------------------------------------------------------------------
@@ -369,16 +556,16 @@ struct PosResult {
 //     be low-rate, so waiting for the next monitored hit to ripen would add
 //     seconds of display latency; the empty-queue ripen test is O(1) anyway.
 //
-// Channel identity is `channel` alone (module ignored) — use keep_module
-// (--module) with more than one digitizer, as above.
+// Channel identity: ChSpec per role ("M:C" or bare "C" = any module), with the
+// same shared-watermark caveat as CoincidenceMatcher.
 class PositionMatcher {
  public:
   struct Config {
-    int trig_ch = -1;  // -1 => never matches (a u8 channel can't be negative)
-    int xl_ch = -1;
-    int xr_ch = -1;
-    int yu_ch = -1;
-    int yd_ch = -1;
+    ChSpec trig_ch;  // unset => never matches
+    ChSpec xl_ch;
+    ChSpec xr_ch;
+    ChSpec yu_ch;
+    ChSpec yd_ch;
     double window_ns = 1000.0;
     double margin_ns = 10000.0;
   };
@@ -391,16 +578,15 @@ class PositionMatcher {
   void push(const ScalarHit& h, ResultF on_result) {
     double t = h.timestamp_ns;
     if (t > max_ts_) max_ts_ = t;  // before the channel test: every hit advances
-    int ch = static_cast<int>(h.channel);
-    if (ch == cfg_.trig_ch) {
+    if (cfg_.trig_ch.matches(h)) {
       trig_.push_back({t, h.energy});
-    } else if (ch == cfg_.xl_ch) {
+    } else if (cfg_.xl_ch.matches(h)) {
       xl_.push_back({t, 0});
-    } else if (ch == cfg_.xr_ch) {
+    } else if (cfg_.xr_ch.matches(h)) {
       xr_.push_back({t, 0});
-    } else if (ch == cfg_.yu_ch) {
+    } else if (cfg_.yu_ch.matches(h)) {
       yu_.push_back({t, 0});
-    } else if (ch == cfg_.yd_ch) {
+    } else if (cfg_.yd_ch.matches(h)) {
       yd_.push_back({t, 0});
     }
     double watermark = max_ts_ - cfg_.margin_ns;
@@ -485,34 +671,6 @@ class PositionMatcher {
   double max_ts_ = -std::numeric_limits<double>::infinity();
   std::deque<TimedHit> trig_, xl_, xr_, yu_, yd_;
 };
-
-// Parse a "T,XL,XR,YU,YD"-style list into exactly `expect` DISTINCT ints in
-// [0,255]. Backs the --xy1-ch/--xy2-ch flags. Returns false on wrong count,
-// junk, negatives, out-of-range, or duplicates — a duplicated channel would
-// otherwise be claimed silently by whichever deque tests first in push().
-inline bool parse_ch_list(const std::string& s, std::size_t expect,
-                          std::vector<int>& out) {
-  out.clear();
-  const char* p = s.c_str();
-  while (*p) {
-    char* end = nullptr;
-    long v = std::strtol(p, &end, 10);
-    if (end == p || v < 0 || v > 255) return false;
-    out.push_back(static_cast<int>(v));
-    p = end;
-    if (*p == ',') {
-      ++p;
-      if (!*p) return false;  // trailing comma
-      continue;
-    }
-    if (*p) return false;  // junk after a number
-  }
-  if (out.size() != expect) return false;
-  for (std::size_t i = 0; i < out.size(); ++i)
-    for (std::size_t j = i + 1; j < out.size(); ++j)
-      if (out[i] == out[j]) return false;
-  return true;
-}
 
 // ---------------------------------------------------------------------------
 // 4. Run / file state machine

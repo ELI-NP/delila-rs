@@ -3,9 +3,11 @@
 //
 // The multithreaded sink writes the same hit SET as the old one but globally
 // time-sorted, so entry-by-entry diffing is useless. Instead compare, per
-// channel: entry count, Σenergy, Σenergy_short (exact integer sums), and the
-// XOR of every timestamp's 64-bit pattern (exact, order-independent — unlike
-// a floating sum). Also verifies the second file is monotonically time-sorted.
+// (module, channel): entry count, Σenergy, Σenergy_short (exact integer
+// sums), and the XOR of every timestamp's 64-bit pattern (exact,
+// order-independent — unlike a floating sum). Also verifies the second file is
+// monotonically time-sorted. Keyed on (module, channel) since TODO 70 Phase 2,
+// so a multi-board run cannot hide one board's loss behind another's channel.
 //
 //   root -l -b -q 'compare_hits.C("baseline.root","candidate.root")'
 //
@@ -16,13 +18,14 @@
 // timeSettings.json as the 4th argument to align A first — the subtraction uses
 // the same doubles as root_sink, so a correct run is bit-IDENTICAL:
 //   root -l -b -q 'compare_hits.C("raw.root","aligned.root","delila","ts.json")'
-// (Channels are still keyed on channel alone here; module-aware compare is TODO 70 Phase 2.)
+// (also the check for `delila2root --time-calib`: raw tree vs aligned tree.)
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "TFile.h"
 #include "TTree.h"
@@ -50,11 +53,13 @@ void compare_hits(const char* a_path, const char* b_path,
     printf("compare_hits: aligning A with %zu offsets from %s (aligned = raw - offset_ns)\n",
            toff.abs_ns.size(), time_calib);
   }
+  // Indexed by mc_key(module, channel) = (module << 8) | channel; on the heap
+  // (4 x 65536 x 8 B per side would not fit a Cling stack frame).
   struct Stat {
-    Long64_t n[256] = {};
-    ULong64_t esum[256] = {};
-    ULong64_t essum[256] = {};
-    ULong64_t tsxor[256] = {};
+    std::vector<Long64_t> n = std::vector<Long64_t>(65536, 0);
+    std::vector<ULong64_t> esum = std::vector<ULong64_t>(65536, 0);
+    std::vector<ULong64_t> essum = std::vector<ULong64_t>(65536, 0);
+    std::vector<ULong64_t> tsxor = std::vector<ULong64_t>(65536, 0);
     Long64_t total = 0;
     bool monotone = true;
   };
@@ -85,12 +90,13 @@ void compare_hits(const char* a_path, const char* b_path,
         auto it = toff.abs_ns.find(rootsink::mc_key(mod, ch));
         if (it != toff.abs_ns.end()) ts -= it->second;
       }
-      s.n[ch]++;
-      s.esum[ch] += e;
-      s.essum[ch] += es;
+      const uint16_t k = rootsink::mc_key(mod, ch);
+      s.n[k]++;
+      s.esum[k] += e;
+      s.essum[k] += es;
       ULong64_t bits;
       std::memcpy(&bits, &ts, 8);
-      s.tsxor[ch] ^= bits;
+      s.tsxor[k] ^= bits;
       if (ts < prev) s.monotone = false;
       prev = ts;
     }
@@ -103,15 +109,19 @@ void compare_hits(const char* a_path, const char* b_path,
   if (!scan(a_path, A, align_a) || !scan(b_path, B, false)) return;
 
   bool same = A.total == B.total;
-  for (int c = 0; c < 256; ++c) {
-    if (A.n[c] != B.n[c] || A.esum[c] != B.esum[c] || A.essum[c] != B.essum[c] ||
-        A.tsxor[c] != B.tsxor[c]) {
-      printf("compare_hits: MISMATCH ch%d  n %lld/%lld  esum %llu/%llu  tsxor %llx/%llx\n",
-             c, A.n[c], B.n[c], A.esum[c], B.esum[c], A.tsxor[c], B.tsxor[c]);
+  int keys = 0;
+  for (int k = 0; k < 65536; ++k) {
+    if (A.n[k] || B.n[k]) ++keys;
+    if (A.n[k] != B.n[k] || A.esum[k] != B.esum[k] || A.essum[k] != B.essum[k] ||
+        A.tsxor[k] != B.tsxor[k]) {
+      printf("compare_hits: MISMATCH %s  n %lld/%lld  esum %llu/%llu  tsxor %llx/%llx\n",
+             rootsink::mc_name(static_cast<uint16_t>(k)).c_str(), A.n[k], B.n[k], A.esum[k],
+             B.esum[k], A.tsxor[k], B.tsxor[k]);
       same = false;
     }
   }
-  printf("compare_hits: A=%lld entries, B=%lld entries\n", A.total, B.total);
+  printf("compare_hits: A=%lld entries, B=%lld entries, %d (module, channel) keys\n", A.total,
+         B.total, keys);
   printf("compare_hits: B monotone in timestamp_ns: %s\n", B.monotone ? "YES" : "NO");
   printf("compare_hits: content %s\n", same ? "IDENTICAL" : "DIFFERS");
 }

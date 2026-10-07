@@ -67,17 +67,19 @@ root_sink [options]
                       --exp-name is not given)
   --hists FILE        histogram definition JSON (see below); replaces the
                       built-in dt1/dt2/dt2_vs_dt1/channels set
-  --module M          process only digitizer M's hits (default: all) — the
-                      trees, histograms and matchers alike;
-                      required with >1 digitizer (see Design notes)
-  --gamma-ch N        gamma detector channel       (enables the Δt monitor)
-  --thgem1-ch N       ThGEM1 channel
-  --thgem2-ch N       ThGEM2 channel
+  --module M[,M2...]  process only these digitizers' hits (default: all) —
+                      the trees, histograms and matchers alike; needed when
+                      the boards are NOT clock-synchronized (see Design notes)
+  Channel options take C or M:C (module:channel, 0..255 each); a bare C
+  matches channel C on any module (see "Several digitizers" below)
+  --gamma-ch C        gamma detector channel       (enables the Δt monitor)
+  --thgem1-ch C       ThGEM1 channel
+  --thgem2-ch C       ThGEM2 channel
                       all three required; if any is omitted -> recorder only
   --xy1-ch T,XL,XR,YU,YD  delay-line XY monitor 1: trigger + 4 arm channels
   --xy2-ch T,XL,XR,YU,YD  delay-line XY monitor 2
-                      5 distinct ints 0..255 each; fills pos1/pos2-scope
-                      histograms, so --hists is required (no built-ins)
+                      5 channels (C or M:C) that cannot match the same hit;
+                      fills pos1/pos2-scope histograms, so --hists is required
   --window-ns X       coincidence half-window      (default 1000)
   --margin-ns X       out-of-order tolerance       (default 10000)
   --http-port N       THttpServer port, 0 disables (default 8090)
@@ -117,6 +119,13 @@ Recorder-only (no monitor), just the scalar tree:
 
 ```sh
 root_sink --out-dir /data --hits-tree --http-port 0
+```
+
+Several clock-synchronized boards (one Δt monitor across modules — give the
+module of every channel, no `--module` needed):
+
+```sh
+root_sink --out-dir /data --hits-tree --gamma-ch 9:0 --thgem1-ch 8:0 --thgem2-ch 10:0
 ```
 
 ### Launched by `start_daq.sh`
@@ -463,7 +472,7 @@ gamma energy" expressible.
 | kind     | names |
 |----------|-------|
 | variable | `energy`, `energy_short`, `channel`, `module` |
-| cut      | `channel` (int: keep events on that channel), `energy_range` (`[min,max]` inclusive) |
+| cut      | `channel` (keep hits on that channel: a number `3` = channel 3 on any module, or a string `"3"` / `"10:3"` = the CLI's C / M:C), `energy_range` (`[min,max]` inclusive) |
 
 **coinc scope** — one row per *ripe gamma* coincidence result (needs the Δt
 matcher enabled):
@@ -596,17 +605,30 @@ reload can safely delete and rebuild the live objects.
   ⇒ one EOS closes. This set-based rule deliberately avoids the first-EOS-latch
   trap of naive multi-source consumers. A stale EOS received while idle is logged
   and ignored.
-- **One digitizer per root_sink (`--module`).** The Δt / XY matchers select
-  hits by `channel` alone, and the Sorter and the watermark matchers assume
-  ONE time base. A second board
-  breaks both: its channels land in the ThGEM/LaBr3 slots, and an independently
-  started board's clock drifts away from the first. Once the drift exceeds
-  `--safe-horizon-ms`, the lagging board's hits arrive behind an emitted core
-  and never reach the `.root` (E2E, 2026-10-05: board 0 lagging 200 ms → 1489
-  of 4000 hits missing). `--module M` drops the other boards right after
-  decoding, before any consumer. Hits behind an emitted core are counted
-  (`late=` in the status line, one WARNING per run) — never silently lost; the
-  `.delila` from the Recorder has every board in any case.
+- **Several digitizers (TODO 70 Phase 2).** Every channel a consumer selects
+  (`--gamma-ch`, `--thgem*-ch`, `--xy*-ch`, a hist `channel` cut) is a spec
+  `M:C` — that board's channel — or a bare `C`, which matches channel C on
+  ANY module. Bare = "any" keeps every single-board command line, TOML and
+  `--hists` file working unchanged; "module 0" (or "the `--module`") was
+  rejected because a single board whose module id is not 0 would then
+  silently match nothing. The failure mode of "any" is made loud instead: at
+  startup the bare channels are listed whenever more than one module can reach
+  them, and the first time a bare channel arrives from a second module in a
+  run the display WARNs once (naming the specs and the two modules). Specs
+  that could match the same hit within one matcher (`1` and `0:1`, two equal
+  specs) are a startup error; a spec naming a module that `--module` drops is
+  a startup WARNING.
+  What M:C cannot fix is time: the Sorter and the watermark matchers assume
+  ONE time base, and an independently started board's clock drifts away. Once
+  the drift exceeds `--safe-horizon-ms`, the lagging board's hits arrive
+  behind an emitted core and never reach the `.root` (E2E, 2026-10-05: board 0
+  lagging 200 ms → 1489 of 4000 hits missing). So: synchronized boards (clock
+  + start daisy chain) → M:C specs, no `--module` needed; unsynchronized
+  boards → `--module M` (or a list `M1,M2` of the boards that ARE in sync),
+  which drops the others right after decoding, before any consumer. Hits
+  behind an emitted core are counted (`late=` in the status line, one WARNING
+  per run) — never silently lost; the `.delila` from the Recorder has every
+  board in any case.
 - **Monitor disabled without channel flags.** Omit any of `--gamma-ch /
   --thgem1-ch / --thgem2-ch` and the Δt matcher is off (recorder-only). The
   `THttpServer` (if `--http-port` ≠ 0) still shows channel occupancy.
@@ -665,7 +687,14 @@ reload can safely delete and rebuild the live objects.
     that much arrival disorder, and the Sorter would drop hits as late (spread ≥
     `--margin-ns` only warns — display matchers);
   - a channel with no entry keeps its raw time and is reported once per run
-    (WARNING + `toff=N (k unmapped)`).
+    (WARNING + `toff=N (k unmapped)`), and RunClose logs the run's list
+    (`run N time offsets: k (module, channel) key(s) had no entry and stayed
+    RAW: m0c10 …`). Log only, by choice: the run's provenance already holds the
+    exact table applied, so "unmapped" = any key in the trees but not in
+    `resolved_abs_ns`, derivable offline;
+  - a run-start reload that changes the table logs the per-channel difference
+    against the previous run (`time offsets CHANGED vs the previous run: m0c2
+    +8.752 -> +9.002 (delta +0.25), m0c10 removed (was +7.576)`).
   This is a correction of the data time axis, not an analysis constant (those —
   mm calibration, the −70 ns TOF display offset — stay in macros); note that
   moving a trigger's or the LaBr3 channel's offset shifts TOF. Offsets fix a
@@ -684,7 +713,9 @@ reload can safely delete and rebuild the live objects.
 
 `sink_core.hpp` and `hist_config.hpp` are pure logic and compile with plain
 `g++ -std=c++17` — no ROOT, no ZMQ. `test_sink_core.cpp` covers envelope parse,
-batch decode, the coincidence matcher (with energies), run state, the HTTP
+batch decode, the coincidence and position matchers (with energies; keyed on
+(module, channel)), channel specs `C` / `M:C` and the `--module` list (all error
+classes), the bare-channel ambiguity watch, run state, the HTTP
 helpers (`split_http_response` / `extract_experiment_name`), and the histogram
 config parser (all error classes + `value_of` / `pass_cut` for both scopes):
 
@@ -715,7 +746,9 @@ g++ -O2 -std=c++17 test_publisher.cxx $(root-config --cflags --libs) -lzmq -o te
 ```
 
 `compare_hits.C` is the matching order-INDEPENDENT equality check between two
-hits trees (per-channel counts, energy sums, timestamp XOR + monotonicity) —
+hits trees (per-(module, channel) counts, energy sums, timestamp XOR +
+monotonicity; it also compares a raw `delila2root` tree with one written by
+`delila2root --time-calib`) —
 the multithreaded sink writes the same hit SET as the old one but time-sorted,
 so entry-by-entry diffing is useless. A sink run with `--time-calib` writes
 aligned times: pass the same file as the 4th argument to align the raw tree
@@ -785,6 +818,20 @@ agrees on every in-event hit; the non-AC/L2 content equals the Phase A run;
 14.1 s vs 14.0 s for the Phase A definition. `check_events.C` compares
 `HitWithAC` per hit and every L2 branch per event (a pre-Phase C file without
 `HitWithAC` compares as all false).
+
+TODO 70 Phase 2 (E2E, 2026-10-07): run 56 replayed with the pf-qaq flags
+(bare channels, `--module 0`, offsets, events) on the previous build and this
+one → hits tree IDENTICAL (`compare_hits`), events digest equal, all 9 display
+histograms byte-identical in the JSROOT dump, same matcher / XY fill counts;
+the same without `--module` → histograms identical too (one board, no
+WARNING). ELIFANT p+¹⁴⁰Ce run0112 (11 modules, no `--module`) with
+`--gamma-ch 9:0 --thgem1-ch 8:0 --thgem2-ch 10:0` (LaBr3, its BGO, an HPGe):
+dt1 peaks at +83 ns (FWHM ≈ 24 ns; the offline LaBr3−BGO Δt is −82 ns), dt2
+at ≈ +95 ns, and both histograms equal, bin for bin, an independent
+nearest-partner recomputation from the hits tree (also for 9:0/1:0/10:0 and
+9:0/2:1/10:8); a bare `--thgem1-ch 2` printed the once-per-run WARNING
+(modules 9 and 8). A run-start edit of the offsets logged the per-channel
+change and the RunClose list of keys without an entry.
 
 The `--operator` HTTP client and the remaining ROOT wiring in `root_sink.cxx`
 are not unit-tested (they need sockets / ROOT); they are covered by the

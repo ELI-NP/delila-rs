@@ -75,7 +75,7 @@ hits_tree  = true              # hits ツリー。2026-10(TODO 71)から opt-in�
 # chunk_span_ms   = 100
 # safe_horizon_ms = 50
 # 2026-10 追加:
-# module          = 0          # デジタイザ 2 台以上なら必須(下記)
+# module          = 0          # 時計の同期していないボードがあるとき(下記)。"0,4" のように複数可
 # time_calib_file = "config/time_settings_thgem.json"  # 時刻オフセット(TODO 70、後述)
 # event_def_file  = "config/event_def_thgem.json"      # 汎用イベントツリー(TODO 71、後述)
 ```
@@ -86,12 +86,23 @@ hits_tree  = true              # hits ツリー。2026-10(TODO 71)から opt-in�
   逆に**古いバイナリは `hits_tree` / `event_def_file` を知らず、渡すと起動しない**ので、
   バイナリを更新してからキーを足すこと。
 
-- **デジタイザが 2 台以上なら `module` を指定する。** Δt / XY マッチャーは
-  チャンネル番号だけでヒットを選び、Sorter とマッチャーは時間軸が 1 本である前提で動く。
-  他のボードの ch0〜10 が LaBr3 / ThGEM 扱いされ、さらに独立にスタートしたボードの時計は
-  ずれていくので、ずれが `safe_horizon_ms` を超えると遅れた側のボードのヒットが .root から
-  落ちる(2026-10-05 E2E: 200 ms 遅れのボード 0 で 4000 件中 1489 件欠落)。`module = M` で
-  デコード直後にボード M 以外を捨てる(ツリー・ヒスト・マッチャーすべてに効く)。
+- **デジタイザが 2 台以上のとき(TODO 70 Phase 2)。** チャンネルの指定は全て `C` か `M:C`
+  (module:channel)。`gamma_ch = "9:0"`、`xy1_ch = "0:1,0:2,0:3,0:5,0:4"` のように書く。
+  - **数字だけの `C` は「どのモジュールの ch C でもよい」**(以前と同じ意味)。ボードが 1 台、
+    または `module` で 1 台に絞っていれば今までの設定がそのまま動く。
+    「モジュール 0」とみなす案は、モジュール番号が 0 でない 1 台構成で黙って何も一致しなくなる
+    ので採らなかった。
+  - 2 台以上が届くときは、起動時に「どのモジュールにも一致する ch」の一覧が出て、ラン中に
+    同じ番号の ch が 2 つ目のモジュールから来た時点で **ランごとに 1 回 WARNING**
+    (どの指定か・どの 2 モジュールか)。`M:C` で書き直すか `module` で絞る。
+  - 同じマッチャーの中で同じヒットに一致しうる指定(`1` と `0:1` など)は起動エラー。
+    `module` で捨てるモジュールを `M:C` で指定すると起動時に WARNING。
+  - **時刻はこれでは直らない。** Sorter とマッチャーは時間軸が 1 本である前提で動き、
+    独立にスタートしたボードの時計はずれていく。ずれが `safe_horizon_ms` を超えると遅れた側の
+    ヒットが .root から落ちる(2026-10-05 E2E: 200 ms 遅れのボード 0 で 4000 件中 1489 件欠落)。
+    → **時計を同期した**ボード(クロックとスタートのデイジーチェーン)なら `M:C` だけで
+    `module` は不要。**同期していない**ボードがあれば `module = M`(または同期している組
+    `"M1,M2"`)でデコード直後に他を捨てる(ツリー・ヒスト・マッチャーすべてに効く)。
   .delila(Recorder)と Monitor(8081)は全ボードを持つ。
 - 安全幅を越えて遅れたヒットは、数えて status 行の `late=` とラン毎 1 回の WARNING で報告する
   (以前は無言で捨てていた)。
@@ -158,10 +169,11 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 | `--exp-name NAME` | (なし) | ファイル名の実験名を明示指定(最優先) |
 | `--operator URL` | (なし) | 例 `http://localhost:9092`。ラン開始時に `/api/status` の `experiment_name` を取得 |
 | `--hists FILE` | (なし) | ヒストグラム定義 JSON(後述)。未指定ならビルトイン 4 種 |
-| `--gamma-ch N` | −1 | ガンマ線検出器チャンネル |
-| `--thgem1-ch N` | −1 | ThGEM1 チャンネル |
-| `--thgem2-ch N` | −1 | ThGEM2 チャンネル(3 つ全て指定でマッチャ有効。省略時は recorder 専用) |
-| `--xy1-ch T,XL,XR,YU,YD` | (なし) | ディレイライン XY モニタ 1: トリガー + 4 腕のチャンネル(相異なる 5 整数のカンマ区切り)。**`--hists` 必須**(pos1 スコープのヒストにのみ表示) |
+| `--module M[,M2...]` | (全部) | これらのデジタイザのヒットだけを扱う(ツリー・ヒスト・マッチャー・events)。時計の同期していないボードを外すのに使う(上記) |
+| `--gamma-ch C` | −1(オフ) | ガンマ線検出器チャンネル。`C` か `M:C`(以下のチャンネル指定も同じ。`C` だけならどのモジュールでも一致) |
+| `--thgem1-ch C` | −1 | ThGEM1 チャンネル |
+| `--thgem2-ch C` | −1 | ThGEM2 チャンネル(3 つ全て指定でマッチャ有効。省略時は recorder 専用) |
+| `--xy1-ch T,XL,XR,YU,YD` | (なし) | ディレイライン XY モニタ 1: トリガー + 4 腕のチャンネル(`C` か `M:C` を 5 つ。同じヒットに一致しうる組は不可)。**`--hists` 必須**(pos1 スコープのヒストにのみ表示) |
 | `--xy2-ch T,XL,XR,YU,YD` | (なし) | ディレイライン XY モニタ 2(pos2 スコープ) |
 | `--window-ns X` | 1000 | コインシデンス半窓 ±W [ns](Δt/XY マッチャ共通) |
 | `--margin-ns X` | 10000 | 到着順の乱れ許容(熟成遅延)[ns](Δt/XY マッチャ共通)。**ストリームはバッチ内ソートのみ**で、バッチ跨ぎの乱れは ms 級になり得る(side3 run0023 実測で最大 8.2 ms)→ 実運用では `20000000`(20 ms)推奨 |
@@ -453,7 +465,7 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
 
 | スコープ | 変数 | カット |
 |---|---|---|
-| **hit**(全イベント) | `energy` `energy_short` `channel` `module` | `"channel": N`、`"energy_range": [lo,hi]` |
+| **hit**(全イベント) | `energy` `energy_short` `channel` `module` | `"channel": 3`(どのモジュールの ch 3 でも)または `"channel": "10:3"`(文字列で CLI と同じ `C` / `M:C`)、`"energy_range": [lo,hi]` |
 | **coinc**(熟成したガンマ毎) | `dt1` `dt2` `gamma_energy` `thgem1_energy` `thgem2_energy` | `"gamma_energy_range"` / `"thgem1_energy_range"` / `"thgem2_energy_range": [lo,hi]` |
 | **pos1**(XY モニタ 1 のトリガー毎) | `xy1_x` `xy1_y` | (なし) |
 | **pos2**(XY モニタ 2 のトリガー毎) | `xy2_x` `xy2_y` | (なし) |
@@ -537,6 +549,13 @@ hits ツリー・events ツリー・Δt/XY モニタ・ヒストグラムが全�
   失敗したら **前の表のまま** ラン(ERROR、status 行 `toff=N STALE`、UserInfo `stale`)——
   黙って「補正なし」に戻ることはない。オフセットの最大−最小が `safe_horizon_ms` 以上はエラー
   (並べ替えで取りこぼすため)。表に無い ch は生の時刻のまま、ランごとに 1 回 WARNING。
+- **ランのログ**: ラン開始時の読み直しで表が変わったら、前のランとの差を ch ごとに 1 行で出す
+  (`time offsets CHANGED vs the previous run: m0c2 +8.752 -> +9.002 (delta +0.25), m0c10 removed ...`)。
+  ラン終了時には、表に無かった (module, channel) の一覧を出す(`run N time offsets: k ... stayed RAW: m0c10`)。
+  一覧はログだけ(provenance には載せない): provenance に使った表そのものが入っているので、
+  ツリーにあって表に無い ch として後から分かる。
+- **オフラインの変換**: `delila2root --time-calib <表>` で、`.delila` から補正後の時刻のツリーを作れる
+  (同じ `time_offsets.hpp`、UserInfo に同じ `timeSettings`。詳細は `tools/delila2root/README.md`)。
 - **限界**: 直せるのは一定の遅れだけ。独立にスタートしたボード同士は時計がずれていくので、
   ボード間の相関にはハードウェアのクロック同期が前提(TODO 70 Phase 2)。トリガーや LaBr3 の
   オフセットを動かすと TOF が変わる(マクロ側の TOF オフセット定数は再導出が必要)。
@@ -564,6 +583,7 @@ hits ツリー・events ツリー・Δt/XY モニタ・ヒストグラムが全�
 | `WARNING event def: trigger '...' channel(s) ... are not on --module M` | トリガー ch が `--module` 以外のボードにある。そのヒットはデコード直後に捨てられるので、そのトリガーではイベントが作られない |
 | `contested` が増えてきた | 窓の重なりが増えている(レート上昇)。重なったヒットは近い基準のイベントに入るので失われはしないが、窓・group_ns の見直しを検討 |
 | `ERROR time offsets reload failed at run start` / status 行 `toff=N STALE` | ラン開始時の読み直しに失敗(書きかけ・JSON の誤り・ファイル消失)。**そのランは前の表で補正済み**。ファイルを直せば次のランで `reloaded OK (was STALE)` |
+| `WARNING bare channel C (...) arrived from modules A and B this run` | `M:C` でなく数字だけで指定した ch に、2 つ以上のモジュールからヒットが来ている(モニタがボードを混ぜている)。その指定を `M:C` で書き直すか `module` で絞る(ランごとに 1 回) |
 | `WARNING time offsets: module M channel C has no entry` | 表に無い ch のヒット。その ch は生の時刻のまま。新しく配線した ch なら表に追加する(ランごとに 1 回だけ出る) |
 | XY 像が中心にない | 配線変更でケーブル長が変わった。`delayline_offsets.C` で測り直して `time_calib_file` を更新(次のランから反映) |
 

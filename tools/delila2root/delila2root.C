@@ -12,18 +12,38 @@
 //   g++ -O2 -std=c++17 delila2root.C $(root-config --cflags --libs) -o delila2root
 //   ./delila2root in.delila [out.root] [in2.delila ...]
 //   ./delila2root -o out.root --tree tr in_0000.delila in_0001.delila   # Rust-CLI compatible
+//   ./delila2root --time-calib timeSettings.json in.delila   # aligned times (TODO 70)
+//
+// --time-calib applies root_sink's per-(module, channel) time offsets
+// (../root_sink/time_offsets.hpp, the Rust EB's timeSettings.json):
+// timestamp_ns = raw - offset_ns for every event, so a converted tree is on the
+// same aligned axis as root_sink's trees. The table is recorded in the tree's
+// UserInfo (TNamed "timeSettings", the same JSON root_sink writes). Without
+// the flag the times stay RAW, exactly as in the .delila.
 //
 // License: BSD-3-Clause (same as delila-rs).
 
+#include <cerrno>
+#include <climits>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <fstream>
+#include <limits>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "TDelila.hpp"
 #include "TFile.h"
+#include "TList.h"
+#include "TNamed.h"
 #include "TROOT.h"
 #include "TTree.h"
+
+#include "../root_sink/time_offsets.hpp"  // parse/resolve/provenance, shared with root_sink
 
 // ROOT compression setting = algorithm*100 + level. ZSTD is algorithm 5, so
 // 505 = ZSTD level 5. Using the integer avoids the ROOT::kZSTD enum, whose
@@ -31,13 +51,67 @@
 // old ROOT: 404 = LZ4 level 4.)
 static const int kDelilaCompression = 505;
 
+// Load `path` with root_sink's time-offset rules (every error listed). The
+// spread limit is root_sink's Sorter guard; offline nothing is sorted, so it
+// is off here (infinity). Returns false on any error.
+static bool d2r_load_offsets(const std::string& path, rootsink::ActiveOffsets& a) {
+  std::ifstream in(path, std::ios::binary);
+  std::string text;
+  std::string why;
+  if (in) {
+    std::stringstream ss;
+    ss << in.rdbuf();
+    text = ss.str();
+  } else {
+    why = std::strerror(errno);
+  }
+  char resolved[PATH_MAX];
+  std::string real = ::realpath(path.c_str(), resolved) ? std::string(resolved) : path;
+  char now[32];
+  std::time_t t = std::time(nullptr);
+  std::strftime(now, sizeof now, "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&t));
+  std::vector<std::string> errors;
+  if (rootsink::reload_offsets(a, in ? &text : nullptr, why, real,
+                               std::numeric_limits<double>::infinity(), now, errors))
+    return true;
+  std::fprintf(stderr, "delila2root: %zu error(s) in --time-calib %s:\n", errors.size(),
+               path.c_str());
+  for (const auto& e : errors) std::fprintf(stderr, "delila2root:   - %s\n", e.c_str());
+  return false;
+}
+
 // Convert one or more `.delila` files (same run) into a single ROOT tree.
 // Returns the number of events written, or -1 on error.
 // `tree_name` defaults to "delila"; the CLI's `--tree` maps here (the old
-// Rust tool's converter scripts pass `--tree tr`).
+// Rust tool's converter scripts pass `--tree tr`). A non-empty `time_calib`
+// (timeSettings.json) writes aligned times (raw - offset_ns, see the header).
 long delila2root(const char* in_path, const char* out_path = nullptr,
                  const std::vector<std::string>& extra = {},
-                 const char* tree_name = "delila") {
+                 const char* tree_name = "delila", const char* time_calib = "") {
+  // Time offsets first: a bad file must fail before any output is created.
+  rootsink::ActiveOffsets toff;
+  const bool align = time_calib && time_calib[0];
+  // Dense (module, channel) lookup for the per-event subtraction; `known`
+  // marks keys with an entry (a key without one keeps its raw time — the same
+  // rule as root_sink — and is reported once).
+  std::vector<double> off_ns;
+  std::vector<char> known;
+  if (align) {
+    if (!d2r_load_offsets(time_calib, toff)) return -1;
+    off_ns.assign(65536, 0.0);
+    known.assign(65536, 0);
+    for (const auto& kv : toff.table.abs_ns) {
+      off_ns[kv.first] = kv.second;
+      known[kv.first] = 1;
+    }
+    std::printf("delila2root: time offsets %s (%zu entries): timestamp_ns = raw - offset_ns\n",
+                toff.source_path.c_str(), toff.table.abs_ns.size());
+    std::printf("delila2root: time offsets: %s\n", rootsink::format_offsets_line(toff.table).c_str());
+    for (const auto& w : toff.table.warnings)
+      std::fprintf(stderr, "delila2root: WARNING time offsets: %s\n", w.c_str());
+  }
+  std::set<uint16_t> unmapped;
+
   // Parallelize ROOT's basket compression (ZSTD-5) across cores. Previously the
   // converter was single-threaded: 100% of one core, compression on the same
   // thread as decode. Works in both compiled and macro (Cling) mode.
@@ -64,7 +138,15 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
     std::fprintf(stderr, "delila2root: cannot create %s\n", out.c_str());
     return -1;
   }
-  TTree* tree = new TTree(tree_name, "DELILA events");
+  TTree* tree = new TTree(tree_name, align ? "DELILA events (timestamp_ns ALIGNED: raw - "
+                                             "timeSettings offset; see UserInfo)"
+                                           : "DELILA events");
+  // Same provenance object root_sink attaches: which table, from where, the
+  // resolved offsets and the verbatim source (part of the tree, so it travels
+  // with every copy of it).
+  if (align)
+    tree->GetUserInfo()->Add(new TNamed("timeSettings",
+                                        rootsink::offsets_provenance_json(toff).c_str()));
 
   // --- Scalar branch buffers (one per event field; all firmwares) ---
   UChar_t  module = 0, channel = 0;
@@ -145,6 +227,16 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
       energy = (UShort_t)ev.energy();
       energy_short = (UShort_t)ev.energy_short();
       timestamp_ns = ev.timestamp_ns();
+      if (align) {
+        const uint16_t k = rootsink::mc_key(module, channel);
+        if (known[k]) {
+          timestamp_ns -= off_ns[k];
+        } else if (unmapped.insert(k).second) {
+          std::fprintf(stderr,
+                       "delila2root: WARNING time offsets: %s has no entry in %s — kept RAW\n",
+                       rootsink::mc_name(k).c_str(), toff.source_path.c_str());
+        }
+      }
       flags = ev.flags();
       for (int k = 0; k < 4; ++k) user_info[k] = ev.user_info(k);
 
@@ -165,7 +257,14 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
   tree->Write();
   f->Close();
   delete f;
-  std::printf("delila2root: wrote %ld events -> %s\n", total, out.c_str());
+  std::printf("delila2root: wrote %ld events -> %s%s\n", total, out.c_str(),
+              align ? " (timestamp_ns ALIGNED)" : "");
+  if (!unmapped.empty()) {
+    std::string keys;
+    for (uint16_t k : unmapped) keys += (keys.empty() ? "" : " ") + rootsink::mc_name(k);
+    std::printf("delila2root: %zu (module, channel) key(s) had no offset entry and stayed RAW: %s\n",
+                unmapped.size(), keys.c_str());
+  }
   return total;
 }
 
@@ -174,10 +273,11 @@ long delila2root(const char* in_path, const char* out_path = nullptr,
 // existing converter scripts (`delila2root -o out.root --tree tr in_00*`)
 // keep working unchanged:
 //   delila2root in.delila [out.root] [in2.delila ...]
-//   delila2root -o out.root [--tree name] in.delila [in2.delila ...]
+//   delila2root -o out.root [--tree name] [--time-calib ts.json] in.delila [in2.delila ...]
 int main(int argc, char** argv) {
   std::string out;
   std::string tree_name = "delila";
+  std::string time_calib;
   std::vector<std::string> inputs;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -185,6 +285,12 @@ int main(int argc, char** argv) {
       out = argv[++i];
     } else if (a == "--tree" && i + 1 < argc) {
       tree_name = argv[++i];
+    } else if (a == "--time-calib") {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "delila2root: --time-calib needs a timeSettings.json path\n");
+        return 1;
+      }
+      time_calib = argv[++i];
     } else if (out.empty() && a.size() >= 5 && a.substr(a.size() - 5) == ".root") {
       out = a;  // positional out.root (legacy form)
     } else {
@@ -193,14 +299,17 @@ int main(int argc, char** argv) {
   }
   if (inputs.empty()) {
     std::fprintf(stderr,
-                 "usage: %s [-o out.root] [--tree name] in.delila [in2.delila ...]\n"
-                 "       %s in.delila [out.root] [in2.delila ...]\n",
+                 "usage: %s [-o out.root] [--tree name] [--time-calib ts.json] in.delila "
+                 "[in2.delila ...]\n"
+                 "       %s in.delila [out.root] [in2.delila ...]\n"
+                 "  --time-calib FILE  write aligned times: timestamp_ns = raw - offset_ns\n"
+                 "                     (root_sink's timeSettings.json; default: RAW)\n",
                  argv[0], argv[0]);
     return 1;
   }
   std::vector<std::string> extra(inputs.begin() + 1, inputs.end());
   return delila2root(inputs[0].c_str(), out.empty() ? nullptr : out.c_str(), extra,
-                     tree_name.c_str()) < 0
+                     tree_name.c_str(), time_calib.c_str()) < 0
              ? 1
              : 0;
 }

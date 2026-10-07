@@ -207,7 +207,7 @@ root_sink は ThGEM と同じフラグで動かし、ポートは `--zmq tcp://1
 - **共有 JSON パーサの制限:** 重複キーは後勝ち、末尾のゴミは検出しない、`\u` は `?` になる。Phase 1 では許容し、ヘッダは変えない。
 - **既存の不整合(今回は直さない):** `_hists.json` は RunOpen ではなく finalize 時にコピーしている。
 
-## 7. Phase 2(マルチデジタイザ、記述のみ)
+## 7. Phase 2(マルチデジタイザ)— ✅ ソフト側は 2026-10-07 実装(TODO 71 Phase D1、下の「Phase 2 実装記録」)。ハードウェアの同期と較正は TODO 72
 
 - **`M:C` 形式の指定:** `--xy*-ch`、`--gamma-ch`、`--thgem*-ch`、`BuilderConfig`、hist_config に module のカットを足す。`parse_ch_list` に `M:` を付けられるようにし、キーを (module, channel) にする。
   - `--module` は複数指定できるようにするか、廃止する。
@@ -271,3 +271,17 @@ root_sink は ThGEM と同じフラグで動かし、ポートは `--zmq tcp://1
   - ただし**イベントは 44 件・統合イベントは 0 件**(検出器が動いていなかった)。**XY 像の中心の実機確認は、次に検出器が動いているランで行う**。
   - 確認方法: `delayline_centres_built()`。補正済みの `.root` にマクロを掛けて残差が 1 ns 未満であることも見る。
 
+
+## Phase 2 実装記録 (2026-10-07、TODO 71 Phase D1)
+
+- **ch の指定に `M:C`:** `--gamma-ch`、`--thgem1-ch`、`--thgem2-ch`、`--xy1-ch`、`--xy2-ch`(例 `"0:1,0:2,0:3,0:5,0:4"`)、hists の `channel` カット(数字 = 従来どおり、または文字列 `"10:3"`)。
+  - **モジュールを書かない `C` は「どのモジュールの ch C でも」**(従来の意味)。1 ボードの設定はそのまま動く。「0 番扱い」にしなかったのは、モジュール番号が 0 でない 1 ボード構成が黙って何も拾わなくなるため。
+  - あいまいさは警告する: 起動時に、2 つ以上のモジュールから届きうる素の指定を 1 行で列挙。表示側は、素の ch が 2 つ目のモジュールから来たらランごとに 1 回 WARNING。
+  - 新しい起動エラー(exit 2): Δt の役割が同じヒットに重なる指定(`0` と `0:0`)、XY のリスト内の重なり、数字でない値(以前は `atoi` で黙って ch 0 になっていた)。
+- **matcher とヒストグラムのカットは (module, channel) で引く**(`ChSpec`、`parse_ch_spec` / `parse_ch_list` など、`sink_core.hpp`)。
+- **`--module` は複数指定できる(`"0,4"`)。** 同期したボード同士なら `M:C` だけで足り、`--module` は不要。時計が独立したボードを切り離すためには引き続き使う(Sorter と matcher は時間軸が 1 本である前提)。
+- `compare_hits.C` は (module, channel) で照合。
+- **`delila2root --time-calib FILE`**(マクロの 5 番目の引数も): `time_offsets.hpp` をそのまま使い、全イベントに raw − offset を掛ける。表に無い ch は生のまま(キーごとに WARNING + 最後に一覧)。UserInfo `timeSettings` とタイトルの `ALIGNED`。ファイルに誤りがあれば出力を作る前に終了。既定は従来どおり生。
+- **ランのログ:** RunClose で表に無かった (M,C) の一覧、RunOpen で前のランからのオフセットの差分(`m0c2 +8.752 -> +9.002 (delta +0.25)`)。表に無い ch の一覧は provenance には載せない(使った表は記録済みなので、後から比べれば分かる。prov の「RunOpen のみ」の約束を崩さない)。
+- **やらなかったこと:** JSROOT にオフセットの表を TNamed で出す(表示側にランごとの受け渡しが無い)。
+- **検証:** 単体テスト `test_sink_core` 754 / `test_eb_core` 257、警告 0。run 56(pf-qaq のフラグ、素の ch)は hits ツリー・events・表示ヒストグラム 9 個がバイト単位で同じ。¹⁴⁰Ce(`--module` なし、モジュールをまたぐ Δt モニタ)はヒストグラムが独立な再計算とビン単位で一致(LaBr3 9:0 − BGO 8:0 が +83 ns に鋭いピーク)。delila2root は 12 モジュールのリプレイ(446 万イベント、185 エントリ)で raw − offset がビット単位で一致、`compare_hits` IDENTICAL。

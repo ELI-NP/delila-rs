@@ -9,7 +9,9 @@
 //
 // KISS: this is a FIXED vocabulary, not an expression engine. Four scopes:
 //   * hit   — per-event scalars: variables energy, energy_short, channel, module;
-//             cuts `channel` (int equals) and `energy_range` [min,max].
+//             cuts `channel` and `energy_range` [min,max]. `channel` is a
+//             number C (that channel on ANY module — the pre-Phase-2 meaning)
+//             or a string "C" / "M:C" (sink_core.hpp ChSpec, the CLI spelling).
 //   * coinc — per-ripe-gamma coincidence results: variables dt1, dt2,
 //             gamma_energy, thgem1_energy, thgem2_energy; cuts
 //             gamma/thgem1/thgem2_energy_range [min,max].
@@ -27,6 +29,7 @@
 #ifndef ROOTSINK_HIST_CONFIG_HPP
 #define ROOTSINK_HIST_CONFIG_HPP
 
+#include <cmath>
 #include <set>
 #include <string>
 #include <vector>
@@ -59,12 +62,13 @@ enum class Var {
   Xy2Y
 };
 
-// A single optional cut. `channel` is an equality test (ivalue); every *_range is
-// an inclusive [lo,hi] test. A *_energy_range on a coinc result requires the
-// matching partner to exist (see pass_cut below).
+// A single optional cut. `channel` is an equality test (ivalue, plus imodule
+// when the spec named one); every *_range is an inclusive [lo,hi] test. A
+// *_energy_range on a coinc result requires the matching partner to exist
+// (see pass_cut below).
 enum class CutKind {
   None,
-  Channel,            // hit:   channel == ivalue
+  Channel,            // hit:   channel == ivalue (&& module == imodule if >= 0)
   EnergyRange,        // hit:   energy   in [lo,hi]
   GammaEnergyRange,   // coinc: gamma_energy  in [lo,hi]
   Thgem1EnergyRange,  // coinc: thgem1_energy in [lo,hi] (requires has_dt1)
@@ -76,6 +80,8 @@ struct Cut {
   int ivalue = 0;   // Channel
   double lo = 0.0;  // *Range lower bound (inclusive)
   double hi = 0.0;  // *Range upper bound (inclusive)
+  int imodule = -1;  // Channel: the module of an "M:C" spec, -1 = any module
+  ChSpec channel_spec() const { return ChSpec(imodule, ivalue); }
 };
 
 // One parsed histogram. `title` defaults to `name`; ROOT parses any embedded
@@ -205,7 +211,7 @@ inline bool pass_cut(const Cut& c, const ScalarHit& h) {
     case CutKind::None:
       return true;
     case CutKind::Channel:
-      return static_cast<int>(h.channel) == c.ivalue;
+      return c.channel_spec().matches(h);
     case CutKind::EnergyRange:
       return h.energy >= c.lo && h.energy <= c.hi;
     default:
@@ -459,12 +465,29 @@ inline void parse_one(const tdelila::json::Value& hv, std::size_t idx,
     c.kind = kind;
     bool val_ok = true;
     if (kind == CutKind::Channel) {
-      if (cv->t != JV::T::Num) {
-        pr.errors.push_back(label + ": cut \"channel\" must be an integer");
+      // A number = that channel on any module (unchanged meaning); a string =
+      // "C" or "M:C", the same spelling as --gamma-ch / --xy1-ch.
+      ChSpec spec;
+      std::string why;
+      if (cv->t == JV::T::Num) {
+        // Range first: casting an out-of-range double to int is undefined.
+        if (!(cv->num >= 0 && cv->num <= 255) || cv->num != std::floor(cv->num)) {
+          why = "a number must be an integer channel 0..255";
+        } else {
+          spec = ChSpec(static_cast<int>(cv->num));
+        }
+      } else if (cv->t == JV::T::Str) {
+        parse_ch_spec(cv->str, spec, &why);
+      } else {
+        why = "must be a channel number or a \"C\" / \"M:C\" string";
+      }
+      if (!spec.set()) {
+        pr.errors.push_back(label + ": cut \"channel\": " + why);
         val_ok = false;
         ok = false;
       } else {
-        c.ivalue = static_cast<int>(cv->num);
+        c.ivalue = spec.channel;
+        c.imodule = spec.module;
       }
     } else {
       if (cv->t != JV::T::Arr || cv->arr.size() != 2 ||

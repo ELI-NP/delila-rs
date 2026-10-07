@@ -1,7 +1,8 @@
 // test_sink_core.cpp — ROOT/ZMQ-free unit tests for the root_sink pure logic.
 //
-// Covers sink_core.hpp (envelope parse, batch decode, coincidence matcher with
-// energies, run state, HTTP helpers), hist_config.hpp (config parse + errors,
+// Covers sink_core.hpp (envelope parse, batch decode, coincidence / position
+// matchers with energies, channel specs C / M:C + the --module list + the
+// bare-channel watch (TODO 70 Phase 2), run state, HTTP helpers), hist_config.hpp (config parse + errors,
 // value_of / pass_cut for both scopes), time_offsets.hpp (TODO 70) and
 // event_def.hpp (TODO 71). Builds and runs on any box:
 //
@@ -1688,12 +1689,15 @@ static void test_pos_matcher() {
 }
 
 // ---------------------------------------------------------------------------
-// parse_ch_list tests (backs --xy1-ch/--xy2-ch)
+// Channel specs "C" / "M:C" (TODO 70 Phase 2): parse_ch_spec / parse_ch_list
+// (backs --gamma-ch ... --xy2-ch), parse_module_list (--module), keep_modules
 // ---------------------------------------------------------------------------
 static void test_parse_ch_list() {
-  std::vector<int> out;
+  std::vector<ChSpec> out;
+  // Bare channels: the pre-Phase-2 lists parse to the same channels, any module.
   CHECK(parse_ch_list("1,2,3,4,5", 5, out));
-  CHECK(out.size() == 5 && out[0] == 1 && out[4] == 5);
+  CHECK(out.size() == 5 && out[0].channel == 1 && out[4].channel == 5);
+  CHECK(out[0].bare() && out[4].bare());
   CHECK(parse_ch_list("0,255,10,20,30", 5, out));   // bounds are inclusive
   CHECK(!parse_ch_list("1,2,3,4", 5, out));         // too few
   CHECK(!parse_ch_list("1,2,3,4,5,6", 5, out));     // too many
@@ -1704,6 +1708,186 @@ static void test_parse_ch_list() {
                                                     // silently shadow the arm)
   CHECK(!parse_ch_list("", 5, out));                // empty
   CHECK(!parse_ch_list("1,2,3,4,", 5, out));        // trailing comma
+  CHECK(!parse_ch_list("1,,3,4,5", 5, out));        // empty element
+  // M:C, mixed with bare.
+  CHECK(parse_ch_list("0:1,0:2,0:3,0:5,0:4", 5, out));
+  CHECK(out[0].module == 0 && out[0].channel == 1 && out[3].channel == 5 && !out[3].bare());
+  CHECK(parse_ch_list("0:1,1:1,2:1,3:1,4", 5, out));  // same channel, distinct modules
+  // Overlap: a bare channel covers every module's channel of that number.
+  std::string why;
+  CHECK(!parse_ch_list("1,0:1,2,3,4", 5, out, &why));
+  CHECK(why.find("'1' and '0:1'") != std::string::npos);
+  CHECK(!parse_ch_list("0:1,0:1,2,3,4", 5, out, &why));
+  CHECK(!parse_ch_list("0:1,2,3,4,5:", 5, out, &why));
+  CHECK(why.find("'5:'") != std::string::npos);
+  CHECK(!parse_ch_list("1,2,3", 5, out, &why) && why.find("want 5") != std::string::npos);
+}
+
+static void test_ch_spec() {
+  ChSpec c;
+  CHECK(parse_ch_spec("3", c) && c.bare() && c.channel == 3);
+  CHECK(parse_ch_spec("10:3", c) && c.module == 10 && c.channel == 3);
+  CHECK(parse_ch_spec("0:0", c) && c.module == 0 && c.channel == 0 && !c.bare());
+  CHECK(parse_ch_spec("255:255", c) && c.module == 255 && c.channel == 255);
+  for (const char* bad : {"", ":", "1:", ":1", "256", "1:256", "256:1", "-1", "a", "1:2:3",
+                          " 1", "1 ", "0x1", "1.0", "+1", "1,2", "1000"}) {
+    std::string why;
+    ChSpec x;
+    CHECK(!parse_ch_spec(bad, x, &why));
+    CHECK(why.find("M:C") != std::string::npos);
+  }
+  CHECK(ch_spec_name(ChSpec(3)) == "3" && ch_spec_name(ChSpec(10, 3)) == "10:3" &&
+        ch_spec_name(ChSpec()) == "-");
+  // matches(): bare = any module; M:C = that module only; unset = nothing.
+  CHECK(ChSpec(3).matches(mod_hit(0, 3, 0)) && ChSpec(3).matches(mod_hit(7, 3, 0)));
+  CHECK(ChSpec(7, 3).matches(mod_hit(7, 3, 0)) && !ChSpec(7, 3).matches(mod_hit(0, 3, 0)));
+  CHECK(!ChSpec(7, 3).matches(mod_hit(7, 4, 0)));
+  CHECK(!ChSpec().matches(mod_hit(0, 0, 0)));
+  CHECK(!ChSpec(-1).matches(mod_hit(0, 0, 0)));  // the old "-1 = off" int still means off
+  // overlaps(): could one hit match both?
+  CHECK(ChSpec(1).overlaps(ChSpec(4, 1)) && ChSpec(4, 1).overlaps(ChSpec(1)));
+  CHECK(ChSpec(4, 1).overlaps(ChSpec(4, 1)) && !ChSpec(4, 1).overlaps(ChSpec(5, 1)));
+  CHECK(!ChSpec(1).overlaps(ChSpec(2)) && !ChSpec().overlaps(ChSpec()));
+}
+
+static void test_module_list() {
+  std::vector<int> m;
+  CHECK(parse_module_list("0", m) && m == std::vector<int>({0}));
+  CHECK(parse_module_list("0,4", m) && m == std::vector<int>({0, 4}));
+  CHECK(parse_module_list("10,8,9", m) && m == std::vector<int>({10, 8, 9}));
+  std::string why;
+  CHECK(!parse_module_list("0,0", m, &why) && why.find("twice") != std::string::npos);
+  for (const char* bad : {"", "0,", ",0", "x", "256", "-1", "0:1", "0, 4"})
+    CHECK(!parse_module_list(bad, m));
+  // keep_modules: the listed boards, order kept; empty list = all.
+  const std::vector<ScalarHit> v = {mod_hit(0, 1, 10.0), mod_hit(4, 1, 11.0),
+                                    mod_hit(2, 6, 12.0), mod_hit(4, 0, 13.0)};
+  auto all = v;
+  keep_modules(all, {});
+  CHECK(all.size() == 4);
+  auto m04 = v;
+  keep_modules(m04, {0, 4});
+  CHECK(m04.size() == 3 && m04[0].module == 0 && m04[1].module == 4 && m04[2].channel == 0);
+  auto none = v;
+  keep_modules(none, {9});
+  CHECK(none.empty());
+}
+
+static void test_matchers_key_on_module() {
+  // Δt monitor across boards (TODO 70 Phase 2): every role is M:C, so the
+  // same channel number on another board is NOT taken for it.
+  CoincidenceMatcher::Config cfg;
+  cfg.gamma_ch = ChSpec(9, 0);
+  cfg.thgem1_ch = ChSpec(1, 0);
+  cfg.thgem2_ch = ChSpec(10, 0);
+  cfg.window_ns = 100.0;
+  cfg.margin_ns = 1000.0;
+  CoincidenceMatcher m(cfg);
+  std::vector<CoincResult> res;
+  auto sink = [&](const CoincResult& r) { res.push_back(r); };
+  m.push(mod_hit(9, 0, 1000.0, 500), sink);   // gamma
+  m.push(mod_hit(0, 0, 1001.0, 1), sink);     // ch0 on board 0: none of the roles
+  m.push(mod_hit(1, 0, 1040.0, 111), sink);   // thgem1 (m1c0) d=+40
+  m.push(mod_hit(10, 0, 990.0, 222), sink);   // thgem2 (m10c0) d=-10
+  m.push(mod_hit(10, 1, 1000.0, 9), sink);    // other channel of board 10
+  m.push(mod_hit(5, 0, 1001.0, 7), sink);     // ch0 on board 5: ignored too
+  m.flush(sink);
+  CHECK(res.size() == 1);
+  CHECK(res[0].gamma_energy == 500);
+  CHECK(res[0].has_dt1 && near(res[0].dt1, 40.0) && res[0].thgem1_energy == 111);
+  CHECK(res[0].has_dt2 && near(res[0].dt2, -10.0) && res[0].thgem2_energy == 222);
+  // A bare spec still matches any module (backward compatible): the gamma on
+  // board 9 is found by a bare "0" too, and so is the board-0 ch0 hit.
+  CoincidenceMatcher::Config bare = cfg;
+  bare.gamma_ch = 0;  // int -> bare ChSpec
+  CoincidenceMatcher mb(bare);
+  std::vector<CoincResult> rb;
+  auto sb = [&](const CoincResult& r) { rb.push_back(r); };
+  mb.push(mod_hit(9, 0, 1000.0, 500), sb);
+  mb.push(mod_hit(0, 0, 5000.0, 1), sb);
+  mb.flush(sb);
+  CHECK(rb.size() == 2);
+
+  PositionMatcher::Config pc;
+  pc.trig_ch = ChSpec(2, 1);
+  pc.xl_ch = ChSpec(2, 2);
+  pc.xr_ch = ChSpec(3, 2);  // an arm on another board
+  pc.yu_ch = ChSpec(2, 4);
+  pc.yd_ch = ChSpec(2, 5);
+  pc.window_ns = 100.0;
+  pc.margin_ns = 1000.0;
+  PositionMatcher p(pc);
+  std::vector<PosResult> pr;
+  auto ps = [&](const PosResult& r) { pr.push_back(r); };
+  p.push(mod_hit(2, 1, 1000.0, 77), ps);  // trigger
+  p.push(mod_hit(2, 2, 1010.0), ps);      // XL
+  p.push(mod_hit(2, 3, 1020.0), ps);      // ch3 of board 2: not XR (XR is 3:2)
+  p.push(mod_hit(3, 2, 1030.0), ps);      // XR on board 3
+  p.push(mod_hit(5, 4, 1005.0), ps);      // ch4 of board 5: not YU
+  p.flush(ps);
+  CHECK(pr.size() == 1 && pr[0].trig_energy == 77);
+  CHECK(pr[0].has_xl && near(pr[0].dt_xl, 10.0));
+  CHECK(pr[0].has_xr && near(pr[0].dt_xr, 30.0));
+  CHECK(!pr[0].has_yu && !pr[0].has_yd);
+}
+
+static void test_bare_channel_watch() {
+  BareChannelWatch w;
+  CHECK(!w.any());
+  w.watch(ChSpec(0));      // bare -> watched
+  w.watch(ChSpec(4, 1));   // M:C -> never ambiguous, not watched
+  CHECK(w.any());
+  std::vector<std::array<int, 3>> got;
+  auto on = [&](int c, int a, int b) { got.push_back({c, a, b}); };
+  w.see(mod_hit(0, 0, 0), on);
+  w.see(mod_hit(0, 0, 0), on);
+  w.see(mod_hit(3, 1, 0), on);
+  w.see(mod_hit(4, 1, 0), on);  // ch1 is not watched (its spec named a module)
+  CHECK(got.empty());
+  w.see(mod_hit(5, 0, 0), on);  // ch0 on a second module -> once
+  w.see(mod_hit(6, 0, 0), on);  // a third module: already reported this run
+  w.see(mod_hit(0, 0, 0), on);
+  CHECK(got.size() == 1 && got[0][0] == 0 && got[0][1] == 0 && got[0][2] == 5);
+  w.reset();  // next run: reported again
+  w.see(mod_hit(6, 0, 0), on);
+  w.see(mod_hit(7, 0, 0), on);
+  CHECK(got.size() == 2 && got[1][1] == 6 && got[1][2] == 7);
+  w.clear_watched();
+  CHECK(!w.any());
+}
+
+static void test_hist_channel_cut_module() {
+  const char* json = R"JSON({ "histograms": [
+    { "name": "a", "type": "TH1D", "x": "energy", "channel": 3,      "bins": 4, "min": 0, "max": 4 },
+    { "name": "b", "type": "TH1D", "x": "energy", "channel": "10:3", "bins": 4, "min": 0, "max": 4 },
+    { "name": "c", "type": "TH1D", "x": "energy", "channel": "3",    "bins": 4, "min": 0, "max": 4 }
+  ]})JSON";
+  ParseResult pr = parse_hist_config(json);
+  CHECK(pr.errors.empty() && pr.defs.size() == 3);
+  if (pr.defs.size() == 3) {
+    CHECK(pr.defs[0].cut.kind == CutKind::Channel && pr.defs[0].cut.ivalue == 3 &&
+          pr.defs[0].cut.imodule == -1);
+    CHECK(pr.defs[1].cut.ivalue == 3 && pr.defs[1].cut.imodule == 10);
+    CHECK(pr.defs[2].cut.ivalue == 3 && pr.defs[2].cut.imodule == -1);
+    CHECK(pass_cut(pr.defs[0].cut, mod_hit(0, 3, 0)) && pass_cut(pr.defs[0].cut, mod_hit(10, 3, 0)));
+    CHECK(pass_cut(pr.defs[1].cut, mod_hit(10, 3, 0)) && !pass_cut(pr.defs[1].cut, mod_hit(0, 3, 0)));
+  }
+  const char* bad = R"JSON({ "histograms": [
+    { "name": "a", "type": "TH1D", "x": "energy", "channel": "x",  "bins": 4, "min": 0, "max": 4 },
+    { "name": "b", "type": "TH1D", "x": "energy", "channel": 3.5,  "bins": 4, "min": 0, "max": 4 },
+    { "name": "c", "type": "TH1D", "x": "energy", "channel": 300,  "bins": 4, "min": 0, "max": 4 },
+    { "name": "d", "type": "TH1D", "x": "energy", "channel": -1,   "bins": 4, "min": 0, "max": 4 },
+    { "name": "e", "type": "TH1D", "x": "energy", "channel": true, "bins": 4, "min": 0, "max": 4 },
+    { "name": "f", "type": "TH1D", "x": "energy", "channel": "1:2:3", "bins": 4, "min": 0, "max": 4 }
+  ]})JSON";
+  ParseResult pb = parse_hist_config(bad);
+  CHECK(pb.defs.empty());
+  int n = 0;
+  for (const auto& e : pb.errors)
+    if (e.find("cut \"channel\"") != std::string::npos) ++n;
+  CHECK(n == 6);  // every one reported
+  // The aggregate form the older tests use still means "any module".
+  CHECK(pass_cut(Cut{CutKind::Channel, 3, 0, 0}, mod_hit(9, 3, 0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -2107,6 +2291,11 @@ int main() {
   test_foreign_module_hits_do_not_reach_the_matcher();
   test_pos_matcher();
   test_parse_ch_list();
+  test_ch_spec();
+  test_module_list();
+  test_matchers_key_on_module();
+  test_bare_channel_watch();
+  test_hist_channel_cut_module();
   test_run_state();
   test_http_helpers();
   test_hist_config_valid();

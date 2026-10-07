@@ -146,12 +146,15 @@ struct Options {
   std::string exp_name;       // --exp-name: explicit override (wins always)
   std::string operator_url;   // --operator: fetch experiment_name from /api/status
   std::string hists_file;     // --hists: declarative histogram set
-  int module = -1;  // --module M: process only digitizer M's hits (-1 = all)
-  int gamma_ch = -1;
-  int thgem1_ch = -1;
-  int thgem2_ch = -1;
-  std::vector<int> xy1_ch;  // --xy1-ch T,XL,XR,YU,YD (empty = disabled)
-  std::vector<int> xy2_ch;  // --xy2-ch likewise
+  // --module M[,M2...]: keep only these digitizers' hits (empty = all boards).
+  std::vector<int> modules;
+  // Channel roles: "C" (any module) or "M:C" (sink_core.hpp ChSpec, TODO 70
+  // Phase 2). Unset = role off.
+  ChSpec gamma_ch;
+  ChSpec thgem1_ch;
+  ChSpec thgem2_ch;
+  std::vector<ChSpec> xy1_ch;  // --xy1-ch T,XL,XR,YU,YD (empty = disabled)
+  std::vector<ChSpec> xy2_ch;  // --xy2-ch likewise
   double window_ns = 1000.0;
   double margin_ns = 10000.0;
   int http_port = 8090;
@@ -189,19 +192,23 @@ static void print_usage(const char* argv0) {
       "                      start (used only when --exp-name is not given)\n"
       "  --hists FILE        histogram definition JSON (see README); replaces the\n"
       "                      built-in dt1/dt2/dt2_vs_dt1/channels set\n"
-      "  --module M          process only hits of digitizer (module) M — tree,\n"
-      "                      histograms, matchers and events alike\n"
-      "                      (default: all). Needed with >1 digitizer: the\n"
-      "                      matchers key on channel alone and every stage\n"
-      "                      assumes one time base\n"
-      "  --gamma-ch N        gamma detector channel (enables Δt monitor)\n"
-      "  --thgem1-ch N       ThGEM1 channel\n"
-      "  --thgem2-ch N       ThGEM2 channel\n"
+      "  --module M[,M2...]  process only hits of these digitizers (modules) —\n"
+      "                      trees, histograms, matchers and events alike\n"
+      "                      (default: all). Needed when boards are NOT clock-\n"
+      "                      synchronized (the Sorter and the matchers assume\n"
+      "                      one time base)\n"
+      "  Channels below are C or M:C (module:channel, 0..255 each). A bare C\n"
+      "  matches channel C on ANY module — fine with one board or one --module;\n"
+      "  with several boards give M:C (a bare channel seen on two modules in a\n"
+      "  run is warned once)\n"
+      "  --gamma-ch C        gamma detector channel (enables Δt monitor)\n"
+      "  --thgem1-ch C       ThGEM1 channel\n"
+      "  --thgem2-ch C       ThGEM2 channel\n"
       "                      (all three required; if any omitted -> recorder only)\n"
       "  --xy1-ch T,XL,XR,YU,YD  delay-line XY monitor 1: trigger + 4 arm channels\n"
       "  --xy2-ch T,XL,XR,YU,YD  delay-line XY monitor 2\n"
-      "                      (5 distinct ints 0..255; fills pos1/pos2-scope\n"
-      "                       histograms, so --hists is required)\n"
+      "                      (5 channels that cannot match the same hit; fills\n"
+      "                       pos1/pos2-scope histograms, so --hists is required)\n"
       "  --window-ns X       coincidence half-window (default 1000)\n"
       "  --margin-ns X       out-of-order tolerance / ripen delay (default 10000)\n"
       "  --http-port N       THttpServer port, 0 disables (default 8090)\n"
@@ -270,30 +277,32 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
       opt.hists_file = v;
     } else if (a == "--module") {
       if (!(v = need(i))) return false;
-      opt.module = std::atoi(v);
-    } else if (a == "--gamma-ch") {
-      if (!(v = need(i))) return false;
-      opt.gamma_ch = std::atoi(v);
-    } else if (a == "--thgem1-ch") {
-      if (!(v = need(i))) return false;
-      opt.thgem1_ch = std::atoi(v);
-    } else if (a == "--thgem2-ch") {
-      if (!(v = need(i))) return false;
-      opt.thgem2_ch = std::atoi(v);
-    } else if (a == "--xy1-ch") {
-      if (!(v = need(i))) return false;
-      if (!parse_ch_list(v, 5, opt.xy1_ch)) {
-        std::fprintf(stderr,
-                     "root_sink: --xy1-ch wants 5 distinct ints 'T,XL,XR,YU,YD' "
-                     "in 0..255 (got '%s')\n", v);
+      std::string why;
+      if (!parse_module_list(v, opt.modules, &why)) {
+        std::fprintf(stderr, "root_sink: --module: %s\n", why.c_str());
         return false;
       }
-    } else if (a == "--xy2-ch") {
+    } else if (a == "--gamma-ch" || a == "--thgem1-ch" || a == "--thgem2-ch") {
       if (!(v = need(i))) return false;
-      if (!parse_ch_list(v, 5, opt.xy2_ch)) {
+      ChSpec& dst = a == "--gamma-ch" ? opt.gamma_ch
+                    : a == "--thgem1-ch" ? opt.thgem1_ch : opt.thgem2_ch;
+      // "-1" = off, the old documented default; anything else must be a
+      // channel (std::atoi used to turn junk silently into channel 0).
+      std::string why;
+      if (std::string(v) == "-1") {
+        dst = ChSpec();
+      } else if (!parse_ch_spec(v, dst, &why)) {
+        std::fprintf(stderr, "root_sink: %s: %s\n", a.c_str(), why.c_str());
+        return false;
+      }
+    } else if (a == "--xy1-ch" || a == "--xy2-ch") {
+      if (!(v = need(i))) return false;
+      std::string why;
+      if (!parse_ch_list(v, 5, a == "--xy1-ch" ? opt.xy1_ch : opt.xy2_ch, &why)) {
         std::fprintf(stderr,
-                     "root_sink: --xy2-ch wants 5 distinct ints 'T,XL,XR,YU,YD' "
-                     "in 0..255 (got '%s')\n", v);
+                     "root_sink: %s wants 5 channels 'T,XL,XR,YU,YD' (each C or M:C, "
+                     "0..255) that cannot match the same hit — %s (got '%s')\n",
+                     a.c_str(), why.c_str(), v);
         return false;
       }
     } else if (a == "--window-ns") {
@@ -1158,22 +1167,60 @@ static bool load_event_def_file(const std::string& path, ActiveEventDef& a,
   return reload_event_def(a, &text, "", real, max_lookback_ns, now_utc_iso(), errors);
 }
 
-// Trigger channels on another digitizer than --module M: those hits are
-// dropped right after decoding, so such a trigger can never open an event.
-// Not fatal (one definition may serve several setups), but never silent.
-static void warn_foreign_triggers(const EventDef& d, int module) {
-  if (module < 0) return;
+// "0" / "0,4" — the --module list as given.
+static std::string module_list_str(const std::vector<int>& m) {
+  std::string s;
+  for (int x : m) s += (s.empty() ? "" : ",") + std::to_string(x);
+  return s;
+}
+
+static bool module_kept(const std::vector<int>& modules, int m) {
+  return modules.empty() || std::find(modules.begin(), modules.end(), m) != modules.end();
+}
+
+// Trigger channels on a digitizer that --module drops: those hits never reach
+// the Sorter, so such a trigger can never open an event. Not fatal (one
+// definition may serve several setups), but never silent.
+static void warn_foreign_triggers(const EventDef& d, const std::vector<int>& modules) {
+  if (modules.empty()) return;
   for (const TriggerDef& t : d.triggers) {
     std::string foreign;
     for (uint16_t k : t.channels)
-      if ((k >> 8) != module) foreign += (foreign.empty() ? "" : ",") + mc_name(k);
+      if (!module_kept(modules, k >> 8)) foreign += (foreign.empty() ? "" : ",") + mc_name(k);
     if (!foreign.empty())
       std::fprintf(stderr,
                    "root_sink: WARNING event def: trigger '%s' channel(s) %s are not on "
-                   "--module %d, whose filter drops them before the Sorter — they can "
+                   "--module %s, whose filter drops them before the Sorter — they can "
                    "never trigger an event\n",
-                   t.name.c_str(), foreign.c_str(), module);
+                   t.name.c_str(), foreign.c_str(), module_list_str(modules).c_str());
   }
+}
+
+// Per-channel differences between the previous run's offset table and this
+// run's, for the run log ("" = unchanged). %.3f like format_offsets_line; the
+// delta in %.4g so a sub-display-precision edit still shows.
+static std::string offsets_diff(const OffsetTable& before, const OffsetTable& after) {
+  std::string s;
+  auto add = [&](const std::string& item) { s += (s.empty() ? "" : ", ") + item; };
+  char buf[128];
+  for (const auto& kv : after.abs_ns) {
+    auto it = before.abs_ns.find(kv.first);
+    if (it == before.abs_ns.end()) {
+      std::snprintf(buf, sizeof buf, "%s added (%+.3f)", mc_name(kv.first).c_str(), kv.second);
+      add(buf);
+    } else if (it->second != kv.second) {
+      std::snprintf(buf, sizeof buf, "%s %+.3f -> %+.3f (delta %+.4g)", mc_name(kv.first).c_str(),
+                    it->second, kv.second, kv.second - it->second);
+      add(buf);
+    }
+  }
+  for (const auto& kv : before.abs_ns)
+    if (!after.abs_ns.count(kv.first)) {
+      std::snprintf(buf, sizeof buf, "%s removed (was %+.3f)", mc_name(kv.first).c_str(),
+                    kv.second);
+      add(buf);
+    }
+  return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,10 +1232,26 @@ int main(int argc, char** argv) {
   if (!parse_args(argc, argv, opt, help)) return help ? 0 : 2;
 
   const bool http_enabled = opt.http_port != 0;
-  const bool coinc_enabled =
-      opt.gamma_ch >= 0 && opt.thgem1_ch >= 0 && opt.thgem2_ch >= 0;
+  const bool coinc_enabled = opt.gamma_ch.set() && opt.thgem1_ch.set() && opt.thgem2_ch.set();
   const bool xy1_enabled = opt.xy1_ch.size() == 5;
   const bool xy2_enabled = opt.xy2_ch.size() == 5;
+
+  // The Δt matcher tests its roles in order (gamma, ThGEM1, ThGEM2): two specs
+  // that can match the same hit would let the first silently claim it.
+  {
+    const ChSpec* role[] = {&opt.gamma_ch, &opt.thgem1_ch, &opt.thgem2_ch};
+    const char* flag[] = {"--gamma-ch", "--thgem1-ch", "--thgem2-ch"};
+    for (int i = 0; i < 3; ++i)
+      for (int j = i + 1; j < 3; ++j)
+        if (role[i]->overlaps(*role[j])) {
+          std::fprintf(stderr,
+                       "root_sink: ERROR %s %s and %s %s can match the same hit (a bare C "
+                       "matches every module's channel C) — give distinct channels\n",
+                       flag[i], ch_spec_name(*role[i]).c_str(), flag[j],
+                       ch_spec_name(*role[j]).c_str());
+          return 2;
+        }
+  }
 
   const bool events_enabled = !opt.event_def.empty();
 
@@ -1230,6 +1293,36 @@ int main(int argc, char** argv) {
   // --hists only defines monitor histograms, so it needs the HTTP server. Warn
   // and ignore it rather than silently drop it when the server is off.
   bool use_hists = http_enabled && !opt.hists_file.empty();
+
+  // Every channel spec a display consumer uses, labelled for the logs (TODO 70
+  // Phase 2): the matcher roles and the hit-scope "channel" cuts of `defs`.
+  auto spec_users = [&](const std::vector<HistDef>& defs) {
+    std::vector<std::pair<std::string, ChSpec>> u;
+    if (http_enabled && coinc_enabled) {  // the matcher lives on the HTTP display
+      u.push_back({"--gamma-ch", opt.gamma_ch});
+      u.push_back({"--thgem1-ch", opt.thgem1_ch});
+      u.push_back({"--thgem2-ch", opt.thgem2_ch});
+    }
+    static const char* const arm[] = {"T", "XL", "XR", "YU", "YD"};
+    for (int k = 0; k < 5; ++k) {  // XY matchers exist only with --hists
+      if (use_hists && xy1_enabled) u.push_back({std::string("--xy1-ch ") + arm[k], opt.xy1_ch[k]});
+      if (use_hists && xy2_enabled) u.push_back({std::string("--xy2-ch ") + arm[k], opt.xy2_ch[k]});
+    }
+    for (const HistDef& d : defs)
+      if (d.cut.kind == CutKind::Channel)
+        u.push_back({"hist '" + d.name + "' channel cut", d.cut.channel_spec()});
+    return u;
+  };
+  // A spec naming a module that --module drops can never match: say so.
+  auto warn_dropped_specs = [&](const std::vector<HistDef>& defs) {
+    for (const auto& u : spec_users(defs))
+      if (!u.second.bare() && !module_kept(opt.modules, u.second.module))
+        std::fprintf(stderr,
+                     "root_sink: WARNING %s %s names module %d, which --module %s drops — "
+                     "it can never match\n",
+                     u.first.c_str(), ch_spec_name(u.second).c_str(), u.second.module,
+                     module_list_str(opt.modules).c_str());
+  };
   if (!opt.hists_file.empty() && !http_enabled)
     std::fprintf(stderr,
                  "root_sink: WARNING --hists %s ignored because --http-port 0 "
@@ -1330,33 +1423,64 @@ int main(int argc, char** argv) {
   } else {
     std::printf("root_sink: time offsets: none (timestamp_ns recorded RAW)\n");
   }
-  if (opt.module >= 0)
+  if (opt.modules.size() == 1)
     std::printf("root_sink: --module %d: only digitizer %d's hits are recorded, histogrammed "
                 "and matched (the .delila keeps every board)\n",
-                opt.module, opt.module);
+                opt.modules[0], opt.modules[0]);
+  else if (!opt.modules.empty())
+    std::printf("root_sink: --module %s: only these digitizers' hits are recorded, "
+                "histogrammed and matched (the .delila keeps every board)\n",
+                module_list_str(opt.modules).c_str());
   if (use_hists)
     std::printf("root_sink: histograms defined by %s (%zu hist(s))\n",
                 opt.hists_file.c_str(), hist_defs.size());
   if (coinc_enabled)
-    std::printf("root_sink: monitor gamma=ch%d thgem1=ch%d thgem2=ch%d window=%.0fns margin=%.0fns\n",
-                opt.gamma_ch, opt.thgem1_ch, opt.thgem2_ch, opt.window_ns, opt.margin_ns);
+    std::printf("root_sink: monitor gamma=ch%s thgem1=ch%s thgem2=ch%s window=%.0fns margin=%.0fns\n",
+                ch_spec_name(opt.gamma_ch).c_str(), ch_spec_name(opt.thgem1_ch).c_str(),
+                ch_spec_name(opt.thgem2_ch).c_str(), opt.window_ns, opt.margin_ns);
   else
     std::printf("root_sink: Δt monitor DISABLED (need --gamma-ch/--thgem1-ch/--thgem2-ch) — recorder only\n");
-  if (use_hists && xy1_enabled)
-    std::printf("root_sink: xy1 monitor trig=ch%d XL=ch%d XR=ch%d YU=ch%d YD=ch%d window=%.0fns margin=%.0fns\n",
-                opt.xy1_ch[0], opt.xy1_ch[1], opt.xy1_ch[2], opt.xy1_ch[3],
-                opt.xy1_ch[4], opt.window_ns, opt.margin_ns);
-  if (use_hists && xy2_enabled)
-    std::printf("root_sink: xy2 monitor trig=ch%d XL=ch%d XR=ch%d YU=ch%d YD=ch%d window=%.0fns margin=%.0fns\n",
-                opt.xy2_ch[0], opt.xy2_ch[1], opt.xy2_ch[2], opt.xy2_ch[3],
-                opt.xy2_ch[4], opt.window_ns, opt.margin_ns);
+  auto xy_line = [&](const char* name, const std::vector<ChSpec>& c) {
+    std::printf("root_sink: %s monitor trig=ch%s XL=ch%s XR=ch%s YU=ch%s YD=ch%s window=%.0fns "
+                "margin=%.0fns\n",
+                name, ch_spec_name(c[0]).c_str(), ch_spec_name(c[1]).c_str(),
+                ch_spec_name(c[2]).c_str(), ch_spec_name(c[3]).c_str(),
+                ch_spec_name(c[4]).c_str(), opt.window_ns, opt.margin_ns);
+  };
+  if (use_hists && xy1_enabled) xy_line("xy1", opt.xy1_ch);
+  if (use_hists && xy2_enabled) xy_line("xy2", opt.xy2_ch);
+  warn_dropped_specs(hist_defs);
+  // A bare channel matches every module's channel C: right with one board or
+  // one --module, a mix with several. Say which specs are bare whenever more
+  // than one module can reach them (the display WARNs if it really happens).
+  if (opt.modules.size() != 1) {
+    std::set<int> chans;
+    std::vector<std::string> who;  // flag / hist names, first-seen order
+    for (const auto& u : spec_users(hist_defs)) {
+      if (!u.second.bare()) continue;
+      chans.insert(u.second.channel);
+      // "--xy1-ch XL" -> "--xy1-ch": one name per option
+      std::string w = u.first.compare(0, 2, "--") == 0 ? u.first.substr(0, u.first.find(' '))
+                                                       : u.first;
+      if (std::find(who.begin(), who.end(), w) == who.end()) who.push_back(w);
+    }
+    if (!chans.empty()) {
+      std::string cs, ws;
+      for (int c : chans) cs += (cs.empty() ? "" : ",") + std::to_string(c);
+      for (const auto& w : who) ws += (ws.empty() ? "" : ", ") + w;
+      std::printf("root_sink: bare channel(s) %s (%s) match ANY module — fine with one "
+                  "digitizer; with several give M:C (a bare channel seen on two modules in a "
+                  "run is WARNED once)\n",
+                  cs.c_str(), ws.c_str());
+    }
+  }
   if (events_enabled) {
     std::printf("root_sink: events tree \"%s\": %s (re-read at every run start)\n",
                 kEventsTreeName, evdef_boot.source_path.c_str());
     std::printf("root_sink: event def: %s\n", format_event_def_line(*evdef_boot.def).c_str());
     for (const auto& w : evdef_boot.warnings)
       std::fprintf(stderr, "root_sink: WARNING event def: %s\n", w.c_str());
-    warn_foreign_triggers(*evdef_boot.def, opt.module);
+    warn_foreign_triggers(*evdef_boot.def, opt.modules);
   }
 
   std::signal(SIGINT, on_signal);
@@ -1461,7 +1585,7 @@ int main(int argc, char** argv) {
   // The two delay-line XY matchers share --window-ns/--margin-ns with the Δt
   // matcher (one disorder tolerance per stream). --hists required: see the
   // startup warning above.
-  auto make_xy = [&](const std::vector<int>& chs) {
+  auto make_xy = [&](const std::vector<ChSpec>& chs) {
     PositionMatcher::Config cfg;
     cfg.trig_ch = chs[0];
     cfg.xl_ch = chs[1];
@@ -1551,6 +1675,18 @@ int main(int argc, char** argv) {
     // every RunOpen and frozen for the run (SPEC §4.3.1).
     ActiveOffsets toff = toff_boot;
     std::set<uint16_t> toff_reported;
+    // Run-end summary of the (module, channel) keys this run had no offset for
+    // (each was WARNed once when first seen). Log only, by choice: the run's
+    // provenance already holds the exact table applied, so "unmapped" = any key
+    // present in the trees but absent from resolved_abs_ns, derivable offline.
+    auto report_unmapped = [&](const std::string& what) {
+      if (!toff_enabled || toff_reported.empty()) return;
+      std::string keys;
+      for (uint16_t k : toff_reported) keys += (keys.empty() ? "" : " ") + mc_name(k);
+      std::printf("root_sink: %s time offsets: %zu (module, channel) key(s) had no entry and "
+                  "stayed RAW: %s\n",
+                  what.c_str(), toff_reported.size(), keys.c_str());
+    };
     // Event definition in force — same ownership and per-run freeze. The
     // shared_ptr<const EventDef> handed to the Sorter is never mutated: a
     // reload adopts a NEW object (reload_event_def).
@@ -1574,14 +1710,22 @@ int main(int argc, char** argv) {
             m.ctrl = eb::Ctrl::RunOpen;
             if (toff_enabled) {
               bool was_stale = toff.stale;
+              // The previous run's table (the startup load before the first
+              // run): an edit between runs is logged per channel, so a moved
+              // image or TOF peak can be traced to the run that changed it.
+              const OffsetTable before = toff.table;
               std::vector<std::string> errs;
               if (!load_offsets_file(opt.time_calib, toff, safe_horizon_ns, errs)) {
                 std::fprintf(stderr,
                              "root_sink: ERROR time offsets reload failed at run start — "
                              "KEEPING THE PREVIOUS TABLE for this run:\n");
                 for (const auto& e : errs) std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
-              } else if (was_stale) {
-                std::printf("root_sink: time offsets reloaded OK (was STALE)\n");
+              } else {
+                if (was_stale) std::printf("root_sink: time offsets reloaded OK (was STALE)\n");
+                const std::string diff = offsets_diff(before, toff.table);
+                if (!diff.empty())
+                  std::printf("root_sink: time offsets CHANGED vs the previous run: %s\n",
+                              diff.c_str());
               }
               toff_reported.clear();
               counters.toff_unmapped = 0;
@@ -1618,7 +1762,7 @@ int main(int argc, char** argv) {
               // run), every run — like the time-offset warnings above.
               for (const auto& w : evdef.warnings)
                 std::fprintf(stderr, "root_sink: WARNING event def: %s\n", w.c_str());
-              warn_foreign_triggers(*evdef.def, opt.module);
+              warn_foreign_triggers(*evdef.def, opt.modules);
               m.event_def = evdef.def;
               m.prov.event_def_meta = event_def_provenance_json(evdef);
               m.prov.event_def_source = evdef.source_text;
@@ -1630,14 +1774,14 @@ int main(int argc, char** argv) {
             std::printf("root_sink: run started (source %u)\n", sid);
             std::fflush(stdout);
           });
-          // --module, then time alignment: both before ANY consumer. The matchers
-          // key on channel alone and the Sorter / watermarks assume one time base
-          // (sink_core.hpp); aligning here puts the Sorter, the hits tree, the
-          // builder and the display matchers on ONE aligned axis
-          // (time_offsets.hpp). The Sorter sorts on timestamp_ns, so this must
-          // never move after it.
+          // --module, then time alignment: both before ANY consumer. The Sorter
+          // and the watermark matchers assume one time base (sink_core.hpp), so
+          // unsynchronized boards go here; aligning here puts the Sorter, the
+          // hits tree, the event layer and the display matchers on ONE aligned
+          // axis (time_offsets.hpp). The Sorter sorts on timestamp_ns, so this
+          // must never move after it.
           std::size_t decoded = hits.size();
-          keep_module(hits, opt.module);
+          keep_modules(hits, opt.modules);
           counters.other_module += static_cast<long long>(decoded - hits.size());
           if (toff_enabled)
             apply_time_offsets(hits, toff.table, toff_reported, [&](uint16_t k) {
@@ -1664,6 +1808,7 @@ int main(int argc, char** argv) {
               env.source_id, env.run_number,
               [&](uint32_t rn) {
                 counters.writing = false;
+                report_unmapped("run " + std::to_string(rn));
                 eb::SorterMsg m;
                 m.ctrl = eb::Ctrl::RunClose;
                 m.run_number = rn;
@@ -1715,6 +1860,7 @@ int main(int argc, char** argv) {
         }
       }
     }
+    if (run_state.is_writing()) report_unmapped("unfinalized run");
     // Orderly teardown: one Shutdown down each path. The Sorter fans it out
     // to the workers (after flushing); the Display loop exits on its copy.
     eb::SorterMsg m;
@@ -2052,12 +2198,40 @@ int main(int argc, char** argv) {
     fill_pos_hists(live_hists, r, Scope::Pos2);
   };
 
+  // Bare channel specs (any module) vs the stream: the first time a bare
+  // channel number arrives from a second module in a run, the matcher / cut
+  // using it starts mixing boards — WARN once per channel per run (TODO 70
+  // Phase 2). Rebuilt on /ReloadHists (the cuts may change).
+  BareChannelWatch bare_watch;
+  std::array<std::string, 256> bare_who;  // channel -> the specs using it bare
+  bool bare_watch_on = false;
+  auto rebuild_bare_watch = [&](const std::vector<HistDef>& defs) {
+    bare_watch.clear_watched();
+    for (auto& w : bare_who) w.clear();
+    for (const auto& u : spec_users(defs))
+      if (u.second.bare()) {
+        bare_watch.watch(u.second);
+        std::string& w = bare_who[static_cast<std::size_t>(u.second.channel)];
+        w += (w.empty() ? "" : ", ") + u.first;
+      }
+    bare_watch_on = bare_watch.any();
+  };
+  rebuild_bare_watch(hist_defs);
+  auto on_bare_ambiguous = [&](int ch, int m1, int m2) {
+    std::fprintf(stderr,
+                 "root_sink: WARNING bare channel %d (%s) arrived from modules %d and %d this "
+                 "run — a bare channel matches BOTH, so the monitor mixes boards; give M:C "
+                 "(e.g. %d:%d) or --module (warned once per channel per run)\n",
+                 ch, bare_who[static_cast<std::size_t>(ch)].c_str(), m1, m2, m1, ch);
+  };
+
   bool display_done = false;
   auto handle_display = [&](eb::DisplayMsg& d) {
     switch (d.ctrl) {
       case eb::Ctrl::None:
         if (http_enabled) {
           for (const ScalarHit& h : d.hits) {
+            if (bare_watch_on) bare_watch.see(h, on_bare_ambiguous);
             if (use_hists)
               fill_hit_hists(live_hists, h);
             else if (h.channel < 64)
@@ -2069,6 +2243,7 @@ int main(int argc, char** argv) {
         }
         break;
       case eb::Ctrl::RunOpen:
+        bare_watch.reset();             // the ambiguity warning is per run
         if (matcher) matcher->reset();  // clock may restart between runs
         if (xy1) xy1->reset();
         if (xy2) xy2->reset();
@@ -2147,6 +2322,8 @@ int main(int argc, char** argv) {
           }
           live_hists.clear();
           build_live_hists(pr.defs, server, live_hists);
+          warn_dropped_specs(pr.defs);
+          rebuild_bare_watch(pr.defs);
           std::printf("root_sink: /ReloadHists — %zu histogram(s) now live\n",
                       live_hists.size());
         }
