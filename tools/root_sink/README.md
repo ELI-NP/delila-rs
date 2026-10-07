@@ -3,9 +3,11 @@
 A single C++ process that subscribes to the DELILA **merger's ZMQ PUB** as an
 *additional* consumer and does two jobs at once:
 
-1. **Recorder** — decode every event to five scalar fields and write a flat,
-   ZSTD-compressed ROOT `TTree` (one file per run). Cheaper than the two-step
-   `.delila` → `delila2root` path when only scalars are needed.
+1. **Recorder** — ZSTD-compressed ROOT `TTree`s, one file per run, each tree
+   opt-in: the per-hit tree (`--hits-tree`, five scalars per hit), the ThGEM
+   built-event tree (`--built-tree`) and the generic `events` tree
+   (`--event-def`, TODO 71). At least one is required — with none, root_sink
+   refuses to start (exit 2).
 2. **Monitor** — a coincidence Δt monitor (gamma vs ThGEM1/ThGEM2 on configurable
    channels) served live over `THttpServer`. Browse it with JSROOT — zero
    frontend code.
@@ -55,7 +57,9 @@ convention as `delila2root`); on **gant** source `thisroot.sh` first
 root_sink [options]
   --zmq ADDR          merger PUB endpoint          (default tcp://localhost:5557)
   --out-dir DIR       output directory             (default .)
-  --tree NAME         TTree name                   (default delila, same as delila2root)
+  --hits-tree         write the per-hit tree — OPT-IN since TODO 71 (the
+                      .delila holds the time series; delila2root reproduces it)
+  --tree NAME         hits tree name               (default delila, same as delila2root)
   --exp-name NAME     experiment name for the output filename (override)
   --operator URL      operator base URL, e.g. http://localhost:9092; experiment
                       name is read from <URL>/api/status at run start (only when
@@ -91,13 +95,20 @@ root_sink [options]
                       legacy time-calib output); aligned = raw - offset_ns for
                       EVERY consumer. Re-read at every run start, frozen per run
                       (see "Time offsets" below)
+  --event-def FILE    generic event definition JSON -> the "events" tree. Re-read
+                      at every run start, frozen per run (see "Generic events")
   --help
 ```
+
+At least one of `--hits-tree`, `--built-tree`, `--event-def` must be given:
+since TODO 71 (2026-10) the hits tree is no longer written implicitly, and a
+command line selecting no tree exits 2 with an ERROR saying so (`--tree NAME`
+alone only warns that the hits tree stays off).
 
 Typical ThGEM run (single V1730, gamma on ch0, ThGEMs on ch1/ch2):
 
 ```sh
-root_sink --zmq tcp://localhost:5557 --out-dir /data/thgem \
+root_sink --zmq tcp://localhost:5557 --out-dir /data/thgem --hits-tree \
           --gamma-ch 0 --thgem1-ch 1 --thgem2-ch 2 \
           --window-ns 500 --http-port 8090
 ```
@@ -105,7 +116,7 @@ root_sink --zmq tcp://localhost:5557 --out-dir /data/thgem \
 Recorder-only (no monitor), just the scalar tree:
 
 ```sh
-root_sink --out-dir /data --http-port 0
+root_sink --out-dir /data --hits-tree --http-port 0
 ```
 
 ### Launched by `start_daq.sh`
@@ -113,9 +124,10 @@ root_sink --out-dir /data --http-port 0
 When the DAQ config has a `[network.root_sink]` section, `scripts/start_daq.sh`
 launches root_sink automatically alongside the other components. The section keys
 are the CLI flag names with hyphens turned into underscores (`--out-dir` →
-`output_dir`; exceptions: `subscribe` → `--zmq` and `time_calib_file` →
-`--time-calib`, the latter named like the Rust event builder's key); only
-present keys are passed, and `--operator` is derived from the
+`output_dir`; exceptions: `subscribe` → `--zmq`, `time_calib_file` →
+`--time-calib` (named like the Rust event builder's key), `event_def_file` →
+`--event-def`, and the boolean `hits_tree = true` → `--hits-tree` (`false` or
+absent: no flag)); only present keys are passed, and `--operator` is derived from the
 `[operator]` port. The binary is resolved in the order `ROOT_SINK_BIN` (env) >
 `PATH` > `~/.local/bin/root_sink` > `tools/root_sink/root_sink`; if none is found
 it warns and skips (not fatal). It is managed symmetrically: both
@@ -126,7 +138,7 @@ example and operator notes.
 
 ## Output files
 
-While a run is in progress the tree is written to
+While a run is in progress the selected trees (all in one file) are written to
 `<out-dir>/run_inprogress_<unixtime>.root` and `AutoSave`d every `--autosave-sec`
 so it is already openable in ROOT. On the run's `EndOfStream` the file is closed
 and renamed to
@@ -150,6 +162,9 @@ verified end-to-end with a tiny test threshold (see *Testing*). The rollover
 also invalidates the original `TFile*` (ROOT deletes it in `ChangeFile`), which
 is why all closing goes through `TTree::GetCurrentFile()` and rollover detection
 compares file NAMES, never pointers (the allocator can reuse the address).
+`ChangeFile` moves every tree of the file together, so any tree that exists
+reports the current file — the Recorder asks the first one present (hits,
+built, events; all three are optional).
 
 `<exp>` (the experiment name) is resolved once at each run start, in priority
 order — the resolved name and its source are logged, and any fallback is warned
@@ -165,7 +180,7 @@ order — the resolved name and its source are logged, and any fallback is warne
 3. Neither given, or the fetch failed / returned no name → `"data"` (with a
    warning to stderr). This mirrors the Rust Recorder's empty-name fallback.
 
-The tree has exactly:
+The hits tree (`--hits-tree`) has exactly:
 
 | branch         | leaf | type      |
 |----------------|------|-----------|
@@ -184,7 +199,7 @@ time in the built tree) is **aligned**: `raw - offset_ns`. The `.delila` stays
 raw, so a delila2root tree of the same run differs on the offset channels. Every
 file says which applies:
 
-- both trees carry a `TNamed "timeSettings"` in their **UserInfo**
+- every tree (hits, built, events) carries a `TNamed "timeSettings"` in its **UserInfo**
   (`tree->GetUserInfo()->FindObject("timeSettings")->GetTitle()`): a JSON with
   `applied` (true/false), the convention, the source path, `status` (`ok` or
   `stale: …`), the resolved absolute offsets (`%.17g`) and the verbatim source.
@@ -194,6 +209,91 @@ file says which applies:
   file: the table **frozen at that run's start** (unlike `_hists.json`, which
   copies the live file at finalize), directly re-loadable by root_sink or the
   Rust EB.
+
+## Generic events (`--event-def`, TODO 71)
+
+The experiment-independent "grouping" layer of event building: triggers and a
+window around them bundle hits into events (TODO/71_generic_event_building.md
+§4–5). Experiment-specific reconstruction (ThGEM XY/TOF = today's built tree,
+ELIADE addback, …) belongs on top of it. The definition file:
+
+```json
+{"version": "1.0",
+ "window_ns": {"pre": 1000, "post": 1000},
+ "group_ns": 1000,
+ "triggers": [
+   {"name": "ThGEM1", "priority": 1, "channels": [[0, 1]]},
+   {"name": "ThGEM2", "priority": 2, "channels": [[0, 6]]}]}
+```
+
+`channels` are `[module, channel]` pairs; a smaller `priority` is the
+preferred reference — give it for all triggers or for none (none = the first
+trigger of a group is the reference); `_comment` is allowed anywhere. The
+ThGEM file is `config/event_def_thgem.json`; the full rules and validation
+(every error listed at once, unknown keys rejected, `group_ns ≤ min(pre,
+post)`, one trigger per channel, lookback `group_ns + 2·pre + post` below
+`--safe-horizon-ms`) are in the header comment of `event_def.hpp`. The rules:
+
+1. Triggers in time order; an ungrouped trigger `t` opens the group `[t, t+G]`
+   (`G = group_ns`, never extended). Every trigger is in exactly one event — no
+   chain-loss as with ELIFANT's ID-priority scheme.
+2. The group's reference = its best-priority trigger (tie → the earlier).
+3. The window is centred on the reference: `[t_ref − pre, t_ref + post]`.
+4. A hit inside two windows goes to the NEAREST reference (tie → the earlier);
+   a hit in no window is an **orphan** — in no event, still in the `.delila`
+   (and the hits tree). Energies are never cut.
+
+Rules 1–2 are sequential, so the Sorter runs them on every chunk in order
+(the RunClose / Shutdown flush chunk closes the last groups); rules 3–4 run
+in the Workers, and an event is emitted by the chunk whose core holds its
+reference (H10), so the output does not depend on `--workers`. The Sorter's
+context carry becomes `max(--window-ns, G + 2·pre + post)` per run (logged as
+`sorter lookback` when it changes). Times are on the aligned axis
+(`--time-calib` is applied before the Sorter).
+
+The `events` tree (fixed name; one entry per event, dictionary-free leaflists,
+hit arrays in time order):
+
+| branch | leaf | content |
+|---|---|---|
+| `EventID` | `/l` | per-run counter from 0 (continues across rollover parts) |
+| `TriggerTime` | `/D` | the reference trigger's absolute aligned time [ns] |
+| `TriggerMod`, `TriggerCh` | `/b` | the reference trigger's channel |
+| `TriggerIdx` | `/b` | its index in the file's `triggers[]` (UserInfo lists them) |
+| `NTriggers` | `/i` | triggers in the group (≥ 1) |
+| `NHits` | `/i` | hits in the event, the reference included |
+| `HitMod[NHits]`, `HitCh[NHits]` | `/b` | per hit |
+| `HitEnergy[NHits]`, `HitEnergyShort[NHits]` | `/s` | per hit |
+| `HitTime[NHits]` | `/D` | hit time − `TriggerTime` [ns] (the reference is at 0) |
+| `HitIsTrigger[NHits]` | `/O` | a trigger hit of this event's group |
+
+```cpp
+events->Draw("HitTime", "HitCh==0 && TriggerIdx==0");  // LaBr3 vs a ThGEM1 reference
+events->Draw("NTriggers");                              // overlap / pile-up of triggers
+```
+
+The array buffers grow on demand (never truncated). **Provenance** works like
+the time offsets: the file is re-read at every run start and frozen for the
+run (a failed reload keeps the previous definition: ERROR, `STALE` in the run
+line, status line and UserInfo); the events tree's UserInfo carries a `TNamed
+"eventDef"` JSON (status, source path, resolved window/group/triggers with
+their `TriggerIdx`, warnings, verbatim source) next to `"timeSettings"`, and
+finalize writes `<run file stem>_eventDef.json` — the file frozen at that run's
+start, byte for byte.
+
+**Counters** (the overlap watch). Each run logs
+
+```
+root_sink: run 56 events: 33463 (NTriggers 1:33463), hits in events 163845, contested 0, orphans 42105
+```
+
+— the NTriggers distribution (zero bins skipped, last bin `8+`), the hits put
+into events, **contested** = non-trigger hits that sat inside two windows and
+went to the nearer reference (it rises when windows start to overlap, i.e.
+with rate), and the orphans. `hits in events + orphans` must equal the hits
+the Sorter emitted (exactly-once); a mismatch is a WARNING. The 10 s status
+line shows the cumulative `ev=N (cont=C orph=O)`, plus `STALE` when the last
+reload failed. A mid-run shutdown logs the same line for the unfinalized run.
 
 ## Live monitor (THttpServer / JSROOT)
 
@@ -425,8 +525,11 @@ reload can safely delete and rebuild the live objects.
   - **Sorter** absorbs arrival disorder (`--safe-horizon-ms`) and emits
     time-sorted chunks per `--chunk-span-ms` of DATA time, each with a sequence
     number. **The hits tree is therefore globally time-sorted now** — offline
-    analysis can scan linearly instead of per-channel bucketing.
-  - **Workers** run the pure-function event builder (`eb_core.hpp`) per chunk.
+    analysis can scan linearly instead of per-channel bucketing. With
+    `--event-def` it also runs the stateful trigger grouping (generic-event
+    rules 1–2) on every chunk and attaches the plan to it.
+  - **Workers** run the pure-function event builders (`eb_core.hpp`: built
+    tree, generic-event rules 3–4) per chunk.
   - **Writer** is the only thread touching the run `TFile`; a sequence reorder
     makes the output deterministic in `--workers` (1 or 8 → identical trees) and
     turns RunClose into a barrier for free. Autosave runs here.
@@ -554,6 +657,16 @@ edit keeps the previous table (STALE); resolved tables equal the Rust
 root -l -b -q 'delayline_offsets.C("run0056_*.root","1,2,3,5,4","6,7,8,9,10","ts.json","run 56")'
 root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X.root")'
 ```
+
+The `--event-def` wiring (E2E, 2026-10-07, replay of run 56 with `--hits-tree
+--built-tree built --event-def config/event_def_thgem.json`): hits / built
+entries unchanged (205,950 / 33,463); the `events` tree has the branches above,
+both UserInfo objects and a byte-identical `_eventDef.json`; `hits in events
++ orphans` = 205,950. The same events digest with the hit buffers starting at
+capacity 1 (growth path), and from a forced-rollover build without the hits
+tree (`events` or `built` as the lead tree; UserInfo in every part). A bad edit
+between runs keeps the previous definition (STALE in the run line, status line
+and UserInfo; the sidecar is the previous file).
 
 The `--operator` HTTP client and the remaining ROOT wiring in `root_sink.cxx`
 are not unit-tested (they need sockets / ROOT); they are covered by the

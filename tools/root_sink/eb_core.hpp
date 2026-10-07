@@ -24,6 +24,7 @@
 #define ROOTSINK_EB_CORE_HPP
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -31,10 +32,13 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "event_def.hpp"  // rootsink::EventDef (generic grouping layer)
 #include "sink_core.hpp"  // rootsink::ScalarHit
 
 namespace rootsink {
@@ -352,6 +356,12 @@ class Sorter {
     late_ = 0;
   }
 
+  // Per-run context carry: the generic event layer needs G + 2*pre + post
+  // (section 7), which follows the event definition reloaded at RunOpen. Call
+  // after reset(), before the run's first push_batch.
+  void set_lookback_ns(double ns) { cfg_.lookback_ns = ns; }
+  double lookback_ns() const { return cfg_.lookback_ns; }
+
   std::size_t buffered() const { return buffer_.size(); }
 
   // Hits of this run that arrived behind an already-emitted core_end (disorder
@@ -609,6 +619,284 @@ inline std::vector<BuiltEvent> build_events_from_chunk(const SortedChunk& chunk,
 }
 
 // ---------------------------------------------------------------------------
+// 7. Generic event layer (TODO 71 Phase A) — "まとめる層"
+// ---------------------------------------------------------------------------
+//
+// Bundle hits around triggers for EVERY experiment the same way; what an event
+// means (XY, addback, E-dE) is the per-experiment reconstruction layer on top
+// (the ThGEM BuiltEvent above is the first such layer). Rules, parameterized by
+// event_def.hpp (TODO/71_generic_event_building.md §4):
+//   1. Triggers in time order; an ungrouped trigger t opens the group [t, t+G]
+//      (non-extending). Every trigger belongs to exactly one group — no
+//      cascade loss as with ELIFANT-Event's ID priority (A->B->C at 0.8 W).
+//   2. Reference = best (priority, time, module, channel) in the group.
+//   3. Window [t_ref - pre, t_ref + post], inclusive; G <= min(pre, post) puts
+//      every group member inside its own window.
+//   4. Trigger hits follow their group (rule 1 owns them). Any other hit goes
+//      to the NEAREST reference whose window holds it (tie -> the earlier
+//      reference); in no window -> in no event (it stays in the .delila).
+//
+// Split of work. Rules 1-2 are sequential over the whole run (where a group
+// starts depends on where the previous one did), so the single-threaded
+// Sorter runs TriggerGrouper over each chunk's core triggers, in order, and
+// attaches the resulting EventPlan. Rules 3-4 are local, so the Workers run
+// build_generic_events() in parallel, a pure function of (chunk, plan).
+//
+// Chunk contract (why the lookback is G + 2*pre + post). Hits below a chunk's
+// core_end are complete (Sorter disorder contract), so after feeding a chunk's
+// core triggers every group starting before the decided frontier
+//   D = (start of the still-open group) or core_end if none is open
+// is final, and D >= core_end - G (a group closes as soon as start + G <
+// core_end). Assigning a hit h of an event with reference r needs every
+// reference that could compete for h, i.e. up to h + pre <= r + post + pre;
+// so the chunk emits exactly the events with r in [ev_lo, ev_hi), where
+// ev_hi = D - pre - post and ev_lo = the previous chunk's ev_hi (chained:
+// -inf first, +inf at the flush). Those events need hits down to
+// ev_lo - pre >= previous core_end - G - 2*pre - post, which the Sorter's
+// lookback must carry: EventDef::lookback_ns(). Upward they need hits below
+// ev_hi + post = D - pre <= core_end, i.e. complete ones. Exactly-once: each
+// event is emitted by the one chunk whose [ev_lo, ev_hi) holds its reference;
+// each orphan is counted by the one chunk whose [ev_lo, ev_hi) holds its TIME.
+// Over a run, hits_in_events + orphans == the hits in the core ranges.
+//
+// A hit that broke the disorder contract (Sorter late_hits(): behind an
+// emitted core) is not in the hits tree and was not fed as a trigger; it may
+// still ride a later chunk as context and join an event there. That case is
+// already reported as data loss by the Sorter, so it is not special-cased.
+
+// One decided group of triggers (rule 1) with its reference (rule 2).
+struct GroupRef {
+  double t = 0.0;        // reference trigger time (aligned ns) = the event's TriggerTime
+  double first_t = 0.0;  // group span: every member trigger lies in [first_t, last_t]
+  double last_t = 0.0;
+  uint8_t mod = 0, ch = 0;  // reference trigger channel
+  uint8_t trig_idx = 0;     // index into EventDef::triggers
+  uint32_t n_triggers = 0;  // group size (>= 1)
+};
+
+// What the Sorter attaches to each chunk (TriggerGrouper::plan_chunk).
+struct EventPlan {
+  std::shared_ptr<const EventDef> def;  // null = generic events disabled
+  std::vector<GroupRef> refs;           // ascending t; every decided ref that can matter
+  // Emit exactly the events whose reference time is in [ev_lo, ev_hi).
+  // Chained over a run (ev_lo == previous ev_hi; -inf first, +inf at flush).
+  double ev_lo = -std::numeric_limits<double>::infinity();
+  double ev_hi = -std::numeric_limits<double>::infinity();
+};
+
+struct EventHit {
+  uint8_t mod = 0, ch = 0;
+  uint16_t energy = 0, energy_short = 0;
+  double dt = 0.0;          // hit time - reference time (aligned ns)
+  bool is_trigger = false;  // a trigger-channel hit (a member of this event's group)
+};
+
+struct GenericEvent {
+  double t = 0.0;  // reference time (aligned, absolute)
+  uint8_t mod = 0, ch = 0, trig_idx = 0;
+  uint32_t n_triggers = 0;
+  std::vector<EventHit> hits;  // time order; includes the reference itself
+};
+
+// Per-chunk counters (summed per run by the Writer). Exactly-once over a run:
+// hits_in_events + orphans == every hit the Sorter put in a core range.
+struct GenericStats {
+  uint64_t events = 0;
+  uint64_t hits_in_events = 0;
+  uint64_t contested = 0;  // non-trigger hits inside two windows (nearest reference won)
+  uint64_t orphans = 0;    // hits inside no window (still in the .delila / hits tree)
+  // NTriggers distribution: [i] = events with min(NTriggers, 8) == i + 1 ("8" = 8+).
+  std::array<uint64_t, 8> ntrig{};
+  void add(const GenericStats& o) {
+    events += o.events;
+    hits_in_events += o.hits_in_events;
+    contested += o.contested;
+    orphans += o.orphans;
+    for (std::size_t i = 0; i < ntrig.size(); ++i) ntrig[i] += o.ntrig[i];
+  }
+};
+
+// Rules 1-2, run by the (single-threaded) Sorter on every emitted chunk, in
+// order (flush chunks included — the +inf core_end closes the last group).
+// Stateful across the chunks of one run; reset() at RunOpen.
+class TriggerGrouper {
+ public:
+  // CRITICAL at RunOpen, like Sorter::reset(): the digitizer clock restarts,
+  // and a stale ev_lo from run N's huge timestamps would gate out every event
+  // of run N+1.
+  void reset(std::shared_ptr<const EventDef> def) {
+    def_ = std::move(def);
+    refs_.clear();
+    open_ = false;
+    ev_lo_ = -std::numeric_limits<double>::infinity();
+  }
+  bool enabled() const { return def_ != nullptr; }
+
+  EventPlan plan_chunk(const SortedChunk& c) {
+    EventPlan p;
+    p.def = def_;
+    if (!def_) return p;
+    const EventDef& d = *def_;
+    // Core range only: the lookback head was fed by the previous chunk, and
+    // the post-core tail is not complete yet (it is fed by the next chunk).
+    auto core = core_range(c);
+    for (std::size_t i = core.first; i < core.second; ++i) {
+      const ScalarHit& h = c.hits[i];
+      int k = d.trigger_index(h.module, h.channel);
+      if (k < 0) continue;
+      if (open_ && h.timestamp_ns <= cur_.first_t + d.group_ns) {
+        join(h, k);
+      } else {
+        if (open_) refs_.push_back(cur_);
+        start(h, k);
+      }
+    }
+    if (open_ && cur_.first_t + d.group_ns < c.core_end) {  // span fully seen
+      refs_.push_back(cur_);
+      open_ = false;
+    }
+    const double margin = d.pre_ns + d.post_ns;
+    const double frontier = open_ ? cur_.first_t : c.core_end;
+    double ev_hi = frontier - margin;  // +inf at the flush
+    if (ev_hi < ev_lo_) ev_hi = ev_lo_;  // monotone by construction; keep the chain
+    p.ev_lo = ev_lo_;
+    p.ev_hi = ev_hi;
+    p.refs = refs_;
+    ev_lo_ = ev_hi;
+    // The next chunk competes hits against references down to its
+    // ev_lo - pre - post; anything older can never matter again.
+    auto keep = std::lower_bound(refs_.begin(), refs_.end(), ev_lo_ - margin,
+                                 [](const GroupRef& r, double v) { return r.t < v; });
+    refs_.erase(refs_.begin(), keep);
+    return p;
+  }
+
+ private:
+  void start(const ScalarHit& h, int k) {
+    open_ = true;
+    cur_ = GroupRef();
+    cur_.t = cur_.first_t = cur_.last_t = h.timestamp_ns;
+    cur_.mod = h.module;
+    cur_.ch = h.channel;
+    cur_.trig_idx = static_cast<uint8_t>(k);
+    cur_.n_triggers = 1;
+    cur_prio_ = def_->triggers[static_cast<std::size_t>(k)].priority;
+  }
+
+  // Members arrive in time order, so "earlier" only decides exact time ties —
+  // broken by (module, channel) so the reference never depends on the order
+  // std::sort left equal timestamps in.
+  void join(const ScalarHit& h, int k) {
+    cur_.last_t = h.timestamp_ns;
+    ++cur_.n_triggers;
+    int prio = def_->triggers[static_cast<std::size_t>(k)].priority;
+    bool better = prio < cur_prio_ ||
+                  (prio == cur_prio_ && h.timestamp_ns == cur_.t &&
+                   mc_key(h.module, h.channel) < mc_key(cur_.mod, cur_.ch));
+    if (!better) return;
+    cur_.t = h.timestamp_ns;
+    cur_.mod = h.module;
+    cur_.ch = h.channel;
+    cur_.trig_idx = static_cast<uint8_t>(k);
+    cur_prio_ = prio;
+  }
+
+  std::shared_ptr<const EventDef> def_;
+  std::vector<GroupRef> refs_;  // decided, ascending t, trimmed per chunk
+  GroupRef cur_;                // the open group (valid while open_)
+  int cur_prio_ = 0;
+  bool open_ = false;
+  double ev_lo_ = -std::numeric_limits<double>::infinity();
+};
+
+// Rules 3-4, run by a Worker: a pure function of the chunk and its plan, so
+// the output does not depend on the worker count. Adds this chunk's counters
+// to `stats`.
+inline std::vector<GenericEvent> build_generic_events(const SortedChunk& c,
+                                                      const EventPlan& p,
+                                                      GenericStats& stats) {
+  std::vector<GenericEvent> out;
+  if (!p.def) return out;
+  const EventDef& d = *p.def;
+  const std::vector<GroupRef>& refs = p.refs;
+  const std::size_t n = refs.size();
+  auto t_less = [](const GroupRef& r, double v) { return r.t < v; };
+  const std::size_t e0 =
+      static_cast<std::size_t>(std::lower_bound(refs.begin(), refs.end(), p.ev_lo, t_less) -
+                               refs.begin());
+  const std::size_t e1 =
+      static_cast<std::size_t>(std::lower_bound(refs.begin(), refs.end(), p.ev_hi, t_less) -
+                               refs.begin());
+  out.resize(e1 - e0);
+  for (std::size_t i = e0; i < e1; ++i) {
+    GenericEvent& e = out[i - e0];
+    e.t = refs[i].t;
+    e.mod = refs[i].mod;
+    e.ch = refs[i].ch;
+    e.trig_idx = refs[i].trig_idx;
+    e.n_triggers = refs[i].n_triggers;
+  }
+  auto in_window = [&](std::size_t j, double t) {
+    double dt = t - refs[j].t;
+    return dt >= -d.pre_ns && dt <= d.post_ns;
+  };
+
+  for (const ScalarHit& h : c.hits) {
+    const double t = h.timestamp_ns;
+    const int k = d.trigger_index(h.module, h.channel);
+    std::size_t ev = n;  // n = no event
+    bool contested = false;
+    if (k >= 0) {
+      // Spans are disjoint and ordered: the last group starting at or before t.
+      auto it = std::upper_bound(refs.begin(), refs.end(), t,
+                                 [](double v, const GroupRef& r) { return v < r.first_t; });
+      if (it != refs.begin() && t <= (it - 1)->last_t)
+        ev = static_cast<std::size_t>(it - 1 - refs.begin());
+    } else {
+      // Window validity is monotone along each direction (a farther reference
+      // on the same side is out of window if the nearer one is), so the
+      // nearest in-window reference is the predecessor or the successor, and
+      // "inside two windows" needs at most the second one on each side.
+      std::size_t s = static_cast<std::size_t>(
+          std::lower_bound(refs.begin(), refs.end(), t, t_less) - refs.begin());
+      bool pred = s > 0 && in_window(s - 1, t);
+      bool succ = s < n && in_window(s, t);
+      if (pred && succ)
+        ev = (refs[s].t - t < t - refs[s - 1].t) ? s : s - 1;  // tie -> earlier
+      else if (pred)
+        ev = s - 1;
+      else if (succ)
+        ev = s;
+      contested = (pred && succ) || (pred && s > 1 && in_window(s - 2, t)) ||
+                  (succ && s + 1 < n && in_window(s + 1, t));
+    }
+    if (ev == n) {
+      if (t >= p.ev_lo && t < p.ev_hi) ++stats.orphans;
+      continue;
+    }
+    if (ev < e0 || ev >= e1) continue;  // another chunk emits that event
+    GenericEvent& e = out[ev - e0];
+    EventHit eh;
+    eh.mod = h.module;
+    eh.ch = h.channel;
+    eh.energy = h.energy;
+    eh.energy_short = h.energy_short;
+    eh.dt = t - e.t;
+    eh.is_trigger = k >= 0;
+    e.hits.push_back(eh);
+    ++stats.hits_in_events;
+    if (contested) ++stats.contested;
+  }
+
+  stats.events += out.size();
+  for (const GenericEvent& e : out) {
+    uint32_t m = e.n_triggers < 8 ? e.n_triggers : 8;
+    if (m > 0) ++stats.ntrig[m - 1];
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // 6. Pipeline message types (in-band control markers)
 // ---------------------------------------------------------------------------
 //
@@ -626,6 +914,8 @@ enum class Ctrl : uint8_t { None, RunOpen, RunClose, Shutdown };
 struct RunProvenance {
   std::string time_offsets_meta;    // provenance JSON -> TTree UserInfo TNamed "timeSettings"
   std::string time_offsets_source;  // verbatim file applied -> <stem>_timeSettings.json
+  std::string event_def_meta;       // provenance JSON -> events-tree UserInfo TNamed "eventDef"
+  std::string event_def_source;     // verbatim file applied -> <stem>_eventDef.json
 };
 
 // Receiver -> Sorter. None carries a decoded batch; markers carry no hits.
@@ -634,6 +924,9 @@ struct SorterMsg {
   std::vector<ScalarHit> hits;
   uint32_t run_number = 0;  // RunClose: from the EOS envelope
   RunProvenance prov;       // RunOpen only
+  // RunOpen only: the event definition frozen for this run (null = no events
+  // tree). The Sorter resets its TriggerGrouper + lookback from it.
+  std::shared_ptr<const EventDef> event_def;
 };
 
 // Sorter -> Workers -> Writer. Every message (data AND control) gets a seq.
@@ -642,6 +935,9 @@ struct WorkMsg {
   uint64_t seq = 0;
   SortedChunk chunk;             // None: the sorted chunk
   std::vector<BuiltEvent> built; // filled by a worker when building is on
+  EventPlan plan;                // None: Sorter's grouping result (plan.def null = off)
+  std::vector<GenericEvent> events;  // filled by a worker when plan.def is set
+  GenericStats gstats;           // the worker's counters for `events`
   uint32_t run_number = 0;       // RunClose
   RunProvenance prov;            // RunOpen only
 };

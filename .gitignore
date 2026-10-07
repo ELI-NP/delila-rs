@@ -81,3 +81,8 @@ scripts/mongodb.local.env
 
 # Affinity lock files
 *~lock~
+
+# ROOT ACLiC build products (root -l "macro.C+")
+*_C.so
+*_C.d
+*_ACLiC_dict_rdict.pcm

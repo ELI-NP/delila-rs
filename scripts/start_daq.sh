@@ -419,6 +419,16 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg safe_horizon_ms --safe-horizon-ms
         rs_add_arg built_tree   --built-tree
         rs_add_arg time_calib_file --time-calib
+        rs_add_arg event_def_file  --event-def
+        # hits_tree is a plain flag (no value), so rs_add_arg would pass
+        # "--hits-tree true". The per-hit tree is opt-in since TODO 71, and
+        # root_sink refuses to start when no tree at all is selected.
+        RS_HITS_TREE=$(get_root_sink_key hits_tree)
+        case "$RS_HITS_TREE" in
+            true) RS_ARGS+=(--hits-tree) ;;
+            ""|false) ;;
+            *) echo -e "  ${YELLOW}[network.root_sink] hits_tree = \"$RS_HITS_TREE\" is not true/false — ignored (hits tree OFF)${NC}" ;;
+        esac
         # Always derive --operator from [operator] port; an explicit exp_name key
         # still wins inside root_sink, so this default is always safe and yields
         # Recorder-matching filenames.

@@ -2,7 +2,10 @@
 //
 // Covers the multithreaded event-builder core: Channel, SeqReorder, the
 // SortedChunk splitter (including the TODO 58 H10 chunk-boundary rules ported
-// from src/event_builder/chunk_builder.rs), and the data-time-driven Sorter.
+// from src/event_builder/chunk_builder.rs), the data-time-driven Sorter, the
+// ThGEM built-event builder, and the generic event layer (TODO 71:
+// TriggerGrouper + build_generic_events, checked against a brute-force
+// reference of the rules over randomized chunkings).
 //
 // Build & run (Channel tests spawn threads, hence -pthread):
 //   g++ -std=c++17 -O0 -g -pthread test_eb_core.cpp -o /tmp/teb && /tmp/teb
@@ -928,6 +931,689 @@ static void test_sorter_offset_spread_beyond_horizon_counts_late() {
 }
 
 // ---------------------------------------------------------------------------
+// Generic event layer (TODO 71 Phase A): TriggerGrouper + build_generic_events
+// ---------------------------------------------------------------------------
+
+static ScalarHit mhit(int mod, int ch, double t, uint16_t e = 0) {
+  ScalarHit h = hit(ch, t, e);
+  h.module = static_cast<uint8_t>(mod);
+  return h;
+}
+
+struct TrigSpec {
+  const char* name;
+  int priority;
+  std::vector<std::pair<int, int>> channels;  // (module, channel)
+};
+
+static std::shared_ptr<const EventDef> mkdef(double pre, double post, double group,
+                                             const std::vector<TrigSpec>& trigs,
+                                             bool priorities = true) {
+  auto d = std::make_shared<EventDef>();
+  d->pre_ns = pre;
+  d->post_ns = post;
+  d->group_ns = group;
+  d->priorities_given = priorities;
+  for (const TrigSpec& t : trigs) {
+    TriggerDef td;
+    td.name = t.name;
+    td.priority = priorities ? t.priority : 0;
+    for (const auto& mc : t.channels)
+      td.channels.push_back(mc_key(static_cast<uint8_t>(mc.first),
+                                   static_cast<uint8_t>(mc.second)));
+    d->triggers.push_back(td);
+  }
+  d->index_channels();
+  return d;
+}
+
+// ThGEM-like: ThGEM1 = m0c1 (priority 1), ThGEM2 = m0c6 (priority 2).
+static std::shared_ptr<const EventDef> thgem_def(double pre = 1000, double post = 1000,
+                                                 double group = 1000) {
+  return mkdef(pre, post, group, {{"ThGEM1", 1, {{0, 1}}}, {"ThGEM2", 2, {{0, 6}}}});
+}
+
+// The whole hit set as ONE chunk (core = everything): grouping + assignment
+// with no chunk boundary in play.
+static std::vector<GenericEvent> one_chunk(const std::vector<ScalarHit>& hits,
+                                           std::shared_ptr<const EventDef> def,
+                                           GenericStats& st) {
+  TriggerGrouper g;
+  g.reset(def);
+  SortedChunk c = mkchunk(hits);
+  EventPlan p = g.plan_chunk(c);
+  return build_generic_events(c, p, st);
+}
+
+// Find the hit of (ch) in an event; nullptr when absent.
+static const EventHit* find_ch(const GenericEvent& ev, int ch) {
+  for (const EventHit& h : ev.hits)
+    if (h.ch == ch) return &h;
+  return nullptr;
+}
+
+static void test_generic_disabled() {
+  TriggerGrouper g;
+  g.reset(nullptr);
+  CHECK(!g.enabled());
+  SortedChunk c = mkchunk({hit(1, 100.0)});
+  EventPlan p = g.plan_chunk(c);
+  CHECK(p.def == nullptr);
+  CHECK(p.refs.empty());
+}
+
+static void test_generic_single_event() {
+  // One trigger + two partners inside the window + one hit far away.
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 10000.0, 7), hit(2, 10030.0, 8), hit(0, 9900.0, 9),
+                        hit(3, 50000.0, 1)},
+                       thgem_def(), st);
+  CHECK(evs.size() == 1);
+  if (evs.size() != 1) return;
+  const GenericEvent& e = evs[0];
+  CHECK(near(e.t, 10000.0));
+  CHECK(e.mod == 0 && e.ch == 1 && e.trig_idx == 0 && e.n_triggers == 1);
+  CHECK(e.hits.size() == 3);
+  // Time order, reference included, dt relative to the reference.
+  CHECK(e.hits.size() == 3 && e.hits[0].ch == 0 && near(e.hits[0].dt, -100.0));
+  CHECK(e.hits.size() == 3 && e.hits[1].ch == 1 && near(e.hits[1].dt, 0.0) &&
+        e.hits[1].is_trigger && e.hits[1].energy == 7);
+  CHECK(e.hits.size() == 3 && e.hits[2].ch == 2 && near(e.hits[2].dt, 30.0) &&
+        !e.hits[2].is_trigger);
+  CHECK(st.events == 1 && st.hits_in_events == 3 && st.orphans == 1 && st.contested == 0);
+  CHECK(st.ntrig[0] == 1);
+}
+
+static void test_generic_group_does_not_extend() {
+  // Rule 1: triggers 800 ns apart with G = 1000 — the group [0, 1000] takes
+  // 0 and 800, and 1600 opens the next group (no extension to 1800).
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 0.0), hit(1, 800.0), hit(1, 1600.0)}, thgem_def(), st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK(near(evs[0].t, 0.0) && evs[0].n_triggers == 2);
+  CHECK(near(evs[1].t, 1600.0) && evs[1].n_triggers == 1);
+}
+
+static void test_generic_abc_chain_no_loss() {
+  // ELIFANT's ID-priority rule loses C in A->B->C at 0.8 W spacing. Here every
+  // trigger lands in exactly one event.
+  GenericStats st;
+  std::vector<ScalarHit> hits;
+  for (int i = 0; i < 10; ++i) hits.push_back(hit(1, 1000.0 + 800.0 * i, static_cast<uint16_t>(i)));
+  auto evs = one_chunk(hits, thgem_def(), st);
+  uint32_t ntrig = 0;
+  std::size_t trig_hits = 0;
+  for (const auto& e : evs) {
+    ntrig += e.n_triggers;
+    for (const auto& h : e.hits) trig_hits += h.is_trigger ? 1 : 0;
+  }
+  CHECK(ntrig == 10);
+  CHECK(trig_hits == 10);
+  CHECK(st.orphans == 0);
+}
+
+static void test_generic_priority_picks_reference() {
+  // ThGEM2 (p2) fires first, ThGEM1 (p1) 300 ns later in the same group: the
+  // reference is ThGEM1, and the ThGEM2 trigger sits at dt = -300.
+  GenericStats st;
+  auto evs = one_chunk({hit(6, 5000.0), hit(1, 5300.0), hit(2, 5400.0)}, thgem_def(), st);
+  CHECK(evs.size() == 1);
+  if (evs.size() != 1) return;
+  CHECK(near(evs[0].t, 5300.0) && evs[0].ch == 1 && evs[0].trig_idx == 0);
+  CHECK(evs[0].n_triggers == 2);
+  const EventHit* t2 = find_ch(evs[0], 6);
+  CHECK(t2 && near(t2->dt, -300.0) && t2->is_trigger);
+}
+
+static void test_generic_priority_ties() {
+  // Same priority -> earliest; same priority and same time -> smallest
+  // (module, channel). Trigger A = m0c1, B = m1c0, both priority 1.
+  auto def = mkdef(1000, 1000, 1000, {{"A", 1, {{0, 1}}}, {"B", 1, {{1, 0}}}});
+  {
+    GenericStats st;
+    auto evs = one_chunk({mhit(1, 0, 100.0), mhit(0, 1, 200.0)}, def, st);
+    CHECK(evs.size() == 1 && near(evs[0].t, 100.0) && evs[0].mod == 1 && evs[0].ch == 0 &&
+          evs[0].trig_idx == 1);
+  }
+  {
+    GenericStats st;
+    auto evs = one_chunk({mhit(1, 0, 100.0), mhit(0, 1, 100.0)}, def, st);
+    CHECK(evs.size() == 1 && evs[0].mod == 0 && evs[0].ch == 1 && evs[0].trig_idx == 0);
+  }
+}
+
+static void test_generic_no_priorities_first_trigger() {
+  auto def = mkdef(1000, 1000, 1000, {{"A", 0, {{0, 1}}}, {"B", 0, {{0, 6}}}}, false);
+  GenericStats st;
+  auto evs = one_chunk({hit(6, 100.0), hit(1, 150.0)}, def, st);
+  CHECK(evs.size() == 1 && evs[0].ch == 6 && near(evs[0].t, 100.0));
+}
+
+static void test_generic_nearest_reference_wins() {
+  // Two separate groups (refs 0 and 1500, windows ±1000 overlap on
+  // [500, 1000]). A hit at 800 is 800 from ref 0 and 700 from ref 1500 ->
+  // second event. A hit at 750 is equidistant -> the EARLIER reference.
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 0.0), hit(1, 1500.0), hit(2, 800.0), hit(3, 750.0)},
+                       thgem_def(), st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK(find_ch(evs[1], 2) && near(find_ch(evs[1], 2)->dt, -700.0));
+  CHECK(!find_ch(evs[0], 2));
+  CHECK(find_ch(evs[0], 3) && near(find_ch(evs[0], 3)->dt, 750.0));
+  CHECK(!find_ch(evs[1], 3));
+  CHECK(st.contested == 2);
+  CHECK(st.hits_in_events == 4 && st.orphans == 0);
+}
+
+static void test_generic_trigger_follows_its_group() {
+  // Group 1 = {0 (ThGEM1, p1), 1000 (ThGEM2, p2)} -> ref 0. Group 2 opens at
+  // 1001 (ThGEM1) -> ref 1001. The ThGEM2 trigger at 1000 is 1 ns from ref
+  // 1001 but belongs to group 1 (rule 1 owns triggers), at dt = +1000 = post.
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 0.0), hit(6, 1000.0), hit(1, 1001.0)}, thgem_def(), st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK(evs[0].n_triggers == 2 && evs[0].hits.size() == 2);
+  const EventHit* t2 = find_ch(evs[0], 6);
+  CHECK(t2 && near(t2->dt, 1000.0) && t2->is_trigger);
+  CHECK(evs[1].n_triggers == 1 && evs[1].hits.size() == 1);
+  CHECK(st.contested == 0);
+}
+
+static void test_generic_window_edges_inclusive() {
+  // [t_ref - pre, t_ref + post] is inclusive on both ends; asymmetric window.
+  auto def = thgem_def(200.0, 1000.0, 200.0);
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 10000.0), hit(2, 9800.0), hit(3, 9799.0), hit(4, 11000.0),
+                        hit(5, 11001.0)},
+                       def, st);
+  CHECK(evs.size() == 1);
+  if (evs.size() != 1) return;
+  CHECK(find_ch(evs[0], 2) && near(find_ch(evs[0], 2)->dt, -200.0));
+  CHECK(!find_ch(evs[0], 3));
+  CHECK(find_ch(evs[0], 4) && near(find_ch(evs[0], 4)->dt, 1000.0));
+  CHECK(!find_ch(evs[0], 5));
+  CHECK(st.orphans == 2);
+}
+
+static void test_generic_asymmetric_nearest_out_of_window() {
+  // pre = 100, post = 1000. Refs at 0 and 1300. A hit at 950 is NEARER to
+  // 1300 (350 before it) but outside that window's pre side -> it goes to ref
+  // 0 (950 after it, inside post). Not contested: only one window holds it.
+  auto def = thgem_def(100.0, 1000.0, 100.0);
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 0.0), hit(1, 1300.0), hit(2, 950.0)}, def, st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK(find_ch(evs[0], 2) && near(find_ch(evs[0], 2)->dt, 950.0));
+  CHECK(st.contested == 0);
+}
+
+static void test_generic_contested_counts_any_two_windows() {
+  // References can sit closer than G: group 1 = {0 (p2), 1000 (p1)} -> ref
+  // 1000; group 2 = {1000.5}; group 3 = {2800}. A hit at 1700 is in the
+  // windows of 1000 and 1000.5 only (2800 is 1100 away > pre): contested via
+  // the SECOND predecessor, not the pred/succ pair -> nearest 1000.5. A hit at
+  // 2000 is in all three windows (1000, 999.5, -800) -> nearest 2800.
+  GenericStats st;
+  auto evs = one_chunk({hit(6, 0.0), hit(1, 1000.0), hit(1, 1000.5), hit(1, 2800.0),
+                        hit(2, 1700.0), hit(3, 2000.0)},
+                       thgem_def(), st);
+  CHECK(evs.size() == 3);
+  if (evs.size() != 3) return;
+  CHECK(near(evs[0].t, 1000.0) && near(evs[1].t, 1000.5) && near(evs[2].t, 2800.0));
+  CHECK(find_ch(evs[1], 2) != nullptr);
+  CHECK(find_ch(evs[2], 3) != nullptr);
+  CHECK(st.contested == 2);
+}
+
+static void test_generic_group_zero() {
+  // G = 0: only triggers at exactly the same time share a group.
+  auto def = thgem_def(500.0, 500.0, 0.0);
+  GenericStats st;
+  auto evs = one_chunk({hit(1, 100.0), hit(6, 100.0), hit(1, 100.5)}, def, st);
+  CHECK(evs.size() == 2);
+  if (evs.size() != 2) return;
+  CHECK(evs[0].n_triggers == 2 && evs[0].ch == 1);
+  CHECK(evs[1].n_triggers == 1);
+}
+
+static void test_generic_ntrig_histogram() {
+  GenericStats st;
+  std::vector<ScalarHit> hits;
+  // 1 group of 9 triggers (bin 8+), then 1 single.
+  for (int i = 0; i < 9; ++i) hits.push_back(hit(1, 100.0 + i * 10.0));
+  hits.push_back(hit(1, 100000.0));
+  auto evs = one_chunk(hits, thgem_def(), st);
+  CHECK(evs.size() == 2);
+  CHECK(st.ntrig[7] == 1 && st.ntrig[0] == 1);
+  CHECK(st.events == 2);
+}
+
+static void test_generic_reset_between_runs() {
+  // A stale ev_lo / open group from run N must not leak into run N+1 (whose
+  // clock restarted near 0).
+  TriggerGrouper g;
+  auto def = thgem_def();
+  g.reset(def);
+  SortedChunk c1 = mkchunk({hit(1, 5e9), hit(2, 5e9 + 10)}, -kInf, 5e9 + 5);  // open group
+  GenericStats st;
+  build_generic_events(c1, g.plan_chunk(c1), st);
+  g.reset(def);
+  SortedChunk c2 = mkchunk({hit(1, 100.0), hit(2, 130.0)});
+  GenericStats st2;
+  auto evs = build_generic_events(c2, g.plan_chunk(c2), st2);
+  CHECK(evs.size() == 1 && near(evs[0].t, 100.0) && evs[0].hits.size() == 2);
+}
+
+static void test_sorter_set_lookback() {
+  Sorter s(small_cfg());
+  CHECK(near(s.lookback_ns(), 1000.0));
+  s.set_lookback_ns(4000.0);
+  CHECK(near(s.lookback_ns(), 4000.0));
+  std::vector<SortedChunk> out;
+  std::vector<ScalarHit> b;
+  for (int i = 0; i <= 20; ++i) b.push_back(hit(0, i * 1000.0));
+  s.push_batch(std::move(b), [&](SortedChunk&& c) { out.push_back(std::move(c)); });
+  CHECK(out.size() == 1);
+  // core_end = 20000 - 5000 = 15000; retained from 15000 - 4000 = 11000.
+  CHECK(s.buffered() == 10);
+}
+
+// --- Brute-force reference: rules 1-4 straight from TODO 71 §4, no chunks ---
+
+struct RefResult {
+  std::vector<GenericEvent> events;
+  uint64_t orphans = 0, contested = 0;
+};
+
+static bool hit_order(const ScalarHit& a, const ScalarHit& b) {
+  if (a.timestamp_ns != b.timestamp_ns) return a.timestamp_ns < b.timestamp_ns;
+  if (a.module != b.module) return a.module < b.module;
+  return a.channel < b.channel;
+}
+
+static RefResult reference_build(std::vector<ScalarHit> hits, const EventDef& d) {
+  std::sort(hits.begin(), hits.end(), hit_order);
+  RefResult r;
+  // Rule 1: non-extending groups over the time-ordered triggers.
+  std::vector<std::vector<std::size_t>> groups;  // indices into hits
+  double start = 0.0;
+  for (std::size_t i = 0; i < hits.size(); ++i) {
+    if (d.trigger_index(hits[i].module, hits[i].channel) < 0) continue;
+    if (groups.empty() || hits[i].timestamp_ns > start + d.group_ns) {
+      groups.push_back({});
+      start = hits[i].timestamp_ns;
+    }
+    groups.back().push_back(i);
+  }
+  // Rule 2: reference = best (priority, time, module, channel).
+  std::vector<std::size_t> refs;
+  for (const auto& g : groups) {
+    std::size_t best = g[0];
+    for (std::size_t i : g) {
+      const ScalarHit& a = hits[i];
+      const ScalarHit& b = hits[best];
+      int pa = d.triggers[d.trigger_index(a.module, a.channel)].priority;
+      int pb = d.triggers[d.trigger_index(b.module, b.channel)].priority;
+      if (pa < pb || (pa == pb && hit_order(a, b))) best = i;
+    }
+    refs.push_back(best);
+    GenericEvent e;
+    e.t = hits[best].timestamp_ns;
+    e.mod = hits[best].module;
+    e.ch = hits[best].channel;
+    e.trig_idx = static_cast<uint8_t>(d.trigger_index(e.mod, e.ch));
+    e.n_triggers = static_cast<uint32_t>(g.size());
+    r.events.push_back(e);
+  }
+  std::vector<int> group_of(hits.size(), -1);
+  for (std::size_t k = 0; k < groups.size(); ++k)
+    for (std::size_t i : groups[k]) group_of[i] = static_cast<int>(k);
+  // Rules 3-4: triggers follow their group; other hits -> nearest window.
+  for (std::size_t i = 0; i < hits.size(); ++i) {
+    const ScalarHit& h = hits[i];
+    int ev = group_of[i];
+    if (ev < 0) {
+      int n_in = 0;
+      double best_d = 0.0;
+      for (std::size_t k = 0; k < refs.size(); ++k) {
+        double dt = h.timestamp_ns - r.events[k].t;
+        if (dt < -d.pre_ns || dt > d.post_ns) continue;
+        ++n_in;
+        double ad = dt < 0 ? -dt : dt;
+        if (ev < 0 || ad < best_d) {  // strict: ties keep the earlier ref
+          ev = static_cast<int>(k);
+          best_d = ad;
+        }
+      }
+      if (n_in >= 2) ++r.contested;
+      if (ev < 0) {
+        ++r.orphans;
+        continue;
+      }
+    }
+    EventHit eh;
+    eh.mod = h.module;
+    eh.ch = h.channel;
+    eh.energy = h.energy;
+    eh.energy_short = h.energy_short;
+    eh.dt = h.timestamp_ns - r.events[ev].t;
+    eh.is_trigger = group_of[i] >= 0;
+    r.events[ev].hits.push_back(eh);
+  }
+  return r;
+}
+
+// Hits inside an event compared as a canonical multiset (equal timestamps may
+// come out of std::sort in either order).
+static std::vector<EventHit> canon(std::vector<EventHit> v) {
+  std::sort(v.begin(), v.end(), [](const EventHit& a, const EventHit& b) {
+    if (a.dt != b.dt) return a.dt < b.dt;
+    if (a.mod != b.mod) return a.mod < b.mod;
+    if (a.ch != b.ch) return a.ch < b.ch;
+    return a.energy < b.energy;
+  });
+  return v;
+}
+
+static bool same_events(const std::vector<GenericEvent>& a, const std::vector<GenericEvent>& b,
+                        std::string& why) {
+  if (a.size() != b.size()) {
+    why = "event count " + std::to_string(a.size()) + " vs " + std::to_string(b.size());
+    return false;
+  }
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    const GenericEvent& x = a[i];
+    const GenericEvent& y = b[i];
+    if (x.t != y.t || x.mod != y.mod || x.ch != y.ch || x.trig_idx != y.trig_idx ||
+        x.n_triggers != y.n_triggers || x.hits.size() != y.hits.size()) {
+      char buf[160];
+      std::snprintf(buf, sizeof buf, "event %zu: t %.3f/%.3f ntrig %u/%u nhits %zu/%zu", i, x.t,
+                    y.t, x.n_triggers, y.n_triggers, x.hits.size(), y.hits.size());
+      why = buf;
+      return false;
+    }
+    auto cx = canon(x.hits), cy = canon(y.hits);
+    for (std::size_t j = 0; j < cx.size(); ++j)
+      if (cx[j].dt != cy[j].dt || cx[j].mod != cy[j].mod || cx[j].ch != cy[j].ch ||
+          cx[j].energy != cy[j].energy || cx[j].is_trigger != cy[j].is_trigger) {
+        why = "event " + std::to_string(i) + " hit " + std::to_string(j) + " differs";
+        return false;
+      }
+  }
+  return true;
+}
+
+// The production path: bounded-disorder arrival -> Sorter (lookback from the
+// definition) -> TriggerGrouper on every chunk in order -> builder per chunk.
+struct PipeResult {
+  std::vector<GenericEvent> events;
+  GenericStats stats;
+  uint64_t core_hits = 0;
+  std::size_t chunks = 0;
+  uint64_t late = 0;
+};
+
+static PipeResult run_generic_pipeline(std::vector<ScalarHit> arrival,
+                                       std::shared_ptr<const EventDef> def,
+                                       Sorter::Config scfg, std::size_t batch) {
+  scfg.lookback_ns = std::max(scfg.lookback_ns, def->lookback_ns());
+  Sorter s(scfg);
+  TriggerGrouper g;
+  g.reset(def);
+  PipeResult r;
+  auto on_chunk = [&](SortedChunk&& c) {
+    EventPlan p = g.plan_chunk(c);
+    auto cr = core_range(c);
+    r.core_hits += cr.second - cr.first;
+    GenericStats st;
+    auto evs = build_generic_events(c, p, st);
+    r.stats.add(st);
+    for (auto& e : evs) r.events.push_back(std::move(e));
+    ++r.chunks;
+  };
+  std::size_t fed = 0;
+  while (fed < arrival.size()) {
+    std::vector<ScalarHit> b;
+    for (std::size_t i = 0; i < batch && fed < arrival.size(); ++i, ++fed)
+      b.push_back(arrival[fed]);
+    s.push_batch(std::move(b), on_chunk);
+  }
+  s.flush(on_chunk);
+  r.late = s.late_hits();
+  return r;
+}
+
+static void test_generic_matches_reference_randomized() {
+  // Many random scenarios: overlapping bursts, ties on integer times, three
+  // trigger kinds over two modules (one sharing a priority), asymmetric
+  // windows, chunk spans comparable to the window, bounded arrival disorder.
+  // The chunked pipeline must reproduce the no-chunk reference EXACTLY, and
+  // hits_in_events + orphans must equal the hits written to the core ranges.
+  int mismatches = 0, scenarios = 0;
+  std::string first_why;
+  for (int seed = 1; seed <= 200; ++seed) {
+    std::mt19937 rng(static_cast<unsigned>(seed));
+    std::uniform_int_distribution<int> u(0, 1000000);
+    double pre = 100.0 + (u(rng) % 1500);
+    double post = 100.0 + (u(rng) % 1500);
+    double group = (u(rng) % 4 == 0) ? 0.0 : static_cast<double>(u(rng) % static_cast<int>(std::min(pre, post) + 1));
+    auto def = mkdef(pre, post, group,
+                     {{"A", 1, {{0, 1}}}, {"B", 2, {{0, 6}, {1, 2}}}, {"C", 1, {{1, 0}}}});
+    std::vector<ScalarHit> hits;
+    double t = 1000.0;
+    int nburst = 40 + u(rng) % 60;
+    for (int b = 0; b < nburst; ++b) {
+      t += static_cast<double>(u(rng) % 4000);  // bursts often overlap windows
+      int n = 1 + u(rng) % 8;
+      for (int k = 0; k < n; ++k) {
+        int mod = u(rng) % 2;
+        int ch = u(rng) % 8;
+        double ht = t + static_cast<double>(u(rng) % 2400) - 600.0;
+        if (u(rng) % 3 == 0) ht = std::floor(ht / 50.0) * 50.0;  // force exact ties
+        if (ht < 0) ht = 0;
+        hits.push_back(mhit(mod, ch, ht, static_cast<uint16_t>(u(rng) & 0xffff)));
+      }
+    }
+    RefResult ref = reference_build(hits, *def);
+    Sorter::Config scfg;
+    scfg.chunk_span_ns = 2000.0 + (u(rng) % 20000);
+    scfg.safe_horizon_ns = 3000.0 + (u(rng) % 3000);
+    scfg.lookback_ns = 0.0;
+    std::vector<ScalarHit> arrival = hits;
+    std::sort(arrival.begin(), arrival.end(), hit_order);
+    jitter_arrival(arrival, scfg.safe_horizon_ns * 0.4, rng);
+    PipeResult got = run_generic_pipeline(arrival, def, scfg, 1 + u(rng) % 25);
+    ++scenarios;
+    std::string why;
+    bool ok = got.late == 0 && same_events(got.events, ref.events, why) &&
+              got.stats.orphans == ref.orphans && got.stats.contested == ref.contested &&
+              got.stats.hits_in_events + got.stats.orphans == got.core_hits &&
+              got.core_hits == hits.size() && got.stats.events == ref.events.size();
+    if (!ok) {
+      if (mismatches == 0) {
+        char buf[256];
+        std::snprintf(buf, sizeof buf,
+                      "seed %d (pre %g post %g G %g, %zu chunks, late %llu): %s | orphans %llu/%llu "
+                      "contested %llu/%llu in+orph %llu core %llu",
+                      seed, pre, post, group, got.chunks,
+                      static_cast<unsigned long long>(got.late), why.c_str(),
+                      static_cast<unsigned long long>(got.stats.orphans),
+                      static_cast<unsigned long long>(ref.orphans),
+                      static_cast<unsigned long long>(got.stats.contested),
+                      static_cast<unsigned long long>(ref.contested),
+                      static_cast<unsigned long long>(got.stats.hits_in_events + got.stats.orphans),
+                      static_cast<unsigned long long>(got.core_hits));
+        first_why = buf;
+      }
+      ++mismatches;
+    }
+  }
+  if (mismatches) std::printf("  randomized: %d/%d mismatch, first: %s\n", mismatches, scenarios,
+                              first_why.c_str());
+  CHECK(mismatches == 0);
+}
+
+static void test_generic_boundary_reference_after_core_end() {
+  // Directed H10-style case. Sorter span 10 us / horizon 5 us: the first batch
+  // (hits up to 20000) splits at core_end = 15000. A group opens at 14990
+  // (ThGEM2, p2) and its reference ThGEM1 at 15200 lies BEYOND core_end; arms
+  // sit on both sides. The event must come out exactly once, complete.
+  auto def = thgem_def();
+  Sorter::Config scfg = small_cfg();
+  std::vector<ScalarHit> b1;
+  for (int i = 0; i <= 20; ++i) b1.push_back(hit(3, i * 1000.0 + 500.0));  // filler
+  b1.push_back(hit(6, 14990.0));
+  b1.push_back(hit(2, 14800.0, 11));
+  b1.push_back(hit(1, 15200.0));
+  b1.push_back(hit(4, 15900.0, 12));
+  b1.push_back(hit(0, 20000.0));
+  std::vector<ScalarHit> b2;
+  for (int i = 21; i <= 40; ++i) b2.push_back(hit(3, i * 1000.0 + 500.0));
+  std::vector<ScalarHit> all = b1;
+  all.insert(all.end(), b2.begin(), b2.end());
+  RefResult ref = reference_build(all, *def);
+
+  scfg.lookback_ns = std::max(scfg.lookback_ns, def->lookback_ns());
+  Sorter s(scfg);
+  TriggerGrouper g;
+  g.reset(def);
+  std::vector<GenericEvent> evs;
+  GenericStats st;
+  std::size_t chunks = 0;
+  auto on_chunk = [&](SortedChunk&& c) {
+    ++chunks;
+    EventPlan p = g.plan_chunk(c);
+    for (auto& e : build_generic_events(c, p, st)) evs.push_back(std::move(e));
+  };
+  s.push_batch(std::move(b1), on_chunk);
+  s.push_batch(std::move(b2), on_chunk);
+  s.flush(on_chunk);
+  CHECK(chunks >= 2);
+  CHECK(evs.size() == 1);
+  if (evs.size() != 1) return;
+  CHECK(near(evs[0].t, 15200.0) && evs[0].n_triggers == 2);
+  CHECK(find_ch(evs[0], 2) && find_ch(evs[0], 2)->energy == 11);
+  CHECK(find_ch(evs[0], 4) && find_ch(evs[0], 4)->energy == 12);
+  CHECK(find_ch(evs[0], 6) && near(find_ch(evs[0], 6)->dt, -210.0));
+  std::string why;
+  CHECK(same_events(evs, ref.events, why));
+  CHECK(st.orphans == ref.orphans);
+}
+
+static void test_generic_group_span_ends_at_core_end() {
+  // The group [14000, 15000] ends EXACTLY at the first chunk's core_end
+  // (20000 - 5000): the trigger at 15000 belongs to it (t <= start + G) but is
+  // only fed with the NEXT chunk's core. The group must stay open across the
+  // boundary (close only when start + G < core_end, strictly).
+  auto def = thgem_def();
+  Sorter::Config scfg = small_cfg();
+  scfg.lookback_ns = def->lookback_ns();
+  Sorter s(scfg);
+  TriggerGrouper g;
+  g.reset(def);
+  std::vector<GenericEvent> evs;
+  GenericStats st;
+  std::size_t chunks = 0;
+  auto on_chunk = [&](SortedChunk&& c) {
+    ++chunks;
+    for (auto& e : build_generic_events(c, g.plan_chunk(c), st)) evs.push_back(std::move(e));
+  };
+  s.push_batch({hit(3, 0.0), hit(1, 14000.0), hit(6, 15000.0), hit(3, 20000.0)}, on_chunk);
+  s.push_batch({hit(3, 40000.0)}, on_chunk);
+  s.flush(on_chunk);
+  CHECK(chunks >= 2);
+  CHECK(evs.size() == 1);
+  CHECK(evs.size() == 1 && evs[0].n_triggers == 2 && near(evs[0].t, 14000.0));
+}
+
+static void test_generic_pool_determinism() {
+  // Plans are made in Sorter order; the builder is pure, so 1 vs 4 workers
+  // must give the identical event sequence.
+  auto def = thgem_def();
+  Sorter::Config scfg = small_cfg();
+  scfg.lookback_ns = def->lookback_ns();
+  Sorter s(scfg);
+  TriggerGrouper g;
+  g.reset(def);
+  std::mt19937 rng(77);
+  std::uniform_real_distribution<double> jit(0.0, 900.0);
+  std::vector<ScalarHit> all;
+  for (int i = 0; i < 400; ++i) {
+    double t = 1000.0 + i * 1300.0 + jit(rng);
+    all.push_back(hit(i % 3 ? 1 : 6, t, static_cast<uint16_t>(i)));
+    all.push_back(hit(2, t + jit(rng), 1));
+    all.push_back(hit(0, t - jit(rng), 2));
+  }
+  jitter_arrival(all, 2000.0, rng);
+  std::vector<WorkMsg> msgs;
+  uint64_t seq = 0;
+  auto on_chunk = [&](SortedChunk&& c) {
+    WorkMsg m;
+    m.plan = g.plan_chunk(c);
+    m.chunk = std::move(c);
+    m.seq = seq++;
+    msgs.push_back(std::move(m));
+  };
+  std::size_t fed = 0;
+  while (fed < all.size()) {
+    std::vector<ScalarHit> b;
+    for (int i = 0; i < 23 && fed < all.size(); ++i, ++fed) b.push_back(all[fed]);
+    s.push_batch(std::move(b), on_chunk);
+  }
+  s.flush(on_chunk);
+  CHECK(msgs.size() >= 3);
+  auto run = [&](int nworkers) {
+    Channel<WorkMsg> work, done;
+    std::vector<std::thread> ws;
+    for (int i = 0; i < nworkers; ++i)
+      ws.emplace_back([&] {
+        WorkMsg m;
+        while (work.pop(m)) {
+          bool pill = m.ctrl == Ctrl::Shutdown;
+          if (!pill) m.events = build_generic_events(m.chunk, m.plan, m.gstats);
+          done.push(std::move(m));
+          if (pill) break;
+        }
+      });
+    uint64_t sq = 0;
+    for (const auto& m0 : msgs) {
+      WorkMsg m;
+      m.chunk = m0.chunk;
+      m.plan = m0.plan;
+      m.seq = sq++;
+      work.push(std::move(m));
+    }
+    for (int i = 0; i < nworkers; ++i) {
+      WorkMsg m;
+      m.ctrl = Ctrl::Shutdown;
+      m.seq = sq++;
+      work.push(std::move(m));
+    }
+    SeqReorder<WorkMsg> reorder;
+    std::vector<std::pair<double, std::size_t>> out;
+    int pills = 0;
+    WorkMsg m;
+    while (pills < nworkers && done.pop(m)) {
+      reorder.push(m.seq, std::move(m));
+      WorkMsg r;
+      while (reorder.pop_ready(r)) {
+        if (r.ctrl == Ctrl::Shutdown) ++pills;
+        for (const auto& e : r.events) out.push_back({e.t, e.hits.size()});
+      }
+    }
+    for (auto& t : ws) t.join();
+    return out;
+  };
+  auto s1 = run(1), s4 = run(4);
+  CHECK(!s1.empty());
+  CHECK(s1 == s4);
+}
+
+// ---------------------------------------------------------------------------
 // Worker-pool determinism (Channel + SeqReorder + builder end-to-end)
 // ---------------------------------------------------------------------------
 
@@ -1071,6 +1757,26 @@ int main() {
   test_sorter_orders_on_aligned_time();
   test_sorter_offset_spread_beyond_horizon_counts_late();
   test_pool_determinism();
+  test_generic_disabled();
+  test_generic_single_event();
+  test_generic_group_does_not_extend();
+  test_generic_abc_chain_no_loss();
+  test_generic_priority_picks_reference();
+  test_generic_priority_ties();
+  test_generic_no_priorities_first_trigger();
+  test_generic_nearest_reference_wins();
+  test_generic_trigger_follows_its_group();
+  test_generic_window_edges_inclusive();
+  test_generic_asymmetric_nearest_out_of_window();
+  test_generic_contested_counts_any_two_windows();
+  test_generic_group_zero();
+  test_generic_ntrig_histogram();
+  test_generic_reset_between_runs();
+  test_sorter_set_lookback();
+  test_generic_boundary_reference_after_core_end();
+  test_generic_matches_reference_randomized();
+  test_generic_group_span_ends_at_core_end();
+  test_generic_pool_determinism();
   std::printf("test_eb_core: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
 }

@@ -1,8 +1,9 @@
 // test_sink_core.cpp — ROOT/ZMQ-free unit tests for the root_sink pure logic.
 //
 // Covers sink_core.hpp (envelope parse, batch decode, coincidence matcher with
-// energies, run state, HTTP helpers) and hist_config.hpp (config parse + errors,
-// value_of / pass_cut for both scopes). Builds and runs on any box:
+// energies, run state, HTTP helpers), hist_config.hpp (config parse + errors,
+// value_of / pass_cut for both scopes), time_offsets.hpp (TODO 70) and
+// event_def.hpp (TODO 71). Builds and runs on any box:
 //
 //   g++ -std=c++17 -O0 -g test_sink_core.cpp -o /tmp/ts && /tmp/ts
 //
@@ -15,9 +16,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#include "event_def.hpp"
 #include "hist_config.hpp"
 #include "sink_core.hpp"
 #include "time_offsets.hpp"
@@ -577,6 +582,401 @@ static void test_toff_run56_centres_xy() {
         near(y2, -11.8, 1e-6));
   CHECK(image(true, x1, y1, x2, y2));
   CHECK(near(x1, 0.0) && near(y1, 0.0) && near(x2, 0.0) && near(y2, 0.0));
+}
+
+// ---------------------------------------------------------------------------
+// Event definition (event_def.hpp, TODO 71 Phase A): triggers, group, window
+// ---------------------------------------------------------------------------
+static const double kEdefHorizon = 50e6;  // root_sink's default safe horizon (50 ms)
+
+// The TODO 71 §4 example = config/event_def_thgem.json without its _comment.
+static const std::string kEdefThGEM =
+    R"({"version": "1.0",
+        "window_ns": {"pre": 1000, "post": 1000},
+        "group_ns": 1000,
+        "triggers": [
+          {"name": "ThGEM1", "priority": 1, "channels": [[0, 1]]},
+          {"name": "ThGEM2", "priority": 2, "channels": [[0, 6]]}]})";
+
+// A file from its parts; `extra` is spliced in as further top-level members.
+static std::string edef_json(const std::string& window, const std::string& group,
+                             const std::string& triggers, const std::string& extra = "") {
+  return R"({"version":"1.0","window_ns":)" + window + R"(,"group_ns":)" + group +
+         R"(,"triggers":)" + triggers + extra + "}";
+}
+
+static std::vector<std::string> edef_errs(const std::string& j, double horizon = kEdefHorizon) {
+  return parse_event_def(j, horizon).errors;
+}
+
+// One-trigger file with the given trigger body (inside the braces).
+static std::vector<std::string> edef_trig_errs(const std::string& body) {
+  return edef_errs(edef_json(R"({"pre":1000,"post":1000})", "1000", "[{" + body + "}]"));
+}
+
+// `rel` relative to the repo root, located from this source file (not the cwd
+// of the test binary's caller: __FILE__ is the path the compiler was given).
+static std::string repo_path(const char* rel) {
+  std::string here = __FILE__;
+  std::size_t slash = here.find_last_of('/');
+  return (slash == std::string::npos ? std::string() : here.substr(0, slash + 1)) + "../../" + rel;
+}
+
+static bool read_text(const std::string& path, std::string& out) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return false;
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  out = ss.str();
+  return true;
+}
+
+static void check_thgem_def(const EventDefParseResult& r) {
+  CHECK(r.errors.empty() && r.warnings.empty());
+  const EventDef& d = r.def;
+  CHECK(near(d.pre_ns, 1000.0) && near(d.post_ns, 1000.0) && near(d.group_ns, 1000.0));
+  CHECK(d.priorities_given);
+  CHECK(d.triggers.size() == 2);
+  if (d.triggers.size() != 2) return;
+  CHECK(d.triggers[0].name == "ThGEM1" && d.triggers[0].priority == 1);
+  CHECK(d.triggers[1].name == "ThGEM2" && d.triggers[1].priority == 2);
+  CHECK(d.triggers[0].channels.size() == 1 && d.triggers[0].channels[0] == mc_key(0, 1));
+  CHECK(d.triggers[1].channels.size() == 1 && d.triggers[1].channels[0] == mc_key(0, 6));
+  CHECK(d.trig_of.size() == 65536);  // index_channels() ran
+  CHECK(d.trigger_index(0, 1) == 0 && d.trigger_index(0, 6) == 1);
+  CHECK(d.trigger_index(0, 2) == -1 && d.trigger_index(0, 0) == -1);  // arm, LaBr3
+  CHECK(d.trigger_index(1, 1) == -1);                                 // other module
+  CHECK(near(d.lookback_ns(), 4000.0));                               // G + 2 pre + post
+}
+
+static void test_edef_thgem_example() {
+  check_thgem_def(parse_event_def(kEdefThGEM, kEdefHorizon));
+  // A hand-built def that never ran index_channels(): no trigger at all.
+  EventDef raw;
+  raw.triggers.push_back(TriggerDef{"T", 0, {mc_key(0, 1)}});
+  CHECK(raw.trigger_index(0, 1) == -1);
+  raw.index_channels();
+  CHECK(raw.trigger_index(0, 1) == 0);
+}
+
+static void test_edef_thgem_file() {
+  std::string text;
+  CHECK(read_text(repo_path("config/event_def_thgem.json"), text));
+  EventDefParseResult r = parse_event_def(text, kEdefHorizon);
+  check_thgem_def(r);
+  CHECK(format_event_def_line(r.def) ==
+        "window [-1000, +1000] ns, group 1000 ns, 2 trigger(s): ThGEM1(p1: m0c1) ThGEM2(p2: m0c6)");
+}
+
+static void test_edef_no_priority() {
+  EventDefParseResult r = parse_event_def(
+      edef_json(R"({"pre":500,"post":2000})", "250",
+                R"([{"name":"Si","channels":[[0,0],[0,1]]},{"name":"Ge","channels":[[1,4]]}])"),
+      kEdefHorizon);
+  CHECK(r.errors.empty() && !r.def.priorities_given);
+  CHECK(r.def.triggers.size() == 2 && r.def.triggers[0].priority == 0 &&
+        r.def.triggers[1].priority == 0);
+  CHECK(r.def.trigger_index(0, 0) == 0 && r.def.trigger_index(0, 1) == 0 &&
+        r.def.trigger_index(1, 4) == 1 && r.def.trigger_index(0, 4) == -1);
+  CHECK(r.def.triggers[0].channels.size() == 2 && r.def.triggers[0].channels[1] == mc_key(0, 1));
+  CHECK(near(r.def.lookback_ns(), 250.0 + 1000.0 + 2000.0));
+  CHECK(format_event_def_line(r.def) ==
+        "window [-500, +2000] ns, group 250 ns, 2 trigger(s), reference = first of group: "
+        "Si(m0c0,m0c1) Ge(m1c4)");
+  // Priorities given: multi-channel form, negative and tied priorities are fine.
+  EventDefParseResult p = parse_event_def(
+      edef_json(R"({"pre":1000,"post":1000})", "100",
+                R"([{"name":"Si","priority":-1,"channels":[[0,0],[0,1]]},
+                    {"name":"Ge","priority":5,"channels":[[1,4]]},
+                    {"name":"PMT","priority":5,"channels":[[2,0]]}])"),
+      kEdefHorizon);
+  CHECK(p.errors.empty() && p.def.priorities_given);
+  CHECK(p.def.triggers.size() == 3 && p.def.triggers[0].priority == -1 &&
+        p.def.triggers[2].priority == 5);
+  CHECK(format_event_def_line(p.def) ==
+        "window [-1000, +1000] ns, group 100 ns, 3 trigger(s): Si(p-1: m0c0,m0c1) Ge(p5: m1c4) "
+        "PMT(p5: m2c0)");
+}
+
+static void test_edef_priority_rules() {
+  const std::string w = R"({"pre":1000,"post":1000})";
+  // All-or-none: a missing priority would silently become "best" or "worst".
+  std::vector<std::string> e = edef_errs(edef_json(
+      w, "100",
+      R"([{"name":"A","priority":1,"channels":[[0,1]]},{"name":"B","channels":[[0,2]]}])"));
+  CHECK(e.size() == 1 && any_contains(e, "all triggers or for none") && any_contains(e, "'B'"));
+  // Not an integer / out of int range / not a number.
+  CHECK(any_contains(edef_trig_errs(R"("name":"A","priority":1.5,"channels":[[0,1]])"),
+                     "'priority' must be an integer"));
+  CHECK(any_contains(edef_trig_errs(R"("name":"A","priority":3e9,"channels":[[0,1]])"),
+                     "'priority' must be an integer"));
+  CHECK(any_contains(edef_trig_errs(R"("name":"A","priority":"1","channels":[[0,1]])"),
+                     "'priority' must be an integer"));
+  CHECK(edef_trig_errs(R"("name":"A","priority":null,"channels":[[0,1]])").size() == 1);
+}
+
+static void test_edef_group_vs_window() {
+  const std::string trig = R"([{"name":"T","channels":[[0,1]]}])";
+  auto errs = [&](const char* pre, const char* post, const char* g) {
+    return edef_errs(edef_json(std::string(R"({"pre":)") + pre + R"(,"post":)" + post + "}", g,
+                               trig));
+  };
+  // G > pre and G > post, symmetric and asymmetric both ways: the reference can
+  // be the group's last trigger (others up to G before it) or its first.
+  std::vector<std::string> e = errs("1000", "1000", "1001");
+  CHECK(e.size() == 1 && any_contains(e, "group_ns 1001 > min(") &&
+        any_contains(e, "wherever the reference sits"));
+  CHECK(any_contains(errs("500", "1000", "800"), "group_ns"));
+  CHECK(any_contains(errs("1000", "500", "800"), "group_ns"));
+  CHECK(any_contains(errs("1000", "500", "800"), "window_ns.post 500"));
+  // G == min(pre, post) is the limit, still fine; so is G = 0 and a zero window.
+  CHECK(errs("500", "1000", "500").empty());
+  CHECK(errs("1000", "500", "500").empty());
+  CHECK(errs("1000", "1000", "1000").empty());
+  CHECK(errs("1000", "1000", "0").empty());
+  CHECK(errs("0", "0", "0").empty());
+  EventDefParseResult asym = parse_event_def(
+      edef_json(R"({"pre":300,"post":700})", "300", trig), kEdefHorizon);
+  CHECK(asym.errors.empty() && near(asym.def.pre_ns, 300.0) && near(asym.def.post_ns, 700.0));
+}
+
+static void test_edef_window_errors() {
+  const std::string trig = R"([{"name":"T","channels":[[0,1]]}])";
+  auto win = [&](const std::string& w, const std::string& g = "0") {
+    return edef_errs(edef_json(w, g, trig));
+  };
+  // Exactly one error each: an invalid window does not cascade into a G error.
+  CHECK(win(R"({"pre":-1,"post":1000})", "1000").size() == 1);
+  CHECK(any_contains(win(R"({"pre":-1,"post":1000})"),
+                     "'window_ns.pre' must be a finite number >= 0"));
+  CHECK(any_contains(win(R"({"pre":1000,"post":"1000"})"), "window_ns.post"));
+  CHECK(any_contains(win(R"({"pre":1000,"post":null})"), "window_ns.post"));
+  CHECK(any_contains(win(R"({"pre":1000})"), "missing 'window_ns.post'"));
+  CHECK(win(R"({})").size() == 2);  // both missing
+  CHECK(any_contains(win("1000"), "'window_ns' must be an object"));
+  CHECK(!win(R"({"pre":1e999,"post":1000})").empty());  // not finite: rejected by the parser
+  CHECK(any_contains(win(R"({"pre":10,"post":10,"pos":10})"), "unknown key 'pos'"));
+  CHECK(win(R"({"_comment":"symmetric","pre":10,"post":10})").empty());
+  CHECK(!win(R"({"_comment":7,"pre":10,"post":10})").empty());
+  CHECK(any_contains(win(R"({"pre":10,"post":10})", "-5"), "'group_ns' must be a finite number"));
+  CHECK(any_contains(win(R"({"pre":10,"post":10})", "\"5\""), "'group_ns'"));
+  // Missing members.
+  CHECK(any_contains(edef_errs(R"({"version":"1.0","group_ns":0,"triggers":)" + trig + "}"),
+                     "'window_ns' must be an object"));
+  CHECK(any_contains(edef_errs(R"({"version":"1.0","window_ns":{"pre":1,"post":1},"triggers":)" +
+                               trig + "}"),
+                     "missing 'group_ns'"));
+}
+
+static void test_edef_channel_errors() {
+  const std::string w = R"({"pre":1000,"post":1000})";
+  // The same channel twice inside one trigger, and across two triggers.
+  std::vector<std::string> in = edef_trig_errs(R"("name":"ThGEM1","channels":[[0,1],[0,2],[0,1]])");
+  CHECK(in.size() == 1 && any_contains(in, "m0c1 listed twice in trigger 'ThGEM1'"));
+  std::vector<std::string> across = edef_errs(edef_json(
+      w, "100",
+      R"([{"name":"ThGEM1","channels":[[0,1]]},{"name":"ThGEM2","channels":[[0,6],[0,1]]}])"));
+  CHECK(across.size() == 1 &&
+        any_contains(across, "m0c1 listed in both trigger 'ThGEM1' and trigger 'ThGEM2'"));
+  // Same channel number on another module is a different channel.
+  CHECK(edef_errs(edef_json(w, "100",
+                            R"([{"name":"A","channels":[[0,1]]},{"name":"B","channels":[[1,1]]}])"))
+            .empty());
+  // Bad [module, channel] pairs.
+  const char* bad[] = {"[[300,0]]", "[[0,-1]]", "[[0,1.5]]", "[[0]]", "[[0,1,2]]",
+                       "[\"0_1\"]", "[[\"0\",1]]", "[[0,256]]"};
+  for (const char* b : bad)
+    CHECK(any_contains(edef_trig_errs(std::string(R"("name":"T","channels":)") + b),
+                       "channels[0] must be [module, channel]"));
+  CHECK(edef_trig_errs(R"("name":"T","channels":[[255,255]])").empty());
+  CHECK(any_contains(edef_trig_errs(R"("name":"T","channels":[])"), "'channels' is empty"));
+  CHECK(any_contains(edef_trig_errs(R"("name":"T")"), "'channels' must be a non-empty array"));
+  CHECK(any_contains(edef_trig_errs(R"("name":"T","channels":[0,1])"), "channels[1]"));
+}
+
+static void test_edef_trigger_errors() {
+  const std::string w = R"({"pre":1000,"post":1000})";
+  std::vector<std::string> dup = edef_errs(edef_json(
+      w, "100", R"([{"name":"A","channels":[[0,1]]},{"name":"A","channels":[[0,2]]}])"));
+  CHECK(dup.size() == 1 && any_contains(dup, "triggers[0] and triggers[1]: duplicate name 'A'"));
+  CHECK(any_contains(edef_errs(edef_json(w, "100", "[]")), "'triggers' is empty"));
+  CHECK(any_contains(edef_errs(edef_json(w, "100", "{}")), "'triggers' must be a non-empty array"));
+  CHECK(any_contains(edef_errs(R"({"version":"1.0","window_ns":{"pre":1,"post":1},"group_ns":0})"),
+                     "'triggers' must be"));
+  CHECK(any_contains(edef_errs(edef_json(w, "100", "[5]")), "triggers[0]: not an object"));
+  CHECK(any_contains(edef_trig_errs(R"("channels":[[0,1]])"), "'name' must be a non-empty string"));
+  CHECK(any_contains(edef_trig_errs(R"("name":"","channels":[[0,1]])"), "'name'"));
+  CHECK(any_contains(edef_trig_errs(R"("name":3,"channels":[[0,1]])"), "'name'"));
+  // Tag-based selection needs the channel table (Phase C): a specific message.
+  std::vector<std::string> tags = edef_trig_errs(R"("name":"Si","tags":["SiE"])");
+  CHECK(any_contains(tags, "triggers[0]: 'tags' needs the channel table (TODO 71 Phase C); use "
+                           "'channels'"));
+  CHECK(any_contains(edef_trig_errs(R"("name":"T","channels":[[0,1]],"chanels":[[0,2]])"),
+                     "unknown key 'chanels'"));
+  CHECK(edef_trig_errs(R"("name":"T","_comment":"front strips","channels":[[0,1]])").empty());
+  // A trigger with a bad name still takes part in the duplicate-channel check.
+  CHECK(any_contains(edef_errs(edef_json(
+                         w, "100", R"([{"name":"A","channels":[[0,1]]},{"channels":[[0,1]]}])")),
+                     "m0c1 listed in both trigger 'A' and triggers[1]"));
+  // TriggerIdx is 8-bit: 256 triggers are fine, 257 are not.
+  auto many = [&](int n) {
+    std::string t = "[";
+    for (int i = 0; i < n; ++i)
+      t += std::string(i ? "," : "") + R"({"name":"t)" + std::to_string(i) + R"(","channels":[[)" +
+           std::to_string(i / 256) + "," + std::to_string(i % 256) + "]]}";
+    return parse_event_def(edef_json(w, "100", t + "]"), kEdefHorizon);
+  };
+  EventDefParseResult m256 = many(256);
+  CHECK(m256.errors.empty() && m256.def.trigger_index(0, 255) == 255);
+  CHECK(any_contains(many(257).errors, "at most 256"));
+}
+
+static void test_edef_top_level() {
+  const std::string w = R"({"pre":1000,"post":1000})";
+  const std::string trig = R"([{"name":"T","channels":[[0,1]]}])";
+  CHECK(any_contains(edef_errs(edef_json(w, "100", trig, R"(,"trigers":[])")),
+                     "unknown top-level key 'trigers'"));
+  CHECK(edef_errs(edef_json(w, "100", trig, R"(,"$schema":"x","_comment":["a","b"])")).empty());
+  CHECK(!edef_errs(edef_json(w, "100", trig, R"(,"_comment":5)")).empty());
+  EventDefParseResult v2 = parse_event_def(
+      R"({"version":"2.0","window_ns":{"pre":1,"post":1},"group_ns":0,"triggers":)" + trig + "}",
+      kEdefHorizon);
+  CHECK(v2.errors.empty() && v2.warnings.size() == 1 && any_contains(v2.warnings, "\"2.0\""));
+  CHECK(any_contains(edef_errs(R"({"window_ns":{"pre":1,"post":1},"group_ns":0,"triggers":)" +
+                               trig + "}"),
+                     "'version'"));
+  CHECK(any_contains(edef_errs(""), "empty file"));
+  CHECK(any_contains(edef_errs(" \n\t"), "empty file"));
+  CHECK(edef_errs("{").size() == 1 && any_contains(edef_errs("{"), "malformed JSON"));
+  CHECK(any_contains(edef_errs("[1,2]"), "top level must be a JSON object"));
+}
+
+static void test_edef_lookback_and_collect_all() {
+  // lookback = G + 2 pre + post = 4000 ns for the ThGEM file; the bound is strict.
+  std::vector<std::string> e = edef_errs(kEdefThGEM, 4000.0);
+  CHECK(e.size() == 1 && any_contains(e, "4000 ns >= Sorter safe horizon 4000 ns"));
+  CHECK(edef_errs(kEdefThGEM, 4000.5).empty());
+  // A typo'd window of seconds is caught by the default horizon.
+  CHECK(any_contains(edef_errs(edef_json(R"({"pre":1e8,"post":1e8})", "0",
+                                         R"([{"name":"T","channels":[[0,1]]}])")),
+                     "safe horizon"));
+  // Every problem at once (and no lookback complaint on top of real errors).
+  std::vector<std::string> all = edef_errs(
+      R"({"version":"1.0","bogus":1,"window_ns":{"pre":-5,"post":1e8},"group_ns":0,
+          "triggers":[{"name":"A","channels":[[0,1]]},
+                      {"name":"A","tags":["x"],"channels":[[0,2],[400,0]]}]})");
+  CHECK(all.size() == 5);
+  CHECK(any_contains(all, "'bogus'") && any_contains(all, "window_ns.pre") &&
+        any_contains(all, "duplicate name 'A'") && any_contains(all, "'tags'") &&
+        any_contains(all, "channels[1]"));
+  CHECK(!any_contains(all, "safe horizon"));
+}
+
+static void test_edef_reload_policy() {
+  const std::string A = kEdefThGEM;
+  const std::string B = edef_json(R"({"pre":500,"post":500})", "500",
+                                  R"([{"name":"Only","channels":[[0,3]]}])");
+  const std::string bad = edef_json(R"({"pre":500,"post":500})", "600",
+                                    R"([{"name":"Only","channels":[[0,3]]}])");
+  ActiveEventDef a;
+  std::vector<std::string> errors;
+  CHECK(reload_event_def(a, &A, "", "/x/ed.json", kEdefHorizon, "t0", errors));
+  CHECK(errors.empty() && a.loaded && !a.stale && a.def && a.def->triggers.size() == 2);
+  CHECK(a.source_text == A && a.source_path == "/x/ed.json" && a.loaded_at == "t0");
+  std::shared_ptr<const EventDef> frozen = a.def;  // what a running Sorter holds
+  // Invalid file at a run boundary: keep the previous def (same object) AND text.
+  CHECK(!reload_event_def(a, &bad, "", "/x/ed.json", kEdefHorizon, "t1", errors));
+  CHECK(!errors.empty() && a.stale && a.def == frozen && a.source_text == A &&
+        a.loaded_at == "t0" && a.stale_error.find("group_ns") != std::string::npos);
+  // Unreadable file.
+  CHECK(!reload_event_def(a, nullptr, "No such file or directory", "/x/ed.json", kEdefHorizon,
+                          "t2", errors));
+  CHECK(a.stale && a.def == frozen && any_contains(errors, "cannot read /x/ed.json") &&
+        any_contains(errors, "No such file"));
+  // Lookback over the horizon is a failure too.
+  CHECK(!reload_event_def(a, &A, "", "/x/ed.json", 100.0, "t3", errors));
+  CHECK(any_contains(errors, "safe horizon") && a.def == frozen);
+  // Recovery: a NEW object, stale cleared; the frozen one is untouched.
+  CHECK(reload_event_def(a, &B, "", "/y/ed.json", kEdefHorizon, "t4", errors));
+  CHECK(!a.stale && a.stale_error.empty() && a.def != frozen && a.source_path == "/y/ed.json");
+  // Warnings survive the reload path (no silent failure): kept with the def in
+  // force and recorded in the provenance; a clean reload clears them.
+  {
+    ActiveEventDef w;
+    std::string v2 = A;
+    v2.replace(v2.find("\"1.0\""), 5, "\"2.0\"");
+    CHECK(reload_event_def(w, &v2, "", "/x/ed.json", kEdefHorizon, "t5", errors));
+    CHECK(w.warnings.size() == 1 && w.warnings[0].find("2.0") != std::string::npos);
+    CHECK(event_def_provenance_json(w).find("\"warnings\":[\"version") != std::string::npos);
+    CHECK(reload_event_def(w, &A, "", "/x/ed.json", kEdefHorizon, "t6", errors));
+    CHECK(w.warnings.empty());
+  }
+  CHECK(a.def->triggers.size() == 1 && a.def->trigger_index(0, 3) == 0);
+  CHECK(frozen->triggers.size() == 2 && frozen->trigger_index(0, 1) == 0);
+  // Reloading the very same text still yields a fresh object (frozen per run).
+  std::shared_ptr<const EventDef> prev = a.def;
+  CHECK(reload_event_def(a, &B, "", "/y/ed.json", kEdefHorizon, "t5", errors));
+  CHECK(a.def != prev);
+  // First load failing leaves nothing loaded (the caller exits at startup).
+  ActiveEventDef fresh;
+  CHECK(!reload_event_def(fresh, &bad, "", "p", kEdefHorizon, "t", errors) && !fresh.loaded &&
+        !fresh.def && fresh.stale);
+}
+
+static void test_edef_provenance_json() {
+  const std::string src =
+      "{\"version\":\"1.0\",\"_comment\":\"tab\\t \\\"quoted\\\" back\\\\slash\",\n"
+      "\"window_ns\":{\"pre\":1000.1,\"post\":900},\"group_ns\":0.3,\n"
+      "\"triggers\":[{\"name\":\"ThGEM1\",\"priority\":1,\"channels\":[[0,1]]},\n"
+      "              {\"name\":\"Si \\\"E\\\"\",\"priority\":2,\"channels\":[[2,7],[2,8]]}]}";
+  ActiveEventDef a;
+  std::vector<std::string> errors;
+  CHECK(reload_event_def(a, &src, "", "/p/ed.json", kEdefHorizon, "2026-10-07T00:00:00Z", errors));
+  using JV = tdelila::json::Value;
+  JV v = tdelila::json::Parser(event_def_provenance_json(a)).parse();
+  CHECK(v.find("applied") && v.find("applied")->b);
+  CHECK(v.find("convention") && v.find("convention")->str.find("ALIGNED") != std::string::npos);
+  CHECK(v.find("status") && v.find("status")->str == "ok" && !v.find("reload_error"));
+  CHECK(v.find("source_path") && v.find("source_path")->str == "/p/ed.json");
+  CHECK(v.find("loaded_at") && v.find("loaded_at")->str == "2026-10-07T00:00:00Z");
+  CHECK(v.find("source_text") && v.find("source_text")->str == src);  // round-trips exactly
+  const JV* w = v.find("window_ns");
+  CHECK(w && w->find("pre") && w->find("pre")->num == 1000.1);  // %.17g: exact
+  CHECK(w && w->find("post") && w->find("post")->num == 900.0);
+  CHECK(v.find("group_ns") && v.find("group_ns")->num == 0.3);
+  CHECK(v.find("priorities_given") && v.find("priorities_given")->b);
+  const JV* t = v.find("triggers");
+  CHECK(t && t->t == JV::T::Arr && t->arr.size() == 2);
+  if (t && t->arr.size() == 2) {
+    const JV& t1 = t->arr[1];
+    CHECK(t1.find("index") && t1.find("index")->num == 1.0);
+    CHECK(t1.find("name") && t1.find("name")->str == "Si \"E\"");
+    CHECK(t1.find("priority") && t1.find("priority")->num == 2.0);
+    const JV* ch = t1.find("channels");
+    CHECK(ch && ch->arr.size() == 2 && ch->arr[1].arr.size() == 2 && ch->arr[1].arr[0].num == 2.0 &&
+          ch->arr[1].arr[1].num == 8.0);
+    CHECK(t->arr[0].find("index") && t->arr[0].find("index")->num == 0.0);
+  }
+  // Stale: the previous definition is still what the provenance describes.
+  const std::string bad = "{";
+  reload_event_def(a, &bad, "", "/p/ed.json", kEdefHorizon, "later", errors);
+  JV s = tdelila::json::Parser(event_def_provenance_json(a)).parse();
+  CHECK(s.find("status") &&
+        s.find("status")->str == "stale: run-start reload failed, previous definition kept");
+  CHECK(s.find("reload_error") && s.find("reload_error")->str.find("malformed JSON") == 0);
+  CHECK(s.find("source_text") && s.find("source_text")->str == src);
+  CHECK(s.find("loaded_at") && s.find("loaded_at")->str == "2026-10-07T00:00:00Z");
+  // Without priorities: flag false, every priority 0.
+  const std::string np = edef_json(R"({"pre":10,"post":10})", "0",
+                                   R"([{"name":"T","channels":[[0,1]]}])");
+  ActiveEventDef b;
+  CHECK(reload_event_def(b, &np, "", "q", kEdefHorizon, "t", errors));
+  JV n = tdelila::json::Parser(event_def_provenance_json(b)).parse();
+  CHECK(n.find("priorities_given") && n.find("priorities_given")->t == JV::T::Bool &&
+        !n.find("priorities_given")->b);
+  // Never loaded: still valid JSON, says so.
+  JV z = tdelila::json::Parser(event_def_provenance_json(ActiveEventDef{})).parse();
+  CHECK(z.find("applied") && !z.find("applied")->b);
 }
 
 // ---------------------------------------------------------------------------
@@ -1216,6 +1616,18 @@ int main() {
   test_toff_reload_policy();
   test_toff_provenance_json();
   test_toff_run56_centres_xy();
+  test_edef_thgem_example();
+  test_edef_thgem_file();
+  test_edef_no_priority();
+  test_edef_priority_rules();
+  test_edef_group_vs_window();
+  test_edef_window_errors();
+  test_edef_channel_errors();
+  test_edef_trigger_errors();
+  test_edef_top_level();
+  test_edef_lookback_and_collect_all();
+  test_edef_reload_policy();
+  test_edef_provenance_json();
 
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;

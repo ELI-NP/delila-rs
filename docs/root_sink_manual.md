@@ -3,15 +3,21 @@
 `root_sink` は DELILA パイプラインに**並列接続する ROOT シンク**である。
 1 プロセスで 3 役をこなす(2026-08 マルチスレッド化で 3 役目が加わった):
 
-1. **スカラー ROOT Recorder** — 全イベントを 5 フィールド
+1. **スカラー ROOT Recorder**(hits ツリー、`--hits-tree`)— 全ヒットを 5 フィールド
    (module / channel / energy / energy_short / timestamp_ns)のフラット TTree に記録。
-   `.delila` → `delila2root` の 2 段変換が不要になる。
    **2026-08 以降、この tree は全体時刻ソート済み。**
+   **2026-10(TODO 71)から opt-in**: `--hits-tree`(TOML `hits_tree = true`)を
+   付けたときだけ書く。時系列は `.delila` の役目(`delila2root` でいつでも同じ形にできる)。
 2. **簡易ライブモニタ** — コインシデンス Δt・エネルギー・XY 等のヒストグラムを
    THttpServer(JSROOT)でブラウザ配信。フロントエンド実装ゼロ。
-3. **イベントビルダー**(`--built-tree`、TODO 66)— ThGEM 両面 + LaBr3 の
-   統合 built-event tree を同一ファイルに書く。オンラインとリプレイで
-   同一コード・同一結果(worker 数にも依存しない決定的出力)。
+3. **イベントビルダー** — 同一ファイルに書く 2 種類のイベントツリー。
+   オンラインとリプレイで同一コード・同一結果(worker 数にも依存しない決定的出力)。
+   - `built`(`--built-tree`、TODO 66)— ThGEM 両面 + LaBr3 の統合イベント(ThGEM 専用)。
+   - `events`(`--event-def`、TODO 71)— **汎用イベント**。トリガーと窓でヒットを束ねる
+     (後述「汎用イベントツリー」)。
+
+**ツリーは全て opt-in** で、`--hits-tree` / `--built-tree` / `--event-def` の
+どれも無いと「何も記録されない」という ERROR を出して起動しない(終了コード 2)。
 
 既存の Recorder(`.delila` 主記録)には一切手を触れない。merger の PUB を
 追加購読するだけなので、途中で kill してもデータ保全に影響はない。
@@ -60,15 +66,23 @@ gamma_ch   = 3
 thgem1_ch  = 7
 thgem2_ch  = 11
 window_ns  = 10000
+hits_tree  = true              # hits ツリー。2026-10(TODO 71)から opt-in、従来どおり欲しければ必須
 # 2026-08 追加(省略時は既定値):
 # workers         = 3
 # chunk_span_ms   = 100
 # safe_horizon_ms = 50
-# built_tree      = "events"   # 要 xy1_ch(+任意で xy2_ch / gamma_ch)
+# built_tree      = "built"    # 要 xy1_ch(+任意で xy2_ch / gamma_ch)。"events" は汎用ツリー専用の名前
 # 2026-10 追加:
 # module          = 0          # デジタイザ 2 台以上なら必須(下記)
 # time_calib_file = "config/time_settings_thgem.json"  # 時刻オフセット(TODO 70、後述)
+# event_def_file  = "config/event_def_thgem.json"      # 汎用イベントツリー(TODO 71、後述)
 ```
+
+- **2026-10-07 以降のバイナリで `hits_tree` が必要になった。** 以前は hits ツリーが
+  無条件に書かれていた。古い TOML のまま新しいバイナリにすると、`built_tree` 等があれば
+  hits ツリー無しで動き(起動ログに `hits tree=OFF`)、ツリー指定が 1 つも無ければ起動しない。
+  逆に**古いバイナリは `hits_tree` / `event_def_file` を知らず、渡すと起動しない**ので、
+  バイナリを更新してからキーを足すこと。
 
 - **デジタイザが 2 台以上なら `module` を指定する。** Δt / XY マッチャーと built tree は
   チャンネル番号だけでヒットを選び、Sorter とマッチャーは時間軸が 1 本である前提で動く。
@@ -83,8 +97,10 @@ window_ns  = 10000
 - セクションがあれば `start_daq.sh` が自動起動、無ければ従来どおり(手動起動)。
 - `--operator` は `[operator]` の `port` から自動導出される(明示不要)。
 - キー名は CLI フラグと同じ(ハイフン→アンダースコア。例 `--out-dir` →
-  `output_dir`)。例外は `subscribe` → `--zmq` と `time_calib_file` → `--time-calib`
-  (後者は Rust EB の TOML キーと同名)。指定したキーだけがフラグになり、残りは root_sink の既定値。
+  `output_dir`)。例外は `subscribe` → `--zmq`、`time_calib_file` → `--time-calib`
+  (Rust EB の TOML キーと同名)、`event_def_file` → `--event-def`、
+  `hits_tree = true` → `--hits-tree`(値なしのフラグ。`false` や省略ならフラグなし、
+  true/false 以外は黄色い警告を出して無視)。指定したキーだけがフラグになり、残りは root_sink の既定値。
 - バイナリ探索順: `ROOT_SINK_BIN`(環境変数) > PATH > `~/.local/bin/root_sink`
   > `tools/root_sink/root_sink`。見つからなければ黄色い警告を出してスキップ
   (致命ではない)。
@@ -98,6 +114,7 @@ window_ns  = 10000
 nohup ~/.local/bin/root_sink \
   --zmq tcp://localhost:5557 \
   --out-dir ~/rootsink_data \
+  --hits-tree \
   --operator http://localhost:9092 \
   --hists ~/rootsink_data/histograms.json \
   --gamma-ch 3 --thgem1-ch 7 --thgem2-ch 11 \
@@ -134,7 +151,8 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 |---|---|---|
 | `--zmq ADDR` | `tcp://localhost:5557` | merger PUB エンドポイント |
 | `--out-dir DIR` | `.` | `.root` 出力ディレクトリ |
-| `--tree NAME` | `delila` | TTree 名(delila2root と同じ既定値 — マクロを共用可能) |
+| `--hits-tree` | (オフ) | hits ツリーを書く。**2026-10(TODO 71)から opt-in**。値なしのフラグ |
+| `--tree NAME` | `delila` | hits ツリー名(delila2root と同じ既定値 — マクロを共用可能)。`--hits-tree` が無ければ使われない(警告が出る) |
 | `--exp-name NAME` | (なし) | ファイル名の実験名を明示指定(最優先) |
 | `--operator URL` | (なし) | 例 `http://localhost:9092`。ラン開始時に `/api/status` の `experiment_name` を取得 |
 | `--hists FILE` | (なし) | ヒストグラム定義 JSON(後述)。未指定ならビルトイン 4 種 |
@@ -153,6 +171,9 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 | `--safe-horizon-ms X` | 50 | Sorter の到着乱れ吸収幅。**ストリームの最大乱れより大きいこと**(side3 実測 ~8 ms) |
 | `--built-tree NAME` | (なし) | 統合 built-event TTree を同一ファイルに追加。**`--xy1-ch` 必須**(無ければ起動エラー)。`--xy2-ch` で第 2 面、`--gamma-ch` で LaBr3/TOF、窓は `--window-ns` 共用 |
 | `--time-calib FILE` | (なし) | (module, channel) ごとの時刻オフセット(`timeSettings.json`、旧 time-calib 形式も可)。**全ての出力・モニタが補正後の時刻**(raw − offset_ns)。ラン開始ごとに読み直してラン中は固定。後述「時刻オフセット」 |
+| `--event-def FILE` | (なし) | 汎用イベント定義 JSON。`events` ツリーを書く。ラン開始ごとに読み直してラン中は固定。後述「汎用イベントツリー」 |
+
+`--hits-tree` / `--built-tree` / `--event-def` のどれか 1 つは必須(どれも無いと起動しない)。
 
 **2026-08 マルチスレッド化について**: root_sink は Receiver → Sorter →
 Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TODO 66 §5)。
@@ -171,6 +192,9 @@ Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TOD
 | ラン終了(確定) | `run%04u_0000_<exp>.root` |
 | ヒスト設定の控え | `run%04u_0000_<exp>_hists.json`(`--hists` 使用時) |
 | 時刻オフセットの控え | `run%04u_0000_<exp>_timeSettings.json`(`--time-calib` 使用時。**ラン開始時に固定した表**そのもの) |
+| イベント定義の控え | `run%04u_0000_<exp>_eventDef.json`(`--event-def` 使用時。**ラン開始時に固定したファイル**をバイト単位でそのまま) |
+
+選んだツリー(hits / built / events)は全て同じ 1 ファイルに入る。
 
 - 確定名は **Rust Recorder の `.delila` と拡張子以外完全一致**
   (例: `run0013_0000_X730_ThGEM_Test.delila` ↔ 同 `.root`)。
@@ -193,7 +217,7 @@ Workers×N → Writer + Display(main)の 5 役スレッド構成になった(TOD
   (未完了ランを完成品に見せないための仕様)。AutoSave 済みなので
   ROOT で開いて中身を確認できる。不要なら手で消してよい。
 
-### TTree 構造
+### hits ツリーの構造(`--hits-tree`)
 
 | branch | 型 | 内容 |
 |---|---|---|
@@ -237,6 +261,81 @@ ev->Draw("y1:x1", "!TMath::IsNaN(x1) && !TMath::IsNaN(y1)", "colz");  // 4-fold 
 ev->Draw("dt_trig", "!TMath::IsNaN(dt_trig)");                        // 両面飛跡
 ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TOF
 ```
+
+### 汎用イベントツリー(`--event-def`、TODO 71)
+
+イベントビルドの「まとめる層」— トリガーと窓でヒットを束ねるだけの、実験によらない
+汎用のイベント。ニアオンラインモニタ(さっと解析して、取り続けるか判断する)用。
+XY・TOF・addback のような実験ごとの「再構成」はこの上に作る(今の `built` は ThGEM 用の第 1 号)。
+ツリー名は **`events` 固定**(`--event-def` 使用時は `--tree` / `--built-tree` に `events` を
+使えない。起動エラー)。
+
+**設定ファイル**(JSON。ThGEM 用は `config/event_def_thgem.json`):
+
+```json
+{"version": "1.0",
+ "window_ns": {"pre": 1000, "post": 1000},
+ "group_ns": 1000,
+ "triggers": [
+   {"name": "ThGEM1", "priority": 1, "channels": [[0, 1]]},
+   {"name": "ThGEM2", "priority": 2, "channels": [[0, 6]]}]}
+```
+
+- `channels` は `[module, channel]` の組。1 つの ch は 1 つのトリガーにしか書けない。
+- `priority` は**小さいほど基準として優先**。全トリガーに書くか、全く書かないか
+  (書かなければ束の先頭のトリガーが基準)。`_comment` はどこにでも書ける。
+- `group_ns ≤ min(pre, post)` が必要(束の中のトリガーが必ず自分のイベントの窓に入るように)。
+- 検査の詳細は `tools/root_sink/event_def.hpp` の先頭コメント。誤りは全て列挙される。
+
+**規則**(時刻は全て `--time-calib` 適用後の時間軸):
+
+1. トリガーを時刻順に見て、まだ束ねていないトリガー t から [t, t+G] を 1 つの束にする
+   (**延長しない**)。全てのトリガーがちょうど 1 つのイベントに入る(取りこぼしなし)。
+2. 束の中で優先順位が一番高いトリガーが基準(同じなら早い方)。
+3. 窓は基準を中心に [t_基準 − pre, t_基準 + post]。
+4. 2 つの窓に入るヒットは**基準が近い方**のイベントに入れる(重複させない)。
+   どの窓にも入らないヒット(**orphan**)はどのイベントにも入らない(`.delila` には残る)。
+   エネルギーで捨てることはしない。
+
+**ブランチ**(1 エントリ = 1 イベント。辞書不要。ヒットは時刻順):
+
+| branch | 型 | 内容 |
+|---|---|---|
+| `EventID` | `l` | ラン内の通し番号(0 から) |
+| `TriggerTime` | `D` | 基準トリガーの絶対時刻 [ns](補正後) |
+| `TriggerMod`, `TriggerCh` | `b` | 基準トリガーの module / channel |
+| `TriggerIdx` | `b` | 基準トリガーが設定の `triggers[]` の何番目か |
+| `NTriggers` | `i` | 束の中のトリガー数(1 以上) |
+| `NHits` | `i` | イベント内のヒット数(基準自身を含む) |
+| `HitMod[NHits]`, `HitCh[NHits]` | `b` | 各ヒットの module / channel |
+| `HitEnergy[NHits]`, `HitEnergyShort[NHits]` | `s` | 各ヒットのエネルギー |
+| `HitTime[NHits]` | `D` | 基準からの相対時刻 [ns](基準自身は 0) |
+| `HitIsTrigger[NHits]` | `O` | そのイベントの束のトリガーなら true |
+
+```cpp
+events->Draw("HitTime", "HitCh==0 && TriggerIdx==0");  // ThGEM1 基準での LaBr3 の時刻
+events->Draw("NTriggers");                              // 1 イベントあたりのトリガー数
+```
+
+- **読み直し**: `--time-calib` と同じ。ラン開始ごとに読み直してラン中は固定
+  (書き換えは一時ファイル + `mv`)。読み直しに失敗したら**前の定義のまま**ラン
+  (ERROR、ラン行と status 行に `STALE`、UserInfo に `stale`)。
+- **記録**: `events` ツリーの UserInfo に `TNamed "eventDef"`(使った定義・状態・原文。
+  `TriggerIdx` と名前の対応もここ)、ラン確定時に `_eventDef.json`(ラン開始時のファイルそのもの)。
+- **監視(重なりへの備え)**: ラン終了時に次の 1 行が出る。
+
+  ```
+  root_sink: run 56 events: 33463 (NTriggers 1:33463), hits in events 163845, contested 0, orphans 42105
+  ```
+
+  NTriggers の分布(0 のビンは省略、最後は `8+`)、イベントに入ったヒット数、
+  **contested**(2 つの窓に入り近い方に付け替えたヒット数 — 窓の重なり、つまりレートが
+  上がると増える)、**orphans**(どの窓にも入らなかったヒット数)。
+  `hits in events + orphans` は Sorter が出したヒット数と必ず一致する(しなければ WARNING)。
+  10 秒ごとの status 行には累計の `ev=N (cont=C orph=O)` が出る。
+- Sorter が持ち越す文脈幅はラン毎に `max(--window-ns, G + 2·pre + post)`
+  (変わったときに `sorter lookback` 行が出る)。G + 2·pre + post は `--safe-horizon-ms`
+  未満でなければならない(起動/読み直し時に検査)。
 
 ---
 
@@ -363,7 +462,7 @@ hits ツリー・built ツリー・Δt/XY モニタ・ヒストグラムが全�
 - **確認**: `root -l -b -q -e '.L tools/root_sink/delayline_offsets.C' -e 'delayline_centres_built("runNNNN_0000_<exp>.root")'`
   で built ツリーの像の中心を表示。補正済みの `.root` に `delayline_offsets.C` を掛けると
   「残差」が出る(正しい表なら |残差| < 0.5 ns)。
-- **記録**: 両ツリーの UserInfo に `TNamed "timeSettings"`(使った表・`applied`・`status`・原文)。
+- **記録**: 全ツリー(hits / built / events)の UserInfo に `TNamed "timeSettings"`(使った表・`applied`・`status`・原文)。
   補正時は hits ツリーのタイトルに `ALIGNED`。sidecar `_timeSettings.json` はそのまま再利用できる。
 - **安全装置**: 起動時にファイルが不正なら起動しない(全エラーを列挙)。ラン開始時の読み直しに
   失敗したら **前の表のまま** ラン(ERROR、status 行 `toff=N STALE`、UserInfo `stale`)——
@@ -389,7 +488,11 @@ hits ツリー・built ツリー・Δt/XY モニタ・ヒストグラムが全�
 | イベント数が Recorder と合わない | ラン途中から購読した/途中で kill した場合は当然合わない。フルランで一致しないなら異常(gant/side3 検証では 3 ラン連続で完全一致) |
 | ssh 切断で sink が死ぬ | 旧バイナリ。`gROOT->SetBatch(kTRUE)`(`6f65ef1`)以降は起きない。`nohup` 併用を推奨 |
 | ブラウザで開けない | `--http-port 0` で起動していないか、FW でポートが塞がれていないか確認 |
-| root_sink が起動しない | `start_daq.sh` の summary table で **DEAD**、または `binary not found` 警告が出る → バイナリ未配備か、ROOT 実行環境(`LD_LIBRARY_PATH`)が無い。`--time-calib` のファイルが不正でも起動しない(sink.log に全エラーが出る) |
+| root_sink が起動しない | `start_daq.sh` の summary table で **DEAD**、または `binary not found` 警告が出る → バイナリ未配備か、ROOT 実行環境(`LD_LIBRARY_PATH`)が無い。`--time-calib` / `--event-def` のファイルが不正でも起動しない(sink.log に全エラーが出る)。`ERROR nothing would be recorded` なら記録するツリーが 1 つも無い → `hits_tree = true` 等を足す。古いバイナリに `hits_tree` / `event_def_file` を渡すと `unknown argument` で起動しない |
+| `.root` に hits ツリー(`delila`)が無い | 2026-10(TODO 71)から opt-in。`hits_tree = true`(`--hits-tree`)を付ける。起動ログの `hits tree=OFF` で分かる |
+| `ERROR event definition reload failed at run start` / status 行 `ev=... STALE` | ラン開始時のイベント定義の読み直しに失敗。**そのランは前の定義で作られている**(`_eventDef.json` も前のファイル)。直せば次のランで `reloaded OK (was STALE)` |
+| `WARNING event def: trigger '...' channel(s) ... are not on --module M` | トリガー ch が `--module` 以外のボードにある。そのヒットはデコード直後に捨てられるので、そのトリガーではイベントが作られない |
+| `contested` が増えてきた | 窓の重なりが増えている(レート上昇)。重なったヒットは近い基準のイベントに入るので失われはしないが、窓・group_ns の見直しを検討 |
 | `ERROR time offsets reload failed at run start` / status 行 `toff=N STALE` | ラン開始時の読み直しに失敗(書きかけ・JSON の誤り・ファイル消失)。**そのランは前の表で補正済み**。ファイルを直せば次のランで `reloaded OK (was STALE)` |
 | `WARNING time offsets: module M channel C has no entry` | 表に無い ch のヒット。その ch は生の時刻のまま。新しく配線した ch なら表に追加する(ランごとに 1 回だけ出る) |
 | XY 像が中心にない | 配線変更でケーブル長が変わった。`delayline_offsets.C` で測り直して `time_calib_file` を更新(次のランから反映) |
@@ -397,15 +500,26 @@ hits ツリー・built ツリー・Δt/XY モニタ・ヒストグラムが全�
 ログの正常パターン(sink.log):
 
 ```
+root_sink: sub=tcp://localhost:5557 out-dir=/data/DELILA_data hits tree=delila
 root_sink: time offsets: /home/daq/delila-rs/config/time_settings_thgem.json (tree, 11 entries, 1 root(s), depth 2, spread 29.801 ns) — ...
+root_sink: events tree "events": /home/daq/delila-rs/config/event_def_thgem.json (re-read at every run start)
+root_sink: event def: window [-1000, +1000] ns, group 1000 ns, 2 trigger(s): ThGEM1(p1: m0c1) ThGEM2(p2: m0c6)
 root_sink: run time offsets [tree, 11 entries, ...]: m0c0=+0.000 m0c1=+0.000 m0c2=+8.752 ...
+root_sink: run event def [.../config/event_def_thgem.json]: window [-1000, +1000] ns, ...
+root_sink: run started (source 0)
+root_sink: sorter lookback 4000 ns (--window-ns 1000, event def G+2*pre+post 4000 ns)
 root_sink: experiment_name = "X730_ThGEM_Test" (source: http://localhost:9092/api/status)
-root_sink: run started (source 0) -> .../run_inprogress_1784618933.root
-root_sink: WRITING | events=524136 | 30236 ev/s | matcher_fills=174711
-root_sink: run 13 finalized -> .../run0013_0000_X730_ThGEM_Test.root (755250 events)
-root_sink: histogram config copied -> .../run0013_0000_X730_ThGEM_Test_hists.json
-root_sink: time settings snapshot -> .../run0013_0000_X730_ThGEM_Test_timeSettings.json
+root_sink: run file -> .../run_inprogress_1791355758.root
+root_sink: WRITING | events=... (written=...) | ... ev/s | ... | built=... | ev=... (cont=... orph=...) | ...
+root_sink: run 56 finalized -> .../run0056_0000_X730_ThGEM_Test.root (205950 hits, 33463 built, 33463 events)
+root_sink: run 56 events: 33463 (NTriggers 1:33463), hits in events 163845, contested 0, orphans 42105
+root_sink: histogram config copied -> .../run0056_0000_X730_ThGEM_Test_hists.json
+root_sink: time settings snapshot -> .../run0056_0000_X730_ThGEM_Test_timeSettings.json
+root_sink: event definition snapshot -> .../run0056_0000_X730_ThGEM_Test_eventDef.json
 ```
+
+(件数は run 56 のリプレイのもの。status 行の `events=` は受信したヒット数(従来どおり)、`ev=` が汎用イベント数。
+finalized 行の括弧内は、あるツリーだけについて hits / built / events のエントリ数。)
 
 ---
 

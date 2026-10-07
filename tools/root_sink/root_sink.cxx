@@ -4,10 +4,15 @@
 // ADDITIONAL consumer (the Rust Recorder that writes `.delila` stays the
 // authoritative recorder — this tool never gates or throttles the pipeline):
 //
-//   Role 1 (recorder): decode every event to 5 scalar fields and Fill a flat,
-//     ZSTD-compressed ROOT TTree. One file per run, named on the EOS-carried
-//     run number. Cheaper than the two-step `.delila` -> delila2root path when
-//     only scalars are needed.
+//   Role 1 (recorder): ZSTD-compressed ROOT TTrees, one file per run, named on
+//     the EOS-carried run number. Up to three trees, each opt-in (at least one
+//     is required — nothing recorded is a startup error):
+//       * hits   (--hits-tree, name from --tree): every hit as 5 scalars, time
+//         sorted. Opt-in since TODO 71: the time series is the .delila's job
+//         (delila2root reproduces it any time);
+//       * built  (--built-tree NAME): the ThGEM-specific integrated events;
+//       * events (--event-def FILE, TODO 71): generic trigger-anchored events,
+//         one entry per event with dictionary-free hit arrays.
 //
 //   Role 2 (monitor): a coincidence Δt monitor for the ThGEM test (single
 //     digitizer, gamma + ThGEM1 + ThGEM2 on configurable channels). Three
@@ -22,6 +27,13 @@
 // (aligned = raw - offset_ns) — so the hits tree, built events and monitors are
 // all on the aligned axis, while the .delila stays raw. The applied table is
 // recorded per run (TTree UserInfo + <run>_timeSettings.json).
+//
+// Generic events (--event-def, TODO 71): the event definition JSON
+// (event_def.hpp) follows the same reload/provenance policy as the offsets —
+// re-read at every run start, frozen per run, recorded in the events tree's
+// UserInfo + <run>_eventDef.json. Rules 1-2 (trigger grouping, reference) run
+// in the single-threaded Sorter, rules 3-4 (window, hit assignment) in the
+// Workers (eb_core.hpp section 7).
 //
 // All logic (envelope parse, decode, matcher, run state) is in sink_core.hpp and
 // is unit-tested without ROOT/ZMQ. This file is only the wiring.
@@ -60,11 +72,13 @@
 #include <vector>
 
 #include "eb_core.hpp"
+#include "event_def.hpp"
 #include "hist_config.hpp"
 #include "sink_core.hpp"
 #include "time_offsets.hpp"
 
 #include "TApplication.h"
+#include "TBranch.h"
 #include "TFile.h"
 #include "TH1.h"
 #include "TH2.h"
@@ -123,6 +137,10 @@ struct Options {
   std::string zmq = "tcp://localhost:5557";
   std::string out_dir = ".";
   std::string tree = "delila";  // same default as delila2root — one macro works on both
+  bool tree_given = false;      // --tree seen (warn when the hits tree is off)
+  // --hits-tree: write the per-hit tree. Opt-in since TODO 71 — the time series
+  // is the .delila's job (delila2root reproduces it any time).
+  bool hits_tree = false;
   std::string exp_name;       // --exp-name: explicit override (wins always)
   std::string operator_url;   // --operator: fetch experiment_name from /api/status
   std::string hists_file;     // --hists: declarative histogram set
@@ -150,14 +168,23 @@ struct Options {
   // --time-calib FILE: per-(module,channel) time offsets (timeSettings.json),
   // re-read at every run start (empty = off, timestamps recorded raw).
   std::string time_calib;
+  // --event-def FILE: generic event definition (event_def.hpp) -> the "events"
+  // tree; re-read at every run start like --time-calib (empty = off).
+  std::string event_def;
 };
+
+// The generic events tree has a FIXED name: analysis macros and the UserInfo
+// lookup ("eventDef") then work on every run file without a parameter.
+static const char* const kEventsTreeName = "events";
 
 static void print_usage(const char* argv0) {
   std::printf(
       "usage: %s [options]\n"
       "  --zmq ADDR          merger PUB endpoint (default tcp://localhost:5557)\n"
       "  --out-dir DIR       output directory for run*.root (default .)\n"
-      "  --tree NAME         TTree name (default delila)\n"
+      "  --hits-tree         write the per-hit tree (5 scalars per hit, time sorted).\n"
+      "                      OPT-IN since TODO 71 (the .delila holds the time series)\n"
+      "  --tree NAME         hits tree name (default delila; needs --hits-tree)\n"
       "  --exp-name NAME     experiment name for the output filename (override)\n"
       "  --operator URL      operator base URL, e.g. http://localhost:9092; the\n"
       "                      experiment name is read from <URL>/api/status at run\n"
@@ -196,6 +223,13 @@ static void print_usage(const char* argv0) {
       "                      raw - offset_ns for every consumer (hits tree, built\n"
       "                      events, monitors). Re-read at every run start, frozen\n"
       "                      per run; recorded in TTree UserInfo + _timeSettings.json\n"
+      "  --event-def FILE    generic event definition JSON (triggers, group, window;\n"
+      "                      see README) -> writes the \"events\" tree (one entry per\n"
+      "                      trigger-anchored event, hit arrays). Re-read at every\n"
+      "                      run start, frozen per run; recorded in the events tree\n"
+      "                      UserInfo + _eventDef.json\n"
+      "                      At least one of --hits-tree / --built-tree / --event-def\n"
+      "                      is required (otherwise nothing would be recorded)\n"
       "  --help              this message\n",
       argv0);
 }
@@ -226,6 +260,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--tree") {
       if (!(v = need(i))) return false;
       opt.tree = v;
+      opt.tree_given = true;
+    } else if (a == "--hits-tree") {
+      opt.hits_tree = true;  // a plain flag: takes no value
     } else if (a == "--exp-name") {
       if (!(v = need(i))) return false;
       opt.exp_name = v;
@@ -300,6 +337,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--time-calib") {
       if (!(v = need(i))) return false;
       opt.time_calib = v;
+    } else if (a == "--event-def") {
+      if (!(v = need(i))) return false;
+      opt.event_def = v;
     } else {
       std::fprintf(stderr, "root_sink: unknown argument '%s' (try --help)\n", a.c_str());
       return false;
@@ -538,23 +578,28 @@ class Recorder {
   long long entries() const { return entries_; }
   // The path chosen by the last finalize() (for pairing the hists-config copy).
   const std::string& final_path() const { return final_path_; }
-  // What open_run recorded about this run (time offsets) — for the sidecar.
+  // What open_run recorded about this run (time offsets, event definition) —
+  // for the sidecars.
   const eb::RunProvenance& provenance() const { return prov_; }
 
-  // Open a provisional file `<dir>/run_inprogress_<unixtime>.root` + empty tree.
+  // Open a provisional file `<dir>/run_inprogress_<unixtime>.root` + empty trees.
   // `exp_name` is remembered for the final filename (resolved at run start so it
-  // matches the Rust Recorder even though EOS/finalize come later). A non-empty
-  // `built_tree_name` adds the integrated built-event tree in the SAME file.
-  // `prov` (frozen at RunOpen by the Receiver) is attached to both trees'
-  // UserInfo so every file says which time offsets — if any — its times carry.
-  bool open_run(const std::string& dir, const std::string& tree_name,
-                const std::string& exp_name, const std::string& built_tree_name = "",
-                const eb::RunProvenance& prov = eb::RunProvenance()) {
+  // matches the Rust Recorder even though EOS/finalize come later). Every tree
+  // is optional and they all live in the SAME file: a non-empty
+  // `hits_tree_name` adds the per-hit tree, a non-empty `built_tree_name` the
+  // integrated built-event tree, `events_tree` the generic "events" tree.
+  // `prov` (frozen at RunOpen by the Receiver) goes into the trees' UserInfo
+  // so every file says which time offsets — if any — its times carry, and
+  // which event definition built its events.
+  bool open_run(const std::string& dir, const std::string& hits_tree_name,
+                const std::string& exp_name, const std::string& built_tree_name,
+                bool events_tree, const eb::RunProvenance& prov) {
     out_dir_ = dir;
     prov_ = prov;
     exp_name_ = exp_name.empty() ? "data" : exp_name;  // mirror the Rust fallback
     entries_ = 0;
     built_entries_ = 0;
+    events_entries_ = 0;
     final_path_.clear();
     provisional_ = dir + "/run_inprogress_" + std::to_string((long long)::time(nullptr)) + ".root";
     file_ = TFile::Open(provisional_.c_str(), "RECREATE", "", kDelilaCompression);
@@ -565,15 +610,18 @@ class Recorder {
       return false;
     }
     const bool aligned = !prov_.time_offsets_source.empty();
-    tree_ = new TTree(tree_name.c_str(),
-                      aligned ? "DELILA scalar events (timestamp_ns ALIGNED: raw - "
-                                "timeSettings offset; see UserInfo)"
-                              : "DELILA scalar events");
-    tree_->Branch("module", &module_, "module/b");
-    tree_->Branch("channel", &channel_, "channel/b");
-    tree_->Branch("energy", &energy_, "energy/s");
-    tree_->Branch("energy_short", &energy_short_, "energy_short/s");
-    tree_->Branch("timestamp_ns", &timestamp_ns_, "timestamp_ns/D");
+    tree_ = nullptr;
+    if (!hits_tree_name.empty()) {
+      tree_ = new TTree(hits_tree_name.c_str(),
+                        aligned ? "DELILA scalar events (timestamp_ns ALIGNED: raw - "
+                                  "timeSettings offset; see UserInfo)"
+                                : "DELILA scalar events");
+      tree_->Branch("module", &module_, "module/b");
+      tree_->Branch("channel", &channel_, "channel/b");
+      tree_->Branch("energy", &energy_, "energy/s");
+      tree_->Branch("energy_short", &energy_short_, "energy_short/s");
+      tree_->Branch("timestamp_ns", &timestamp_ns_, "timestamp_ns/D");
+    }
     built_ = nullptr;
     if (!built_tree_name.empty()) {
       // One row per trigger-anchored event; missing pieces are NaN (floats) or
@@ -617,13 +665,39 @@ class Recorder {
       built_->Branch("n_arms1", &bev_.n_arms1, "n_arms1/b");
       built_->Branch("n_arms2", &bev_.n_arms2, "n_arms2/b");
     }
+    events_ = nullptr;
+    if (events_tree) {
+      // One entry per generic event (TODO 71 §4): dictionary-free leaflists,
+      // so a bare TTree::Draw / any ROOT version reads it without a library.
+      // The per-hit columns are variable-length arrays counted by NHits; their
+      // buffers are re-pointed whenever they grow (ensure_hit_capacity).
+      events_ = new TTree(kEventsTreeName,
+                          "DELILA generic events (TODO 71; aligned time axis, see "
+                          "UserInfo eventDef)");
+      events_->Branch("EventID", &ev_id_, "EventID/l");
+      events_->Branch("TriggerTime", &ev_t_, "TriggerTime/D");
+      events_->Branch("TriggerMod", &ev_mod_, "TriggerMod/b");
+      events_->Branch("TriggerCh", &ev_ch_, "TriggerCh/b");
+      events_->Branch("TriggerIdx", &ev_idx_, "TriggerIdx/b");
+      events_->Branch("NTriggers", &ev_ntrig_, "NTriggers/i");
+      events_->Branch("NHits", &ev_nhits_, "NHits/i");
+      hit_cap_ = 0;
+      alloc_hit_buffers(kInitialHitCapacity);
+      br_hit_mod_ = events_->Branch("HitMod", hit_mod_.data(), "HitMod[NHits]/b");
+      br_hit_ch_ = events_->Branch("HitCh", hit_ch_.data(), "HitCh[NHits]/b");
+      br_hit_e_ = events_->Branch("HitEnergy", hit_e_.data(), "HitEnergy[NHits]/s");
+      br_hit_es_ = events_->Branch("HitEnergyShort", hit_es_.data(), "HitEnergyShort[NHits]/s");
+      br_hit_t_ = events_->Branch("HitTime", hit_t_.data(), "HitTime[NHits]/D");
+      br_hit_trig_ = events_->Branch("HitIsTrigger", hit_trig_.get(), "HitIsTrigger[NHits]/O");
+    }
     // UserInfo is part of the TTree object: written by every AutoSave and into
     // every MaxTreeSize part (a file-level key would land in the last part only).
     if (!prov_.time_offsets_meta.empty()) {
-      tree_->GetUserInfo()->Add(new TNamed("timeSettings", prov_.time_offsets_meta.c_str()));
-      if (built_)
-        built_->GetUserInfo()->Add(new TNamed("timeSettings", prov_.time_offsets_meta.c_str()));
+      for (TTree* t : {tree_, built_, events_})
+        if (t) t->GetUserInfo()->Add(new TNamed("timeSettings", prov_.time_offsets_meta.c_str()));
     }
+    if (events_ && !prov_.event_def_meta.empty())
+      events_->GetUserInfo()->Add(new TNamed("eventDef", prov_.event_def_meta.c_str()));
     return true;
   }
 
@@ -645,14 +719,40 @@ class Recorder {
     ++built_entries_;
   }
 
+  // One generic event -> one entry. EventID is a per-run counter from 0 (it
+  // keeps counting across ROOT rollover parts). Never truncates: an event with
+  // more hits than the buffers hold grows them first.
+  void fill_event(const eb::GenericEvent& e) {
+    if (!events_) return;
+    ensure_hit_capacity(e.hits.size());
+    ev_id_ = static_cast<ULong64_t>(events_entries_);
+    ev_t_ = e.t;
+    ev_mod_ = e.mod;
+    ev_ch_ = e.ch;
+    ev_idx_ = e.trig_idx;
+    ev_ntrig_ = e.n_triggers;
+    ev_nhits_ = static_cast<UInt_t>(e.hits.size());
+    for (std::size_t i = 0; i < e.hits.size(); ++i) {
+      const eb::EventHit& h = e.hits[i];
+      hit_mod_[i] = h.mod;
+      hit_ch_[i] = h.ch;
+      hit_e_[i] = h.energy;
+      hit_es_[i] = h.energy_short;
+      hit_t_[i] = h.dt;
+      hit_trig_[i] = h.is_trigger;
+    }
+    events_->Fill();
+    ++events_entries_;
+  }
+
   long long built_entries() const { return built_entries_; }
   bool has_built() const { return built_ != nullptr; }
 
   // Flush the current tree(s) so the in-progress file is openable in ROOT while
   // the run is still going (SaveSelf writes tree + keys without closing).
   void autosave() {
-    if (tree_) tree_->AutoSave("SaveSelf");
-    if (built_) built_->AutoSave("SaveSelf");
+    for (TTree* t : {tree_, built_, events_})
+      if (t) t->AutoSave("SaveSelf");
   }
 
   // Close and rename to run%04u_<seq>_<exp>.root — identical to the Rust
@@ -690,23 +790,77 @@ class Recorder {
   // never finalized, so it must not masquerade as a complete run%04d file).
   void close_unfinalized() {
     if (!file_) return;
+    std::string counts = entry_counts();
     int parts = close_all_parts();
-    std::printf("root_sink: shutdown mid-run — kept provisional %s (%lld events, NOT finalized)\n",
-                provisional_.c_str(), entries_);
+    std::printf("root_sink: shutdown mid-run — kept provisional %s (%s, NOT finalized)\n",
+                provisional_.c_str(), counts.c_str());
     if (parts > 0)
       std::printf("root_sink: (plus %d ROOT rollover part(s) kept as %s_*.root)\n", parts,
                   provisional_.substr(0, provisional_.size() - 5).c_str());
   }
 
+  // "205950 hits, 33463 built, 30120 events" — only the trees that exist.
+  std::string entry_counts() const {
+    std::string s;
+    auto add = [&](bool on, long long n, const char* what) {
+      if (!on) return;
+      if (!s.empty()) s += ", ";
+      s += std::to_string(n) + " " + what;
+    };
+    add(tree_ != nullptr, entries_, "hits");
+    add(built_ != nullptr, built_entries_, "built");
+    add(events_ != nullptr, events_entries_, "events");
+    return s.empty() ? std::string("no run file") : s;  // open_run had failed
+  }
+
  private:
-  // Write + close the run's tree, via the CURRENT file. When the tree crossed
-  // MaxTreeSize, ROOT's ChangeFile DELETED our original TFile and moved the
-  // tree to <stem>_k.root — `file_` is then dangling and must not be touched
-  // (empirically the allocator often reuses the same address, so a pointer
-  // compare can lie; the file NAME is the only reliable rollover signal).
+  static constexpr std::size_t kInitialHitCapacity = 64;
+
+  // (Re)allocate the hit-array buffers for `cap` hits. Contents need not
+  // survive: fill_event rewrites every element up to NHits before each Fill.
+  void alloc_hit_buffers(std::size_t cap) {
+    hit_mod_.assign(cap, 0);
+    hit_ch_.assign(cap, 0);
+    hit_e_.assign(cap, 0);
+    hit_es_.assign(cap, 0);
+    hit_t_.assign(cap, 0.0);
+    // Bool_t[] for the /O leaf, NOT std::vector<bool> (bit-packed: no data()).
+    hit_trig_.reset(new Bool_t[cap]());
+    hit_cap_ = cap;
+  }
+
+  // ROOT copies NHits elements from each array branch's ADDRESS at Fill, so a
+  // buffer smaller than the event would read past its end. Grow (double) and
+  // re-point every array branch BEFORE that Fill — reallocation moves the
+  // data, and a stale address would be a use-after-free, not just truncation.
+  void ensure_hit_capacity(std::size_t n) {
+    if (n <= hit_cap_) return;
+    std::size_t cap = hit_cap_ ? hit_cap_ : kInitialHitCapacity;
+    while (cap < n) cap *= 2;
+    alloc_hit_buffers(cap);
+    br_hit_mod_->SetAddress(hit_mod_.data());
+    br_hit_ch_->SetAddress(hit_ch_.data());
+    br_hit_e_->SetAddress(hit_e_.data());
+    br_hit_es_->SetAddress(hit_es_.data());
+    br_hit_t_->SetAddress(hit_t_.data());
+    br_hit_trig_->SetAddress(hit_trig_.get());
+  }
+
+  // Write + close the run's trees, via the CURRENT file. When a tree crossed
+  // MaxTreeSize, ROOT's ChangeFile DELETED our original TFile and moved EVERY
+  // tree of that directory to <stem>_k.root (each one's entries so far are
+  // saved into the old part first) — `file_` is then dangling and must not be
+  // touched (empirically the allocator often reuses the same address, so a
+  // pointer compare can lie; the file NAME is the only reliable rollover
+  // signal). Since all trees move together, any existing one reports the
+  // current file; which trees exist is a per-run choice (all optional), so
+  // ask the first one present.
   // Returns the number of continuation parts (0 = the normal single-file case).
   int close_all_parts() {
-    TFile* cur = tree_->GetCurrentFile();
+    TTree* lead = tree_ ? tree_ : (built_ ? built_ : events_);
+    // lead is never null in practice (main() refuses to start without a
+    // tree); without one there was no rollover either, so file_ is current.
+    TFile* cur = lead ? lead->GetCurrentFile() : file_;
     bool rolled = cur && provisional_ != cur->GetName();
     int parts = 0;
     if (rolled) {
@@ -719,13 +873,15 @@ class Recorder {
                    parts);
     }
     cur->cd();
-    tree_->Write();
-    if (built_) built_->Write();  // both trees live in the same (current) file
+    for (TTree* t : {tree_, built_, events_})
+      if (t) t->Write();  // all trees live in the same (current) file
     cur->Close();
     delete cur;  // == file_ only in the un-rolled case; file_ may be dangling
     file_ = nullptr;
     tree_ = nullptr;
     built_ = nullptr;
+    events_ = nullptr;
+    br_hit_mod_ = br_hit_ch_ = br_hit_e_ = br_hit_es_ = br_hit_t_ = br_hit_trig_ = nullptr;
     return parts;
   }
 
@@ -740,20 +896,39 @@ class Recorder {
   }
 
   TFile* file_ = nullptr;
-  TTree* tree_ = nullptr;
-  TTree* built_ = nullptr;  // optional built-event tree, same file
+  TTree* tree_ = nullptr;    // optional hits tree (--hits-tree)
+  TTree* built_ = nullptr;   // optional built-event tree, same file
+  TTree* events_ = nullptr;  // optional generic events tree, same file
   std::string out_dir_;
   std::string exp_name_ = "data";
   std::string provisional_;
   std::string final_path_;
   long long entries_ = 0;
   long long built_entries_ = 0;
+  long long events_entries_ = 0;
   // Branch buffers (types match the leaflist: /b UChar_t, /s UShort_t, /D Double_t).
   UChar_t module_ = 0, channel_ = 0;
   UShort_t energy_ = 0, energy_short_ = 0;
   Double_t timestamp_ns_ = 0.0;
   eb::BuiltEvent bev_;  // built-tree branch buffer (fill_built copies into it)
-  eb::RunProvenance prov_;  // this run's time-offset record (open_run)
+  // Events-tree buffers: per-event scalars (/l ULong64_t, /i UInt_t) ...
+  ULong64_t ev_id_ = 0;
+  Double_t ev_t_ = 0.0;
+  UChar_t ev_mod_ = 0, ev_ch_ = 0, ev_idx_ = 0;
+  UInt_t ev_ntrig_ = 0, ev_nhits_ = 0;
+  // ... and the per-hit arrays, hit_cap_ elements each (ensure_hit_capacity).
+  std::vector<UChar_t> hit_mod_, hit_ch_;
+  std::vector<UShort_t> hit_e_, hit_es_;
+  std::vector<Double_t> hit_t_;
+  std::unique_ptr<Bool_t[]> hit_trig_;
+  std::size_t hit_cap_ = 0;
+  TBranch* br_hit_mod_ = nullptr;
+  TBranch* br_hit_ch_ = nullptr;
+  TBranch* br_hit_e_ = nullptr;
+  TBranch* br_hit_es_ = nullptr;
+  TBranch* br_hit_t_ = nullptr;
+  TBranch* br_hit_trig_ = nullptr;
+  eb::RunProvenance prov_;  // this run's time-offset + event-def record (open_run)
 };
 
 // ---------------------------------------------------------------------------
@@ -931,6 +1106,44 @@ static std::string offsets_summary(const ActiveOffsets& a) {
 }
 
 // ---------------------------------------------------------------------------
+// Generic event definition (--event-def): file I/O around event_def.hpp
+// ---------------------------------------------------------------------------
+
+// Read + parse + validate `path` into `a` (reload_event_def policy, identical
+// to the offsets: on failure the previous definition is kept and marked
+// stale). The recorded path is the realpath. The adopted definition's parser
+// warnings are in a.warnings — the caller prints them.
+static bool load_event_def_file(const std::string& path, ActiveEventDef& a,
+                                double max_lookback_ns, std::vector<std::string>& errors) {
+  char resolved[4096];
+  std::string real = ::realpath(path.c_str(), resolved) ? std::string(resolved) : path;
+  std::string text;
+  if (!read_file(path, text)) {
+    std::string why = std::strerror(errno);
+    return reload_event_def(a, nullptr, why, real, max_lookback_ns, now_utc_iso(), errors);
+  }
+  return reload_event_def(a, &text, "", real, max_lookback_ns, now_utc_iso(), errors);
+}
+
+// Trigger channels on another digitizer than --module M: those hits are
+// dropped right after decoding, so such a trigger can never open an event.
+// Not fatal (one definition may serve several setups), but never silent.
+static void warn_foreign_triggers(const EventDef& d, int module) {
+  if (module < 0) return;
+  for (const TriggerDef& t : d.triggers) {
+    std::string foreign;
+    for (uint16_t k : t.channels)
+      if ((k >> 8) != module) foreign += (foreign.empty() ? "" : ",") + mc_name(k);
+    if (!foreign.empty())
+      std::fprintf(stderr,
+                   "root_sink: WARNING event def: trigger '%s' channel(s) %s are not on "
+                   "--module %d, whose filter drops them before the Sorter — they can "
+                   "never trigger an event\n",
+                   t.name.c_str(), foreign.c_str(), module);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
@@ -947,6 +1160,45 @@ int main(int argc, char** argv) {
   // The built tree is a DATA PRODUCT, not a monitor nicety: a misconfiguration
   // must be loud and fatal, never a silent recorder-only fallback.
   const bool build_enabled = !opt.built_tree.empty();
+  const bool events_enabled = !opt.event_def.empty();
+
+  // Since TODO 71 every tree is opt-in. An old command line (or TOML) that
+  // relied on the hits tree being implicit would otherwise run "fine" and
+  // write empty run files — refuse loudly instead.
+  if (!opt.hits_tree && !build_enabled && !events_enabled) {
+    std::fprintf(stderr,
+                 "root_sink: ERROR nothing would be recorded: give at least one of\n"
+                 "root_sink:   --hits-tree        the per-hit tree (TOML hits_tree = true) —\n"
+                 "root_sink:                      OPT-IN since TODO 71 (2026-10), it used to be\n"
+                 "root_sink:                      written implicitly\n"
+                 "root_sink:   --built-tree NAME  the ThGEM built-event tree (TOML built_tree)\n"
+                 "root_sink:   --event-def FILE   the generic events tree (TOML event_def_file)\n");
+    return 2;
+  }
+  if (opt.tree_given && !opt.hits_tree)
+    std::fprintf(stderr,
+                 "root_sink: WARNING --tree %s given without --hits-tree — the hits tree is "
+                 "opt-in since TODO 71 and will NOT be written\n",
+                 opt.tree.c_str());
+  // Trees share one file and are looked up by name: a clash would make one
+  // shadow the other (and macros would read the wrong tree).
+  {
+    std::vector<std::string> names;
+    if (opt.hits_tree) names.push_back(opt.tree);
+    if (build_enabled) names.push_back(opt.built_tree);
+    if (events_enabled) names.push_back(kEventsTreeName);
+    for (std::size_t i = 0; i < names.size(); ++i)
+      for (std::size_t j = i + 1; j < names.size(); ++j)
+        if (names[i] == names[j]) {
+          std::fprintf(stderr,
+                       "root_sink: ERROR two trees would both be named \"%s\" (the hits tree "
+                       "is --tree, the built tree --built-tree, the generic events tree is "
+                       "always \"%s\") — pick distinct names\n",
+                       names[i].c_str(), kEventsTreeName);
+          return 2;
+        }
+  }
+
   if (build_enabled && !xy1_enabled) {
     std::fprintf(stderr,
                  "root_sink: ERROR --built-tree requires --xy1-ch (the plane-1 "
@@ -1042,8 +1294,23 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::printf("root_sink: sub=%s out-dir=%s tree=%s\n", opt.zmq.c_str(),
-              opt.out_dir.c_str(), opt.tree.c_str());
+  // --event-def: same policy — ANY error is fatal at startup (later run-start
+  // reload failures keep the previous definition, STALE). The lookback bound
+  // is the safe horizon, like the offsets' spread: context the Sorter carries
+  // back must stay well inside what it holds anyway.
+  ActiveEventDef evdef_boot;
+  if (events_enabled) {
+    std::vector<std::string> errs;
+    if (!load_event_def_file(opt.event_def, evdef_boot, safe_horizon_ns, errs)) {
+      std::fprintf(stderr, "root_sink: %zu error(s) in --event-def %s:\n", errs.size(),
+                   opt.event_def.c_str());
+      for (const auto& e : errs) std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+      return 2;
+    }
+  }
+
+  std::printf("root_sink: sub=%s out-dir=%s hits tree=%s\n", opt.zmq.c_str(),
+              opt.out_dir.c_str(), opt.hits_tree ? opt.tree.c_str() : "OFF (opt-in: --hits-tree)");
   if (toff_enabled) {
     std::printf("root_sink: time offsets: %s (%s) — aligned_ts = raw_ts - offset_ns for "
                 "every consumer; re-read at every run start\n",
@@ -1084,6 +1351,14 @@ int main(int argc, char** argv) {
                 opt.built_tree.c_str(), bcfg.trig1,
                 xy2_enabled ? " + plane2" : " (single plane)",
                 bcfg.labr_ch >= 0 ? " + LaBr3" : "", bcfg.window_ns);
+  if (events_enabled) {
+    std::printf("root_sink: events tree \"%s\": %s (re-read at every run start)\n",
+                kEventsTreeName, evdef_boot.source_path.c_str());
+    std::printf("root_sink: event def: %s\n", format_event_def_line(*evdef_boot.def).c_str());
+    for (const auto& w : evdef_boot.warnings)
+      std::fprintf(stderr, "root_sink: WARNING event def: %s\n", w.c_str());
+    warn_foreign_triggers(*evdef_boot.def, opt.module);
+  }
 
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
@@ -1243,6 +1518,13 @@ int main(int argc, char** argv) {
     std::atomic<int> toff_entries{-1};        // time offsets in force (-1 = off)
     std::atomic<bool> toff_stale{false};      // last run-start reload failed
     std::atomic<long long> toff_unmapped{0};  // keys without an entry, this run
+    // Generic events (Writer), cumulative like `built`. contested / orphans are
+    // the overlap watch of TODO 71 §4: a rising contested share = windows
+    // overlapping more (beam intensity) — visible here before anyone analyses.
+    std::atomic<long long> events{0};
+    std::atomic<long long> ev_contested{0};
+    std::atomic<long long> ev_orphans{0};
+    std::atomic<bool> evdef_stale{false};     // last run-start reload failed
   } counters;
   if (toff_enabled) counters.toff_entries = static_cast<int>(toff_boot.table.abs_ns.size());
 
@@ -1265,6 +1547,10 @@ int main(int argc, char** argv) {
     // every RunOpen and frozen for the run (SPEC §4.3.1).
     ActiveOffsets toff = toff_boot;
     std::set<uint16_t> toff_reported;
+    // Event definition in force — same ownership and per-run freeze. The
+    // shared_ptr<const EventDef> handed to the Sorter is never mutated: a
+    // reload adopts a NEW object (reload_event_def).
+    ActiveEventDef evdef = evdef_boot;
     auto process = [&](const uint8_t* data, size_t size) {
       Envelope env = parse_envelope(data, size);
       switch (env.kind) {
@@ -1306,6 +1592,32 @@ int main(int argc, char** argv) {
               m.prov.time_offsets_source = toff.source_text;
             } else {
               m.prov.time_offsets_meta = offsets_disabled_json();
+            }
+            if (events_enabled) {
+              bool was_stale = evdef.stale;
+              std::vector<std::string> errs;
+              if (!load_event_def_file(opt.event_def, evdef, safe_horizon_ns, errs)) {
+                std::fprintf(stderr,
+                             "root_sink: ERROR event definition reload failed at run start — "
+                             "KEEPING THE PREVIOUS DEFINITION for this run:\n");
+                for (const auto& e : errs) std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+              } else if (was_stale) {
+                std::printf("root_sink: event definition reloaded OK (was STALE)\n");
+              }
+              counters.evdef_stale = evdef.stale;
+              // evdef.def is never null here: the startup load succeeded and a
+              // failed reload keeps the previous definition.
+              std::printf("root_sink: run event def [%s%s]: %s\n", evdef.source_path.c_str(),
+                          evdef.stale ? ", STALE" : "",
+                          format_event_def_line(*evdef.def).c_str());
+              // Warnings of the definition IN FORCE (kept with it on a STALE
+              // run), every run — like the time-offset warnings above.
+              for (const auto& w : evdef.warnings)
+                std::fprintf(stderr, "root_sink: WARNING event def: %s\n", w.c_str());
+              warn_foreign_triggers(*evdef.def, opt.module);
+              m.event_def = evdef.def;
+              m.prov.event_def_meta = event_def_provenance_json(evdef);
+              m.prov.event_def_source = evdef.source_text;
             }
             to_sorter.push(std::move(m));
             eb::DisplayMsg d;
@@ -1417,9 +1729,13 @@ int main(int argc, char** argv) {
     scfg.safe_horizon_ns = opt.safe_horizon_ms * 1e6;
     scfg.lookback_ns = opt.window_ns;  // context carry >= coincidence window
     eb::Sorter sorter(scfg);
+    // Generic events, rules 1-2 (TODO 71 §5): trigger grouping is sequential
+    // over the whole run, so it lives here, on the one thread that sees every
+    // chunk in order; the Workers then only do the local rules 3-4.
+    eb::TriggerGrouper grouper;
     uint64_t seq = 0;
     // No silent loss: hits that arrived behind an emitted core (disorder beyond
-    // --safe-horizon-ms) are in neither the hits tree nor the built events.
+    // --safe-horizon-ms) are in none of the trees (hits, built, events).
     // Reported once per run (RunClose, or Shutdown of a still-open run).
     uint64_t reported_late = 0;
     auto report_late = [&](const eb::Sorter& so) {
@@ -1427,16 +1743,21 @@ int main(int argc, char** argv) {
       if (so.late_hits() > reported_late)
         std::fprintf(stderr,
                      "root_sink: WARNING %llu hit(s) this run arrived more than %.0f ms behind "
-                     "the newest hit and are MISSING from the hits tree and built events "
+                     "the newest hit and are MISSING from every tree of the .root file "
                      "(the .delila has them). Unsynchronized digitizers? Use --module, or "
                      "raise --safe-horizon-ms.\n",
                      static_cast<unsigned long long>(so.late_hits()), opt.safe_horizon_ms);
       reported_late = so.late_hits();
     };
+    // EVERY emitted chunk passes through here — data splits and the RunClose /
+    // Shutdown flush (core_end = +inf) alike. The grouper is stateful (open
+    // groups carry across chunk boundaries) and must see them all, in emission
+    // order: the flush chunk is what closes the run's last groups.
     auto emit_chunk = [&](eb::SortedChunk&& c) {
       eb::WorkMsg m;
       m.seq = seq++;
       m.chunk = std::move(c);
+      if (grouper.enabled()) m.plan = grouper.plan_chunk(m.chunk);
       ++counters.chunks;
       work_q.push(std::move(m));
     };
@@ -1450,6 +1771,20 @@ int main(int argc, char** argv) {
         case eb::Ctrl::RunOpen: {
           sorter.reset();  // R11: forget the previous run's clock, or the new
                            // run's hits all fall below core_start and vanish
+          // The context carried across a chunk boundary must cover BOTH
+          // consumers: the built tree's ±window and the generic layer's
+          // G + 2*pre + post (eb_core.hpp section 7). Per run, since the
+          // event definition is re-read at every RunOpen.
+          const double prev_lookback = sorter.lookback_ns();
+          const double lookback =
+              std::max(opt.window_ns, in.event_def ? in.event_def->lookback_ns() : 0.0);
+          sorter.set_lookback_ns(lookback);
+          grouper.reset(in.event_def);  // null = generic events off for this run
+          if (lookback != prev_lookback)
+            std::printf("root_sink: sorter lookback %.0f ns (--window-ns %.0f, event def "
+                        "G+2*pre+post %.0f ns)\n",
+                        lookback, opt.window_ns,
+                        in.event_def ? in.event_def->lookback_ns() : 0.0);
           reported_late = 0;
           eb::WorkMsg m;
           m.ctrl = eb::Ctrl::RunOpen;
@@ -1492,6 +1827,10 @@ int main(int argc, char** argv) {
     while (work_q.pop(m)) {
       if (build_enabled && m.ctrl == eb::Ctrl::None)
         m.built = eb::build_events_from_chunk(m.chunk, bcfg);
+      // Rules 3-4 of the generic layer: a pure function of the chunk and the
+      // plan the Sorter attached (plan.def null = off for this run).
+      if (m.ctrl == eb::Ctrl::None && m.plan.def)
+        m.events = eb::build_generic_events(m.chunk, m.plan, m.gstats);
       bool shutdown = (m.ctrl == eb::Ctrl::Shutdown);
       writer_q.push(std::move(m));
       if (shutdown) return;  // exactly one pill per worker
@@ -1505,6 +1844,37 @@ int main(int argc, char** argv) {
     int pills = 0;
     auto t_last_autosave = Clock::now();
     bool done = false;
+    // Generic-event counters of the current run (summed per chunk), and the
+    // number of core-range hits they must account for: hits_in_events +
+    // orphans == core hits (GenericStats contract) — checked at run end so a
+    // hit the layer lost or doubled is reported, never silent.
+    eb::GenericStats run_gstats;
+    long long run_core_hits = 0;
+    auto report_events = [&](const std::string& what) {
+      std::string dist;
+      for (std::size_t i = 0; i < run_gstats.ntrig.size(); ++i) {
+        if (run_gstats.ntrig[i] == 0) continue;
+        char b[48];
+        std::snprintf(b, sizeof b, "%s%zu%s:%llu", dist.empty() ? "" : " ", i + 1,
+                      i + 1 == run_gstats.ntrig.size() ? "+" : "",
+                      static_cast<unsigned long long>(run_gstats.ntrig[i]));
+        dist += b;
+      }
+      std::printf("root_sink: %s events: %llu (NTriggers %s), hits in events %llu, "
+                  "contested %llu, orphans %llu\n",
+                  what.c_str(), static_cast<unsigned long long>(run_gstats.events),
+                  dist.empty() ? "-" : dist.c_str(),
+                  static_cast<unsigned long long>(run_gstats.hits_in_events),
+                  static_cast<unsigned long long>(run_gstats.contested),
+                  static_cast<unsigned long long>(run_gstats.orphans));
+      const unsigned long long accounted = run_gstats.hits_in_events + run_gstats.orphans;
+      if (accounted != static_cast<unsigned long long>(run_core_hits))
+        std::fprintf(stderr,
+                     "root_sink: WARNING %s: the generic event layer accounted for %llu hits "
+                     "(in events + orphans) but the Sorter emitted %lld — a hit was lost or "
+                     "doubled (eb_core.hpp section 7 bug; the .delila is complete)\n",
+                     what.c_str(), accounted, run_core_hits);
+    };
     while (!done) {
       eb::WorkMsg m;
       // Value → process; Timeout → fall through to the autosave tick below;
@@ -1521,15 +1891,26 @@ int main(int argc, char** argv) {
           switch (r.ctrl) {
             case eb::Ctrl::None: {
               // Core range ONLY: chunks deliberately carry duplicated context
-              // (lookback head + post-core tail) for the builder; writing the
-              // full chunk would duplicate hits in the tree. Built events were
-              // already core-gated by the builder itself.
+              // (lookback head + post-core tail) for the builders; writing the
+              // full chunk would duplicate hits in the tree. Built and generic
+              // events were already core-gated by their builders.
               auto range = eb::core_range(r.chunk);
-              for (std::size_t i = range.first; i < range.second; ++i)
-                recorder.fill(r.chunk.hits[i]);
-              counters.written += static_cast<long long>(range.second - range.first);
+              const long long n_core = static_cast<long long>(range.second - range.first);
+              if (opt.hits_tree) {
+                for (std::size_t i = range.first; i < range.second; ++i)
+                  recorder.fill(r.chunk.hits[i]);
+                counters.written += n_core;
+              }
               for (const eb::BuiltEvent& ev : r.built) recorder.fill_built(ev);
               counters.built += static_cast<long long>(r.built.size());
+              if (r.plan.def) {
+                for (const eb::GenericEvent& ev : r.events) recorder.fill_event(ev);
+                run_gstats.add(r.gstats);
+                run_core_hits += n_core;
+                counters.events += static_cast<long long>(r.events.size());
+                counters.ev_contested += static_cast<long long>(r.gstats.contested);
+                counters.ev_orphans += static_cast<long long>(r.gstats.orphans);
+              }
               break;
             }
             case eb::Ctrl::RunOpen: {
@@ -1537,7 +1918,10 @@ int main(int argc, char** argv) {
               // bounded (~2 s) HTTP fetch only delays file naming while the
               // unbounded queues upstream absorb the stream.
               std::string exp = resolve_exp_name(opt);
-              if (!recorder.open_run(opt.out_dir, opt.tree, exp, opt.built_tree, r.prov))
+              run_gstats = eb::GenericStats();
+              run_core_hits = 0;
+              if (!recorder.open_run(opt.out_dir, opt.hits_tree ? opt.tree : std::string(), exp,
+                                     opt.built_tree, events_enabled, r.prov))
                 std::fprintf(stderr,
                              "root_sink: run start FAILED — dropping this run's events\n");
               else
@@ -1548,24 +1932,25 @@ int main(int argc, char** argv) {
             case eb::Ctrl::RunClose: {
               // Seq order makes this a barrier for free: every chunk of the
               // run has already been written when the marker pops.
-              long long ev = recorder.entries();
-              long long bev = recorder.built_entries();
-              bool had_built = recorder.has_built();
+              std::string counts = recorder.entry_counts();  // before finalize closes
               std::string fn = recorder.finalize(r.run_number);
-              if (had_built)
-                std::printf("root_sink: run %u finalized -> %s (%lld events, %lld built)\n",
-                            r.run_number, fn.c_str(), ev, bev);
-              else
-                std::printf("root_sink: run %u finalized -> %s (%lld events)\n",
-                            r.run_number, fn.c_str(), ev);
+              std::printf("root_sink: run %u finalized -> %s (%s)\n", r.run_number, fn.c_str(),
+                          counts.c_str());
+              if (events_enabled) report_events("run " + std::to_string(r.run_number));
               if (use_hists) copy_hists_sidecar(opt.hists_file, recorder.final_path());
-              // The FROZEN RunOpen snapshot (unlike _hists.json, which re-reads
-              // the live file here): a re-loadable timeSettings.json, also for
-              // the Rust EB.
+              // The FROZEN RunOpen snapshots (unlike _hists.json, which re-reads
+              // the live file here): a re-loadable timeSettings.json (also for
+              // the Rust EB) and the event definition that built this run.
               if (!recorder.provenance().time_offsets_source.empty()) {
                 std::string ts = write_text_sidecar(recorder.final_path(), "_timeSettings.json",
                                                     recorder.provenance().time_offsets_source);
                 if (!ts.empty()) std::printf("root_sink: time settings snapshot -> %s\n", ts.c_str());
+              }
+              if (!recorder.provenance().event_def_source.empty()) {
+                std::string ed = write_text_sidecar(recorder.final_path(), "_eventDef.json",
+                                                    recorder.provenance().event_def_source);
+                if (!ed.empty())
+                  std::printf("root_sink: event definition snapshot -> %s\n", ed.c_str());
               }
               if (http_enabled)
                 std::printf("root_sink: (monitor histograms kept across the run boundary)\n");
@@ -1586,7 +1971,10 @@ int main(int argc, char** argv) {
         t_last_autosave = now;
       }
     }
-    if (recorder.is_open()) recorder.close_unfinalized();
+    if (recorder.is_open()) {
+      recorder.close_unfinalized();
+      if (events_enabled) report_events("unfinalized run");
+    }
   };
 
   std::thread th_receiver(receiver_loop);
@@ -1750,13 +2138,27 @@ int main(int argc, char** argv) {
           std::snprintf(toff_s + used, sizeof toff_s - used, " (%lld unmapped)", um);
         }
       }
+      // written=N | hits tree off
+      char written_s[48];
+      if (opt.hits_tree)
+        std::snprintf(written_s, sizeof written_s, "written=%lld", (long long)counters.written);
+      else
+        std::snprintf(written_s, sizeof written_s, "hits tree off");
+      // ev=off | N (cont=C orph=O) [STALE]
+      char ev_s[96];
+      if (!events_enabled)
+        std::snprintf(ev_s, sizeof ev_s, "off");
+      else
+        std::snprintf(ev_s, sizeof ev_s, "%lld (cont=%lld orph=%lld)%s",
+                      (long long)counters.events, (long long)counters.ev_contested,
+                      (long long)counters.ev_orphans, counters.evdef_stale ? " STALE" : "");
       std::printf(
-          "root_sink: %s | events=%lld (written=%lld) | %.0f ev/s | chunks=%lld | "
-          "built=%lld | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "
+          "root_sink: %s | events=%lld (%s) | %.0f ev/s | chunks=%lld | "
+          "built=%lld | ev=%s | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "
           "write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | late=%lld | "
           "toff=%s\n",
-          counters.writing ? "WRITING" : "idle", rec, (long long)counters.written,
-          rate, (long long)counters.chunks, (long long)counters.built,
+          counters.writing ? "WRITING" : "idle", rec, written_s,
+          rate, (long long)counters.chunks, (long long)counters.built, ev_s,
           (long long)counters.matcher_fills, (long long)counters.xy_fills,
           to_sorter.size(), work_q.size(), writer_q.size(), display_q.size(),
           (long long)counters.display_drops, (long long)counters.other_module,
@@ -1781,7 +2183,11 @@ int main(int argc, char** argv) {
   zmq_ctx_term(ctx);  // the Receiver closed the socket on its way out
   // ROOT objects (histograms, server, app) are process-lifetime; let the OS
   // reclaim them on exit rather than risk teardown-order surprises.
-  std::printf("root_sink: bye (%lld hits received, %lld written).\n",
-              (long long)counters.received, (long long)counters.written);
+  if (opt.hits_tree)
+    std::printf("root_sink: bye (%lld hits received, %lld written).\n",
+                (long long)counters.received, (long long)counters.written);
+  else
+    std::printf("root_sink: bye (%lld hits received; hits tree off).\n",
+                (long long)counters.received);
   return 0;
 }

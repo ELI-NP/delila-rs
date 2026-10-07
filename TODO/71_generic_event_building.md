@@ -1,6 +1,6 @@
 # TODO 71 — root_sink 汎用イベントビルド(「まとめる層」)
 
-**Status: 📋 OPEN (2026-10-07) — 設計合意済み、未着手**
+**Status: 🚧 Phase A 実装・検証済み (2026-10-07、未コミット・pf-qaq 未配備) / Phase B 以降は未着手**
 
 **関連:** [event-builder/66_cpp_event_builder.md](event-builder/66_cpp_event_builder.md) Phase 2「汎用化」(本 TODO がその具体化) /
 [70_root_sink_time_offsets.md](70_root_sink_time_offsets.md)(時刻オフセットが前提) /
@@ -59,8 +59,10 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
    - 例: ELIFANT は Si E > Si ΔE > HPGe > PMT、ThGEM は ThGEM1 > ThGEM2。優先順位を指定しなければ、先頭のトリガーが基準。
 3. **窓は基準を中心に取る:** [t_基準 − pre, t_基準 + post]。
    - 束の先頭を中心にすると、Si から見た窓の後ろ側が欠ける。基準を中心にすれば、基準からの相対時刻の範囲がいつも一定になる。
-   - 束の中のトリガーがすべて窓に入るよう、**G ≤ pre** とする(読み込み時に検査)。対称な窓なら G = pre = post = W。
+   - 束の中のトリガーがすべて窓に入るよう、**G ≤ min(pre, post)** とする(読み込み時に検査)。対称な窓なら G = pre = post = W。
+     - (2026-10-07 実装時に訂正: 当初は「G ≤ pre」。基準が束の末尾なら他のトリガーは最大 G 前 → pre ≥ G、先頭なら最大 G 後 → post ≥ G が要る。)
 4. **ヒットは重複させない:** 2 つのイベントの窓に入るヒットは、**基準時刻が近い方**に入れる(同じ距離なら早い方)。窓の外のヒットは、どのイベントにも入らない(`.delila` には残る)。
+   - **トリガーのヒットは規則 1 の束に従う**(2026-10-07 実装時に明確化)。束の末尾のトリガーが、次の束の基準の方に近いことがある(例: 束 {0, 1000} の基準 0、次の束の基準 1001 → 1000 のトリガーは基準 1001 に 1 ns だが、束 0 のイベントに入る)。こうしないと「すべてのトリガーがちょうど 1 つのイベントに属する」が崩れる。
 
 **設定**(JSON、ラン開始ごとに読み直し、provenance を記録する仕組みは TODO 70 と共通)
 
@@ -98,7 +100,7 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
 
 ## 6. 段階
 
-- **Phase A — まとめる層:**
+- **Phase A — まとめる層:** ✅ 2026-10-07 実装・検証済み(§8)
   - 規則 1〜4、配列での出力、監視用のカウンタ、設定 JSON の読み直し。
   - 単体テスト: 束が延長しないこと、A-B-C の連鎖で取りこぼしが無いこと、重なり時に近い基準へ振り分けること、優先順位による基準の選択、G ≤ pre の検査、非対称の窓、H10 相当の境界テスト(基準がチャンク境界をまたぐ場合)、Worker の数に依存しないこと。
   - E2E: run 56 の再生、ThGEM 設定で events を作る。
@@ -112,3 +114,48 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
 - `events` ツリーのファイル分割(今は 1 ラン 1 ファイル + ROOT の自動分割で対応)。
 - JSROOT モニタ(XY、Δt)を、表示用のマッチャーのまま残すか、events から作るか。
 - ELIADE の窓と優先順位(ビーム仕様の確定待ち)。
+
+## 8. Phase A 実装記録 (2026-10-07)
+
+### 何を作ったか
+
+| ファイル | 中身 |
+|---|---|
+| `tools/root_sink/event_def.hpp`(新規) | 設定 JSON のパースと検証(全エラーをまとめて出す)、ラン開始時の読み直し(失敗したら前の設定を維持して STALE)、provenance JSON、ログ 1 行 |
+| `tools/root_sink/eb_core.hpp` §7 | `TriggerGrouper`(規則 1〜2、Sorter で実行)、`build_generic_events`(規則 3〜4、Worker で実行)、`GenericStats`、`Sorter::set_lookback_ns` |
+| `tools/root_sink/root_sink.cxx` | `--event-def` / `--hits-tree`、`events` ツリー、UserInfo `eventDef` + `_eventDef.json`、ランごとの集計行、状態行 `ev=N (cont= orph=)` |
+| `tools/root_sink/check_events.C`(新規) | hits ツリーからイベントを 1 チャンクで作り直し、`events` ツリーと 1 件ずつ比べる(配備後の確認にも使う) |
+| `config/event_def_thgem.json`(新規) | ThGEM 用: ±1000 ns、G = 1000 ns、ThGEM1 (p1, m0c1) > ThGEM2 (p2, m0c6) |
+| `scripts/start_daq.sh` | TOML `event_def_file` → `--event-def`、`hits_tree = true` → `--hits-tree` |
+| README / `docs/root_sink_manual.md` | 汎用イベントの節、hits ツリーの opt-in 化 |
+
+### チャンク境界の扱い(設計の要点)
+
+- Sorter は各チャンクの core 範囲のトリガーだけを順に `TriggerGrouper` に入れる。core_end より前のヒットは揃っている(Sorter の前提)ので、`開始 + G < core_end` の束は確定。
+- 確定した境界 D = まだ開いている束の開始時刻(無ければ core_end)。あるヒットの振り分けには、そのヒットから +pre 以内の基準が全部確定している必要がある → このチャンクが出すのは、**基準時刻が [ev_lo, ev_hi) のイベント**(ev_hi = D − pre − post、ev_lo = 前のチャンクの ev_hi)。hits ツリー用の core 範囲とは別の範囲。
+- そのため Sorter が前のチャンクから持ち越す範囲は **G + 2·pre + post**(ThGEM なら 4000 ns)。`--window-ns` と大きい方を使う。
+- どの窓にも入らないヒットは、時刻が [ev_lo, ev_hi) に入るチャンクで数える → ラン全体で「イベント内のヒット + 窓外のヒット = core 範囲のヒット数」がちょうど成り立つ。Writer がラン終了時に検査し、合わなければ WARNING。
+
+### 検証
+
+- **単体テスト:** `test_eb_core` 256(うち汎用層 77)、`test_sink_core` 465(うち設定 JSON 158)。全合格、警告 0。
+  - 規則 1〜4 を素直に書いた総当たりの参照実装と、ランダムな 200 通り(重なる束、時刻の同値、2 モジュール 3 種類のトリガー、非対称の窓、細かいチャンク、到着順の乱れ)で完全一致。
+  - わざと 6 種類のバグを入れて検出できるか確認(持ち越し不足、ev_hi の余裕不足、2 つ目の窓の見落とし、束を閉じる条件の ≤、基準の削り過ぎ、同じ距離のとき遅い方)。束を閉じる条件だけ乱数では捕まらなかったので、束の終わりがちょうど core_end になる専用テストを足した。
+- **E2E(Mac、`check_events.C` で 1 チャンクの作り直しと比較):**
+
+| データ | 条件 | 結果 |
+|---|---|---|
+| run 56(pf-qaq、時刻オフセットあり) | workers 3 | IDENTICAL。33,463 イベント、イベント内 163,845 + 窓外 42,105 = 205,950 ヒット。hits / built は TODO 70 の結果と一致 |
+| run0023(side3) | workers 1 / 8 / チャンク 0.2 ms | 3 通りとも IDENTICAL(40,045 イベント) |
+| run0023 + LaBr3 を 3 番目のトリガーに(窓 −1500/+800、G 700) | workers 1 / 6 + チャンク 0.2 ms | IDENTICAL。764,911 イベント、うちトリガー 2 個が 7,177、取り合い 44 |
+| 同上 | 1 バッチ 7 ヒット(約 13 万チャンク) | IDENTICAL |
+
+- 起動時の検査・読み直しの失敗(STALE)・途中停止・ROOT の自動分割(パートごとに UserInfo)・配列バッファの拡張も確認済み(配線担当の E2E)。
+- **データについての所見:** run 56 と run0023 では全イベントの NTriggers が 1。run 56 は ThGEM1/ThGEM2 がそれぞれ約 5 Hz で互いに独立(既存の built ツリーでも両面そろったイベントは 0、LaBr3 が付くのは 114)、run0023 は ThGEM2(ch6)のヒットが 0。汎用層の不具合ではない。
+  - ユーザー確認 (2026-10-07): **今の ThGEM は線源を置いているだけなので、ThGEM 基準でイベントが重なることはほぼない**。重なり(NTriggers ≥ 2、取り合い)の実データでの確認はビームが来てから。それまでは単体テスト(総当たりとの一致)と、LaBr3 をトリガーにした負荷試験で担保する。
+
+### pf-qaq への配備(未実施)
+
+1. 新しいバイナリを入れる前に、`config_thgem_pfqaq.toml` の **`hits_tree = true` のコメントを外す**(外さないと hits ツリーが出なくなる。built だけになるので起動は通ってしまう)。`event_def_file` も外せば events ツリーが出る。
+2. 入れ替えは TODO 70 §5 と同じ手順(ランとランの間に `root_sink.prev` を残して `install` → `mv`)。
+3. 最初のランの後で `root -l -b -q 'check_events.C+("<run>.root")'` が IDENTICAL になることを確認する。
