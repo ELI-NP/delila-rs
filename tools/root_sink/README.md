@@ -4,10 +4,11 @@ A single C++ process that subscribes to the DELILA **merger's ZMQ PUB** as an
 *additional* consumer and does two jobs at once:
 
 1. **Recorder** — ZSTD-compressed ROOT `TTree`s, one file per run, each tree
-   opt-in: the per-hit tree (`--hits-tree`, five scalars per hit), the ThGEM
-   built-event tree (`--built-tree`) and the generic `events` tree
-   (`--event-def`, TODO 71). At least one is required — with none, root_sink
-   refuses to start (exit 2).
+   opt-in: the per-hit tree (`--hits-tree`, five scalars per hit) and the
+   generic `events` tree (`--event-def`, TODO 71). At least one is required —
+   with none, root_sink refuses to start (exit 2). Experiment-specific
+   reconstruction runs offline on the events (ThGEM: `thgem_events.C`, see
+   *Generic events*).
 2. **Monitor** — a coincidence Δt monitor (gamma vs ThGEM1/ThGEM2 on configurable
    channels) served live over `THttpServer`. Browse it with JSROOT — zero
    frontend code.
@@ -67,7 +68,7 @@ root_sink [options]
   --hists FILE        histogram definition JSON (see below); replaces the
                       built-in dt1/dt2/dt2_vs_dt1/channels set
   --module M          process only digitizer M's hits (default: all) — the
-                      tree, histograms, matchers and built events alike;
+                      trees, histograms and matchers alike;
                       required with >1 digitizer (see Design notes)
   --gamma-ch N        gamma detector channel       (enables the Δt monitor)
   --thgem1-ch N       ThGEM1 channel
@@ -88,9 +89,6 @@ root_sink [options]
   --chunk-span-ms X   sorter chunk span, DATA time (default 100)
   --safe-horizon-ms X sorter disorder absorption   (default 50; must exceed the
                       stream's max arrival disorder — side3 measured ~8 ms)
-  --built-tree NAME   also write the integrated built-event TTree (requires
-                      --xy1-ch; --xy2-ch adds the 2nd plane, --gamma-ch adds
-                      LaBr3/TOF; window = --window-ns)
   --time-calib FILE   per-(module,channel) time offsets (timeSettings.json, or
                       legacy time-calib output); aligned = raw - offset_ns for
                       EVERY consumer. Re-read at every run start, frozen per run
@@ -100,10 +98,12 @@ root_sink [options]
   --help
 ```
 
-At least one of `--hits-tree`, `--built-tree`, `--event-def` must be given:
-since TODO 71 (2026-10) the hits tree is no longer written implicitly, and a
-command line selecting no tree exits 2 with an ERROR saying so (`--tree NAME`
-alone only warns that the hits tree stays off).
+At least one of `--hits-tree`, `--event-def` must be given: since TODO 71
+(2026-10) the hits tree is no longer written implicitly, and a command line
+selecting no tree exits 2 with an ERROR saying so (`--tree NAME` alone only
+warns that the hits tree stays off). `--built-tree` was retired (TODO 71):
+it exits 2 pointing to `thgem_events.C`, and `start_daq.sh` warns about and
+skips a TOML `built_tree`.
 
 Typical ThGEM run (single V1730, gamma on ch0, ThGEMs on ch1/ch2):
 
@@ -164,7 +164,7 @@ is why all closing goes through `TTree::GetCurrentFile()` and rollover detection
 compares file NAMES, never pointers (the allocator can reuse the address).
 `ChangeFile` moves every tree of the file together, so any tree that exists
 reports the current file — the Recorder asks the first one present (hits,
-built, events; all three are optional).
+events; both are optional).
 
 `<exp>` (the experiment name) is resolved once at each run start, in priority
 order — the resolved name and its source are logged, and any fallback is warned
@@ -195,11 +195,11 @@ closed but **keeps its `run_inprogress_*` name** (it was never finalized) — a 
 line reports it.
 
 **Time offsets.** With `--time-calib` the `timestamp_ns` written here (and every
-time in the built tree) is **aligned**: `raw - offset_ns`. The `.delila` stays
+time in the events tree) is **aligned**: `raw - offset_ns`. The `.delila` stays
 raw, so a delila2root tree of the same run differs on the offset channels. Every
 file says which applies:
 
-- every tree (hits, built, events) carries a `TNamed "timeSettings"` in its **UserInfo**
+- every tree (hits, events) carries a `TNamed "timeSettings"` in its **UserInfo**
   (`tree->GetUserInfo()->FindObject("timeSettings")->GetTitle()`): a JSON with
   `applied` (true/false), the convention, the source path, `status` (`ok` or
   `stale: …`), the resolved absolute offsets (`%.17g`) and the verbatim source.
@@ -214,8 +214,9 @@ file says which applies:
 
 The experiment-independent "grouping" layer of event building: triggers and a
 window around them bundle hits into events (TODO/71_generic_event_building.md
-§4–5). Experiment-specific reconstruction (ThGEM XY/TOF = today's built tree,
-ELIADE addback, …) belongs on top of it. The definition file:
+§4–5). Experiment-specific reconstruction (ThGEM XY/TOF, ELIADE addback, …)
+runs offline on top of it (ThGEM: *ThGEM reconstruction* below). The
+definition file:
 
 ```json
 {"version": "1.0",
@@ -360,6 +361,38 @@ Design and the choices made: `TODO/71_phase_c_proposal.md` (§2.3 branches,
   `run N L2: <flag>=<events> … | <accept>=<events> … | L2Accept=<events>`; the
   status line gains `ac=` / `l2acc=` inside `ev=(…)` while the run's
   definition has them.
+
+### ThGEM reconstruction (`thgem_events.C`)
+
+The ThGEM `built` tree is no longer written by the sink (retired in TODO 71;
+`--built-tree` exits 2). `thgem_events.C` rebuilds it offline from a run's
+`events` tree into a separate file — same branches as the old sink tree, the
+input's UserInfo (`timeSettings`, `eventDef`) copied:
+
+```sh
+root -l -b -q 'thgem_events.C+("run0056_0000_X.root","run0056_0000_X_built.root")'
+#   further args: xy1 "T,XL,XR,YU,YD" (default "1,2,3,5,4"), xy2 (default
+#   "6,7,8,9,10"; "" = single plane), gamma ch (default 0; -1 = no LaBr3/TOF),
+#   window_ns (arm / LaBr3 match window, default 1000)
+```
+
+One row per event holding a ThGEM trigger (`thgem_from_event`,
+`thgem_reco.hpp`): per plane the arm hits nearest to that plane's own trigger
+within ±window (the offline ground-truth rule of `macros/grid_resolution.C`),
+the LaBr3 hit nearest to the earlier trigger; a missing piece is `NaN`
+(times/derived) or `0` (energies) — completeness is an offline cut, partial
+rows ARE the arm-efficiency measurement. Branches: `trig1_t trig2_t labr_t /D`,
+`x1 y1 x2 y2 /F` (ns, aligned axis; `x = t_XR − t_XL`, `y = t_YU − t_YD`),
+per-arm `dt_* /F` + `e_* /s`, `dt_trig/F` (`t(det2) − t(det1)`), `tof1 tof2 /F`
+(raw `t(trig) − t(labr)`), `e_trig* e_labr /s`, `e_sum1 e_sum2 /i`,
+`n_arms1 n_arms2 /b`. Typical cuts: 4-fold plane 1 = `!TMath::IsNaN(x1) &&
+!TMath::IsNaN(y1)`; both-plane track = `!TMath::IsNaN(dt_trig)`.
+
+It reproduces the retired sink tree bit for bit (run 56: 33,463 rows; run0023:
+40,045 rows, 15,644 four-fold) when the event window covers `group_ns +
+window_ns` on both sides and no hit is contested; two triggers of one plane in
+one event make one row (the earliest). `delayline_offsets.C`'s
+`delayline_centres_built()` reads its output file directly.
 
 ## Live monitor (THttpServer / JSROOT)
 
@@ -563,9 +596,9 @@ reload can safely delete and rebuild the live objects.
   ⇒ one EOS closes. This set-based rule deliberately avoids the first-EOS-latch
   trap of naive multi-source consumers. A stale EOS received while idle is logged
   and ignored.
-- **One digitizer per root_sink (`--module`).** The Δt / XY matchers and the
-  built-event builder select hits by `channel` alone, and the Sorter, the
-  watermark matchers and the builder all assume ONE time base. A second board
+- **One digitizer per root_sink (`--module`).** The Δt / XY matchers select
+  hits by `channel` alone, and the Sorter and the watermark matchers assume
+  ONE time base. A second board
   breaks both: its channels land in the ThGEM/LaBr3 slots, and an independently
   started board's clock drifts away from the first. Once the drift exceeds
   `--safe-horizon-ms`, the lagging board's hits arrive behind an emitted core
@@ -594,8 +627,8 @@ reload can safely delete and rebuild the live objects.
     analysis can scan linearly instead of per-channel bucketing. With
     `--event-def` it also runs the stateful trigger grouping (generic-event
     rules 1–2) on every chunk and attaches the plan to it.
-  - **Workers** run the pure-function event builders (`eb_core.hpp`: built
-    tree, generic-event rules 3–4) per chunk.
+  - **Workers** run the pure-function generic-event rules 3–4 (`eb_core.hpp`)
+    per chunk.
   - **Writer** is the only thread touching the run `TFile`; a sequence reorder
     makes the output deterministic in `--workers` (1 or 8 → identical trees) and
     turns RunClose into a barrier for free. Autosave runs here.
@@ -607,25 +640,10 @@ reload can safely delete and rebuild the live objects.
   - `TRootSniffer::SetScanGlobalDir(kFALSE)` is mandatory: the default scan
     would expose the Writer's live run file over HTTP (cross-thread reads from
     a browser click). Registered histograms are explicit, so nothing is lost.
-- **Built-event tree (`--built-tree`).** One row per trigger-anchored event
-  carrying BOTH ThGEM planes + LaBr3; a missing piece is `NaN` (times/derived)
-  or `0` (energies). Completeness is an offline cut, never a build condition —
-  partial and trigger-only rows are kept on purpose (they ARE the
-  arm-efficiency measurement). Branches: `trig1_t/D trig2_t/D labr_t/D`,
-  `x1 y1 x2 y2 /F` (ns on the aligned axis — raw without `--time-calib`;
-  `x = t_XR − t_XL`, `y = t_YU − t_YD`),
-  per-arm `dt_* /F` + `e_* /s`, `dt_trig/F` (= `t(det2) − t(det1)`, the
-  plane-to-plane TOF), `tof1 tof2 /F` (raw `t(trig) − t(labr)`, no analysis
-  offset), `e_trig* e_labr /s`, `e_sum1 e_sum2 /i`, `n_arms1 n_arms2 /b`.
-  Matching is nearest-hit per arm (the offline ground-truth rule of
-  `macros/grid_resolution.C`), and cross-plane triggers within the window pair
-  into ONE row (greedy, anchored on the earlier trigger). Typical cuts:
-  4-fold plane 1 = `!TMath::IsNaN(x1) && !TMath::IsNaN(y1)`; both-plane track
-  = `!TMath::IsNaN(dt_trig)`.
 - **Time offsets (`--time-calib`, TODO 70).** A constant propagation delay per
   `(module, channel)` (cables, delay lines) is removed once, in the Receiver,
-  right after `--module` and BEFORE the Sorter, the display tee, the builder and
-  the hits tree — so all of them work on one aligned axis. It must stay before
+  right after `--module` and BEFORE the Sorter, the display tee, the event
+  layer and the hits tree — so all of them work on one aligned axis. It must stay before
   the Sorter: it sorts on `timestamp_ns`, and its core ranges / H10 gates use the
   same field. Format = the Rust EB's `timeSettings.json`
   (`src/event_builder/time_offsets.rs`, `schemas/timeSettings.schema.json`):
@@ -678,7 +696,7 @@ g++ -std=c++17 -O0 -g test_sink_core.cpp -o /tmp/ts && /tmp/ts
 It prints `N passed, 0 failed` and exits non-zero on any failure.
 
 The pipeline core (`eb_core.hpp`: Channel, SeqReorder, chunk splitter with the
-H10 boundary rules, Sorter, the integrated-event builder) has its own suite —
+H10 boundary rules, Sorter, the generic event layer; `thgem_reco.hpp`) has its own suite —
 also plain g++, but `-pthread` (the Channel tests spawn threads):
 
 ```sh
@@ -721,41 +739,36 @@ edit keeps the previous table (STALE); resolved tables equal the Rust
 
 ```sh
 root -l -b -q 'delayline_offsets.C("run0056_*.root","1,2,3,5,4","6,7,8,9,10","ts.json","run 56")'
-root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X.root")'
+root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X_built.root")'
 ```
 
-Generic events (TODO 71) have two run-file checks, both ACLiC-compiled against
-`eb_core.hpp`:
+(the `_built.root` file is `thgem_events.C`'s output).
 
-- `check_events.C` rebuilds the run's events from its hits tree in ONE chunk
-  (no chunk boundary at all) with the run's own `_eventDef.json` and compares
-  them entry by entry with the `events` tree; it also checks hits in events +
-  orphans == hits. Needs `--hits-tree`. Use it after a deployment's first run.
-- `compare_built.C` rebuilds the ThGEM `built` rows from the `events` tree
-  (`thgem_from_event`, Phase B) and compares them row by row with the `built`
-  tree of the same file. Equality needs an event window of at least
-  `group_ns + --window-ns` on both sides and no contested hits (see
-  `eb_core.hpp` §8).
+Generic events (TODO 71) have a run-file check, ACLiC-compiled against
+`eb_core.hpp`: `check_events.C` rebuilds the run's events from its hits tree in
+ONE chunk (no chunk boundary at all) with the run's own `_eventDef.json` and
+compares them entry by entry with the `events` tree; it also checks hits in
+events + orphans == hits. Needs `--hits-tree`. Use it after a deployment's
+first run.
 
 ```sh
 root -l -b -q 'check_events.C+("run0056_0000_X.root")'
-root -l -b -q 'compare_built.C+("run0023_0000_X.root","1,2,3,5,4","6,7,8,9,10",0,500)'
 ```
 
 E2E (2026-10-07): run 56 (pf-qaq, offsets) and run0023 (side3) replays are
 IDENTICAL to the single-chunk rebuild for workers 1/3/8, 0.2 ms chunks and
 ~130k chunks, also with LaBr3 as a 3rd trigger (7,177 two-trigger events, 44
-contested hits); `compare_built.C` reproduces run0023's 15,644 four-fold events
-with all 40,045 rows identical (window 500, events ±1000 / G 500) and run 56's
-33,463 rows under the production settings.
+contested hits). Historical (Phase B, before the retirement): the ThGEM rows
+rebuilt from events matched the then in-sink built tree row by row — run0023's
+15,644 four-fold events, all 40,045 rows (window 500, events ±1000 / G 500).
 
 The `--event-def` wiring (E2E, 2026-10-07, replay of run 56 with `--hits-tree
---built-tree built --event-def config/event_def_thgem.json`): hits / built
-entries unchanged (205,950 / 33,463); the `events` tree has the branches above,
-both UserInfo objects and a byte-identical `_eventDef.json`; `hits in events
-+ orphans` = 205,950. The same events digest with the hit buffers starting at
-capacity 1 (growth path), and from a forced-rollover build without the hits
-tree (`events` or `built` as the lead tree; UserInfo in every part). A bad edit
+--event-def config/event_def_thgem.json`): hits entries unchanged (205,950);
+the `events` tree has the branches above, both UserInfo objects and a
+byte-identical `_eventDef.json`; `hits in events + orphans` = 205,950. The
+same events digest with the hit buffers starting at capacity 1 (growth path),
+and from a forced-rollover build without the hits tree (`events` as the lead
+tree; UserInfo in every part). A bad edit
 between runs keeps the previous definition (STALE in the run line, status line
 and UserInfo; the sidecar is the previous file).
 

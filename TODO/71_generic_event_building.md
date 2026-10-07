@@ -154,7 +154,14 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
 - **データについての所見:** run 56 と run0023 では全イベントの NTriggers が 1。run 56 は ThGEM1/ThGEM2 がそれぞれ約 5 Hz で互いに独立(既存の built ツリーでも両面そろったイベントは 0、LaBr3 が付くのは 114)、run0023 は ThGEM2(ch6)のヒットが 0。汎用層の不具合ではない。
   - ユーザー確認 (2026-10-07): **今の ThGEM は線源を置いているだけなので、ThGEM 基準でイベントが重なることはほぼない**。重なり(NTriggers ≥ 2、取り合い)の実データでの確認はビームが来てから。それまでは単体テスト(総当たりとの一致)と、LaBr3 をトリガーにした負荷試験で担保する。
 
-### pf-qaq への配備(未実施)
+### pf-qaq への配備 — ✅ 2026-10-07 10:54 実施(3e6a4e9)
+
+- ユーザーの指示(「配備やってください。start_daq.sh なども最新に」)。GitHub は使わず、Mac から ssh で pf-qaq の別ブランチに push → `git merge --ff-only`(0cfdeb9 → 3e6a4e9)。pf-qaq 側で手を入れた `config/digitizers/thgem_v1730_psd1_0.json`(UI 調整)と `monitor_layout.json` はそのまま残した。バックアップは `~/deploy_backup/todo71_20261007_105319/`。
+- ステージング `~/tmp/todo71_deploy_3e6a4e9/` で GCC 13.3 / ROOT 6.38.06 のビルド(警告 0)と単体テスト 657 / 257 合格、別ポートで空起動を確認してから `~/.local/bin/root_sink` を入れ替え。戻し先は `root_sink.prev`(TODO 70 版)、その前は `root_sink.prev-pre-todo70`。
+- 待機中(Configured)に `stop_daq.sh` → `start_daq.sh`。root_sink の引数は `... --time-calib ... --event-def config/event_def_thgem.json --hits-tree`(`--built-tree` 無し)、起動行に ERROR / WARNING 無し、JSROOT :8090 応答あり。Operator は Idle に戻った → **次のランの前に Configure が要る**。
+- **残り:** 最初のラン(59)の後で `root -l -b -q "$HOME/delila-rs/tools/root_sink/check_events.C+(\"<run>.root\")"` が IDENTICAL になることを確認する。
+
+### (配備前に書いた手順と注意)
 
 **配備前テストは済み (2026-10-07、本番を止めずに `~/tmp/todo71_test/` で):** GCC 13.3 + ROOT 6.38.06 でビルド・単体テスト 465/256 合格。pf-qaq の run 57(生の時刻、288,571 ヒット)を別ポートで再生 → hits / built が本番と同数(built 46,544)、events 46,544(NTriggers すべて 1)、`check_events` と `compare_hits`(時刻オフセット込み)ともに IDENTICAL、`--hists` 付きの本番フラグでも同じ。`start_daq.sh` の TOML→引数の変換も模擬して確認。
 
