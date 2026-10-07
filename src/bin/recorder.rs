@@ -62,6 +62,16 @@ async fn main() -> anyhow::Result<()> {
                 0,
             )
         };
+    // Free-space watermarks (TODO 69); without a [network.recorder] section
+    // the struct defaults apply.
+    let defaults = RecorderConfig::default();
+    let (disk_soft_bytes, disk_hard_bytes) = match config.network.recorder {
+        Some(ref recorder) => (
+            recorder.disk_soft_free_mb * 1024 * 1024,
+            recorder.disk_hard_free_mb * 1024 * 1024,
+        ),
+        None => (defaults.disk_soft_free_bytes, defaults.disk_hard_free_bytes),
+    };
 
     // CLI overrides config file
     let recorder_config = RecorderConfig {
@@ -73,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
         // MB → bytes at the bin boundary, like max_file_size (TODO 68).
         backlog_soft_limit_bytes: soft_mb * 1024 * 1024,
         backlog_hard_limit_bytes: hard_mb * 1024 * 1024,
+        disk_soft_free_bytes: disk_soft_bytes,
+        disk_hard_free_bytes: disk_hard_bytes,
     };
 
     // Setup shutdown handling

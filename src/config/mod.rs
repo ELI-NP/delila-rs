@@ -605,6 +605,27 @@ pub struct RecorderNetworkConfig {
     /// the operator section (double opt-in).
     #[serde(default)]
     pub backlog_hard_limit_mb: u64,
+
+    /// Soft free-space watermark for `output_dir`, in MB (TODO 69). Free space
+    /// below it logs a warning and sets `disk_level = 1`. `0` disables.
+    #[serde(default = "default_disk_soft_free_mb")]
+    pub disk_soft_free_mb: u64,
+
+    /// Hard free-space watermark for `output_dir`, in MB (TODO 69). Free
+    /// space below it sets `disk_level = 2`: the Operator's run guard (always
+    /// on) stops the run drain-first while the disk is still writable, and
+    /// Start is refused. Keep it above the largest backlog a drain may have
+    /// to write. `0` disables.
+    #[serde(default = "default_disk_hard_free_mb")]
+    pub disk_hard_free_mb: u64,
+}
+
+fn default_disk_soft_free_mb() -> u64 {
+    20 * 1024 // 20 GiB — minutes of warning at tens of MB/s
+}
+
+fn default_disk_hard_free_mb() -> u64 {
+    2 * 1024 // 2 GiB — room to drain the backlog and write the footer
 }
 
 fn default_backlog_soft_limit_mb() -> u64 {

@@ -550,8 +550,23 @@ impl<R: std::io::Read + std::io::Seek> DataFileReader<R> {
         result
     }
 
+    /// End of the data region: before the footer when the file has one, else
+    /// the end of the file. A file without a footer (crash, or cut at its last
+    /// complete block after a write failure, TODO 69) ends in a data block —
+    /// taking its last FOOTER_SIZE bytes for a footer hid that block.
+    fn data_end(&mut self) -> u64 {
+        if self.file_size >= FOOTER_SIZE as u64
+            && (self.footer.is_some() || self.read_footer().is_ok())
+        {
+            self.file_size - FOOTER_SIZE as u64
+        } else {
+            self.file_size
+        }
+    }
+
     /// Count recoverable data blocks
     fn count_recoverable_blocks(&mut self) -> (usize, u64) {
+        let data_end = self.data_end();
         let mut blocks = 0;
         let mut events = 0u64;
 
@@ -563,13 +578,6 @@ impl<R: std::io::Read + std::io::Seek> DataFileReader<R> {
         {
             return (0, 0);
         }
-
-        // Data region ends at file_size - FOOTER_SIZE (if footer might exist)
-        let data_end = if self.file_size >= FOOTER_SIZE as u64 {
-            self.file_size - FOOTER_SIZE as u64
-        } else {
-            self.file_size
-        };
 
         #[allow(clippy::while_let_loop)]
         loop {
@@ -670,16 +678,11 @@ impl<R: std::io::Read + std::io::Seek> DataFileReader<R> {
 
     /// Iterator over data blocks (for recovery)
     pub fn data_blocks(&mut self) -> DataBlockIterator<'_, R> {
+        let data_end = self.data_end();
         // Position after header
         let _ = self
             .reader
             .seek(std::io::SeekFrom::Start(self.header_size as u64));
-
-        let data_end = if self.file_size >= FOOTER_SIZE as u64 {
-            self.file_size - FOOTER_SIZE as u64
-        } else {
-            self.file_size
-        };
 
         DataBlockIterator {
             reader: &mut self.reader,
@@ -951,5 +954,65 @@ mod tests {
         assert_eq!(restored.total_events, 500);
         assert_eq!(restored.data_bytes, 11000);
         assert!(restored.is_complete());
+    }
+
+    /// Header + `sizes.len()` blocks of `sizes[i]` events, optionally a footer.
+    fn file_bytes(sizes: &[usize], with_footer: bool) -> Vec<u8> {
+        let mut buf = Vec::new();
+        FileHeader::new(1, "t".to_string(), 0)
+            .write_to(&mut buf)
+            .unwrap();
+        let mut calc = ChecksumCalculator::new();
+        let mut footer = FileFooter::new();
+        for (seq, &n) in sizes.iter().enumerate() {
+            let mut b = crate::common::EventDataBatch::new(0, seq as u64);
+            for i in 0..n {
+                b.push(crate::common::EventData::new(0, 0, 1, 1, i as f64, 0));
+            }
+            let data = b.to_msgpack().unwrap();
+            let len = (data.len() as u32).to_le_bytes();
+            buf.extend_from_slice(&len);
+            buf.extend_from_slice(&data);
+            calc.update(&len);
+            calc.update(&data);
+            footer.total_events += n as u64;
+        }
+        if with_footer {
+            footer.data_checksum = calc.finalize();
+            footer.data_bytes = calc.bytes_processed();
+            footer.finalize();
+            footer.write_to(&mut buf).unwrap();
+        }
+        buf
+    }
+
+    /// TODO 69: a file without a footer (crash, or cut back at its last
+    /// complete block after a write failure) ends in a data block. The reader
+    /// used to treat its last FOOTER_SIZE bytes as a footer and lost that block.
+    #[test]
+    fn footerless_file_reads_every_complete_block() {
+        let sizes = [3, 5, 1];
+        let mut r = DataFileReader::new(std::io::Cursor::new(file_bytes(&sizes, false))).unwrap();
+        let v = r.validate();
+        assert!(!v.is_valid);
+        assert!(v.needs_recovery());
+        assert_eq!(v.recoverable_blocks, 3);
+        assert_eq!(v.recoverable_events, 9);
+        let mut r = DataFileReader::new(std::io::Cursor::new(file_bytes(&sizes, false))).unwrap();
+        let events: usize = r.data_blocks().map(|b| b.unwrap().events.len()).sum();
+        assert_eq!(events, 9);
+    }
+
+    #[test]
+    fn sealed_file_still_stops_before_footer() {
+        let sizes = [3, 5, 1];
+        let mut r = DataFileReader::new(std::io::Cursor::new(file_bytes(&sizes, true))).unwrap();
+        let v = r.validate();
+        assert!(v.is_valid, "errors: {:?}", v.errors);
+        assert_eq!(v.recoverable_blocks, 3);
+        let mut r = DataFileReader::new(std::io::Cursor::new(file_bytes(&sizes, true))).unwrap();
+        let blocks: Vec<_> = r.data_blocks().collect();
+        assert_eq!(blocks.len(), 3);
+        assert!(blocks.iter().all(|b| b.is_ok()));
     }
 }

@@ -106,6 +106,20 @@ curl -X POST http://localhost:9090/api/run/start
 
 Run 番号の付与・履歴は `/api/runs*`（Web UI の Runs ページ）で管理する。
 
+### ディスク満杯・書き込み失敗で自動停止する（TODO 69）
+
+Operator は常にランを見張っていて（設定不要）、次の 2 つでランを止める。
+
+| 状況 | 止め方 | ラン履歴 |
+|------|--------|----------|
+| Recorder の書き込み失敗（ディスク満杯・I/O エラー） | 即時停止（ソースから） | Error、停止理由に書けなかったイベント数 |
+| `output_dir` の空きが `disk_hard_free_mb`（既定 2 GiB）未満 | drain-first 停止（溜まった分を書いてから止める） | Completed、停止理由つき |
+
+- 書き込みに失敗したファイルは、最後の完全なブロックで切ってフッタ付きで閉じる。そのまま `recover validate` / `delila2root` で読める。
+- 空きが `disk_hard_free_mb` 未満の間は Start が HTTP 507 で拒否される。空きを作ってから開始する。
+- 書き込み失敗のあとは Recorder が Error のままになる。ディスクを直したら Configure（または Reset）してから開始する。
+- 空きが `disk_soft_free_mb`（既定 20 GiB）を下回ると Recorder のログに警告が出る。
+
 ---
 
 ## 5. DAQ の停止

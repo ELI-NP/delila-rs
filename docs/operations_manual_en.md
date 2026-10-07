@@ -109,6 +109,20 @@ curl -X POST http://localhost:9090/api/run/start
 
 Run numbers and history are managed via `/api/runs*` (the Runs page in the web UI).
 
+### Automatic stop on a full disk / write failure (TODO 69)
+
+The Operator always watches the run (no configuration) and stops it when:
+
+| Situation | Stop | Run history |
+|-----------|------|-------------|
+| A Recorder write failed (disk full, I/O error) | Immediate, sources first | Error; stop reason gives the events not written |
+| Free space on `output_dir` below `disk_hard_free_mb` (default 2 GiB) | Drain-first (the backlog is written first) | Completed, with the stop reason |
+
+- After a write failure the file is cut at its last complete block and closed with its footer; `recover validate` / `delila2root` read it as usual.
+- Start is refused (HTTP 507) while free space is below `disk_hard_free_mb`. Free some space first.
+- After a write failure the Recorder stays in Error: fix the disk, then Configure (or Reset) before the next run.
+- Below `disk_soft_free_mb` (default 20 GiB) the Recorder logs a warning.
+
 ---
 
 ## 5. Stopping the DAQ

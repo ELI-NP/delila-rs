@@ -68,6 +68,11 @@ pipeline_order = 3
 # semantics as [network.merger]. 0 = disabled; soft defaults to 4096 MB.
 #backlog_soft_limit_mb = 4096
 #backlog_hard_limit_mb = 0
+# Free-space watermarks for output_dir (TODO 69, on by default): soft = warn,
+# hard = the Operator's run guard stops the run drain-first and Start is
+# refused. 0 = disabled. A failed write always stops the run (no switch).
+#disk_soft_free_mb = 20480
+#disk_hard_free_mb = 2048
 
 # Monitor (local)
 [network.monitor]

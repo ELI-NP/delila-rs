@@ -314,6 +314,10 @@ impl CommandHandlerExt for MergerCommandExt {
             queue_bytes: self.ext_state.queue.depth_bytes(),
             queue_bytes_peak: self.ext_state.queue.peak_bytes(),
             backlog_level: self.ext_state.backlog_level(),
+            write_failed: false,
+            unwritten_events: 0,
+            disk_free_bytes: None,
+            disk_level: 0,
         })
     }
 }

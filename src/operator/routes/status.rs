@@ -315,7 +315,8 @@ pub(super) async fn arm(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     request_body = StartRequest,
     responses(
         (status = 200, description = "Start result", body = ApiResponse),
-        (status = 400, description = "Invalid state transition", body = ApiResponse)
+        (status = 400, description = "Invalid state transition", body = ApiResponse),
+        (status = 507, description = "Disk below the hard free-space watermark, or a write failure still latched", body = ApiResponse)
     )
 )]
 pub(super) async fn start(
@@ -340,6 +341,19 @@ pub(super) async fn start(
     // Check current state
     let components = state.client.get_all_status(&state.components).await;
     let system_state = SystemState::from_components(&components);
+
+    // TODO 69: no run on a disk below its hard watermark, and none while a
+    // previous write failure is still latched — the run guard would stop it
+    // within seconds.
+    if let Some(msg) = crate::operator::run_guard::start_refusal(&components)
+        .or_else(|| crate::operator::run_guard::latched_write_failure(&components))
+    {
+        tracing::error!("{}", msg);
+        return (
+            StatusCode::INSUFFICIENT_STORAGE,
+            Json(ApiResponse::error(msg)),
+        );
+    }
 
     // If Configured, arm first
     if system_state == SystemState::Configured {
@@ -707,6 +721,51 @@ pub(crate) async fn drain_first_stop(
     (status, Json(response))
 }
 
+/// Immediate stop after a write failure (TODO 69): nothing is drained —
+/// the writer has already stopped writing this run, so the only thing that
+/// limits the loss is how fast the sources stop. `stop_all` stops them first
+/// (ascending pipeline order). The run is recorded as Error with the reason
+/// and the final count of events that never reached the disk.
+///
+/// Caller must hold `state.run_control_lock`.
+pub(crate) async fn failure_stop(
+    state: &Arc<AppState>,
+    reason: &str,
+) -> (StatusCode, Json<ApiResponse>) {
+    // Same Tune Up guard as /api/stop (TODO 58 M15).
+    if state.tuneup.is_active() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::error(
+                "Tune Up mode is active — use the Tune Up stop endpoint instead.",
+            )),
+        );
+    }
+
+    tracing::error!(reason, "Failure stop initiated — data is not being written");
+    let results = state.client.stop_all(&state.components).await;
+
+    // Final loss, now that the sources are stopped.
+    let unwritten: u64 = state
+        .client
+        .get_all_status(&state.components)
+        .await
+        .iter()
+        .filter_map(|s| s.metrics.as_ref())
+        .map(|m| m.unwritten_events)
+        .sum();
+    let stop_reason = format!("{reason}; {unwritten} events not written in total");
+
+    let mut response = ApiResponse::error(format!("Run stopped by the run guard: {stop_reason}"))
+        .with_results(results);
+    // with_results() recomputes `success` from the stop results alone; a run
+    // that lost data is an Error in the run history whatever the stop did.
+    response.success = false;
+    finish_run_bookkeeping(state, &mut response, Some(&stop_reason)).await;
+
+    (StatusCode::BAD_GATEWAY, Json(response))
+}
+
 /// Stop the run by draining the pipeline first (TODO 68)
 #[utoipa::path(
     post,
@@ -804,7 +863,8 @@ pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Js
         (status = 200, description = "Run started successfully", body = ApiResponse),
         (status = 400, description = "Failed to start run", body = ApiResponse),
         (status = 408, description = "Timeout during synchronization", body = ApiResponse),
-        (status = 409, description = "System is Running or in Tune Up mode", body = ApiResponse)
+        (status = 409, description = "System is Running or in Tune Up mode", body = ApiResponse),
+        (status = 507, description = "Disk below the hard free-space watermark", body = ApiResponse)
     )
 )]
 pub(super) async fn run_start(
@@ -832,6 +892,17 @@ pub(super) async fn run_start(
             Json(ApiResponse::error(
                 "System is currently Running. Stop the run first before starting a new one.",
             )),
+        );
+    }
+
+    // TODO 69: no run on a disk below its hard watermark (the run guard
+    // would stop it within seconds). A latched write failure is no reason to
+    // refuse here: the Reset/Configure below clears it.
+    if let Some(msg) = crate::operator::run_guard::start_refusal(&components) {
+        tracing::error!("{}", msg);
+        return (
+            StatusCode::INSUFFICIENT_STORAGE,
+            Json(ApiResponse::error(msg)),
         );
     }
 

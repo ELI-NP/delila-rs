@@ -665,6 +665,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "rmp-serde",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

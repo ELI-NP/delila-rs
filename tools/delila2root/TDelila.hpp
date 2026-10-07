@@ -755,9 +755,11 @@ class TDelila {
     parse_header(hbuf);
 
     header_size_ = 8u + 4u + hlen;
-    data_end_ = file_size_ - 64;  // footer is fixed 64 bytes
-
     read_footer();
+    // The fixed 64-byte footer ends the data region only when it is there: a
+    // file without one (crash, or cut at its last complete block after a
+    // write failure — TODO 69) ends in a data block, which "size - 64" hid.
+    data_end_ = footer_.present ? file_size_ - 64 : file_size_;
 
     schema_ = Schema::from_header_json(header_.event_schema);
     wf_index_ = schema_.index_of("EventData", "waveform");

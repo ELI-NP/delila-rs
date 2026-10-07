@@ -44,6 +44,9 @@ pub mod zmq_helper;
 
 /// Byte/item accounting for unbounded inter-task channels (TODO 68).
 pub mod queue_accounting;
+
+/// Free-space probe for writer output directories (TODO 69).
+pub mod disk_space;
 pub use zmq_helper::{pub_no_hwm, sub_no_hwm};
 
 pub mod delila_schema;
@@ -110,6 +113,24 @@ pub struct ComponentMetrics {
     /// (drain-first stop material). See `queue_accounting::backlog_level`.
     #[serde(default)]
     pub backlog_level: u8,
+    /// A file write/close failed and this writer stopped writing the run
+    /// (TODO 69). Latched until Configure/Reset. The Operator's run guard
+    /// stops the run on it. Recorder only.
+    #[serde(default)]
+    pub write_failed: bool,
+    /// Events received this run AFTER a write failure, i.e. not on disk
+    /// (TODO 69). Recorder only.
+    #[serde(default)]
+    pub unwritten_events: u64,
+    /// Free bytes on the output filesystem (TODO 69). `None` for components
+    /// that write no files, or when the probe failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_free_bytes: Option<u64>,
+    /// Free space vs the configured watermarks: 0 = OK, 1 = below soft,
+    /// 2 = below hard (drain-first stop, Start refused). See
+    /// `disk_space::disk_level`.
+    #[serde(default)]
+    pub disk_level: u8,
 }
 
 /// Flag bit definitions for event status

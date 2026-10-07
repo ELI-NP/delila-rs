@@ -11,6 +11,7 @@ pub mod elog;
 mod event_builder_repository;
 pub mod influxdb;
 pub(crate) mod routes;
+pub mod run_guard;
 mod run_repository;
 
 pub use client::ComponentClient;

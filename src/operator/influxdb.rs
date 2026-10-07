@@ -63,6 +63,17 @@ pub async fn run_writer(config: InfluxDbConfig, state: Arc<AppState>) {
                         metrics.backlog_level,
                         metrics.events_processed,
                     ));
+                    // Writers only (TODO 69): free space and write health.
+                    if let Some(free) = metrics.disk_free_bytes {
+                        lines.push(format!(
+                            "disk,component={} free_bytes={}u,disk_level={}u,write_failed={},unwritten_events={}u",
+                            comp.name.replace(' ', "\\ "),
+                            free,
+                            metrics.disk_level,
+                            metrics.write_failed,
+                            metrics.unwritten_events,
+                        ));
+                    }
                     continue;
                 }
             };

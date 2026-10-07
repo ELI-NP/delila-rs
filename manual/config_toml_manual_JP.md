@@ -179,6 +179,8 @@ command = "tcp://*:5570"
 | `max_file_size_mb` | u64 | | `1024` | ファイルローテーション: サイズ上限 (MB) |
 | `max_file_duration_sec` | u64 | | `600` | ファイルローテーション: 時間上限 (秒) |
 | `pipeline_order` | u32 | | `3` | Start/Stop 順序 |
+| `disk_soft_free_mb` | u64 | | `20480` | `output_dir` の空き容量がこれを下回ると警告 (MB、0 = 無効) |
+| `disk_hard_free_mb` | u64 | | `2048` | 空き容量がこれを下回ると Operator がランを drain-first で停止し、Start も拒否する (MB、0 = 無効)。drain で書き出すバックログより大きくしておく |
 
 ```toml
 [network.recorder]
@@ -188,6 +190,12 @@ output_dir = "./data"
 max_file_size_mb = 2048
 max_file_duration_sec = 1800
 ```
+
+書き込みに失敗した場合(ディスク満杯・I/O エラー)は、設定に関係なく常にランが止まる(TODO 69)。
+Recorder はファイルを最後の完全なブロックで切って閉じ、以降そのランでは書かない。
+Operator は約 2 秒以内にソースから止め、ランを Error として記録する。
+書けなかったイベント数は Recorder の状態表示(`WRITE FAILED (N events not written)`)と停止理由に出る。
+次のランの前に Configure(または Reset)が必要。
 
 ---
 

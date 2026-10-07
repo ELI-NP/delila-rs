@@ -411,6 +411,15 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Run guard (TODO 69) — always on: write failure → immediate stop, disk
+    // below the Recorder's hard free-space watermark → drain-first stop.
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            delila_rs::operator::run_guard::run_watcher(state).await;
+        });
+    }
+
     // Backlog autostop watcher (TODO 68) — opt-in via [operator.backlog_autostop]
     if let Some(backlog_config) = backlog_autostop_config {
         let state = app_state.clone();

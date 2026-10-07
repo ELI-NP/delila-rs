@@ -179,6 +179,8 @@ Writes raw `.delila` binary data to disk.
 | `max_file_size_mb` | u64 | | `1024` | File rotation: size limit (MB) |
 | `max_file_duration_sec` | u64 | | `600` | File rotation: time limit (s) |
 | `pipeline_order` | u32 | | `3` | Start/Stop ordering |
+| `disk_soft_free_mb` | u64 | | `20480` | Warn when free space on `output_dir` drops below this (MB, 0 = off) |
+| `disk_hard_free_mb` | u64 | | `2048` | Below this the Operator stops the run drain-first and refuses Start (MB, 0 = off). Keep it above the backlog a drain has to write |
 
 ```toml
 [network.recorder]
@@ -188,6 +190,13 @@ output_dir = "./data"
 max_file_size_mb = 2048
 max_file_duration_sec = 1800
 ```
+
+A failed write (disk full, I/O error) always stops the run, whatever the
+configuration (TODO 69). The Recorder closes the file at its last complete
+block and writes nothing more that run. The Operator stops the sources first
+within about 2 s and records the run as Error. The number of events not
+written appears in the Recorder status (`WRITE FAILED (N events not written)`)
+and in the stop reason. Configure (or Reset) before the next run.
 
 ---
 

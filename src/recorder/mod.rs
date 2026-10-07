@@ -26,8 +26,8 @@ pub use format::{
 };
 
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -60,6 +60,10 @@ pub struct RecorderConfig {
     pub backlog_soft_limit_bytes: u64,
     /// Hard backlog watermark in bytes (0 = disabled). See TODO 68.
     pub backlog_hard_limit_bytes: u64,
+    /// Soft free-space watermark for `output_dir` in bytes (0 = disabled). See TODO 69.
+    pub disk_soft_free_bytes: u64,
+    /// Hard free-space watermark for `output_dir` in bytes (0 = disabled). See TODO 69.
+    pub disk_hard_free_bytes: u64,
 }
 
 impl Default for RecorderConfig {
@@ -72,6 +76,8 @@ impl Default for RecorderConfig {
             max_file_duration_secs: 600,       // 10 minutes
             backlog_soft_limit_bytes: 4096 * 1024 * 1024,
             backlog_hard_limit_bytes: 0,
+            disk_soft_free_bytes: 20 * 1024 * 1024 * 1024,
+            disk_hard_free_bytes: 2 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -109,6 +115,11 @@ struct AtomicStats {
     /// the operator SEES the failure instead of the run silently discarding
     /// the rest of its data (TODO 58 H7). Cleared on Configure/Reset.
     write_failed: AtomicBool,
+    /// Batches/events that arrived after a write failure and were not written
+    /// (TODO 69): the writer stops at the failure, the run guard stops the
+    /// run, and this is the loss in between — counted, never silent.
+    unwritten_batches: AtomicU64,
+    unwritten_events: AtomicU64,
     /// Backlog gauge for the receiver→writer channel (TODO 68). Lifetime
     /// counters — deliberately NOT touched by `reset()`: channel contents can
     /// straddle run boundaries, and clearing while items sit in the channel
@@ -126,6 +137,8 @@ impl AtomicStats {
             files_written: AtomicU64::new(0),
             dropped_batches: AtomicU64::new(0),
             write_failed: AtomicBool::new(false),
+            unwritten_batches: AtomicU64::new(0),
+            unwritten_events: AtomicU64::new(0),
             queue: crate::common::queue_accounting::QueueAccounting::new(),
         }
     }
@@ -137,6 +150,8 @@ impl AtomicStats {
         self.written_bytes.store(0, Ordering::Relaxed);
         self.files_written.store(0, Ordering::Relaxed);
         self.dropped_batches.store(0, Ordering::Relaxed);
+        self.unwritten_batches.store(0, Ordering::Relaxed);
+        self.unwritten_events.store(0, Ordering::Relaxed);
         // `queue` intentionally NOT reset — see the field doc. Per-run peak:
         self.queue.reset_peak();
     }
@@ -149,6 +164,8 @@ impl AtomicStats {
             files_written: self.files_written.load(Ordering::Relaxed) as u32,
             written_events: self.written_events.load(Ordering::Relaxed),
             dropped_batches: self.dropped_batches.load(Ordering::Relaxed),
+            unwritten_batches: self.unwritten_batches.load(Ordering::Relaxed),
+            unwritten_events: self.unwritten_events.load(Ordering::Relaxed),
         }
     }
 }
@@ -162,6 +179,9 @@ pub struct RecorderStats {
     pub files_written: u32,
     pub written_events: u64,
     pub dropped_batches: u64,
+    /// Not written after a write failure (TODO 69).
+    pub unwritten_batches: u64,
+    pub unwritten_events: u64,
 }
 
 /// Rate tracker for 1-second interval rate calculation
@@ -258,6 +278,15 @@ struct FileWriter {
     header_size: u64,
     /// Whether we have an active run (file can be opened)
     run_active: bool,
+    /// Path of the open file (for failure reports).
+    current_path: Option<PathBuf>,
+    /// A write failed this run: the file was closed at its last complete
+    /// block and nothing more is written until the next Start (TODO 69).
+    poisoned: bool,
+    /// Test hook (`DELILA_TEST_FAIL_WRITE_AT_BYTES`): once this run's written
+    /// bytes would pass the limit, half a block is written and the write
+    /// fails like a full disk. Never set in production.
+    fail_at_bytes: Option<u64>,
 }
 
 impl FileWriter {
@@ -274,6 +303,9 @@ impl FileWriter {
             footer: FileFooter::new(),
             header_size: 0,
             run_active: false,
+            current_path: None,
+            poisoned: false,
+            fail_at_bytes: None,
         }
     }
 
@@ -324,7 +356,14 @@ impl FileWriter {
 
         let path = self.generate_filename();
         let file = File::create(&path)?;
-        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        // Owned by `self` before anything is written, so a failure below takes
+        // the same cut-back path as a failed batch (TODO 69). Nothing of the
+        // file counts as complete until the header is flushed.
+        self.writer = Some(BufWriter::with_capacity(64 * 1024, file));
+        self.current_path = Some(path.clone());
+        self.current_file_size = 0;
+        self.header_size = 0;
+        self.current_file_start = Some(Instant::now());
 
         // Reset checksum and footer for new file
         self.checksum.reset();
@@ -348,13 +387,13 @@ impl FileWriter {
         let header_bytes = header
             .to_bytes()
             .map_err(|e| RecorderError::Io(std::io::Error::other(e.to_string())))?;
-        writer.write_all(&header_bytes)?;
+        if let Some(ref mut writer) = self.writer {
+            writer.write_all(&header_bytes)?;
+            writer.flush()?;
+        }
 
         self.header_size = header_bytes.len() as u64;
         self.current_file_size = self.header_size;
-        self.current_file_start = Some(Instant::now());
-
-        self.writer = Some(writer);
 
         info!(
             path = %path.display(),
@@ -366,31 +405,123 @@ impl FileWriter {
         Ok(())
     }
 
+    /// Close the current file with its footer.
+    ///
+    /// `current_file_size` counts only what reached the kernel as complete
+    /// units — the header and whole blocks; every write path flushes — so on
+    /// any failure the file is cut back to it (TODO 69). What stays on disk is
+    /// then the header plus complete blocks, all of which `recover` reads; a
+    /// torn block or a torn footer would hide data from the reader instead.
     fn close_file(&mut self) -> Result<(), RecorderError> {
-        if let Some(mut writer) = self.writer.take() {
-            // Finalize and write footer
-            self.footer.data_checksum = self.checksum.finalize();
-            self.footer.data_bytes = self.checksum.bytes_processed();
-            self.footer.finalize();
+        self.current_file_start = None;
+        let Some(writer) = self.writer.take() else {
+            return Ok(());
+        };
+        // into_parts, not into_inner: bytes still buffered here belong to a
+        // write that already failed and must never reach the file later.
+        let (file, _failed_bytes) = writer.into_parts();
+        let path = self.current_path.take().unwrap_or_default();
+        self.file_sequence += 1;
+        self.seal_file(file, &path)
+    }
 
-            let footer_bytes = self.footer.to_bytes();
-            writer.write_all(&footer_bytes)?;
+    fn seal_file(&mut self, mut file: File, path: &Path) -> Result<(), RecorderError> {
+        let good_len = self.current_file_size;
+        if good_len == 0 {
+            // The header never made it: nothing in this file is readable.
+            drop(file);
+            if let Err(e) = fs::remove_file(path) {
+                error!(path = %path.display(), error = %e, "Could not remove data file without a header");
+            } else {
+                warn!(path = %path.display(), "Removed data file whose header could not be written");
+            }
+            return Ok(());
+        }
 
-            writer.flush()?;
-            // Final fsync on close
-            writer.get_ref().sync_data()?;
-            self.stats.files_written.fetch_add(1, Ordering::Relaxed);
-            self.file_sequence += 1;
-
-            info!(
-                size_mb = (self.current_file_size + FOOTER_SIZE as u64) as f64 / 1_000_000.0,
-                events = self.footer.total_events,
-                checksum = format!("{:016x}", self.footer.data_checksum),
-                "Closed data file"
+        let on_disk = file.seek(SeekFrom::End(0))?;
+        if on_disk > good_len {
+            // Only after a failed write: drop the torn block it left behind.
+            warn!(
+                path = %path.display(),
+                torn_bytes = on_disk - good_len,
+                "Cutting the partial block left by the failed write"
+            );
+            file.set_len(good_len)?;
+            file.seek(SeekFrom::Start(good_len))?;
+        } else if on_disk < good_len {
+            error!(
+                path = %path.display(),
+                on_disk,
+                counted = good_len,
+                "Data file is shorter than the bytes counted as written — sealing it as is"
             );
         }
-        self.current_file_start = None;
+
+        // Finalize and write footer
+        self.footer.data_checksum = self.checksum.finalize();
+        self.footer.data_bytes = self.checksum.bytes_processed();
+        self.footer.finalize();
+        let footer_bytes = self.footer.to_bytes();
+
+        // Final fsync on close
+        if let Err(e) = file
+            .write_all(&footer_bytes)
+            .and_then(|()| file.sync_data())
+        {
+            // A torn footer would make the reader take the file's last
+            // FOOTER_SIZE bytes for the footer region and lose the last
+            // block — cut it off so every complete block stays readable.
+            if let Err(cut) = file.set_len(good_len.min(on_disk)) {
+                error!(path = %path.display(), error = %cut, "Could not cut the torn footer");
+            }
+            error!(
+                path = %path.display(),
+                error = %e,
+                events = self.footer.total_events,
+                "Footer not written — file ends at its last complete block (readable with `recover`)"
+            );
+            return Err(e.into());
+        }
+
+        self.stats.files_written.fetch_add(1, Ordering::Relaxed);
+        info!(
+            path = %path.display(),
+            size_mb = (good_len + FOOTER_SIZE as u64) as f64 / 1_000_000.0,
+            events = self.footer.total_events,
+            checksum = format!("{:016x}", self.footer.data_checksum),
+            "Closed data file"
+        );
         Ok(())
+    }
+
+    /// After a failed write (TODO 69): count the batch that did not make it,
+    /// close the file at its last complete block (with a footer if the disk
+    /// still takes 64 bytes) and write nothing more this run. Appending after
+    /// a torn block — or opening the next file on a disk that just failed —
+    /// would only interleave garbage or repeat the failure batch by batch.
+    /// The Operator's run guard stops the run within seconds; every batch
+    /// until then is counted in `unwritten_*`.
+    fn abandon_after_failure(&mut self, failed_events: u64) {
+        self.poisoned = true;
+        self.stats.unwritten_batches.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .unwritten_events
+            .fetch_add(failed_events, Ordering::Relaxed);
+        let path = self.current_path.clone();
+        let kept_bytes = self.current_file_size;
+        match self.close_file() {
+            Ok(()) => error!(
+                path = %path.unwrap_or_default().display(),
+                kept_bytes,
+                "Data file closed at its last complete block after the write failure — \
+                 nothing more is written this run"
+            ),
+            Err(e) => error!(
+                error = %e,
+                "Data file could not be sealed after the write failure — \
+                 nothing more is written this run"
+            ),
+        }
     }
 
     fn needs_rotation(&self) -> bool {
@@ -421,6 +552,15 @@ impl FileWriter {
             return Ok(());
         }
 
+        // A write already failed this run (see abandon_after_failure).
+        if self.poisoned {
+            self.stats.unwritten_batches.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .unwritten_events
+                .fetch_add(event_count, Ordering::Relaxed);
+            return Ok(());
+        }
+
         // Open file if needed
         if self.writer.is_none() {
             self.open_new_file()?;
@@ -434,8 +574,27 @@ impl FileWriter {
         let len_bytes = (data.len() as u32).to_le_bytes();
 
         if let Some(ref mut writer) = self.writer {
+            if let Some(limit) = self.fail_at_bytes {
+                let after =
+                    self.stats.written_bytes.load(Ordering::Relaxed) + 4 + data.len() as u64;
+                if after > limit {
+                    writer.write_all(&len_bytes)?;
+                    writer.write_all(&data[..data.len() / 2])?;
+                    writer.flush()?;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::StorageFull,
+                        "TEST HOOK: simulated full disk",
+                    )
+                    .into());
+                }
+            }
             writer.write_all(&len_bytes)?;
             writer.write_all(data)?;
+            // Flush per batch (TODO 69): everything counted below has reached
+            // the kernel, so after a failure `current_file_size` marks exactly
+            // the last complete block. Batches above the 64 KiB buffer bypass
+            // it anyway; small ones cost one write(2) each.
+            writer.flush()?;
 
             // Update checksum with data block (length prefix + data)
             self.checksum.update(&len_bytes);
@@ -504,6 +663,7 @@ impl FileWriter {
         self.checksum = ChecksumCalculator::new();
         self.footer = FileFooter::new();
         self.header_size = 0;
+        self.poisoned = false;
 
         self.run_active = true;
     }
@@ -522,6 +682,28 @@ struct RecorderCommandExt {
     /// Backlog watermarks in bytes (0 = disabled), from config (TODO 68).
     backlog_soft_limit_bytes: u64,
     backlog_hard_limit_bytes: u64,
+    /// Free-space probe target and watermarks (TODO 69).
+    output_dir: PathBuf,
+    disk_soft_free_bytes: u64,
+    disk_hard_free_bytes: u64,
+}
+
+impl RecorderCommandExt {
+    /// Free bytes on the output filesystem and their grade (TODO 69). A failed
+    /// probe reports `None`/0 here; the stats loop logs it.
+    fn disk(&self) -> (Option<u64>, u8) {
+        match crate::common::disk_space::free_bytes(&self.output_dir) {
+            Ok(free) => (
+                Some(free),
+                crate::common::disk_space::disk_level(
+                    free,
+                    self.disk_soft_free_bytes,
+                    self.disk_hard_free_bytes,
+                ),
+            ),
+            Err(_) => (None, 0),
+        }
+    }
 }
 
 impl CommandHandlerExt for RecorderCommandExt {
@@ -560,14 +742,28 @@ impl CommandHandlerExt for RecorderCommandExt {
 
     fn status_details(&self) -> Option<String> {
         let stats = self.stats.snapshot();
-        let failed = self.stats.write_failed.load(Ordering::Relaxed);
+        let failed = if self.stats.write_failed.load(Ordering::Relaxed) {
+            format!(
+                ", WRITE FAILED ({} events not written)",
+                stats.unwritten_events
+            )
+        } else {
+            String::new()
+        };
+        let disk = match self.disk() {
+            (Some(free), level) if level > 0 => {
+                format!(", DISK LOW: {} MB free", free / 1_000_000)
+            }
+            _ => String::new(),
+        };
         Some(format!(
-            "Received: {} events, Written: {} events, Files: {}, Dropped: {}{}",
+            "Received: {} events, Written: {} events, Files: {}, Dropped: {}{}{}",
             stats.total_events,
             stats.written_events,
             stats.files_written,
             stats.dropped_batches,
-            if failed { ", WRITE FAILED" } else { "" }
+            failed,
+            disk
         ))
     }
 
@@ -584,6 +780,7 @@ impl CommandHandlerExt for RecorderCommandExt {
 
     fn get_metrics(&self) -> Option<crate::common::ComponentMetrics> {
         let stats = self.stats.snapshot();
+        let (disk_free_bytes, disk_level) = self.disk();
         // Update rate tracker with current event count
         self.rate_tracker.update(stats.written_events);
         Some(crate::common::ComponentMetrics {
@@ -603,6 +800,10 @@ impl CommandHandlerExt for RecorderCommandExt {
                 self.backlog_soft_limit_bytes,
                 self.backlog_hard_limit_bytes,
             ),
+            write_failed: self.stats.write_failed.load(Ordering::Relaxed),
+            unwritten_events: stats.unwritten_events,
+            disk_free_bytes,
+            disk_level,
         })
     }
 }
@@ -711,6 +912,9 @@ impl Recorder {
         let cmd_writer_tx = writer_tx.clone();
         let cmd_backlog_soft = self.config.backlog_soft_limit_bytes;
         let cmd_backlog_hard = self.config.backlog_hard_limit_bytes;
+        let cmd_output_dir = self.config.output_dir.clone();
+        let cmd_disk_soft = self.config.disk_soft_free_bytes;
+        let cmd_disk_hard = self.config.disk_hard_free_bytes;
 
         let cmd_handle = tokio::spawn(async move {
             run_command_task(
@@ -725,6 +929,9 @@ impl Recorder {
                         writer_tx: cmd_writer_tx.clone(),
                         backlog_soft_limit_bytes: cmd_backlog_soft,
                         backlog_hard_limit_bytes: cmd_backlog_hard,
+                        output_dir: cmd_output_dir.clone(),
+                        disk_soft_free_bytes: cmd_disk_soft,
+                        disk_hard_free_bytes: cmd_disk_hard,
                     };
                     handle_command(state, tx, cmd, Some(&mut ext))
                 },
@@ -738,6 +945,8 @@ impl Recorder {
         // === Stats reporting loop ===
         let mut stats_interval = tokio::time::interval(Duration::from_secs(10));
         let mut last_logged_level: u8 = 0;
+        let mut last_disk_level: u8 = 0;
+        let mut disk_probe_ok = true;
         loop {
             tokio::select! {
                 biased;
@@ -773,6 +982,48 @@ impl Recorder {
                             "Recorder backlog back below watermarks"
                         );
                     }
+                    // Free-space watermarks (TODO 69): same transition-only
+                    // logging. A failing probe is reported once, not hidden.
+                    match crate::common::disk_space::free_bytes(&self.config.output_dir) {
+                        Ok(free) => {
+                            if !disk_probe_ok {
+                                info!("Recorder free-space probe works again");
+                                disk_probe_ok = true;
+                            }
+                            let level = crate::common::disk_space::disk_level(
+                                free,
+                                self.config.disk_soft_free_bytes,
+                                self.config.disk_hard_free_bytes,
+                            );
+                            let last = last_disk_level;
+                            last_disk_level = level;
+                            if level > last {
+                                warn!(
+                                    disk_level = level,
+                                    free_gb = free as f64 / 1e9,
+                                    soft_free_gb = self.config.disk_soft_free_bytes as f64 / 1e9,
+                                    hard_free_gb = self.config.disk_hard_free_bytes as f64 / 1e9,
+                                    output_dir = %self.config.output_dir.display(),
+                                    "Recorder output disk below free-space watermark"
+                                );
+                            } else if level < last && level == 0 {
+                                info!(
+                                    free_gb = free as f64 / 1e9,
+                                    "Recorder output disk back above free-space watermarks"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if disk_probe_ok {
+                                warn!(
+                                    error = %e,
+                                    output_dir = %self.config.output_dir.display(),
+                                    "Recorder free-space probe failed — disk watermarks inactive"
+                                );
+                                disk_probe_ok = false;
+                            }
+                        }
+                    }
                     if *self.state_rx.borrow() == ComponentState::Running {
                         let stats = self.stats.snapshot();
                         info!(
@@ -781,6 +1032,7 @@ impl Recorder {
                             bytes_mb = stats.total_bytes_written as f64 / 1_000_000.0,
                             files = stats.files_written,
                             dropped = stats.dropped_batches,
+                            unwritten_events = stats.unwritten_events,
                             queue_bytes = self.stats.queue.depth_bytes(),
                             "Recording progress"
                         );
@@ -995,7 +1247,18 @@ impl Recorder {
                 "TEST HOOK ACTIVE: artificial write delay per batch"
             );
         }
+        // TODO 69 test hook — simulated full disk. Never silent when active.
+        let fail_at_bytes: Option<u64> = std::env::var("DELILA_TEST_FAIL_WRITE_AT_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        if let Some(bytes) = fail_at_bytes {
+            warn!(
+                fail_at_bytes = bytes,
+                "TEST HOOK ACTIVE: writes fail like a full disk past this many bytes per run"
+            );
+        }
         let mut writer = FileWriter::new(config, stats);
+        writer.fail_at_bytes = fail_at_bytes;
         let mut eos_received = false;
         let mut current_run_number: u32 = 0;
         let mut last_state = *state_rx.borrow();
@@ -1011,10 +1274,12 @@ impl Recorder {
                         }
                         if let Err(e) = writer.write_raw_batch(&data, event_count) {
                             // Disk full / I/O error: latch Error so the operator
-                            // sees it — otherwise the rest of the run is silently
-                            // discarded batch by batch (TODO 58 H7).
+                            // sees it (TODO 58 H7) and the run guard stops the
+                            // run (TODO 69); the file is closed at its last
+                            // complete block and nothing more is written.
                             error!(error = %e, "Failed to write batch — latching Error state");
                             stats_flag.write_failed.store(true, Ordering::Relaxed);
+                            writer.abandon_after_failure(event_count);
                         }
                         // Dequeue only after the write returned (success or
                         // error): queue_bytes == 0 then means "handed to the
@@ -1146,5 +1411,117 @@ mod tests {
         writer.file_sequence = 5;
         let path = writer.generate_filename();
         assert_eq!(path.to_str().unwrap(), "/data/run0042_0005_CRIB2026.delila");
+    }
+
+    /// A batch of `n` events as the Merger sends it (raw MsgPack).
+    fn batch_bytes(seq: u64, n: usize) -> Vec<u8> {
+        let mut b = EventDataBatch::new(0, seq);
+        for i in 0..n {
+            b.push(crate::common::EventData::new(
+                0,
+                (i % 16) as u8,
+                100,
+                50,
+                (seq * 1000 + i as u64) as f64,
+                0,
+            ));
+        }
+        b.to_msgpack().unwrap()
+    }
+
+    fn started_writer(dir: &std::path::Path) -> (FileWriter, Arc<AtomicStats>) {
+        let config = RecorderConfig {
+            output_dir: dir.to_path_buf(),
+            ..Default::default()
+        };
+        let stats = Arc::new(AtomicStats::new());
+        let mut writer = FileWriter::new(config, Arc::clone(&stats));
+        writer.new_run(RunConfig {
+            run_number: 7,
+            exp_name: "t69".to_string(),
+            ..Default::default()
+        });
+        writer.start_run(7);
+        (writer, stats)
+    }
+
+    fn validate(path: &std::path::Path) -> FileValidationResult {
+        let f = File::open(path).unwrap();
+        DataFileReader::new(f).unwrap().validate()
+    }
+
+    /// TODO 69: a write that fails mid-block (full disk) must leave a file
+    /// that holds exactly the complete blocks before it — cut back, sealed
+    /// with a valid footer — and nothing may be written after it this run.
+    #[test]
+    fn write_failure_cuts_back_to_last_complete_block_and_stops_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut writer, stats) = started_writer(dir.path());
+        let (b0, b1, b2) = (batch_bytes(0, 10), batch_bytes(1, 20), batch_bytes(2, 40));
+        // Fail inside the third block (its first half reaches the disk).
+        writer.fail_at_bytes = Some((8 + b0.len() + b1.len()) as u64 + 1);
+
+        writer.write_raw_batch(&b0, 10).unwrap();
+        writer.write_raw_batch(&b1, 20).unwrap();
+        let path = writer.current_path.clone().unwrap();
+        let err = writer.write_raw_batch(&b2, 40).unwrap_err();
+        assert!(err.to_string().contains("simulated full disk"), "{err}");
+        writer.abandon_after_failure(40);
+
+        // Sealed at the last complete block: a valid file with 30 events.
+        let v = validate(&path);
+        assert!(v.is_valid, "errors: {:?}", v.errors);
+        assert_eq!(v.recoverable_blocks, 2);
+        assert_eq!(v.recoverable_events, 30);
+        assert_eq!(v.footer.unwrap().total_events, 30);
+        let size = fs::metadata(&path).unwrap().len();
+
+        // Later batches are counted, not written — no new file, no growth.
+        writer.fail_at_bytes = None;
+        writer.write_raw_batch(&batch_bytes(3, 5), 5).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), size);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        let snap = stats.snapshot();
+        assert_eq!(snap.written_events, 30);
+        assert_eq!(snap.unwritten_batches, 2);
+        assert_eq!(snap.unwritten_events, 45);
+        assert_eq!(snap.files_written, 1);
+
+        // Stop is harmless (file already closed); the next run writes again.
+        writer.end_run().unwrap();
+        writer.start_run(8);
+        writer.write_raw_batch(&batch_bytes(4, 3), 3).unwrap();
+        writer.end_run().unwrap();
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    /// A failure before the header is complete leaves no unreadable stub.
+    #[test]
+    fn failure_before_header_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut writer, _stats) = started_writer(dir.path());
+        // Simulate: file created, header not flushed (current_file_size 0).
+        let path = dir.path().join("stub.delila");
+        writer.writer = Some(BufWriter::new(File::create(&path).unwrap()));
+        writer.current_path = Some(path.clone());
+        writer.current_file_size = 0;
+        writer.abandon_after_failure(1);
+        assert!(!path.exists());
+    }
+
+    /// The healthy path is unchanged: per-batch flush, footer, valid file.
+    #[test]
+    fn healthy_run_writes_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut writer, stats) = started_writer(dir.path());
+        for seq in 0..5 {
+            writer.write_raw_batch(&batch_bytes(seq, 7), 7).unwrap();
+        }
+        let path = writer.current_path.clone().unwrap();
+        writer.end_run().unwrap();
+        let v = validate(&path);
+        assert!(v.is_valid, "errors: {:?}", v.errors);
+        assert_eq!(v.recoverable_events, 35);
+        assert_eq!(stats.snapshot().unwritten_events, 0);
     }
 }

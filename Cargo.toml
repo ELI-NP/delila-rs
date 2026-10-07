@@ -78,6 +78,9 @@ crossbeam-channel = "0.5"
 # tree transitively via zeromq-src.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Safe statvfs for the Recorder's free-space probe (TODO 69) — already in the
+# tree transitively; a direct dependency keeps `unsafe` out of the Recorder.
+rustix = { version = "1", features = ["fs"] }
 
 [features]
 default = []
