@@ -587,15 +587,18 @@ class Recorder {
   // matches the Rust Recorder even though EOS/finalize come later). Every tree
   // is optional and they all live in the SAME file: a non-empty
   // `hits_tree_name` adds the per-hit tree, a non-empty `built_tree_name` the
-  // integrated built-event tree, `events_tree` the generic "events" tree.
+  // integrated built-event tree, a non-null `event_def` the generic "events"
+  // tree — whose L2 branches are named by that (run-frozen) definition.
   // `prov` (frozen at RunOpen by the Receiver) goes into the trees' UserInfo
   // so every file says which time offsets — if any — its times carry, and
   // which event definition built its events.
   bool open_run(const std::string& dir, const std::string& hits_tree_name,
                 const std::string& exp_name, const std::string& built_tree_name,
-                bool events_tree, const eb::RunProvenance& prov) {
+                std::shared_ptr<const EventDef> event_def, const eb::RunProvenance& prov) {
     out_dir_ = dir;
     prov_ = prov;
+    event_def_ = std::move(event_def);
+    l2_size_warned_ = false;
     exp_name_ = exp_name.empty() ? "data" : exp_name;  // mirror the Rust fallback
     entries_ = 0;
     built_entries_ = 0;
@@ -666,7 +669,7 @@ class Recorder {
       built_->Branch("n_arms2", &bev_.n_arms2, "n_arms2/b");
     }
     events_ = nullptr;
-    if (events_tree) {
+    if (event_def_) {
       // One entry per generic event (TODO 71 §4): dictionary-free leaflists,
       // so a bare TTree::Draw / any ROOT version reads it without a library.
       // The per-hit columns are variable-length arrays counted by NHits; their
@@ -689,6 +692,11 @@ class Recorder {
       br_hit_es_ = events_->Branch("HitEnergyShort", hit_es_.data(), "HitEnergyShort[NHits]/s");
       br_hit_t_ = events_->Branch("HitTime", hit_t_.data(), "HitTime[NHits]/D");
       br_hit_trig_ = events_->Branch("HitIsTrigger", hit_trig_.get(), "HitIsTrigger[NHits]/O");
+      // ALWAYS present (all false without anti_compton): the tree's shape must
+      // not depend on the definition, so TChains and macros keep working.
+      br_hit_ac_ = events_->Branch("HitWithAC", hit_ac_.get(), "HitWithAC[NHits]/O");
+      check_fixed_branch_names();
+      add_l2_branches(*event_def_);
     }
     // UserInfo is part of the TTree object: written by every AutoSave and into
     // every MaxTreeSize part (a file-level key would land in the last part only).
@@ -740,6 +748,23 @@ class Recorder {
       hit_es_[i] = h.energy_short;
       hit_t_[i] = h.dt;
       hit_trig_[i] = h.is_trigger;
+      hit_ac_[i] = h.with_ac;
+    }
+    if (!l2_counts_.empty()) {
+      // One value per counter is the core's contract (GenericEvent::l2_counts);
+      // a short vector would leave stale values behind — fill 0 and say so.
+      if (e.l2_counts.size() != l2_counts_.size() && !l2_size_warned_) {
+        std::fprintf(stderr,
+                     "root_sink: WARNING event %lld carries %zu L2 counter value(s), the run's "
+                     "definition has %zu — missing ones are written as 0 (reported once per run)\n",
+                     events_entries_, e.l2_counts.size(), l2_counts_.size());
+        l2_size_warned_ = true;
+      }
+      for (std::size_t i = 0; i < l2_counts_.size(); ++i)
+        l2_counts_[i] = i < e.l2_counts.size() ? e.l2_counts[i] : 0;
+      for (std::size_t i = 0; i < n_l2_flags_; ++i) l2_flags_[i] = (e.l2_flags >> i) & 1u;
+      for (std::size_t i = 0; i < n_l2_accepts_; ++i) l2_accepts_[i] = (e.l2_accepts >> i) & 1u;
+      l2_accept_ = e.l2_accept;
     }
     events_->Fill();
     ++events_entries_;
@@ -824,9 +849,64 @@ class Recorder {
     hit_e_.assign(cap, 0);
     hit_es_.assign(cap, 0);
     hit_t_.assign(cap, 0.0);
-    // Bool_t[] for the /O leaf, NOT std::vector<bool> (bit-packed: no data()).
+    // Bool_t[] for the /O leaves, NOT std::vector<bool> (bit-packed: no data()).
     hit_trig_.reset(new Bool_t[cap]());
+    hit_ac_.reset(new Bool_t[cap]());
     hit_cap_ = cap;
+  }
+
+  // The fixed events-tree branch names live in two places: here (the branches
+  // created above, plus L2Accept) and edef_detail::is_fixed_branch, which the
+  // parser uses to reject L2 names that would clash. If a fixed branch is added
+  // here but not there, a definition could name an L2 branch after it — so
+  // check every fixed name against the parser's list, once per process.
+  void check_fixed_branch_names() {
+    static bool checked = false;
+    if (checked) return;
+    checked = true;
+    std::vector<std::string> names{"L2Accept"};
+    for (TObject* b : *events_->GetListOfBranches()) names.push_back(b->GetName());
+    for (const std::string& n : names)
+      if (!edef_detail::is_fixed_branch(n))
+        std::fprintf(stderr,
+                     "root_sink: ERROR events-tree branch \"%s\" is missing from "
+                     "edef_detail::is_fixed_branch (event_def.hpp) — an L2 name could clash "
+                     "with it; add it there\n",
+                     n.c_str());
+  }
+
+  // Phase C L2 (TODO/71_phase_c_proposal.md §2.3): one scalar branch per
+  // counter (<name>/i), flag and accept (<name>/O), then L2Accept/O when any
+  // accept exists — named by the definition frozen at RunOpen, so
+  // `events->Draw("HitEnergy", "GeClean")` works. The buffers are sized here,
+  // once per run, and never resized: the branches hold their addresses for
+  // the whole run (unlike the hit arrays, these do not depend on the event).
+  void add_l2_branches(const EventDef& d) {
+    l2_counts_.assign(d.has_l2() ? d.counters.size() : 0, 0);
+    n_l2_flags_ = d.has_l2() ? d.flags.size() : 0;
+    n_l2_accepts_ = d.has_l2() ? d.accepts.size() : 0;
+    l2_flags_.reset(new Bool_t[n_l2_flags_ + 1]());  // +1: never a zero-length new[]
+    l2_accepts_.reset(new Bool_t[n_l2_accepts_ + 1]());
+    l2_accept_ = false;
+    if (!d.has_l2()) return;
+    // The parser rejects names that are not identifiers or clash with each
+    // other / the fixed branches (edef_detail::is_fixed_branch, kept in sync by
+    // check_fixed_branch_names); re-check here because a clash would make
+    // ROOT keep two same-named branches and Draw read the wrong one.
+    auto add = [&](const std::string& name, void* addr, const char* type) {
+      if (events_->GetBranch(name.c_str())) {
+        std::fprintf(stderr,
+                     "root_sink: ERROR L2 name \"%s\" clashes with an existing events-tree "
+                     "branch — NOT written this run (fix the event definition)\n",
+                     name.c_str());
+        return;
+      }
+      events_->Branch(name.c_str(), addr, (name + "/" + type).c_str());
+    };
+    for (std::size_t i = 0; i < d.counters.size(); ++i) add(d.counters[i].name, &l2_counts_[i], "i");
+    for (std::size_t i = 0; i < n_l2_flags_; ++i) add(d.flags[i].name, &l2_flags_[i], "O");
+    for (std::size_t i = 0; i < n_l2_accepts_; ++i) add(d.accepts[i].name, &l2_accepts_[i], "O");
+    if (n_l2_accepts_ > 0) add("L2Accept", &l2_accept_, "O");
   }
 
   // ROOT copies NHits elements from each array branch's ADDRESS at Fill, so a
@@ -844,6 +924,7 @@ class Recorder {
     br_hit_es_->SetAddress(hit_es_.data());
     br_hit_t_->SetAddress(hit_t_.data());
     br_hit_trig_->SetAddress(hit_trig_.get());
+    br_hit_ac_->SetAddress(hit_ac_.get());
   }
 
   // Write + close the run's trees, via the CURRENT file. When a tree crossed
@@ -882,6 +963,7 @@ class Recorder {
     built_ = nullptr;
     events_ = nullptr;
     br_hit_mod_ = br_hit_ch_ = br_hit_e_ = br_hit_es_ = br_hit_t_ = br_hit_trig_ = nullptr;
+    br_hit_ac_ = nullptr;
     return parts;
   }
 
@@ -921,6 +1003,7 @@ class Recorder {
   std::vector<UShort_t> hit_e_, hit_es_;
   std::vector<Double_t> hit_t_;
   std::unique_ptr<Bool_t[]> hit_trig_;
+  std::unique_ptr<Bool_t[]> hit_ac_;
   std::size_t hit_cap_ = 0;
   TBranch* br_hit_mod_ = nullptr;
   TBranch* br_hit_ch_ = nullptr;
@@ -928,6 +1011,14 @@ class Recorder {
   TBranch* br_hit_es_ = nullptr;
   TBranch* br_hit_t_ = nullptr;
   TBranch* br_hit_trig_ = nullptr;
+  TBranch* br_hit_ac_ = nullptr;
+  // L2 scalars, sized once per run by add_l2_branches (never resized).
+  std::vector<UInt_t> l2_counts_;
+  std::unique_ptr<Bool_t[]> l2_flags_, l2_accepts_;
+  std::size_t n_l2_flags_ = 0, n_l2_accepts_ = 0;
+  Bool_t l2_accept_ = false;
+  bool l2_size_warned_ = false;
+  std::shared_ptr<const EventDef> event_def_;  // this run's frozen definition (open_run)
   eb::RunProvenance prov_;  // this run's time-offset + event-def record (open_run)
 };
 
@@ -1525,6 +1616,12 @@ int main(int argc, char** argv) {
     std::atomic<long long> ev_contested{0};
     std::atomic<long long> ev_orphans{0};
     std::atomic<bool> evdef_stale{false};     // last run-start reload failed
+    // Phase C (cumulative too): AC-flagged hits, events with L2Accept. Shown
+    // only while the current run's definition has AC / an accept.
+    std::atomic<long long> ev_ac{0};
+    std::atomic<long long> ev_l2acc{0};
+    std::atomic<bool> run_has_ac{false};
+    std::atomic<bool> run_has_l2acc{false};
   } counters;
   if (toff_enabled) counters.toff_entries = static_cast<int>(toff_boot.table.abs_ns.size());
 
@@ -1773,8 +1870,9 @@ int main(int argc, char** argv) {
                            // run's hits all fall below core_start and vanish
           // The context carried across a chunk boundary must cover BOTH
           // consumers: the built tree's ±window and the generic layer's
-          // G + 2*pre + post (eb_core.hpp section 7). Per run, since the
-          // event definition is re-read at every RunOpen.
+          // G + 2*pre + post, plus ac_pre + ac_post with anti_compton
+          // (EventDef::lookback_ns, eb_core.hpp section 7). Per run, since
+          // the event definition is re-read at every RunOpen.
           const double prev_lookback = sorter.lookback_ns();
           const double lookback =
               std::max(opt.window_ns, in.event_def ? in.event_def->lookback_ns() : 0.0);
@@ -1782,7 +1880,7 @@ int main(int argc, char** argv) {
           grouper.reset(in.event_def);  // null = generic events off for this run
           if (lookback != prev_lookback)
             std::printf("root_sink: sorter lookback %.0f ns (--window-ns %.0f, event def "
-                        "G+2*pre+post %.0f ns)\n",
+                        "G+2*pre+post[+ac_pre+ac_post] %.0f ns)\n",
                         lookback, opt.window_ns,
                         in.event_def ? in.event_def->lookback_ns() : 0.0);
           reported_late = 0;
@@ -1790,6 +1888,9 @@ int main(int argc, char** argv) {
           m.ctrl = eb::Ctrl::RunOpen;
           m.seq = seq++;
           m.prov = std::move(in.prov);  // time-offset record -> Writer (UserInfo)
+          // The run's frozen definition -> Writer: it names the events tree's
+          // L2 branches and the run summary's flag/accept counts.
+          m.event_def = in.event_def;
           work_q.push(std::move(m));
           break;
         }
@@ -1850,6 +1951,9 @@ int main(int argc, char** argv) {
     // hit the layer lost or doubled is reported, never silent.
     eb::GenericStats run_gstats;
     long long run_core_hits = 0;
+    // The run's frozen event definition (RunOpen): names the L2 flags and
+    // accepts in the run summary, says whether AC / L2 exist this run.
+    std::shared_ptr<const EventDef> run_def;
     auto report_events = [&](const std::string& what) {
       std::string dist;
       for (std::size_t i = 0; i < run_gstats.ntrig.size(); ++i) {
@@ -1860,13 +1964,37 @@ int main(int argc, char** argv) {
                       static_cast<unsigned long long>(run_gstats.ntrig[i]));
         dist += b;
       }
+      char ac[64] = "";
+      if (run_def && run_def->has_ac())
+        std::snprintf(ac, sizeof ac, ", AC-flagged hits %llu",
+                      static_cast<unsigned long long>(run_gstats.ac_flagged));
       std::printf("root_sink: %s events: %llu (NTriggers %s), hits in events %llu, "
-                  "contested %llu, orphans %llu\n",
+                  "contested %llu, orphans %llu%s\n",
                   what.c_str(), static_cast<unsigned long long>(run_gstats.events),
                   dist.empty() ? "-" : dist.c_str(),
                   static_cast<unsigned long long>(run_gstats.hits_in_events),
                   static_cast<unsigned long long>(run_gstats.contested),
-                  static_cast<unsigned long long>(run_gstats.orphans));
+                  static_cast<unsigned long long>(run_gstats.orphans), ac);
+      // L2 (flag-only): events with each flag / accept true, then L2Accept.
+      if (run_def && run_def->has_l2()) {
+        const EventDef& d = *run_def;
+        std::string l2;
+        auto add = [&](const std::string& name, uint64_t n) {
+          if (!l2.empty() && l2.back() != ' ') l2 += ' ';
+          l2 += name + "=" + std::to_string(static_cast<unsigned long long>(n));
+        };
+        for (std::size_t i = 0; i < d.flags.size() && i < run_gstats.flag_true.size(); ++i)
+          add(d.flags[i].name, run_gstats.flag_true[i]);
+        if (!d.accepts.empty()) {
+          if (!l2.empty()) l2 += " | ";
+          for (std::size_t i = 0; i < d.accepts.size() && i < run_gstats.accept_true.size(); ++i)
+            add(d.accepts[i].name, run_gstats.accept_true[i]);
+          l2 += " | ";
+          add("L2Accept", run_gstats.l2_accepted);
+        }
+        if (l2.empty()) l2 = std::to_string(d.counters.size()) + " counter(s), no flags";
+        std::printf("root_sink: %s L2: %s\n", what.c_str(), l2.c_str());
+      }
       const unsigned long long accounted = run_gstats.hits_in_events + run_gstats.orphans;
       if (accounted != static_cast<unsigned long long>(run_core_hits))
         std::fprintf(stderr,
@@ -1910,6 +2038,8 @@ int main(int argc, char** argv) {
                 counters.events += static_cast<long long>(r.events.size());
                 counters.ev_contested += static_cast<long long>(r.gstats.contested);
                 counters.ev_orphans += static_cast<long long>(r.gstats.orphans);
+                counters.ev_ac += static_cast<long long>(r.gstats.ac_flagged);
+                counters.ev_l2acc += static_cast<long long>(r.gstats.l2_accepted);
               }
               break;
             }
@@ -1920,8 +2050,15 @@ int main(int argc, char** argv) {
               std::string exp = resolve_exp_name(opt);
               run_gstats = eb::GenericStats();
               run_core_hits = 0;
+              run_def = r.event_def;
+              if (events_enabled && !run_def)  // the Receiver always attaches one
+                std::fprintf(stderr,
+                             "root_sink: ERROR RunOpen without an event definition — no events "
+                             "tree this run (bug)\n");
+              counters.run_has_ac = run_def && run_def->has_ac();
+              counters.run_has_l2acc = run_def && run_def->has_l2() && !run_def->accepts.empty();
               if (!recorder.open_run(opt.out_dir, opt.hits_tree ? opt.tree : std::string(), exp,
-                                     opt.built_tree, events_enabled, r.prov))
+                                     opt.built_tree, run_def, r.prov))
                 std::fprintf(stderr,
                              "root_sink: run start FAILED — dropping this run's events\n");
               else
@@ -2144,14 +2281,24 @@ int main(int argc, char** argv) {
         std::snprintf(written_s, sizeof written_s, "written=%lld", (long long)counters.written);
       else
         std::snprintf(written_s, sizeof written_s, "hits tree off");
-      // ev=off | N (cont=C orph=O) [STALE]
-      char ev_s[96];
-      if (!events_enabled)
+      // ev=off | N (cont=C orph=O[ ac=A][ l2acc=L])[ STALE]
+      char ev_s[160];
+      if (!events_enabled) {
         std::snprintf(ev_s, sizeof ev_s, "off");
-      else
-        std::snprintf(ev_s, sizeof ev_s, "%lld (cont=%lld orph=%lld)%s",
+      } else {
+        char extra[64] = "";
+        std::size_t used = 0;
+        if (counters.run_has_ac)
+          used += std::snprintf(extra + used, sizeof extra - used, " ac=%lld",
+                                (long long)counters.ev_ac);
+        if (counters.run_has_l2acc && used < sizeof extra)
+          std::snprintf(extra + used, sizeof extra - used, " l2acc=%lld",
+                        (long long)counters.ev_l2acc);
+        std::snprintf(ev_s, sizeof ev_s, "%lld (cont=%lld orph=%lld%s)%s",
                       (long long)counters.events, (long long)counters.ev_contested,
-                      (long long)counters.ev_orphans, counters.evdef_stale ? " STALE" : "");
+                      (long long)counters.ev_orphans, extra,
+                      counters.evdef_stale ? " STALE" : "");
+      }
       std::printf(
           "root_sink: %s | events=%lld (%s) | %.0f ev/s | chunks=%lld | "
           "built=%lld | ev=%s | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "

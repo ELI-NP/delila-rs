@@ -1,6 +1,6 @@
 # TODO 71 — root_sink 汎用イベントビルド(「まとめる層」)
 
-**Status: 🚧 Phase A 実装・検証済み (2026-10-07、未コミット・pf-qaq 未配備) / Phase B 以降は未着手**
+**Status: 🚧 Phase A・B・C 実装・検証済み (2026-10-07、コミット済み・未 push・pf-qaq 未配備) / 残 = ユーザー判断(`built` の扱い、Phase C の質問 11 個)、配備、Phase D の残り(TODO 70 Phase 2 / TODO 72)**
 
 **関連:** [event-builder/66_cpp_event_builder.md](event-builder/66_cpp_event_builder.md) Phase 2「汎用化」(本 TODO がその具体化) /
 [70_root_sink_time_offsets.md](70_root_sink_time_offsets.md)(時刻オフセットが前提) /
@@ -105,7 +105,7 @@ ELIFANT の実験で使われた汎用イベントビルダー(2025-05〜、34 �
   - 単体テスト: 束が延長しないこと、A-B-C の連鎖で取りこぼしが無いこと、重なり時に近い基準へ振り分けること、優先順位による基準の選択、G ≤ pre の検査、非対称の窓、H10 相当の境界テスト(基準がチャンク境界をまたぐ場合)、Worker の数に依存しないこと。
   - E2E: run 56 の再生、ThGEM 設定で events を作る。
 - **Phase B — ThGEM の `built` をこの層の上に作り直す:** ✅ 2026-10-07 再構成関数と検証まで済み(§9)。`built` の扱いはユーザー判断待ち run0023 の 4 本そろったイベント数 15,644 を再現できるかで検証(まとめる層の正しさの検証も兼ねる)。そのあと `built` の扱いを決める。
-- **Phase C — ELIFANT からの移植(ELIADE の準備):** 調査と設計案 → [71_phase_c_proposal.md](71_phase_c_proposal.md)(2026-10-07、ユーザーへの質問 11 個つき)。 タグ付きのチャンネル表、AC の印(`HitWithAC`)、L2(Counter → Flag → Accept、出力に数えた値と判定結果)。
+- **Phase C — ELIFANT からの移植(ELIADE の準備):** 調査と設計案 → [71_phase_c_proposal.md](71_phase_c_proposal.md)(2026-10-07、ユーザーへの質問 11 個つき)。✅ 2026-10-07 推奨案で実装・検証済み(§11)。質問への回答しだいで直す。 タグ付きのチャンネル表、AC の印(`HitWithAC`)、L2(Counter → Flag → Accept、出力に数えた値と判定結果)。
 - **Phase D — マルチデジタイザ:** TODO 70 Phase 2(`M:C` 指定、`--module` の扱い)と TODO 72(ボード間の時刻合わせ)と合わせて行う。
 
 ## 7. 未決事項
@@ -210,3 +210,36 @@ ThGEM は線源だけで重なりが無いので、ELIFANT p+¹⁴⁰Ce(2025、1
 - モジュールをまたぐトリガー・重なり・取り合いが大量にある実データでも、チャンク単位の結果が 1 チャンクの作り直しと完全に一致した。Phase D のうち「汎用層がモジュールをまたいで正しく動くか」は確認できた。残りは TODO 70 Phase 2(ThGEM の built / モニタが ch だけで引いている点)と TODO 72(ボード間の時刻合わせ)。
 - 所見(ニアオンラインモニタとして): 設定 A では 2 µs の束にリングのトリガーが 8 本以上入るイベントが 24,071 ある(ノイズの多いリングか、多重度の高い反応)。こうした分布がランごとに状態行とログで見える。
 - 変換マクロと設定は scratchpad に置いた(恒久化はしていない)。ログの 1 行に 45 ch が並んで読みにくかったので、連続する ch を `m1c0-14` とまとめるようにした。
+
+## 11. Phase C 実装記録 (2026-10-07)
+
+設計案([71_phase_c_proposal.md](71_phase_c_proposal.md))の**推奨案**で実装した。§2.7 の質問 11 個は未回答 — 回答が違えば該当部分だけ直す。
+
+### 何を作ったか
+
+- **設定 v1.1**(`event_def.hpp`、1.0 のファイルはそのまま読める):
+  - `tags`(タグ → `[m, c]` / `[m, 最初, 最後]`)、トリガーの `tags`。
+  - `anti_compton`: 窓は**印を付けるヒット自身から**の `[t − pre, t + post]`、`pairs` は detector / shield のタグ。
+  - `l2`: counter(ヒット数を数える。`ac` = any / clean / vetoed)→ flag(6 種の比較)→ accept(AND / OR)。名前は C の識別子で、固定のブランチ名とは重ならない。
+  - 空のリスト・知らない参照・名前の重複などはすべて読み込みエラー(まとめて出す)。
+- **中核**(`eb_core.hpp`): 出すイベントに入れたヒットごとに AC を判定(チャンク全体の shield ヒットを二分探索、イベントとは無関係)。L2 はイベントごとに評価し、**印を付けるだけで捨てない**。
+  - チャンクの約束: ev_hi をさらに ac_post だけ手前にし、持ち越しを G + 2·pre + post + ac_pre + ac_post に広げた。
+- **出力**: `HitWithAC[NHits]/O` を常に出す(AC 無しの設定では全部 false)。L2 があるときは counter `名前/i`、flag / accept `名前/O`、`L2Accept/O`。ランのまとめ行に AC の印の数と L2 の集計。
+- `check_events.C` は AC と L2 も作り直して比べる。
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| 単体テスト | `test_eb_core` 321(総当たりの参照実装に AC・L2 を足して、ランダム 200 通りで一致。わざと入れたバグ 5 種をすべて検出。うち「core_end より後に来る shield」は専用テストで捕まえた)、`test_sink_core` 657 |
+| ThGEM run 56(v1.0 の設定のまま) | events の中身が Phase A と同じ(HitWithAC がすべて false で増えただけ、L2 ブランチ無し)。`check_events` IDENTICAL |
+| ELIFANT p+¹⁴⁰Ce run 112(4,130 万ヒット) | ELIFANT の HasAC から 24 ペア(HPGe 4 + LaBr3/CeBr3 20、相手は同じ位置の BGO)、L2 は counter 6・flag 3・accept 2。`check_events` IDENTICAL(workers 6、および workers 1 + 1 ms チャンク = 21,099 チャンク)。依存しない別実装で HitWithAC を作り直しても不一致 0 |
+
+- **実データでの AC:** Ge − BGO の Δt は幅の広いピーク(HPGe のタイミングウォーク、FWHM −78〜+124 ns)、LaBr3 − BGO は −82 ns に鋭いピーク(FWHM 29 ns)。窓を **[−300, +200] ns** にすると、偶発分を引いた真の同時計数の 98 % 以上が入る(窓内の偶発は約 4 %)。印が付いた割合は **HPGe 15.7 %、LaBr3/CeBr3 21.1 %**。
+- **処理速度:** AC と L2 を足しても約 1 %(14.0 s → 14.2 s、4,130 万ヒット)。
+- 140Ce 用の設定(`def_C.json`)と解析マクロは scratchpad にだけある(リポジトリには入れていない)。
+
+### 既知の制限
+
+- `TDelila.hpp` の JSON パーサーは、同じキーが 2 つあると後のものだけを残す → 同名のタグ 2 つなどは検出できない(共有ヘッダーの変更が要るので保留)。
+- ThGEM の built と XY モニタは ch だけで引いている(モジュールを見ない)→ TODO 70 Phase 2。

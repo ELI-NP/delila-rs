@@ -15,8 +15,13 @@
 // The definition defaults to the run's own sidecar <stem>_eventDef.json (the
 // verbatim file root_sink applied). Hits inside an event are compared as a
 // canonical multiset: equal timestamps may leave std::sort in either order.
+// Phase C: HitWithAC is part of each hit (a file without the branch — written
+// before Phase C — compares as all false, which is right for a definition
+// without anti_compton), and with an l2 section every event's counters, flags,
+// accepts and L2Accept are compared through the definition-named branches.
 // Prints IDENTICAL or MISMATCH plus the run's counters (orphans, contested,
-// NTriggers distribution). A ROOT MaxTreeSize-split run is not supported.
+// NTriggers distribution, AC / L2 totals). A ROOT MaxTreeSize-split run is not
+// supported.
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -111,6 +116,7 @@ void check_events(const char* path, const char* def_path = "", const char* hits_
   std::vector<UShort_t> he(cap), hes(cap);
   std::vector<Double_t> htime(cap);
   std::unique_ptr<Bool_t[]> htrig(new Bool_t[cap]);
+  std::unique_ptr<Bool_t[]> hac(new Bool_t[cap]());
   et->SetBranchAddress("EventID", &id);
   et->SetBranchAddress("TriggerTime", &tt);
   et->SetBranchAddress("TriggerMod", &tmod);
@@ -124,6 +130,36 @@ void check_events(const char* path, const char* def_path = "", const char* hits_
   et->SetBranchAddress("HitEnergyShort", hes.data());
   et->SetBranchAddress("HitTime", htime.data());
   et->SetBranchAddress("HitIsTrigger", htrig.get());
+  bool structure_ok = true;  // every branch the definition implies is present
+  const bool has_ac_branch = et->GetBranch("HitWithAC") != nullptr;
+  if (has_ac_branch) {
+    et->SetBranchAddress("HitWithAC", hac.get());
+  } else if (def->has_ac()) {
+    printf("check_events: MISSING branch HitWithAC (the definition has anti_compton)\n");
+    structure_ok = false;
+  } else {
+    printf("check_events: NOTE no HitWithAC branch (pre-Phase C file) — compared as all false\n");
+  }
+  // L2: one scalar branch per counter (/i), flag and accept (/O), L2Accept
+  // when any accept exists — named by the definition (root_sink add_l2_branches).
+  const std::size_t n_cnt = def->has_l2() ? def->counters.size() : 0;
+  const std::size_t n_flag = def->has_l2() ? def->flags.size() : 0;
+  const std::size_t n_acc = def->has_l2() ? def->accepts.size() : 0;
+  std::vector<UInt_t> l2c(n_cnt + 1, 0);
+  std::unique_ptr<Bool_t[]> l2f(new Bool_t[n_flag + 1]()), l2a(new Bool_t[n_acc + 1]());
+  Bool_t l2acc = false;
+  auto bind = [&](const std::string& name, void* addr) {
+    if (!et->GetBranch(name.c_str())) {
+      printf("check_events: MISSING L2 branch %s\n", name.c_str());
+      structure_ok = false;
+      return;
+    }
+    et->SetBranchAddress(name.c_str(), addr);
+  };
+  for (std::size_t i = 0; i < n_cnt; ++i) bind(def->counters[i].name, &l2c[i]);
+  for (std::size_t i = 0; i < n_flag; ++i) bind(def->flags[i].name, &l2f[i]);
+  for (std::size_t i = 0; i < n_acc; ++i) bind(def->accepts[i].name, &l2a[i]);
+  if (n_acc > 0) bind("L2Accept", &l2acc);
 
   auto canon = [](std::vector<eb::EventHit> v) {
     std::sort(v.begin(), v.end(), [](const eb::EventHit& a, const eb::EventHit& b) {
@@ -131,7 +167,9 @@ void check_events(const char* path, const char* def_path = "", const char* hits_
       if (a.mod != b.mod) return a.mod < b.mod;
       if (a.ch != b.ch) return a.ch < b.ch;
       if (a.energy != b.energy) return a.energy < b.energy;
-      return a.energy_short < b.energy_short;
+      if (a.energy_short != b.energy_short) return a.energy_short < b.energy_short;
+      if (a.is_trigger != b.is_trigger) return a.is_trigger < b.is_trigger;
+      return a.with_ac < b.with_ac;
     });
     return v;
   };
@@ -151,6 +189,7 @@ void check_events(const char* path, const char* def_path = "", const char* hits_
       got[j].energy_short = hes[j];
       got[j].dt = htime[j];
       got[j].is_trigger = htrig[j];
+      got[j].with_ac = has_ac_branch ? static_cast<bool>(hac[j]) : false;
     }
     // Time order inside the event (as written), then content as a multiset.
     bool ordered = true;
@@ -163,15 +202,26 @@ void check_events(const char* path, const char* def_path = "", const char* hits_
       for (std::size_t j = 0; same && j < a.size(); ++j)
         same = a[j].dt == b[j].dt && a[j].mod == b[j].mod && a[j].ch == b[j].ch &&
                a[j].energy == b[j].energy && a[j].energy_short == b[j].energy_short &&
-               a[j].is_trigger == b[j].is_trigger;
+               a[j].is_trigger == b[j].is_trigger && a[j].with_ac == b[j].with_ac;
+    }
+    bool l2_same = true;
+    if (same && def->has_l2()) {
+      for (std::size_t k = 0; k < n_cnt; ++k)
+        if (k >= r.l2_counts.size() || l2c[k] != r.l2_counts[k]) l2_same = false;
+      for (std::size_t k = 0; k < n_flag; ++k)
+        if (static_cast<bool>(l2f[k]) != (((r.l2_flags >> k) & 1u) != 0)) l2_same = false;
+      for (std::size_t k = 0; k < n_acc; ++k)
+        if (static_cast<bool>(l2a[k]) != (((r.l2_accepts >> k) & 1u) != 0)) l2_same = false;
+      if (n_acc > 0 && static_cast<bool>(l2acc) != r.l2_accept) l2_same = false;
+      same = l2_same;
     }
     if (!same) {
       if (mismatches < 5)
         printf("  MISMATCH entry %lld: id %llu t %.3f/%.3f m%uc%u/m%uc%u idx %u/%u ntrig %u/%u "
-               "nhits %u/%zu%s\n",
+               "nhits %u/%zu%s%s\n",
                i, static_cast<unsigned long long>(id), tt, r.t, tmod, tch, r.mod, r.ch, tidx,
                r.trig_idx, ntrig, r.n_triggers, nhits, r.hits.size(),
-               ordered ? "" : " (hits not time-ordered)");
+               ordered ? "" : " (hits not time-ordered)", l2_same ? "" : " (L2 values differ)");
       ++mismatches;
     }
   }
@@ -190,7 +240,24 @@ void check_events(const char* path, const char* def_path = "", const char* hits_
     if (st.ntrig[i])
       printf(" %s%zu:%llu", i == 7 ? "" : "", i + 1, static_cast<unsigned long long>(st.ntrig[i]));
   printf("%s\n", st.ntrig[7] ? "  (8 = 8+)" : "");
-  const bool ok = count_ok && mismatches == 0 &&
+  if (def->has_ac())
+    printf("  AC-flagged hits %llu (of %llu hits in events)\n",
+           static_cast<unsigned long long>(st.ac_flagged),
+           static_cast<unsigned long long>(st.hits_in_events));
+  if (def->has_l2()) {
+    printf("  L2:");
+    for (std::size_t k = 0; k < n_flag; ++k)
+      printf(" %s=%llu", def->flags[k].name.c_str(), static_cast<unsigned long long>(st.flag_true[k]));
+    if (n_acc > 0) {
+      printf(" |");
+      for (std::size_t k = 0; k < n_acc; ++k)
+        printf(" %s=%llu", def->accepts[k].name.c_str(),
+               static_cast<unsigned long long>(st.accept_true[k]));
+      printf(" | L2Accept=%llu", static_cast<unsigned long long>(st.l2_accepted));
+    }
+    printf("\n");
+  }
+  const bool ok = structure_ok && count_ok && mismatches == 0 &&
                   st.hits_in_events + st.orphans == static_cast<unsigned long long>(nh) &&
                   tree_hits == static_cast<long long>(st.hits_in_events);
   printf("check_events: %s (%lld mismatching entries)\n", ok ? "IDENTICAL" : "MISMATCH",

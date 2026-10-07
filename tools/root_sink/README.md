@@ -231,8 +231,10 @@ preferred reference — give it for all triggers or for none (none = the first
 trigger of a group is the reference); `_comment` is allowed anywhere. The
 ThGEM file is `config/event_def_thgem.json`; the full rules and validation
 (every error listed at once, unknown keys rejected, `group_ns ≤ min(pre,
-post)`, one trigger per channel, lookback `group_ns + 2·pre + post` below
-`--safe-horizon-ms`) are in the header comment of `event_def.hpp`. The rules:
+post)`, one trigger per channel, the lookback below `--safe-horizon-ms`) are
+in the header comment of `event_def.hpp`. Version `"1.1"` adds a channel
+table, anti-Compton flags and L2 (see *Tags, anti-Compton and L2* below); a
+1.0 file reads unchanged. The rules:
 
 1. Triggers in time order; an ungrouped trigger `t` opens the group `[t, t+G]`
    (`G = group_ns`, never extended). Every trigger is in exactly one event — no
@@ -247,9 +249,10 @@ Rules 1–2 are sequential, so the Sorter runs them on every chunk in order
 (the RunClose / Shutdown flush chunk closes the last groups); rules 3–4 run
 in the Workers, and an event is emitted by the chunk whose core holds its
 reference (H10), so the output does not depend on `--workers`. The Sorter's
-context carry becomes `max(--window-ns, G + 2·pre + post)` per run (logged as
-`sorter lookback` when it changes). Times are on the aligned axis
-(`--time-calib` is applied before the Sorter).
+context carry becomes `max(--window-ns, lookback)` per run, lookback = `G +
+2·pre + post` (+ `ac_pre + ac_post` with anti-Compton), logged as `sorter
+lookback` when it changes. Times are on the aligned axis (`--time-calib` is
+applied before the Sorter).
 
 The `events` tree (fixed name; one entry per event, dictionary-free leaflists,
 hit arrays in time order):
@@ -266,6 +269,10 @@ hit arrays in time order):
 | `HitEnergy[NHits]`, `HitEnergyShort[NHits]` | `/s` | per hit |
 | `HitTime[NHits]` | `/D` | hit time − `TriggerTime` [ns] (the reference is at 0) |
 | `HitIsTrigger[NHits]` | `/O` | a trigger hit of this event's group |
+| `HitWithAC[NHits]` | `/O` | an anti-Compton shield fired around this hit (always present; all false without `anti_compton`) |
+| `<counter>` | `/i` | L2 counter value (only with an `l2` section; named by the definition) |
+| `<flag>`, `<accept>` | `/O` | L2 flag / accept result (likewise) |
+| `L2Accept` | `/O` | OR of all accepts (when at least one accept exists) |
 
 Leaf types for `SetBranchAddress`: `/l` = `ULong64_t`, `/i` = `UInt_t` (NOT
 `Int_t` — ROOT refuses the mismatch), `/b` = `UChar_t`, `/s` = `UShort_t`,
@@ -298,6 +305,61 @@ with rate), and the orphans. `hits in events + orphans` must equal the hits
 the Sorter emitted (exactly-once); a mismatch is a WARNING. The 10 s status
 line shows the cumulative `ev=N (cont=C orph=O)`, plus `STALE` when the last
 reload failed. A mid-run shutdown logs the same line for the unfinalized run.
+
+### Tags, anti-Compton and L2 (`"version": "1.1"`, TODO 71 Phase C)
+
+Design and the choices made: `TODO/71_phase_c_proposal.md` (§2.3 branches,
+§2.4 semantics). All three sections are optional:
+
+```json
+{"version": "1.1",
+ "window_ns": {"pre": 2000, "post": 2000}, "group_ns": 2000,
+ "tags": {"core": [[0, 0], [1, 0]], "seg": [[0, 2, 9], [1, 2, 9]],
+          "C1": [[0, 0, 9], [1, 0, 9]], "BGO1": [[8, 0, 3]]},
+ "triggers": [{"name": "Ge", "tags": ["core"]}],
+ "anti_compton": {"window_ns": {"pre": 300, "post": 200},
+                  "pairs": [{"name": "C1", "detector": ["C1"], "shield": ["BGO1"]}]},
+ "l2": {"counters": [{"name": "nGe", "tags": ["core"]},
+                     {"name": "nGeClean", "tags": ["core"], "ac": "clean"}],
+        "flags":    [{"name": "GeGe", "counter": "nGeClean", "op": ">=", "value": 2}],
+        "accept":   [{"name": "GammaGamma", "op": "AND", "flags": ["GeGe"]}]}}
+```
+
+- **`tags`** — tag → channels; `[m, c]` or an inclusive range `[m, first,
+  last]`. `triggers[].tags` adds the tags' channels to `channels` (still one
+  trigger per channel). The resolved table is in the provenance.
+- **`anti_compton`** — a hit on a pair's `detector` channel gets `HitWithAC`
+  when a hit on that pair's `shield` channels lies in `[t − pre, t + post]` of
+  **the flagged hit itself** (inclusive), whatever event — or none — that
+  shield hit went to. It does not depend on triggers or windows (unlike
+  ELIFANT's "partner inside the same event", which would let a Ge pass when
+  rule 4 gave its BGO to the neighbouring event). Nothing is dropped: the
+  shield hits stay in their events, and `HitWithAC` is only a mark. Pairs are
+  many-to-many (≤ 64), but a channel may not be detector and shield of the same pair.
+- **`l2`** — evaluated per event on its own hits, **flag only: every event is
+  written**, select with the branches (`events->Draw("HitEnergy",
+  "L2Accept")`). A counter counts HITS on its tags' channels (a channel that
+  fired twice counts 2); `"ac"` = `"any"` (default) / `"clean"` (no
+  `HitWithAC`) / `"vetoed"`. A flag compares one counter (`== != < <= > >=`)
+  with an integer; an accept ANDs or ORs flags; `L2Accept` = OR of all
+  accepts. Every reference is resolved at load time — an unknown tag /
+  counter / flag is a load error, never a silent false.
+- **Branch names** are the definition's names, so the tree's L2 branches are
+  fixed per run (frozen at RunOpen; a TChain over runs with different
+  definitions needs care — the provenance says which). Names must be C
+  identifiers, unique over counters/flags/accepts and none of the fixed
+  branches (`event_def.hpp` `edef_detail::is_fixed_branch`; the Writer checks
+  its own branch list against it at the first run and prints an ERROR on drift).
+- **Chunk contract.** Deciding `HitWithAC` for a hit near the end of an
+  event's window needs shield hits up to `ac_post` later, so a chunk stops
+  emitting events `ac_post` earlier than in Phase A, and the lookback grows by
+  `ac_pre + ac_post` (ThGEM without AC: unchanged; the 140Ce example below:
+  8500 ns vs 8000).
+- **Counters.** The run summary appends `AC-flagged hits N` (hits in events
+  with `HitWithAC`) and adds a line
+  `run N L2: <flag>=<events> … | <accept>=<events> … | L2Accept=<events>`; the
+  status line gains `ac=` / `l2acc=` inside `ev=(…)` while the run's
+  definition has them.
 
 ## Live monitor (THttpServer / JSROOT)
 
@@ -696,6 +758,20 @@ capacity 1 (growth path), and from a forced-rollover build without the hits
 tree (`events` or `built` as the lead tree; UserInfo in every part). A bad edit
 between runs keeps the previous definition (STALE in the run line, status line
 and UserInfo; the sidecar is the previous file).
+
+Phase C wiring (E2E, 2026-10-07): run 56 with the unchanged ThGEM file →
+the events content digest equals Phase A, `HitWithAC` present and all false,
+no L2 branches, `check_events` IDENTICAL. ELIFANT p+¹⁴⁰Ce run0112 (41.3 M hits,
+11 modules) with a v1.1 definition generated from its `chSettings.json` (the
+Phase A triggers/window, 24 AC pairs = every `HasAC` channel → the BGO with the
+same position tag, AC window −300/+200 ns from the measured Ge−BGO Δt, 6
+counters / 3 flags / 2 accepts): `check_events` IDENTICAL incl. `HitWithAC` and
+L2 at `--workers 6` and at `--workers 1 --chunk-span-ms 1` (21,099 chunks); an
+independent (non-`eb_core`) recomputation of `HitWithAC` from the hits tree
+agrees on every in-event hit; the non-AC/L2 content equals the Phase A run;
+14.1 s vs 14.0 s for the Phase A definition. `check_events.C` compares
+`HitWithAC` per hit and every L2 branch per event (a pre-Phase C file without
+`HitWithAC` compares as all false).
 
 The `--operator` HTTP client and the remaining ROOT wiring in `root_sink.cxx`
 are not unit-tested (they need sockets / ROOT); they are covered by the

@@ -286,6 +286,8 @@ XY・TOF・addback のような実験ごとの「再構成」はこの上に作�
   (書かなければ束の先頭のトリガーが基準)。`_comment` はどこにでも書ける。
 - `group_ns ≤ min(pre, post)` が必要(束の中のトリガーが必ず自分のイベントの窓に入るように)。
 - 検査の詳細は `tools/root_sink/event_def.hpp` の先頭コメント。誤りは全て列挙される。
+- `"version": "1.1"` ではチャンネル表(`tags`)・AC の印(`anti_compton`)・L2(`l2`)が
+  書ける(後述「タグ・AC・L2」)。1.0 のファイルはそのまま読める。
 
 **規則**(時刻は全て `--time-calib` 適用後の時間軸):
 
@@ -311,6 +313,10 @@ XY・TOF・addback のような実験ごとの「再構成」はこの上に作�
 | `HitEnergy[NHits]`, `HitEnergyShort[NHits]` | `s` | 各ヒットのエネルギー |
 | `HitTime[NHits]` | `D` | 基準からの相対時刻 [ns](基準自身は 0) |
 | `HitIsTrigger[NHits]` | `O` | そのイベントの束のトリガーなら true |
+| `HitWithAC[NHits]` | `O` | そのヒットの周りで AC(BGO など)が鳴っていれば true。**常にある**(`anti_compton` が無ければ全部 false) |
+| `<counter 名>` | `i` | L2 の counter の値(`l2` があるときだけ。名前は設定のまま) |
+| `<flag 名>`, `<accept 名>` | `O` | L2 の flag / accept の結果(同上) |
+| `L2Accept` | `O` | accept 全体の OR(accept が 1 つ以上あるとき) |
 
 ```cpp
 events->Draw("HitTime", "HitCh==0 && TriggerIdx==0");  // ThGEM1 基準での LaBr3 の時刻
@@ -334,8 +340,63 @@ events->Draw("NTriggers");                              // 1 イベントあた�
   `hits in events + orphans` は Sorter が出したヒット数と必ず一致する(しなければ WARNING)。
   10 秒ごとの status 行には累計の `ev=N (cont=C orph=O)` が出る。
 - Sorter が持ち越す文脈幅はラン毎に `max(--window-ns, G + 2·pre + post)`
-  (変わったときに `sorter lookback` 行が出る)。G + 2·pre + post は `--safe-horizon-ms`
-  未満でなければならない(起動/読み直し時に検査)。
+  (AC があれば + ac_pre + ac_post。変わったときに `sorter lookback` 行が出る)。
+  これは `--safe-horizon-ms` 未満でなければならない(起動/読み直し時に検査)。
+
+#### タグ・AC・L2(`"version": "1.1"`、TODO 71 Phase C)
+
+設計と選んだ案は `TODO/71_phase_c_proposal.md`(§2.3 ブランチ、§2.4 意味)。3 つとも省略できる。
+
+```json
+{"version": "1.1",
+ "window_ns": {"pre": 2000, "post": 2000}, "group_ns": 2000,
+ "tags": {"core": [[0, 0], [1, 0]], "seg": [[0, 2, 9], [1, 2, 9]],
+          "C1": [[0, 0, 9], [1, 0, 9]], "BGO1": [[8, 0, 3]]},
+ "triggers": [{"name": "Ge", "tags": ["core"]}],
+ "anti_compton": {"window_ns": {"pre": 300, "post": 200},
+                  "pairs": [{"name": "C1", "detector": ["C1"], "shield": ["BGO1"]}]},
+ "l2": {"counters": [{"name": "nGe", "tags": ["core"]},
+                     {"name": "nGeClean", "tags": ["core"], "ac": "clean"}],
+        "flags":    [{"name": "GeGe", "counter": "nGeClean", "op": ">=", "value": 2}],
+        "accept":   [{"name": "GammaGamma", "op": "AND", "flags": ["GeGe"]}]}}
+```
+
+- **`tags`**(チャンネル表): タグ名 → ch の一覧。`[m, c]` のほか `[m, 最初, 最後]`(両端を含む範囲)。
+  トリガーは `channels` に加えて `tags` でも書ける(和集合。1 つの ch は 1 つのトリガーだけ、は同じ)。
+- **`anti_compton`**: ペアの `detector` の ch のヒットについて、`shield` の ch のヒットが
+  **そのヒット自身から** `[t − pre, t + post]`(両端を含む)にあれば `HitWithAC` を立てる。
+  - **イベントとは独立**に決まる。相手の BGO が規則 4 で隣のイベントに入っても、どのイベントにも
+    入らなくても印は付く(ELIFANT の「同じイベント内に相手がいる」方式だと、BGO を隣に取られた
+    Ge が素通りする)。
+  - **何も捨てない**。印を付けるだけで、BGO のヒットも自分のイベントに残る。
+  - ペアは多対多で書ける(64 個まで)。同じペアの detector と shield に同じ ch があるとエラー。
+- **`l2`**: イベントごとに、そのイベントのヒットだけで決める。**印だけで、イベントは全部書く**
+  (`events->Draw("HitEnergy", "L2Accept")` のように選ぶ)。
+  - counter はタグの ch の**ヒット数**(同じ ch が 2 回鳴れば 2)。`"ac"` は `"any"`(既定)/
+    `"clean"`(`HitWithAC` でないものだけ)/ `"vetoed"`(`HitWithAC` のものだけ)。
+  - flag は counter 1 つと整数の比較(`== != < <= > >=`)。accept は flag の AND か OR。
+    `L2Accept` は全 accept の OR。
+  - 知らないタグ・counter・flag は**読み込み時のエラー**(実行時に黙って false にはならない)。
+- **ブランチ名**は設定の名前そのまま(ラン開始時に固定)。C の識別子で、counter / flag / accept の
+  間で重複せず、固定のブランチ名(`EventID` … `L2Accept`)と同じでないこと。定義の違うランを
+  TChain でつなぐときは注意(provenance で分かる)。
+- **AC の窓の決め方**: Ge − BGO の Δt 分布を見て決める。例: ELIFANT p+¹⁴⁰Ce run0112 では
+  HPGe − BGO の FWHM が [−78, +124] ns(HPGe のタイミングのばらつきで幅が広い)、
+  LaBr3/CeBr3 − BGO は −82 ns の鋭いピーク → shield が `[t − 300, t + 200]` で、真の同時計数の
+  98.4 %(Ge)/ 97.8 %(LaBr3)を含み、偶然の割合は約 4 %。
+- **チャンクの約束**: 窓の端のヒットの AC を決めるには、さらに `ac_post` 先までのヒットが要る。
+  そのためチャンクは Phase A より `ac_post` 早くイベントを出すのを止め、持ち越しは
+  `ac_pre + ac_post` 増える(AC の無い ThGEM 設定では変化なし)。
+- **監視**: ラン終了行の末尾に `AC-flagged hits N`(イベント内で `HitWithAC` のヒット数)、
+  続けて次の行が出る。status 行の `ev=(…)` には、そのランの定義にあるときだけ `ac=` / `l2acc=` が出る。
+
+  ```
+  root_sink: run 112 events: 328295 (...), hits in events 3387633, contested 34253, orphans 37917876, AC-flagged hits 118767
+  root_sink: run 112 L2: GeClean=41439 ScClean=228005 OneRing=262819 | SiGe=33419 AnyGamma=238873 | L2Accept=238873
+  ```
+
+- **確認**: `root -l -b -q 'tools/root_sink/check_events.C+("<run>.root")'`(要 `--hits-tree`)が
+  `HitWithAC` と L2 のブランチも含めて作り直しと比べ、IDENTICAL / MISMATCH を出す。
 
 ---
 
