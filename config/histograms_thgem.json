@@ -2,9 +2,10 @@
   "_comment": [
     "root_sink live histograms for the ThGEM experiment (pf-qaq), after side3's",
     "/home/daq/rootsink_data/histograms.json (2026-08-02): dt1/dt2 = t(ThGEM) - t(LaBr3),",
-    "xy1/xy2 delay-line images (+-250 ns, the ThGEM physical extent), tof1/tof2 = the",
-    "[70,190] ns zoom of dt1/dt2 (LiveEventBuilder.C hTOF; the -70 ns display offset is",
-    "not applied). Reload without restarting: curl http://localhost:8090/ReloadHists/cmd.json",
+    "xy1/xy2 delay-line images (+-250 ns, the ThGEM physical extent), tof1/tof2 = a",
+    "[-100,300] ns zoom of dt1/dt2. Widened on 2026-10-14 from LiveEventBuilder.C's [70,190]:",
+    "the ThGEM signal paths were being changed and the TOF peaks sat at +42..+66 ns, outside",
+    "it. Reload without restarting: curl http://localhost:8090/ReloadHists/cmd.json",
     "NOTE: the coinc/pos matchers select hits by CHANNEL ONLY (module ignored). With more",
     "than one digitizer, other boards' channels 0-10 leak into them - see the TOML header."
   ],
@@ -33,11 +34,11 @@
 
     { "name": "tof1", "type": "TH1D",
       "title": "ThGEM1 TOF window;#Deltat_{1} [ns];counts",
-      "fill": "dt1", "bins": 1024, "min": 70, "max": 190 },
+      "fill": "dt1", "bins": 1600, "min": -100, "max": 300 },
 
     { "name": "tof2", "type": "TH1D",
       "title": "ThGEM2 TOF window;#Deltat_{2} [ns];counts",
-      "fill": "dt2", "bins": 1024, "min": 70, "max": 190 },
+      "fill": "dt2", "bins": 1600, "min": -100, "max": 300 },
 
     { "name": "xy1_pos", "type": "TH2D",
       "title": "ThGEM1 XY;x = t_{XR} - t_{XL} [ns];y = t_{YU} - t_{YD} [ns]",
