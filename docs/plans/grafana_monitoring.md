@@ -41,52 +41,112 @@ Operator (ポーリングループ)
 
 ## メトリクス定義（Line Protocol）
 
-### Measurement 1: `channel_rate` — チャンネル別イベントレート
+**実装:** `src/operator/influxdb.rs`（2026-10-22 時点、TODO 74 P2/P5 反映）。
+Operator が `[operator.influxdb] interval_secs` ごとに全コンポーネントへ ZMQ GetStatus を投げ、
+結果を 1 回の POST（`/api/v3/write_lp`）で書く。タイムスタンプは付けない（InfluxDB の受信時刻）。
+整数フィールドは unsigned（`u` 接尾辞）。接尾辞なしの数値は float。
+
+### `system_rate` — ソース（Reader / Emulator）ごと
 
 ```
-channel_rate,module=0,channel=3,name=det03 counts=45234i,rate=1523.5 <ns_timestamp>
-```
-
-| Tag | 説明 |
-|-----|------|
-| `module` | デジタイザ module_id |
-| `channel` | チャンネル番号 |
-| `name` | チャンネル名（Channel Registration で登録した名前、なければ `m{module}_ch{channel}`） |
-
-| Field | 型 | 説明 |
-|-------|----|------|
-| `counts` | integer | 累積イベント数（`total_counts`） |
-| `rate` | float | `Instant::elapsed()` 実測値に基づくレート (Hz)。delta < 0（Clear/Reset時）は 0.0 |
-
-**Cardinality**: ~200 series (module x channel) — InfluxDB v3 にとっては問題なし。
-
-### Measurement 2: `system_rate` — システム全体
-
-```
-system_rate total_events=500000i,event_rate=15000.5,bytes=2000000i,data_rate=800000.0 <ns_timestamp>
-```
-
-| Field | 型 | 説明 |
-|-------|----|------|
-| `total_events` | integer | 全チャンネル合計イベント数 |
-| `event_rate` | float | Monitor 算出の全体レート (Hz) |
-| `bytes` | integer | Recorder の bytes_transferred |
-| `data_rate` | float | Recorder の data_rate (bytes/s) |
-
-### Measurement 3: `run_info` — ラン情報（状態変化時のみ書き込み）
-
-```
-run_info,state=Running run_number=42i,comment="production" <ns_timestamp>
+system_rate,module=0 total_events=500000u,event_rate=15000.5,bytes=2000000u
 ```
 
 | Tag | 説明 |
 |-----|------|
-| `state` | ComponentState (Idle, Running, etc.) |
+| `module` | ソースの source_id |
 
 | Field | 型 | 説明 |
 |-------|----|------|
-| `run_number` | integer | ラン番号 |
-| `comment` | string | ランコメント |
+| `total_events` | unsigned | 累積イベント数（`events_processed`） |
+| `event_rate` | float | コンポーネント自身が算出したレート (Hz) |
+| `bytes` | unsigned | 累積バイト数（`bytes_transferred`） |
+
+### `channel_rate` — (module, channel) ごと
+
+```
+channel_rate,module=0,channel=3 count=45234u,rate=1523.5
+```
+
+| Tag | 説明 |
+|-----|------|
+| `module` | ソースの source_id |
+| `channel` | チャンネル番号（Reader の `channel_counts` の添字） |
+
+**名前のタグは付けない**（TODO 74 §3.1）。InfluxDB 上の識別は (module, channel) だけにし、
+検出器名は表示時（ダッシュボード生成時）に対応表から付ける。名前をタグにすると改名のたびに系列が分かれ、
+過去のデータに新しい名前が付かないため。
+
+| Field | 型 | 説明 |
+|-------|----|------|
+| `count` | unsigned | 累積イベント数 |
+| `rate` | float | レート (Hz) = (count − 前回の count) ÷ 前回からの経過時間。経過時間は `Instant` の実測値（設定の interval ではない） |
+
+`rate` の規則:
+
+- その (module, channel) の最初のサンプル → `rate` なし（`count` だけの行）
+- count が前回より小さい（新しいラン等でカウンタが戻った）→ `rate=0`、次回はこの count から差分を取る
+- 経過時間が 0 以下、または結果が有限でない → `rate` なし
+- 行を書くのは count > 0 のチャンネルだけ。前回値の記録は全チャンネルで更新する
+
+### `backlog` — パイプライン（Merger / Recorder / …）ごと（TODO 68）
+
+```
+backlog,component=Recorder queue_bytes=0u,queue_bytes_peak=1048576u,queue_items=0u,backlog_level=0u,events_processed=123456u
+```
+
+| Tag | 説明 |
+|-----|------|
+| `component` | コンポーネント名（空白はエスケープ） |
+
+| Field | 型 | 説明 |
+|-------|----|------|
+| `queue_bytes` | unsigned | 現在のバックログ（バイト） |
+| `queue_bytes_peak` | unsigned | ラン開始以降の `queue_bytes` の最大値 |
+| `queue_items` | unsigned | キューの件数（`queue_size`） |
+| `backlog_level` | unsigned | 0 = OK、1 = soft 超え、2 = hard 超え |
+| `events_processed` | unsigned | 累積処理イベント数 |
+
+### `disk` — ファイルを書くコンポーネントごと（TODO 69）
+
+`disk_free_bytes` を報告するコンポーネント（Recorder 等）だけ。
+
+```
+disk,component=Recorder free_bytes=500000000000u,disk_level=0u,write_failed=false,unwritten_events=0u
+```
+
+| Field | 型 | 説明 |
+|-------|----|------|
+| `free_bytes` | unsigned | 出力先ファイルシステムの空き容量 |
+| `disk_level` | unsigned | 0 = OK、1 = soft 未満、2 = hard 未満 |
+| `write_failed` | boolean | 書き込み失敗でこのランの書き込みを止めた（Configure/Reset まで保持） |
+| `unwritten_events` | unsigned | 書き込み失敗後に受け取り、ディスクに載っていないイベント数 |
+
+### `run_event` — ランの開始・停止（TODO 74 P5、Grafana アノテーション用）
+
+```
+run_event,exp=N_Wall run=53u,event="start"
+run_event,exp=N_Wall run=53u,event="stop"
+```
+
+| Tag | 説明 |
+|-----|------|
+| `exp` | Operator の `experiment_name`（`/api/status` と同じ値）。`,` `=` 空白はエスケープ |
+
+| Field | 型 | 説明 |
+|-------|----|------|
+| `run` | unsigned | ラン番号 |
+| `event` | string | `"start"` または `"stop"` |
+
+判定（同じポーリングループ内）:
+
+- 「ラン中」= オンラインで Running のソースが 1 つ以上ある。ラン番号はそのソースの `run_number`
+  （ソース間で食い違えば最大値を使い warn）
+- Operator 起動後の最初のポーリングは状態を覚えるだけで何も書かない（ラン中に Operator を再起動しても
+  偽の start を出さない）
+- ラン外 → ラン中: start。ラン中 → ラン外: 前回のラン番号で stop。
+  ラン中のままラン番号が変わった: stop(旧) → start(新)
+- 時刻はポーリング周期の分解能（既定 2 秒）。Running のソースが全部オフラインになった場合も「ラン外」として stop が出る
 
 ### 将来追加（MVP 外）
 
@@ -95,7 +155,6 @@ run_info,state=Running run_number=42i,comment="production" <ns_timestamp>
 | `busy_status` | デジタイザ Busy カウンタ | Reader から FELib 経由で取得。未実装 |
 | `event_builder` | ビルド済みイベント数 | EB オンライン化後 |
 | `hv_monitor` | HV 電圧/電流/Status | Python SY5527 exporter |
-| `disk_usage` | ディスク使用量 | Python スクリプト |
 
 ## データフロー詳細
 
