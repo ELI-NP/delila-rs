@@ -16,6 +16,13 @@
   生成した全 29 種類の SQL を pf-qaq の InfluxDB と Grafana(`/api/ds/query`)で確認。
   注意: Grafana の InfluxDB(SQL)でアノテーションを動かすには target に `query` キーが要る(プラグインのソースで確認)。
 
+**UI からの保存 (2026-10-22、ユーザー: admin でも編集を保存できない、毎回説明するのが面倒):**
+`provisioning/dashboards/default.yml` の `editable: true` はプロバイダの設定項目ではなく(正しくは `allowUiUpdates`)、
+そのため全ダッシュボードが「Provisioned dashboard」として保存を拒否していた。`allowUiUpdates: true` に変更。
+ログインした人は UI でそのまま保存できる(匿名は Viewer なので変わらず閲覧のみ)。UI での保存は Grafana の DB に残り、
+**JSON ファイル自体が変わったとき(git pull で更新、対応表を変えて再生成)にファイルの内容で上書きされる**。
+同じ対応表での再生成は同一ファイルなので上書きされない。生成ダッシュボードも `editable: true` にした。
+
 **P1 配備記録 (2026-10-22、ラン中にユーザー了承のうえ実施):** `docker/docker-compose.yml` に
 `INFLUXDB3_QUERY_FILE_LIMIT=50000`(このイメージの `serve --help-all` で `--query-file-limit` / 同 env を確認)、
 Grafana の匿名ロールを `Viewer` に、admin パスワードを `${GRAFANA_ADMIN_PASSWORD:-delila}` に。pf-qaq で

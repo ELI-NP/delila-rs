@@ -38,6 +38,17 @@ SQL, so a rename also applies to past data:
 The map is checked first. Every error is listed with its line number and
 nothing is written until the map is clean.
 
+## Editing in the Grafana UI
+
+Logged-in users can change and save any of these dashboards in Grafana
+(`allowUiUpdates: true` in `docker/grafana/provisioning/dashboards/default.yml`);
+anonymous visitors only view. A saved edit stays until the JSON file itself
+changes. Re-running the generator with a changed map (or a git pull that
+updates a dashboard file) replaces it with the file's version. Re-running with
+the same map writes an identical file and keeps the edit. To keep a change for
+good, put it in the generator or the map, or use "Save as" for a copy that is
+not provisioned.
+
 ## What the dashboard shows
 
 - Module × channel grid: rate over the last 10 s of the time range. 0 Hz is red,

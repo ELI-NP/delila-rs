@@ -5,7 +5,16 @@ providers:
     orgId: 1
     type: file
     disableDeletion: false
-    editable: true
+    # Logged-in users can save changes to these dashboards from the Grafana UI;
+    # anonymous visitors only view (GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer in
+    # docker-compose.yml). A UI save is kept in Grafana's database until the
+    # JSON file itself changes (a git pull that updates it, or re-running
+    # tools/grafana/gen_dashboards.py with a changed channel map): then the file
+    # wins and the UI edit is gone. To keep a change for good, put it in the
+    # file, or use "Save as" to make a copy that is not provisioned.
+    # (Before 2026-10-22 this said `editable: true`, which is not a provider
+    # option, so every provisioned dashboard refused UI saves.)
+    allowUiUpdates: true
     options:
       path: /etc/grafana/provisioning/dashboards/json
       foldersFromFilesStructure: false
