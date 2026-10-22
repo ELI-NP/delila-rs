@@ -81,6 +81,21 @@ time_step_ns = 2.0
 #pipeline_order = 1
 #time_step_ns = 2.0
 
+# --- VX2730 DPP-PSD, liquid scintillator (n/gamma), 2026-10-20 ---
+# Direct 1 GbE on eno1 (172.18.4.50/22, no gateway). Replaces the link-1 V1730
+# template above (same id 1). An unreachable source makes Configure fail for
+# the whole DAQ: comment this block out if the VX2730 is disconnected. 24 LS
+# detectors, all 32 channels enabled. module 1 is outside root_sink
+# (`module = 0`): .delila + Monitor 8081 only. Independent time base from the
+# V1730 (no clock/sync cable).
+[[network.sources]]
+id = 1
+name = "PSD2-VX2730-LS"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/thgem_vx2730_psd2_1.json"
+pipeline_order = 1
+
 #[[network.sources]]
 #id = 2
 #name = "PSD1-V1730-2"
