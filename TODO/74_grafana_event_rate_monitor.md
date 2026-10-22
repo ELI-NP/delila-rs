@@ -1,6 +1,6 @@
 # TODO 74 — Grafana をイベントレートモニタとして使えるようにする(pf-qaq)
 
-**Status: 🚧 P1〜P5 実装済み (2026-10-22) — P1 + 匿名 Viewer 化は pf-qaq に配備済み。P2/P5(Operator)は pf-qaq でのビルドまで、有効化は Operator の再起動待ち(データ取得中のためユーザー判断)**
+**Status: 🚧 P1〜P5 実装・pf-qaq に配備済み (2026-10-22 17:02、ランの合間にユーザー了承で DAQ 再起動) — 残 = 次のランで `channel_rate.rate` と `run_event` の実データ確認、`N_Wall` 用の HV パネル(P4)**
 
 **P2〜P5 実装記録 (2026-10-22):**
 - P2/P5: `src/operator/influxdb.rs` — `RateTracker`(実測の経過時間で割る、初回は rate なし、カウンタが戻ったら 0)、
@@ -160,3 +160,10 @@ Grafana の画面で 150 ch(Si 122 + 液シン 24 + …)を手で付け替える
 - InfluxDB 3 Core にはコンパクションがない(Enterprise のみ)。ファイル数は増え続けるので、
   上限を上げると長期間のクエリは遅くなる(Luna2: 17k ファイルの全期間カウントで約 4.5 秒)。
   保持期間を決めるかどうかも検討する。
+
+**新 Operator 有効化 (2026-10-22 17:02、pf-qaq):** ラン 120 終了後の合間に stop_daq → start_daq(ログ `logs/20261022_170246`)、
+Configure で元の状態(Configured、次は run 121)に戻した(V1730 108 パラメーター・VX2730 54 パラメーター、失敗 0)。
+`gen_dashboards.py --config config.toml` で `json/X730_ThGEM_Test/rates_x730-thgem-test.json` を生成し、Grafana の
+`X730_ThGEM_Test` フォルダに読み込まれたことを確認(48 ch、うち VX2730 の 32 ch は JSON で無効)。
+ボードごとのレートは表示できる。チャンネル別のパネルは `rate` 列、アノテーションは `run_event` 表がまだ無いので、
+**次のランが始まるまでエラー表示**(新 Operator はイベントを数えたときだけ channel_rate を書くため)。
