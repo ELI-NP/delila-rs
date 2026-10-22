@@ -18,6 +18,7 @@
 //! ```text
 //! pha_fw_scan --data-dir ~/DELILA_data --digitizers 0,1,2 \
 //!     --rise 2000:8000:1000 --flat 1200 --seconds 300 [--dry-run]
+//! pha_fw_scan --data-dir ~/DELILA_data --measure-run 1   # analyse only
 //! ```
 //!
 //! Waveforms should be OFF (list mode): the FW energy is all that is used, and
@@ -52,14 +53,14 @@ struct Args {
     #[arg(long)]
     data_dir: PathBuf,
     /// Digitizer (source) IDs to program, comma-separated.
-    #[arg(long, value_delimiter = ',', required = true)]
+    #[arg(long, value_delimiter = ',', required_unless_present = "measure_run")]
     digitizers: Vec<u32>,
     /// Trapezoid rise times, ns: lo:hi:step or a,b,c.
-    #[arg(long)]
-    rise: String,
+    #[arg(long, required_unless_present = "measure_run")]
+    rise: Option<String>,
     /// Flat-top times, ns: lo:hi:step or a,b,c.
-    #[arg(long)]
-    flat: String,
+    #[arg(long, required_unless_present = "measure_run")]
+    flat: Option<String>,
     /// Run length per point, s.
     #[arg(long, default_value_t = 300)]
     seconds: u64,
@@ -75,6 +76,9 @@ struct Args {
     /// Print the plan and exit without touching the DAQ.
     #[arg(long)]
     dry_run: bool,
+    /// Only measure the files of an existing run (no DAQ control at all).
+    #[arg(long)]
+    measure_run: Option<u32>,
 }
 
 /// One grid point: the configuration as found, or a board-wide trapezoid.
@@ -326,12 +330,7 @@ async fn measure_point(
     let mut last_err: Option<BoxError> = None;
     for _ in 0..5 {
         match read_run(&args.data_dir, run) {
-            Ok(spectra) => {
-                return Ok(spectra
-                    .into_par_iter()
-                    .map(|(key, energies)| (key, measure_channel(&energies)))
-                    .collect());
-            }
+            Ok(spectra) => return Ok(measure_all(spectra)),
             Err(e) => last_err = Some(e),
         }
         sleep_or_cancel(Duration::from_secs(2), cancel).await?;
@@ -343,20 +342,29 @@ fn fmt_opt(v: Option<f64>, prec: usize) -> String {
     v.map_or_else(|| "-".into(), |v| format!("{v:.prec$}"))
 }
 
-fn print_point(point: Point, run: u32, results: &BTreeMap<(u8, u8), ChannelMeasurement>) {
-    println!("  {} run {run}:", point.label());
+fn print_point(label: &str, run: u32, results: &BTreeMap<(u8, u8), ChannelMeasurement>) {
+    println!("  {label} run {run}:");
     for ((m, c), r) in results {
         if r.high.is_none() && r.events < 1000 {
             continue; // empty / noise-only channel
         }
         println!(
-            "    mod {m} ch {c:>2}: FWHM@1332 {} keV (N={}), @1173 {} keV, events {}",
+            "    mod {m} ch {c:>2}: FWHM@1332 {} keV (N={}, code {}), @1173 {} keV, events {}",
             fmt_opt(r.fwhm_kev_high(), 3),
             r.high.map_or(0, |f| f.counts.round() as i64),
+            fmt_opt(r.high.map(|f| f.centroid), 0),
             fmt_opt(r.fwhm_kev_low(), 3),
             r.events
         );
     }
+}
+
+/// Measure every (module, channel) spectrum of a run.
+fn measure_all(spectra: BTreeMap<(u8, u8), Vec<u16>>) -> BTreeMap<(u8, u8), ChannelMeasurement> {
+    spectra
+        .into_par_iter()
+        .map(|(key, energies)| (key, measure_channel(&energies)))
+        .collect()
 }
 
 fn csv_row(
@@ -498,9 +506,23 @@ async fn restore(op: &Operator, originals: &[DigitizerConfig], out_dir: &Path) -
 }
 
 async fn run(args: Args) -> Result<(), BoxError> {
+    if let Some(run) = args.measure_run {
+        print_point(
+            "existing",
+            run,
+            &measure_all(read_run(&args.data_dir, run)?),
+        );
+        return Ok(());
+    }
     let step = fw_scan::trap_step_ns(args.sample_ns);
-    let rises = parse_values(&args.rise).map_err(|e| format!("--rise: {e}"))?;
-    let flats = parse_values(&args.flat).map_err(|e| format!("--flat: {e}"))?;
+    let axis = |v: &Option<String>, name: &str| -> Result<Vec<f64>, BoxError> {
+        let text = v
+            .as_deref()
+            .ok_or_else(|| format!("--{name} is required"))?;
+        Ok(parse_values(text).map_err(|e| format!("--{name}: {e}"))?)
+    };
+    let rises = axis(&args.rise, "rise")?;
+    let flats = axis(&args.flat, "flat")?;
     let mut points = vec![Point::AsConfigured];
     points.extend(
         fw_scan::grid(&rises, &flats, step)
@@ -611,7 +633,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
         println!("[{}/{}] {}", i + 1, points.len(), point.label());
         match measure_point(&op, &args, &originals, point, run, &mut cancel).await {
             Ok(results) => {
-                print_point(point, run, &results);
+                print_point(&point.label(), run, &results);
                 csv_row(&mut csv, i, point, run, &results)?;
                 runs.push(run);
                 measured.push(results);
@@ -862,13 +884,14 @@ mod tests {
             operator,
             data_dir: dir.join("data"),
             digitizers: vec![0, 1],
-            rise: "3296,6592,9888".into(),
-            flat: "1200".into(),
+            rise: Some("3296,6592,9888".into()),
+            flat: Some("1200".into()),
             seconds,
             sample_ns: 4.0,
             first_run: None,
             out_dir: Some(dir.join("out")),
             dry_run: false,
+            measure_run: None,
         }
     }
 
@@ -937,5 +960,22 @@ mod tests {
         // Two good points are still summarized.
         let summary = std::fs::read_to_string(dir.path().join("out").join("summary.txt")).unwrap();
         assert!(summary.contains("as-configured"), "{summary}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn measure_run_needs_no_operator() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = mock(dir.path());
+        write_run(&m, 7);
+        let mut a = args("http://127.0.0.1:1".into(), dir.path(), 0);
+        a.digitizers.clear();
+        a.rise = None;
+        a.flat = None;
+        a.measure_run = Some(7);
+        run(a).await.expect("offline measurement");
+        assert!(
+            !dir.path().join("out").exists(),
+            "measure-only writes nothing"
+        );
     }
 }

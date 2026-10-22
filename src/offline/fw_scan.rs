@@ -25,8 +25,12 @@ use crate::config::DigitizerConfig;
 pub const CO60_LOW_KEV: f64 = 1173.228;
 pub const CO60_HIGH_KEV: f64 = 1332.492;
 
-/// Lowest FW code considered a γ line (noise triggers sit at E ≈ 1..20).
-const MIN_CODE: usize = 64;
+/// Lowest FW code searched for a ⁶⁰Co line. Below it sit the noise triggers a
+/// low threshold lets through, rising from the threshold and falling away —
+/// on SN05 run 1 (mod 2 ch 8, 447 k events) their slope yielded a fake pair at
+/// codes 68/77. A ⁶⁰Co line below code 512 would mean < 0.4 codes/keV, which no
+/// HPGe spectroscopy gain on the 15-bit FW energy comes near.
+const MIN_CODE: usize = 512;
 /// Codes at and above this are overflow / saturation markers.
 const MAX_CODE: usize = 0x7FFF;
 /// Half width of the line-finding density window, relative to the code.
@@ -34,6 +38,12 @@ const MAX_CODE: usize = 0x7FFF;
 const DENSITY_HALF_WIDTH: f64 = 0.0025;
 /// …but never narrower than this many codes (low-gain spectra).
 const DENSITY_MIN_HALF_CODES: f64 = 2.0;
+/// The local continuum under a candidate is read from same-width windows this
+/// many half-widths to either side (clear of a line ~0.25 % FWHM wide).
+const SIDE_OFFSET_HALF_WIDTHS: f64 = 3.0;
+/// A candidate must stand this many Poisson σ above the local continuum: on a
+/// steep continuum, fluctuations make local maxima everywhere.
+const MIN_SIGNIFICANCE: f64 = 5.0;
 /// Candidate lines must be at least this far apart (relative).
 const CANDIDATE_SEPARATION: f64 = 0.02;
 /// How many candidate lines are searched for the ⁶⁰Co pair.
@@ -103,9 +113,13 @@ pub fn with_channel_traps(
     config
 }
 
-/// Line candidates, densest first: `(code, events within ±DENSITY_HALF_WIDTH)`,
-/// each at least [`CANDIDATE_SEPARATION`] from a denser one.
-pub fn line_candidates(energies: &[u16], n: usize) -> Vec<(f64, u32)> {
+/// Line candidates, most prominent first: `(code, excess)`. `excess` is the
+/// number of events within ±DENSITY_HALF_WIDTH of `code` minus the local
+/// continuum, estimated from same-width windows at ±SIDE_OFFSET_HALF_WIDTHS.
+/// A candidate is a local maximum of the windowed count, stands
+/// [`MIN_SIGNIFICANCE`] σ above the continuum, and is at least
+/// [`CANDIDATE_SEPARATION`] from a more prominent one.
+pub fn line_candidates(energies: &[u16], n: usize) -> Vec<(f64, f64)> {
     let mut prefix = vec![0u32; MAX_CODE + 1];
     for &e in energies {
         let e = e as usize;
@@ -116,43 +130,63 @@ pub fn line_candidates(energies: &[u16], n: usize) -> Vec<(f64, u32)> {
     for i in 1..prefix.len() {
         prefix[i] += prefix[i - 1];
     }
-    let in_range = |lo: f64, hi: f64| {
-        let lo = (lo.ceil().max(0.0) as usize).min(MAX_CODE);
-        let hi = ((hi.floor() + 1.0).max(0.0) as usize).min(MAX_CODE);
-        prefix[hi].saturating_sub(prefix[lo])
+    // Events in [c - h, c + h] (codes clipped to the table).
+    let window = |c: f64, h: f64| {
+        let lo = ((c - h).ceil().max(0.0) as usize).min(MAX_CODE);
+        let hi = (((c + h).floor() + 1.0).max(0.0) as usize).min(MAX_CODE);
+        f64::from(prefix[hi].saturating_sub(prefix[lo]))
     };
-    let mut density: Vec<(usize, u32)> = (MIN_CODE..MAX_CODE)
-        .map(|c| {
-            let half = (c as f64 * DENSITY_HALF_WIDTH).max(DENSITY_MIN_HALF_CODES);
-            (c, in_range(c as f64 - half, c as f64 + half))
-        })
-        .filter(|&(_, d)| d > 0)
-        .collect();
-    // Densest first; ties to the lower code so the result is deterministic.
-    density.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let mut lines: Vec<(f64, u32)> = Vec::new();
-    for (c, d) in density {
+    let half = |c: f64| (c * DENSITY_HALF_WIDTH).max(DENSITY_MIN_HALF_CODES);
+
+    let mut found: Vec<(f64, f64)> = Vec::new();
+    for code in MIN_CODE..MAX_CODE {
+        let c = code as f64;
+        let h = half(c);
+        let reach = SIDE_OFFSET_HALF_WIDTHS * h + h;
+        // The side windows must lie inside the searched range.
+        if c - reach < MIN_CODE as f64 || c + reach >= MAX_CODE as f64 {
+            continue;
+        }
+        let d = window(c, h);
+        if d == 0.0 {
+            continue;
+        }
+        // Local maximum over ±2h (plateaus pass; separation keeps one).
+        let span = (2.0 * h).round() as usize;
+        if (code - span..=code + span).any(|o| window(o as f64, half(o as f64)) > d) {
+            continue;
+        }
+        let side = SIDE_OFFSET_HALF_WIDTHS * h;
+        let continuum = 0.5 * (window(c - side, h) + window(c + side, h));
+        let excess = d - continuum;
+        if excess > MIN_SIGNIFICANCE * (continuum + 1.0).sqrt() {
+            found.push((c, excess));
+        }
+    }
+    // Most prominent first; ties to the lower code so the result is deterministic.
+    found.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.total_cmp(&b.0)));
+    let mut lines: Vec<(f64, f64)> = Vec::new();
+    for (c, e) in found {
         if lines.len() == n {
             break;
         }
-        let c = c as f64;
         if lines
             .iter()
             .all(|&(l, _)| (c - l).abs() > CANDIDATE_SEPARATION * l)
         {
-            lines.push((c, d));
+            lines.push((c, e));
         }
     }
     lines
 }
 
 /// FW codes of the ⁶⁰Co lines `(1173 keV, 1332 keV)`: the candidate pair whose
-/// ratio matches 1332.492 / 1173.228 within 1 %, the pair with the stronger
-/// weaker line if several match. `None` when no pair matches.
+/// ratio matches 1332.492 / 1173.228 within 1 %, the pair whose weaker line is
+/// the more prominent if several match. `None` when no pair matches.
 pub fn find_co60(energies: &[u16]) -> Option<(f64, f64)> {
     let ratio = CO60_HIGH_KEV / CO60_LOW_KEV;
     let lines = line_candidates(energies, CANDIDATES);
-    let mut best: Option<(u32, (f64, f64))> = None;
+    let mut best: Option<(f64, (f64, f64))> = None;
     for &(a, da) in &lines {
         for &(b, db) in &lines {
             if b <= a || ((b / a) / ratio - 1.0).abs() > PAIR_RATIO_TOLERANCE {
@@ -374,6 +408,26 @@ mod tests {
                 "gain {gain}: 1332 at {hi}"
             );
         }
+    }
+
+    #[test]
+    fn a_falling_noise_continuum_is_not_a_line_pair() {
+        // SN05 run 1 mod 2 ch 8: 447 k noise triggers falling away from the
+        // threshold were taken for a pair at codes 68/77 ("FWHM 100 keV").
+        // Weak real lines (a segment: ~800 events at 1332 keV) on top of it.
+        let mut e = co60_spectrum(21, 6.3, 3.5, 800);
+        let mut r = rng(22);
+        let fall = rand_distr::Exp::new(1.0f64 / 300.0).expect("rate");
+        e.extend((0..400_000).map(|_| (64.0 + fall.sample(&mut r)).min(32_000.0) as u16));
+        let (lo, hi) = find_co60(&e).expect("the real pair");
+        assert!(
+            (lo / (CO60_LOW_KEV * 6.3) - 1.0).abs() < 0.002,
+            "1173 at {lo}"
+        );
+        assert!(
+            (hi / (CO60_HIGH_KEV * 6.3) - 1.0).abs() < 0.002,
+            "1332 at {hi}"
+        );
     }
 
     #[test]
