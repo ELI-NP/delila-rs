@@ -1,0 +1,17 @@
+# SY5527 HV monitor on pf-qaq (neutron wall: 2x A1833 in slots 1 and 3,
+# channels NWA01-NWA12 / NWB01-NWB12). Read-only. TODO 76.
+# The password is the crate's well-known default (user: no problem if it leaks).
+hv_host: "192.168.144.148"
+hv_username: "admin"
+hv_password: "eli-np"
+system_type: "SY5527"
+
+# CAENHVWrapper v7.5, unpacked under daq's home (no root needed):
+#   ~/delila-rs/external/CAENHVWrapper-v7.5.tgz -> ~/.local/opt/CAENHVWrapper-v7.5
+#   ~/.local/lib/libcaenhvwrapper.so -> .../bin/x86_64/libcaenhvwrapper.so.v7.5
+# After a system install (sudo ./install.sh) use /usr/local/lib/libcaenhvwrapper.so.
+lib_path: "/home/daq/.local/lib/libcaenhvwrapper.so"
+
+# No `slots`: read every populated slot from the crate map.
+poll_interval_sec: 5.0
+influx_url: "http://localhost:8086/api/v3/write_lp?db=delila"

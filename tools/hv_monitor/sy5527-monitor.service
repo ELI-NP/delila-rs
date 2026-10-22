@@ -1,0 +1,15 @@
+[Unit]
+Description=SY5527 HV monitor (read-only, InfluxDB) — independent of the DAQ
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=daq
+WorkingDirectory=/home/daq/delila-rs/tools/hv_monitor
+# pf-qaq's config; other hosts point --config at their own file.
+ExecStart=/usr/bin/python3 -u sy5527_monitor.py --config sy5527_config_pfqaq.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

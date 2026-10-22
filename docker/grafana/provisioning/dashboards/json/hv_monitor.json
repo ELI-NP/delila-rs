@@ -17,16 +17,23 @@
           { "text": "All", "value": "$__all", "selected": true },
           { "text": "0", "value": "0", "selected": false },
           { "text": "1", "value": "1", "selected": false },
+          { "text": "2", "value": "2", "selected": false },
+          { "text": "3", "value": "3", "selected": false },
           { "text": "4", "value": "4", "selected": false },
           { "text": "5", "value": "5", "selected": false },
+          { "text": "6", "value": "6", "selected": false },
           { "text": "7", "value": "7", "selected": false },
           { "text": "8", "value": "8", "selected": false },
+          { "text": "9", "value": "9", "selected": false },
           { "text": "10", "value": "10", "selected": false },
           { "text": "11", "value": "11", "selected": false },
+          { "text": "12", "value": "12", "selected": false },
           { "text": "13", "value": "13", "selected": false },
-          { "text": "14", "value": "14", "selected": false }
+          { "text": "14", "value": "14", "selected": false },
+          { "text": "15", "value": "15", "selected": false }
         ],
-        "query": "0,1,4,5,7,8,10,11,13,14",
+        "query": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15",
+        "description": "Every slot 0-15, so it fits any SY4527/SY5527 crate (pf-qaq uses slots 1 and 3); empty slots have no data.",
         "includeAll": true,
         "multi": true
       }
@@ -116,7 +123,7 @@
         {
           "refId": "A",
           "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
-          "rawSql": "SELECT slot, channel, name, vmon, imon, vset, pw, status FROM sy5527_hv WHERE slot IN (${slot:singlequote}) ORDER BY time DESC LIMIT 120",
+          "rawSql": "SELECT slot, channel, name, vmon, imon, vset, pw, status FROM (SELECT slot, channel, name, vmon, imon, vset, pw, status, ROW_NUMBER() OVER (PARTITION BY slot, channel ORDER BY time DESC) AS rn FROM sy5527_hv WHERE time >= now() - interval '1 minute' AND slot IN (${slot:singlequote})) WHERE rn = 1 ORDER BY CAST(slot AS INT), CAST(channel AS INT)",
           "format": "table"
         }
       ]
