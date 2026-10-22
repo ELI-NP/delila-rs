@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 672" role="img" aria-label="Words of specification prose against tokens of Rust, with the Rust split into production and test code: 100909 words in task documents, 51171 in design documents, 68830 in source comments; 121891 production code tokens and 43817 test code tokens across 777 test functions">
+<!-- prose (words) -->
+<text x="494" y="76" text-anchor="end" font-family="OCR B, OCRB, IBM Plex Sans, sans-serif" font-size="37" fill="#111111">TODO/ · 84 task docs</text>
+<rect x="520" y="26" width="736.8" height="72" fill="#E84E1B"/>
+<text x="1274.8" y="77" font-family="Decima Mono LT Std, Decima Mono, IBM Plex Mono, monospace" font-size="39" font-weight="500" fill="#111111">100,909</text>
+
+<text x="494" y="192" text-anchor="end" font-family="OCR B, OCRB, IBM Plex Sans, sans-serif" font-size="37" fill="#111111">docs/ · 46 design docs</text>
+<rect x="520" y="142" width="373.6" height="72" fill="#E84E1B"/>
+<text x="911.6" y="193" font-family="Decima Mono LT Std, Decima Mono, IBM Plex Mono, monospace" font-size="39" font-weight="500" fill="#111111">51,171</text>
+
+<text x="494" y="308" text-anchor="end" font-family="OCR B, OCRB, IBM Plex Sans, sans-serif" font-size="37" fill="#111111">source comments</text>
+<rect x="520" y="258" width="502.6" height="72" fill="#E84E1B"/>
+<text x="1040.6" y="309" font-family="Decima Mono LT Std, Decima Mono, IBM Plex Mono, monospace" font-size="39" font-weight="500" fill="#111111">68,830</text>
+
+<!-- Rust (tokens) -->
+<text x="494" y="444" text-anchor="end" font-family="OCR B, OCRB, IBM Plex Sans, sans-serif" font-size="37" fill="#111111">production code</text>
+<rect x="520" y="394" width="890.0" height="72" fill="#111111"/>
+<text x="1428.0" y="445" font-family="Decima Mono LT Std, Decima Mono, IBM Plex Mono, monospace" font-size="39" font-weight="500" fill="#111111">121,891</text>
+
+<text x="494" y="560" text-anchor="end" font-family="OCR B, OCRB, IBM Plex Sans, sans-serif" font-size="37" fill="#111111">test code</text>
+<rect x="521.5" y="511.5" width="316.9" height="69" fill="none" stroke="#111111" stroke-width="3"/>
+<text x="857.9" y="561" font-family="Decima Mono LT Std, Decima Mono, IBM Plex Mono, monospace" font-size="39" font-weight="500" fill="#111111">43,817</text>
+<text x="1010" y="560" font-family="OCR B, OCRB, IBM Plex Sans, sans-serif" font-size="30" fill="#8C8A84">= 777 test functions</text>
+
+<line x1="520" y1="16" x2="520" y2="592" stroke="#111111" stroke-width="3"/>
+<text x="520" y="648" font-family="Decima Mono LT Std, Decima Mono, IBM Plex Mono, monospace" font-size="30" fill="#8C8A84" letter-spacing="3">PROSE IN WORDS · RUST IN TOKENS · 2026-09-08</text>
+</svg>

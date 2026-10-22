@@ -11,7 +11,8 @@
 | `qr-gh-orbit-transparent.svg`, `qr-orbit-rot90-transparent.svg` | The two QR codes on the sheet: the delila-rs repository and the TNS paper on the C++ predecessor. |
 | `poster.html`, `DELILA-poster-A0.pdf` | The earlier HTML/Chrome draft (three-column, measurement-led). Superseded by the Affinity version but kept as the alternative layout and as the source of its charts and diagrams. |
 | `make_diagrams.py` | Generates the four explanatory diagrams embedded in `poster.html` (triggered-vs-listmode, event building, `.delila` layout, ELIADE clock/RUN topology). |
-| `wordcount.py` | Counts words in `TODO/` and `docs/` prose vs Rust tokens (the "specified in prose, written by agents" figure). Needs `janome`. |
+| `wordcount.py` | Counts words in `TODO/` and `docs/` prose vs Rust tokens, with the Rust split into production and test code (the "specified in prose, written by agents" figure). Needs `janome`. |
+| `prose_vs_code_tests.svg` | Standalone bar chart of the wordcount (prose orange, production code solid ink, test code outlined + "777 test functions"), for import into Affinity. |
 
 The logo sources live in `../logo/` (`DELILA-logo.svg` + its Affinity file).
 
@@ -41,9 +42,14 @@ channel, 2026-05-29 → 06-01.
   (VX2730 over Ethernet; two VX1730B over optical), and not one inter-hit gap longer than a
   single period on any of them
 
-**Prose vs code** (`wordcount.py`, 2026-08-24): TODO/ 96 867 words · docs/ 51 171 · source
-comments 65 418 · Rust code tokens 158 132. 53 % of the prose is Japanese, at 2.00 characters
-per word against 6.10 for English — which is why the comparison is by words, not characters.
+**Prose vs code** (`wordcount.py`, re-measured 2026-09-08): TODO/ 100 909 words · docs/ 51 171 ·
+source comments 68 830 · Rust **production** code 121 891 tokens · Rust **test** code 43 817
+tokens across **777 test functions** (`#[cfg(test)]` modules in `src/` plus `tests/*.rs`,
+brace-matched; shell E2E harnesses in `scripts/` not counted). Tests are 26 % of all Rust —
+36 % the size of the production code they guard. 53 % of the TODO/docs prose is Japanese, at
+2.00 characters per word against 6.10 for English — which is why the comparison is by words,
+not characters. (First measurement 2026-08-24, before TODO 67/68: code was a single
+158 132-token bar.)
 
 **"When memory full → stop and write all data to the file"** — implemented after the poster
 text was written, as TODO 68 (backlog watermarks + drain-first stop, commit `14d40ff`).

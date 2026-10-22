@@ -44,6 +44,36 @@ def split_rust(src):
             code.append(src[i]); i += 1
     return ''.join(comments), ''.join(code)
 
+def test_spans(src):
+    """spans of #[cfg(test)] mod blocks (brace-matched, comment/string-aware)"""
+    spans = []
+    for m in re.finditer(r'#\[cfg\(test\)\]', src):
+        i, n = m.end(), len(src)
+        while i < n and src[i] != '{':          # skip to the mod's opening brace
+            if src.startswith('//', i):
+                j = src.find('\n', i); i = n if j < 0 else j
+            i += 1
+        depth, j = 0, i
+        while j < n:
+            c = src[j]
+            if src.startswith('//', j):
+                k = src.find('\n', j); j = n if k < 0 else k
+            elif src.startswith('/*', j):
+                k = src.find('*/', j+2); j = n if k < 0 else k+2
+            elif c == '"':
+                j += 1
+                while j < n and src[j] != '"':
+                    j += 2 if src[j] == '\\' else 1
+                j += 1
+            else:
+                if c == '{': depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0: j += 1; break
+                j += 1
+        spans.append((m.start(), j))
+    return spans
+
 def report(label, files, kind):
     jw = jc = lw = 0
     for f in files:
@@ -58,19 +88,39 @@ out = []
 out.append(report('TODO/ task documents', sorted(glob.glob(root+'TODO/**/*.md', recursive=True)), 'md'))
 out.append(report('docs/ design documents', sorted(glob.glob(root+'docs/**/*.md', recursive=True)), 'md'))
 
-# rust: comments vs code
+# rust: comments vs code, code further split production vs test
+# (test = #[cfg(test)] mod blocks in src/ + everything in tests/)
 rs = sorted(glob.glob(root+'src/**/*.rs', recursive=True))
-cj = cc = cl = 0; kj = kc = kl = 0; ntok = 0
+it = sorted(glob.glob(root+'tests/*.rs'))
+cj = cc = cl = 0
+prod_tok = test_tok = 0
+n_testfn = 0
 KW = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\b\d+\b")
-for f in rs:
+TESTFN = re.compile(r'#\[(?:tokio::)?test[\](]')
+for f in rs + it:
     s = open(f, encoding='utf-8', errors='replace').read()
-    com, cod = split_rust(s)
+    com, _ = split_rust(s)
     a, b = ja_words(com); cj += a; cc += b; cl += latin_words(com)
-    ntok += len(KW.findall(cod))
-out.append(dict(label='comments inside src/*.rs', files=len(rs),
+    n_testfn += len(TESTFN.findall(s))
+    if f in it:
+        prod_s, test_s = '', s
+    else:
+        spans = test_spans(s)
+        test_s = ''.join(s[a:b] for a, b in spans)
+        keep, pos = [], 0
+        for a, b in spans:
+            keep.append(s[pos:a]); pos = b
+        keep.append(s[pos:])
+        prod_s = ''.join(keep)
+    _, cod = split_rust(prod_s); prod_tok += len(KW.findall(cod))
+    _, cod = split_rust(test_s); test_tok += len(KW.findall(cod))
+out.append(dict(label='comments in src/ + tests/', files=len(rs)+len(it),
                 ja_words=cj, ja_chars=cc, latin_words=cl, total=cj+cl))
-out.append(dict(label='Rust code tokens', files=len(rs), ja_words=0, ja_chars=0,
-                latin_words=ntok, total=ntok))
+out.append(dict(label='Rust production code tokens', files=len(rs), ja_words=0,
+                ja_chars=0, latin_words=prod_tok, total=prod_tok))
+out.append(dict(label='Rust test code tokens', files=len(rs)+len(it), ja_words=0,
+                ja_chars=0, latin_words=test_tok, total=test_tok,
+                test_fns=n_testfn))
 json.dump(out, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1)
 w = max(len(o['label']) for o in out)
 print(f"{'':{w}}  {'files':>6} {'JA words':>10} {'(JA chars)':>11} {'EN words':>10} {'TOTAL':>11}")
