@@ -196,6 +196,23 @@ config/digitizers/psd1_test.json → "digitizer_id": 0   (= TOML source id 0)
 config/digitizers/psd2_56.json   → "digitizer_id": 1   (= TOML source id 1)
 ```
 
+### Start never completes and keeps failing (multi-board start sync)
+
+If some boards are set to start on S-IN (an external signal) but the board that
+should drive that signal (the master) is not set to output it, the S-IN boards
+never start and Start cannot complete. The Operator waits for the digitizers to
+report Running and gives up after about 5 s, so it looks like starting and
+failing over and over (Grafana's run markers keep each failed attempt as a
+start/stop pair).
+
+- **Whenever a board is set to start on S-IN, set the master's output to match**
+  (e.g. its TRG-OUT / GPIO carrying the Run signal). When you switch back to a
+  software (SW) start, revert the receiving boards too.
+- If it won't stop, stop the DAQ, fix the settings and relaunch with
+  `start_daq.sh`.
+- Real case (2026-10-22, pf-qaq): the VX2730 was set to start on S-IN while the
+  V1730 was still set not to output the signal.
+
 ### Zero events, counter not increasing
 
 Check the physical side before the software. Typical causes: NIM crate off

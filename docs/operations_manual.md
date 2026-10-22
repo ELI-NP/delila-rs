@@ -191,6 +191,21 @@ config/digitizers/psd1_test.json → "digitizer_id": 0   (= TOML の source id 0
 config/digitizers/psd2_56.json   → "digitizer_id": 1   (= TOML の source id 1)
 ```
 
+### Start が完了せず、開始と失敗を繰り返す場合（複数ボードのスタート同期）
+
+一部のボードを S-IN（外部信号）でスタートする設定にしたのに、その信号を出す側
+（マスター）の出力が設定されていないと、S-IN 待ちのボードがいつまでも始まらず
+Start が完了しない。Operator はデジタイザが Running になるのを待って約 5 秒で
+諦めるので、開始と失敗を繰り返すように見える（Grafana のランの印には、失敗した
+試行が start / stop の組として残る）。
+
+- **S-IN でスタートを受けるボードを作ったら、信号を出す側の出力設定も必ず合わせる**
+  （例: マスターの TRG-OUT / GPIO を Run 信号にする）。スタートをソフトウェア
+  （SW）に戻すときは、受ける側の設定も戻す。
+- 止まらなくなったら DAQ を止めて設定を直し、`start_daq.sh` で立ち上げ直す。
+- 実例（2026-10-22、pf-qaq）: VX2730 を S-IN スタートにしたが、V1730 が信号を
+  出さない設定のままだった。
+
 ### events が 0 のまま増えない場合
 
 ソフトの前に物理を疑う。NIM クレート OFF（Configure 成功だが events=0）、
