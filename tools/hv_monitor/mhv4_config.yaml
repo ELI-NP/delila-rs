@@ -1,0 +1,21 @@
+# Mesytec MHV-4 HV monitor (read-only) — see TODO/75_mesytec_hv_monitor.md
+# Si detector bias, 4 channels, USB (FTDI) on pf-qaq.
+
+# Fixed by-id path (no udev rule needed). daq must be in the dialout group.
+serial_port: "/dev/serial/by-id/usb-mesytec_MHV4_V42_0915075-if00-port0"
+
+# InfluxDB tag `device` on the mhv4 / mhv4_ramp tables.
+device_name: "si_bias"
+
+# Seconds between read cycles (one cycle = 21 read commands at 9600 Bd).
+poll_interval_sec: 2.0
+
+# InfluxDB 3 write endpoint.
+influx_url: "http://localhost:8086/api/v3/write_lp?db=delila"
+
+# hv_present = |vmon| > this [V]. Judged from the measured voltage, not the ON/OFF state
+# (the MHV-4 has no command to read ON/OFF; TODO 75 §2.2).
+hv_present_threshold_v: 1.0
+
+# Max seconds to wait for one reply (echo ... "MHV-4>" prompt).
+reply_timeout_sec: 1.0

@@ -1,0 +1,286 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Mesytec MHV-4 (Si bias, 4 ch), read-only monitor tools/hv_monitor/mhv4_monitor.py. TODO 75.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Current values (latest read per channel, last 1 min)",
+      "description": "Latest reading of each channel from the last minute. A blank cell means that value could not be read in the latest cycle (nothing is filled in from older cycles). 'HV output (from voltage)' is |VMon| > 1 V (hv_present_threshold_v): it is judged from the measured voltage, it is NOT the ON/OFF state (the MHV-4 has no command to read ON/OFF). Empty table = the monitor has written nothing for 1 minute.",
+      "type": "table",
+      "gridPos": { "h": 7, "w": 19, "x": 0, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "channel" },
+            "properties": [
+              { "id": "displayName", "value": "Channel" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "vmon" },
+            "properties": [
+              { "id": "displayName", "value": "VMon" },
+              { "id": "unit", "value": "suffix: V" },
+              { "id": "decimals", "value": 1 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "imon" },
+            "properties": [
+              { "id": "displayName", "value": "IMon" },
+              { "id": "unit", "value": "suffix: µA" },
+              { "id": "decimals", "value": 3 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "vlimit" },
+            "properties": [
+              { "id": "displayName", "value": "V limit" },
+              { "id": "unit", "value": "suffix: V" },
+              { "id": "decimals", "value": 1 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ilimit" },
+            "properties": [
+              { "id": "displayName", "value": "I limit" },
+              { "id": "unit", "value": "suffix: µA" },
+              { "id": "decimals", "value": 3 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "polarity" },
+            "properties": [
+              { "id": "displayName", "value": "Polarity" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "hv_output" },
+            "properties": [
+              { "id": "displayName", "value": "HV output (from voltage)" },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "present": { "text": "present", "color": "green", "index": 0 },
+                      "none": { "text": "none", "color": "text", "index": 1 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "time" },
+            "properties": [
+              { "id": "displayName", "value": "Read at" },
+              { "id": "unit", "value": "dateTimeAsLocal" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          { "displayName": "Channel", "desc": false }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "rawSql": "SELECT channel, vmon, imon, vlimit, ilimit, polarity, CASE WHEN hv_present THEN 'present' WHEN NOT hv_present THEN 'none' END AS hv_output, time FROM (SELECT time, channel, vmon, imon, vlimit, ilimit, polarity, hv_present, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY time DESC) AS rn FROM mhv4 WHERE time >= now() - interval '1 minute') AS latest WHERE rn = 1 ORDER BY channel",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "Ramp speed",
+      "description": "MHV-4 voltage ramp speed (RRA), one value for the whole module. Latest read in the last minute.",
+      "type": "stat",
+      "gridPos": { "h": 7, "w": 5, "x": 19, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: V/s",
+          "decimals": 0,
+          "displayName": "Ramp speed",
+          "color": { "mode": "fixed", "fixedColor": "text" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "/^speed_vps$/"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "rawSql": "SELECT time, speed_vps FROM mhv4_ramp WHERE time >= now() - interval '1 minute' ORDER BY time DESC LIMIT 1",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "HV output present (judged from voltage)",
+      "description": "'HV present' = |VMon| > 1 V (hv_present_threshold_v in mhv4_config.yaml). Computed from the measured voltage of each cycle; it is NOT the ON/OFF state, which the MHV-4 cannot report (a channel switched on with a 0 V preset, or still ramping up, shows 'no HV'). Empty = no reading (monitor not running or the voltage read failed).",
+      "type": "state-timeline",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 7 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "ch ${__field.labels.channel}",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#8e8e8e", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "no HV", "color": "#8e8e8e", "index": 0 },
+                "1": { "text": "HV present", "color": "green", "index": 1 }
+              }
+            }
+          ],
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "spanNulls": false,
+            "insertNulls": 10000
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "alignValue": "center",
+        "rowHeight": 0.8,
+        "legend": { "showLegend": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "rawSql": "SELECT time, CASE WHEN hv_present THEN 1 WHEN NOT hv_present THEN 0 END AS hv_present, channel FROM mhv4 WHERE time >= $__timeFrom AND time <= $__timeTo ORDER BY time",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Voltage (VMon)",
+      "description": "Measured output voltage per channel (RU). Gaps = no reading.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "ch ${__field.labels.channel}",
+          "unit": "suffix: V",
+          "decimals": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "insertNulls": 10000
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["mean", "lastNotNull"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "rawSql": "SELECT time, vmon, channel FROM mhv4 WHERE time >= $__timeFrom AND time <= $__timeTo ORDER BY time",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Current (IMon)",
+      "description": "Measured leakage current per channel (RI), µA, 1 nA resolution. Can be slightly negative near 0. Gaps = no reading.",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "ch ${__field.labels.channel}",
+          "unit": "suffix: µA",
+          "decimals": 3,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "insertNulls": 10000
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["mean", "lastNotNull"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "influxdb", "uid": "P951FEA4DE68E13C5" },
+          "rawSql": "SELECT time, imon, channel FROM mhv4 WHERE time >= $__timeFrom AND time <= $__timeTo ORDER BY time",
+          "format": "time_series"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["delila", "hv", "mhv4"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Si HV (MHV-4)",
+  "uid": "si-hv-mhv4",
+  "version": 1
+}
