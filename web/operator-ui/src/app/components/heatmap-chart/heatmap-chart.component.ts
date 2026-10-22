@@ -6,7 +6,7 @@ import {
   signal,
 } from '@angular/core';
 import { NgxEchartsDirective } from 'ngx-echarts';
-import type { EChartsCoreOption } from 'echarts/core';
+import type { ECharts, EChartsCoreOption } from 'echarts/core';
 import { AxisView, Histogram2D } from '../../models/histogram.types';
 import { rebin2d } from '../../utils/rebin';
 
@@ -19,6 +19,7 @@ import { rebin2d } from '../../utils/rebin';
       echarts
       [options]="chartOptions()"
       [merge]="mergeOptions()"
+      (chartInit)="onChartInit($event)"
       class="heatmap-chart"
     ></div>
   `,
@@ -46,8 +47,24 @@ export class HeatmapChartComponent implements OnChanges {
   /** Client-side Y view (range + bin count). Falls back to native server config. */
   @Input() yView: AxisView | null = null;
 
+  private chartInstance: ECharts | null = null;
+
   readonly chartOptions = signal<EChartsCoreOption>(this.buildInitialOptions());
   readonly mergeOptions = signal<EChartsCoreOption>({});
+
+  onChartInit(chart: ECharts): void {
+    this.chartInstance = chart;
+  }
+
+  /** Get chart as data URL (PNG) for image export — same contract as HistogramChartComponent */
+  getDataURL(pixelRatio = 2): string | null {
+    if (!this.chartInstance) return null;
+    return this.chartInstance.getDataURL({
+      type: 'png',
+      pixelRatio,
+      backgroundColor: '#fff',
+    });
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['xAxisLabel'] || changes['yAxisLabel']) {

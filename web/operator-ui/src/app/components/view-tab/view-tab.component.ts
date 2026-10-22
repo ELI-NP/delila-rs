@@ -151,6 +151,7 @@ import {
                   ></app-histogram-chart>
                 } @else {
                   <app-heatmap-chart
+                    #chartRef
                     [histogram]="histograms2d()[i] ?? null"
                     [logScale]="cell.logScale ?? true"
                     [xAxisLabel]="axisLabel(xAxis())"
@@ -333,7 +334,8 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   @Output() tabChange = new EventEmitter<ViewTab>();
   @Output() cellExpand = new EventEmitter<number>();
 
-  @ViewChildren('chartRef') chartRefs!: QueryList<HistogramChartComponent>;
+  // 1D and 2D cells both carry #chartRef so "Save Image" works for either view.
+  @ViewChildren('chartRef') chartRefs!: QueryList<HistogramChartComponent | HeatmapChartComponent>;
 
   private readonly histogramService = inject(HistogramService);
   private readonly digitizerService = inject(DigitizerService);
