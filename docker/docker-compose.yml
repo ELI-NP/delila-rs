@@ -96,6 +96,14 @@ services:
         exec influxdb3 "$@"
       - --
     command: ["serve", "--node-id", "delila", "--object-store", "file", "--data-dir", "/var/lib/influxdb3", "--without-auth"]
+    # Core refuses any query that touches more than 432 parquet files (about
+    # 3.5 days of DAQ metrics; Core has no compaction), so after two weeks every
+    # long-range Grafana panel failed with HTTP 500 (pf-qaq, 2026-10-22, TODO 74
+    # P1). The limit is a hidden `serve` option (see `serve --help-all`).
+    # Raising it only makes very long ranges slower (Luna2: full-range count over
+    # 17k files took about 4.5 s).
+    environment:
+      INFLUXDB3_QUERY_FILE_LIMIT: "50000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8181/health"]
       interval: 10s
@@ -123,11 +131,17 @@ services:
     user: "${DAO_UID:-1000}:${DAO_GID:-1000}"
     ports:
       - "3000:3000"
+    # Anyone who has not logged in can only view (TODO 74 §3.3: the dashboards are
+    # watched from the user room, the office and home). Editing needs the admin
+    # login. GF_SECURITY_ADMIN_PASSWORD only takes effect when grafana.db is first
+    # created; to change it on an existing install run
+    #   docker exec -it delila_grafana grafana cli admin reset-admin-password
+    # Set GRAFANA_ADMIN_PASSWORD in docker/.env (gitignored) on each DAQ host.
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: delila
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-delila}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./data/grafana:/var/lib/grafana
