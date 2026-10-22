@@ -38,6 +38,7 @@
 # Same name as side3: the Operator numbers runs per experiment_name (most recent
 # run of that name + 1), so this continues side3's series at run 52.
 experiment_name = "X730_ThGEM_Test"
+#experiment_name = "NWall_140Ce"
 # Same port as side3 (there Cockpit owns 9090; here 9090 is free).
 port = 9091
 

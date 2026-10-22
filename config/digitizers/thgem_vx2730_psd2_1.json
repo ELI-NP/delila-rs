@@ -12,20 +12,21 @@
     "test_pulse_period": 0,
     "test_pulse_width": 0,
     "global_trigger_source": "TrgIn",
+    "record_length": 2000,
     "waveforms_enabled": false,
     "io_level": "NIM",
     "extra": {
       "clocksource": "Internal",
-      "enclockoutfp": "True",
       "boardvetowidth": 0,
       "trgoutmode": "Run",
       "boardvetosource": "Disabled",
-      "boardvetopolarity": "ActiveHigh",
-      "syncoutmode": "Run"
+      "enclockoutfp": "True",
+      "syncoutmode": "Run",
+      "boardvetopolarity": "ActiveHigh"
     }
   },
   "channel_defaults": {
-    "enabled": "True",
+    "enabled": "False",
     "polarity": "Negative",
     "dc_offset": 10.0,
     "vga_gain": 0,
@@ -44,8 +45,8 @@
     "wave_trigger_source": "Disabled",
     "energy_coarse_gain": "x64",
     "gate_long_ns": 400,
-    "gate_short_ns": 32,
-    "gate_pre_ns": 24,
+    "gate_short_ns": 50,
+    "gate_pre_ns": 100,
     "charge_smoothing": "Disabled",
     "coincidence_mask": "Disabled",
     "anti_coincidence_mask": "Disabled",
@@ -61,5 +62,18 @@
     "digital_probe_2": "Trigger",
     "digital_probe_3": "CFDFilterArmed"
   },
-  "channel_overrides": {}
+  "channel_overrides": {
+    "0": {
+      "trigger_threshold": 100
+    },
+    "25": {
+      "trigger_threshold": 100
+    },
+    "1": {
+      "polarity": "Positive",
+      "dc_offset": 20.0,
+      "baseline_avg": "High",
+      "trigger_threshold": 400
+    }
+  }
 }
