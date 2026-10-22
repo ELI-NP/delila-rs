@@ -1,127 +1,107 @@
 {
-  "annotations": {
+  "uid": "delila-overview",
+  "title": "DELILA DAQ Overview",
+  "description": "Generic DAQ overview (any experiment, any host). Every query follows the time picker. Per-channel rates with detector names: the Rates dashboards made by tools/grafana/gen_dashboards.py.",
+  "tags": [
+    "delila",
+    "daq"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "templating": {
     "list": []
   },
-  "editable": true,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
-  "links": [],
-  "panels": [
-    {
-      "title": "Beam Current",
-      "type": "stat",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 0
-      },
-      "datasource": {
-        "type": "influxdb",
-        "uid": "P951FEA4DE68E13C5"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "nA",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "green",
-                "value": 10
-              }
-            ]
-          }
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
         },
-        "overrides": []
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
       },
-      "options": {
-        "graphMode": "area",
-        "colorMode": "value",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P951FEA4DE68E13C5"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "green",
+        "name": "Run start",
+        "target": {
+          "refId": "Anno",
           "datasource": {
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, event_rate / 10.0 AS \"beam_current\" FROM system_rate WHERE module = '2' AND time >= now() - interval '5 minutes' ORDER BY time DESC LIMIT 1",
+          "rawSql": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'start'\nORDER BY time",
+          "query": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'start'\nORDER BY time",
           "format": "table"
         }
-      ]
-    },
-    {
-      "title": "Beam Current History",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 0
       },
-      "datasource": {
-        "type": "influxdb",
-        "uid": "P951FEA4DE68E13C5"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "nA",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false
-          }
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P951FEA4DE68E13C5"
         },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "single"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
+        "enable": true,
+        "hide": false,
+        "iconColor": "red",
+        "name": "Run stop",
+        "target": {
+          "refId": "Anno",
           "datasource": {
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, event_rate / 10.0 AS \"beam_current\" FROM system_rate WHERE module = '2' AND time >= now() - interval '5 minutes' ORDER BY time",
-          "format": "time_series"
+          "rawSql": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'stop'\nORDER BY time",
+          "query": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'stop'\nORDER BY time",
+          "format": "table"
         }
-      ]
-    },
+      }
+    ]
+  },
+  "links": [
     {
-      "title": "Event Rate (Hz)",
+      "title": "Rates",
+      "type": "dashboards",
+      "tags": [
+        "rates"
+      ],
+      "asDropdown": true,
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
       "type": "timeseries",
+      "title": "Event rate per module (Hz)",
+      "description": "system_rate.event_rate per source. Board names and per-channel rates: the Rates dashboards (links at the top).",
       "gridPos": {
-        "h": 12,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 0
       },
       "datasource": {
         "type": "influxdb",
@@ -130,9 +110,11 @@
       "fieldConfig": {
         "defaults": {
           "unit": "Hz",
+          "displayName": "M${__field.labels.module}",
           "custom": {
             "lineWidth": 1,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
+            "showPoints": "never",
             "spanNulls": false
           }
         },
@@ -144,6 +126,7 @@
           "sort": "desc"
         },
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
@@ -160,19 +143,21 @@
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, event_rate, module FROM system_rate WHERE time >= now() - interval '5 minutes' ORDER BY time",
+          "rawSql": "SELECT $__dateBin(time) AS time, AVG(event_rate) AS event_rate, module\nFROM system_rate\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, module\nORDER BY 1",
           "format": "time_series"
         }
       ]
     },
     {
-      "title": "Total Events",
+      "id": 2,
       "type": "timeseries",
+      "title": "Total events per module",
+      "description": "system_rate.total_events (events processed this run).",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 20
+        "y": 9
       },
       "datasource": {
         "type": "influxdb",
@@ -181,20 +166,25 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "displayName": "M${__field.labels.module}",
           "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
           }
         },
         "overrides": []
       },
       "options": {
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         },
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
-          "placement": "bottom",
+          "placement": "right",
           "calcs": [
             "lastNotNull"
           ]
@@ -207,19 +197,21 @@
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, total_events, module FROM system_rate WHERE time >= now() - interval '5 minutes' ORDER BY time",
+          "rawSql": "SELECT $__dateBin(time) AS time, MAX(total_events) AS total_events, module\nFROM system_rate\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, module\nORDER BY 1",
           "format": "time_series"
         }
       ]
     },
     {
-      "title": "Data Rate (bytes/s)",
+      "id": 3,
       "type": "timeseries",
+      "title": "Data rate per module (bytes/s)",
+      "description": "Derivative of system_rate.bytes (cumulative bytes read). Counter resets (new run) are skipped.",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 20
+        "y": 9
       },
       "datasource": {
         "type": "influxdb",
@@ -228,20 +220,25 @@
       "fieldConfig": {
         "defaults": {
           "unit": "Bps",
+          "displayName": "M${__field.labels.module}",
           "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
           }
         },
         "overrides": []
       },
       "options": {
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         },
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
-          "placement": "bottom",
+          "placement": "right",
           "calcs": [
             "mean",
             "max"
@@ -255,28 +252,276 @@
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, bytes, module FROM system_rate WHERE time >= now() - interval '5 minutes' ORDER BY time",
+          "rawSql": "SELECT $__dateBin(time) AS time, AVG(bps) AS data_rate, module\nFROM (\n  SELECT time, module,\n    (CAST(bytes AS DOUBLE) - CAST(lag(bytes) OVER (PARTITION BY module ORDER BY time) AS DOUBLE))\n    / (CAST(time AS BIGINT) - CAST(lag(time) OVER (PARTITION BY module ORDER BY time) AS BIGINT)) * 1e9 AS bps\n  FROM system_rate\n  WHERE time >= $__timeFrom AND time <= $__timeTo\n) AS d\nWHERE bps >= 0\nGROUP BY 1, module\nORDER BY 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Backlog queue per component (bytes)",
+      "description": "backlog.queue_bytes (max per interval) of Merger / Recorder / Monitor / ...",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "displayName": "${__field.labels.component}",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "max",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT $__dateBin(time) AS time, MAX(queue_bytes) AS queue_bytes, component\nFROM backlog\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, component\nORDER BY 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Disk free per writer",
+      "description": "disk.free_bytes of the output filesystem (min per interval).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "displayName": "${__field.labels.component}",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT $__dateBin(time) AS time, MIN(free_bytes) AS free_bytes, component\nFROM disk\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, component\nORDER BY 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "state-timeline",
+      "title": "Health: backlog / disk / write",
+      "description": "backlog_level and disk_level: 0 OK, 1 below the soft watermark, 2 below the hard one (the Operator stops / refuses Start). write = disk.write_failed (TODO 69).",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "${__field.labels.series}",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 0
+                },
+                "1": {
+                  "text": "WARN",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "CRITICAL",
+                  "color": "red",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 80
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "OK",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "WRITE FAILED",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showValue": "never",
+        "mergeValues": true,
+        "alignValue": "left",
+        "rowHeight": 0.8,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT $__dateBin(time) AS time, MAX(backlog_level) AS level, concat(component, ' backlog') AS series\nFROM backlog\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, component\nORDER BY 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT $__dateBin(time) AS time, MAX(disk_level) AS level, concat(component, ' disk') AS series\nFROM disk\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, component\nORDER BY 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT $__dateBin(time) AS time, MAX(CAST(write_failed AS INT)) AS failed, concat(component, ' write') AS series\nFROM disk\nWHERE time >= $__timeFrom AND time <= $__timeTo\nGROUP BY 1, component\nORDER BY 1",
           "format": "time_series"
         }
       ]
     }
   ],
-  "refresh": "5s",
-  "schemaVersion": 39,
-  "tags": [
-    "delila",
-    "daq"
-  ],
-  "templating": {
-    "list": []
-  },
-  "time": {
-    "from": "now-5m",
-    "to": "now"
-  },
-  "timepicker": {},
-  "timezone": "",
-  "title": "DELILA DAQ Overview",
-  "uid": "delila-overview",
-  "version": 3
+  "version": 4
 }

@@ -1,0 +1,29 @@
+# Channel map for experiment "N_Wall" (TODO 74 §3.2).
+#
+# Read by tools/grafana/gen_dashboards.py, which builds the Grafana rate
+# dashboard "Rates — N_Wall" from the DAQ TOML and this file:
+#   python3 tools/grafana/gen_dashboards.py --config config.toml
+# Grafana picks up the regenerated dashboard within ~10 s, no restart.
+# InfluxDB stores only (module, channel): a renamed channel gets its new
+# name on past data too.
+#
+# Format: one channel per line, whitespace separated (spaces or tabs):
+#   module  channel  name  group  [more columns...]
+# - module  = module_id of the [[network.sources]] entry (= its id unless
+#             module_id is set); channel = 0 .. num_channels-1.
+# - name    = series name in Grafana; group = one time-series panel per group
+#             (e.g. dE_inner, E_sector, LS). Allowed characters for both:
+#             A-Z a-z 0-9 _ . + - /   (no spaces, no quotes). Names are unique.
+# - Columns 5 and later are ignored here: the analysis may append its own
+#   (position, calibration, ...).
+# - '#' starts a comment (to the end of the line); blank lines are ignored.
+# - Channels not listed are shown as M<module>/Ch<channel> in group M<module>.
+#
+# C++: std::getline, drop everything from '#', then
+#   std::istringstream(line) >> module >> channel >> name >> group;
+#
+# Channel names are not known before the experiment: fill this in from the
+# analysis after the first runs. Examples (commented out):
+#   0   0   dE_Ri00   dE_inner
+#   0   1   dE_Ri01   dE_inner
+#   8   5   LS06      LS
