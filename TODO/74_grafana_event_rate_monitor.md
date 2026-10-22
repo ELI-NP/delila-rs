@@ -23,6 +23,11 @@
 **JSON ファイル自体が変わったとき(git pull で更新、対応表を変えて再生成)にファイルの内容で上書きされる**。
 同じ対応表での再生成は同一ファイルなので上書きされない。生成ダッシュボードも `editable: true` にした。
 
+**フォルダ構成 (2026-10-22、ユーザー: 実験別):** `foldersFromFilesStructure: true` で `json/` のサブディレクトリ =
+Grafana のフォルダ。`Common/`(Overview)、`N_Wall/`(SY5527 と MHV-4 の HV)、生成するレート用は
+`json/<experiment_name>/rates_<slug>.json`(`.gitignore` の `json/*/rates_*.json`、旧 `json/generated/` は廃止)。
+Fission2026 の 4 枚(Beam Current、SY5527 のスロット別 VMon / IMon、N1408 の Si HV)は実験終了のため削除(git 履歴には残る)。
+
 **P1 配備記録 (2026-10-22、ラン中にユーザー了承のうえ実施):** `docker/docker-compose.yml` に
 `INFLUXDB3_QUERY_FILE_LIMIT=50000`(このイメージの `serve --help-all` で `--query-file-limit` / 同 env を確認)、
 Grafana の匿名ロールを `Viewer` に、admin パスワードを `${GRAFANA_ADMIN_PASSWORD:-delila}` に。pf-qaq で

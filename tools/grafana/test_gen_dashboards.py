@@ -220,6 +220,7 @@ class DashboardTest(AssertBounded, unittest.TestCase):
         self.map = self.root / "map.txt"
         self.map.write_text("# m c name group\n0 0 dE_Ri00 dE_inner\n1 0 LS01 LS\n1 1 LS02 LS\n")
         self.out = self.root / "out"
+        self.dash_dir = self.out / "N_Wall"  # <out>/<experiment_name>/
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -256,7 +257,7 @@ class DashboardTest(AssertBounded, unittest.TestCase):
     def test_generated_dashboard(self):
         rc, out, err = self.run_main("--map", str(self.map))
         self.assertEqual(rc, 0, err)
-        path = self.out / "rates_n-wall.json"
+        path = self.dash_dir / "rates_n-wall.json"
         self.assertIn(str(path), out)
         dash = json.loads(path.read_text())
         self.assertEqual(dash["uid"], "rates-n-wall")
@@ -307,7 +308,13 @@ class DashboardTest(AssertBounded, unittest.TestCase):
         rc, _, err = self.run_main("--map", str(self.map))
         self.assertEqual(rc, 1)
         self.assertIn(":2: channel 99 out of range", err)
-        self.assertFalse((self.out / "rates_n-wall.json").exists())
+        self.assertFalse((self.dash_dir / "rates_n-wall.json").exists())
+
+    def test_experiment_name_must_be_a_folder_name(self):
+        self.toml.write_text(self.toml.read_text().replace('"N_Wall"', '"a/b"'))
+        rc, _, err = self.run_main("--map", str(self.map))
+        self.assertEqual(rc, 1)
+        self.assertIn("cannot be a folder name", err)
 
     def test_explicit_map_must_exist(self):
         rc, _, err = self.run_main("--map", str(self.root / "nope.txt"))
@@ -318,15 +325,15 @@ class DashboardTest(AssertBounded, unittest.TestCase):
         self.assertEqual(self.run_main("--map", str(self.map))[0], 0)
         self.map.write_text(self.map.read_text().replace("LS01", "LS_left"))
         self.assertEqual(self.run_main("--map", str(self.map))[0], 0)
-        self.assertEqual([p.name for p in self.out.iterdir()], ["rates_n-wall.json"])
-        text = (self.out / "rates_n-wall.json").read_text()
+        self.assertEqual([p.name for p in self.dash_dir.iterdir()], ["rates_n-wall.json"])
+        text = (self.dash_dir / "rates_n-wall.json").read_text()
         self.assertIn("LS_left", text)
         self.assertNotIn("LS01", text)
 
 
 class CommittedFilesTest(AssertBounded, unittest.TestCase):
     def test_overview_follows_the_time_picker(self):
-        dash = json.loads((DASH_DIR / "delila_overview.json").read_text())
+        dash = json.loads((DASH_DIR / "Common/delila_overview.json").read_text())
         self.assertEqual(dash["uid"], "delila-overview")
         self.assertFalse(any("Beam" in p["title"] for p in dash["panels"]))
         sqls = all_sql(dash)
@@ -335,19 +342,19 @@ class CommittedFilesTest(AssertBounded, unittest.TestCase):
             self.assertNotIn("now()", sql)
             self.assertBounded(sql)
 
-    def test_fission_beam_panels_kept(self):
-        dash = json.loads((DASH_DIR / "fission2026_beam.json").read_text())
-        self.assertEqual(dash["uid"], "fission2026-beam")
-        self.assertEqual([p["title"] for p in dash["panels"]], ["Beam Current", "Beam Current History"])
-
     def test_template_maps_parse(self):
         for exp in ("N_Wall", "X730_ThGEM_Test"):
             text = (REPO / f"config/channel_map_{exp}.txt").read_text()
             self.assertEqual(g.parse_map(text, boards_fixture()), [], exp)
 
-    def test_generated_dir_is_gitignored(self):
-        text = (DASH_DIR / "generated/.gitignore").read_text()
-        self.assertIn("*", text.splitlines())
+    def test_generated_dashboards_are_gitignored(self):
+        text = (REPO / ".gitignore").read_text()
+        self.assertIn("docker/grafana/provisioning/dashboards/json/*/rates_*.json", text.splitlines())
+
+    def test_every_committed_dashboard_is_in_a_folder(self):
+        # foldersFromFilesStructure: a file directly in json/ would land in "General".
+        self.assertEqual(sorted(p.name for p in DASH_DIR.glob("*.json")), [])
+        self.assertTrue(sorted(DASH_DIR.glob("*/*.json")))
 
 
 if __name__ == "__main__":

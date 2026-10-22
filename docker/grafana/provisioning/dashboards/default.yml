@@ -17,4 +17,7 @@ providers:
     allowUiUpdates: true
     options:
       path: /etc/grafana/provisioning/dashboards/json
-      foldersFromFilesStructure: false
+      # Each subdirectory of json/ is a Grafana folder, one per experiment
+      # (json/<experiment_name>/, plus json/Common/ for experiment-independent
+      # dashboards). gen_dashboards.py writes into json/<experiment_name>/.
+      foldersFromFilesStructure: true

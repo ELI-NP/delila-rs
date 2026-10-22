@@ -10,7 +10,7 @@ On the DAQ host, from the repository root:
 ```sh
 python3 tools/grafana/gen_dashboards.py --config config.toml
 # options: --map config/channel_map_<experiment>.txt   (this is the default)
-#          --out docker/grafana/provisioning/dashboards/json/generated   (default)
+#          --out docker/grafana/provisioning/dashboards/json   (default; the file goes to <out>/<experiment>/)
 #          --datasource-uid P951FEA4DE68E13C5                            (default)
 ```
 
@@ -19,9 +19,10 @@ python3 tools/grafana/gen_dashboards.py --config config.toml
   channel count = `num_channels` of its digitizer JSON (`config_file`).
   Channels disabled in that JSON and missing from the map are treated as unused.
 - Output: `rates_<slug>.json` (uid `rates-<slug>`) in
-  `docker/grafana/provisioning/dashboards/json/generated/`. That directory is
-  gitignored: generate on each host, never commit. Grafana's file provider scans
-  it and loads new or changed files **within ~10 s, no restart**.
+  `docker/grafana/provisioning/dashboards/json/<experiment_name>/`, which is the
+  experiment's Grafana folder (`foldersFromFilesStructure: true`). Generated
+  files are gitignored (`json/*/rates_*.json`): generate on each host, never
+  commit. Grafana loads new or changed files **within ~10 s, no restart**.
 - Without a map file every channel is shown as `M<module>/Ch<channel>`.
 
 ## Rename channels
@@ -62,9 +63,19 @@ not provisioned.
 On an older Operator the per-channel panels report "No field named rate", and
 the run markers show an error until the first Start/Stop is written.
 
-The generic `delila_overview.json` (any experiment) and `fission2026_beam.json`
-in `docker/grafana/provisioning/dashboards/json/` are static files and are not
-generated.
+## Folders
+
+One Grafana folder per subdirectory of `docker/grafana/provisioning/dashboards/json/`:
+
+| Folder | Contents |
+|---|---|
+| `Common/` | `delila_overview.json` — the generic DAQ overview (any experiment) |
+| `<experiment_name>/` | that experiment's committed dashboards (e.g. `N_Wall/`: the SY5527 and MHV-4 HV dashboards) plus its generated `rates_<slug>.json` |
+
+Static dashboards are committed; only `rates_*.json` is generated. A dashboard
+file placed directly in `json/` would land in Grafana's "General" folder, so
+don't (a test checks this). The Fission2026 dashboards were removed on
+2026-10-22 (the experiment is over; they remain in git history).
 
 ## Tests
 

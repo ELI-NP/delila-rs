@@ -28,8 +28,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # Grafana's file provider (docker/grafana/provisioning/dashboards/default.yml)
-# scans json/ recursively; generated/ is gitignored (host-local output).
-DEFAULT_OUT = REPO_ROOT / "docker/grafana/provisioning/dashboards/json/generated"
+# turns each subdirectory of json/ into a folder; the dashboard is written to
+# json/<experiment_name>/rates_<slug>.json, which is gitignored (host-local output).
+DEFAULT_OUT = REPO_ROOT / "docker/grafana/provisioning/dashboards/json"
+# experiment_name becomes a directory (and Grafana folder) name.
+FOLDER_RE = re.compile(r"^[A-Za-z0-9_.+\-]+$")
 # The provisioned InfluxDB datasource (same uid as every dashboard in json/).
 DEFAULT_DS_UID = "P951FEA4DE68E13C5"
 
@@ -654,7 +657,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--map", type=Path,
                     help="channel map (default: config/channel_map_<experiment_name>.txt; "
                          "if that does not exist every channel gets its default name)")
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output directory (default: {_rel(DEFAULT_OUT)})")
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT,
+                    help="base directory; the dashboard goes to <out>/<experiment_name>/ "
+                         f"(default: {_rel(DEFAULT_OUT)})")
     ap.add_argument("--datasource-uid", default=DEFAULT_DS_UID, help="InfluxDB datasource uid (default: %(default)s)")
     args = ap.parse_args(argv)
 
@@ -674,7 +679,10 @@ def main(argv: list[str] | None = None) -> int:
         channels = build_channels(boards, entries)
         groups = group_channels(channels, entries)
         dash = rates_dashboard(experiment, boards, channels, groups, args.datasource_uid, sources)
-        out = args.out / f"rates_{slug(experiment)}.json"
+        if not FOLDER_RE.match(experiment):
+            raise GenError(f"experiment_name {experiment!r} cannot be a folder name "
+                           "(letters, digits, _ . + - only)")
+        out = args.out / experiment / f"rates_{slug(experiment)}.json"
         write_json_atomic(dash, out)
     except GenError as e:
         print(f"error: {e}", file=sys.stderr)

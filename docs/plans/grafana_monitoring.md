@@ -288,7 +288,7 @@ datasources:
 注: Flight SQL プラグインの正確な設定は実装時に検証する。
 InfluxQL 互換モードの方が簡単な場合はそちらを使用。
 
-### ダッシュボード (`docker/grafana/dashboards/delila_overview.json`)
+### ダッシュボード (`docker/grafana/provisioning/dashboards/json/Common/delila_overview.json`)
 
 JSON provisioning で自動構成。パネル構成:
 

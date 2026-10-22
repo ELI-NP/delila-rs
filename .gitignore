@@ -86,3 +86,7 @@ scripts/mongodb.local.env
 *_C.so
 *_C.d
 *_ACLiC_dict_rdict.pcm
+
+# Grafana dashboards generated on each host by tools/grafana/gen_dashboards.py
+# into json/<experiment_name>/ (one Grafana folder per experiment). Never commit.
+docker/grafana/provisioning/dashboards/json/*/rates_*.json

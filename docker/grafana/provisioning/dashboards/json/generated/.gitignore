@@ -1,4 +1,0 @@
-# Host-local dashboards written by tools/grafana/gen_dashboards.py (Grafana's
-# file provider scans this directory too). Regenerate them, never commit them.
-*
-!.gitignore
