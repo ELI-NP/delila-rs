@@ -160,7 +160,9 @@ http_port = 8090
 hists = "config/histograms_thgem.json"
 # Only the ThGEM board (source id 0) - see the header.
 module = 0
-gamma_ch = 0
+# dt1/dt2 = t(ThGEM trigger) - t(gamma_ch). ch0 = LaBr3 until 2026-10-25, then the
+# beam pulse on ch11 (user).
+gamma_ch = 11
 thgem1_ch = 1
 thgem2_ch = 6
 xy1_ch = "1,2,3,5,4"

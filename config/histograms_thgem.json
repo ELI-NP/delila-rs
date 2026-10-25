@@ -1,7 +1,7 @@
 {
   "_comment": [
     "root_sink live histograms for the ThGEM experiment (pf-qaq), after side3's",
-    "/home/daq/rootsink_data/histograms.json (2026-08-02): dt1/dt2 = t(ThGEM) - t(LaBr3),",
+    "/home/daq/rootsink_data/histograms.json (2026-08-02): dt1/dt2 = t(ThGEM) - t(gamma_ch): LaBr3 (ch0) until 2026-10-25, beam pulse (ch11) since;",
     "xy1/xy2 delay-line images (+-250 ns, the ThGEM physical extent), tof1/tof2 = a",
     "[-100,300] ns zoom of dt1/dt2. Widened on 2026-10-14 from LiveEventBuilder.C's [70,190]:",
     "the ThGEM signal paths were being changed and the TOF peaks sat at +42..+66 ns, outside",
@@ -20,11 +20,11 @@
       "xbins": 4, "xmin": 0, "xmax": 4, "ybins": 16, "ymin": 0, "ymax": 16 },
 
     { "name": "dt1", "type": "TH1D",
-      "title": "t(ThGEM1) - t(LaBr3);#Deltat_{1} [ns];counts",
+      "title": "t(ThGEM1) - t(beam pulse, ch11);#Deltat_{1} [ns];counts",
       "fill": "dt1", "bins": 2000, "min": -1000, "max": 1000 },
 
     { "name": "dt2", "type": "TH1D",
-      "title": "t(ThGEM2) - t(LaBr3);#Deltat_{2} [ns];counts",
+      "title": "t(ThGEM2) - t(beam pulse, ch11);#Deltat_{2} [ns];counts",
       "fill": "dt2", "bins": 2000, "min": -1000, "max": 1000 },
 
     { "name": "dt2_vs_dt1", "type": "TH2D",
