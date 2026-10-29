@@ -1,6 +1,6 @@
 # TODO 72 — デジタイザ間の時刻オフセットの自動較正(パルサー / 実験データ)
 
-**Status: 🚧 測定ツール実装済み (2026-10-07、`tools/root_sink/time_map.C`) — 残 = 実機での確認(start_delay の向き、パルサーでの確認ラン)、Operator からの自動化**
+**Status: 🚧 測定ツール実装済み (2026-10-07、`tools/root_sink/time_map.C`)、start_delay の向きを実機で確定 (2026-10-29、TODO 77 §6) — 残 = 複数ボードでの `time_map_verify`、DIG2 `rundelay`、Operator からの自動化**
 
 **関連:** [70_root_sink_time_offsets.md](70_root_sink_time_offsets.md)(ソフト側のオフセット、`timeSettings.json`) /
 [71_generic_event_building.md](71_generic_event_building.md)(マルチデジタイザのイベントビルドの前提) /
@@ -127,7 +127,8 @@ ELIFANT-Event の TimeAlignment(同、C++) /
 | `time_map_verify` | 次のランで、パルサーの時間差が入れた変更量どおりに動いたかを、ボードごとに PASS / FAIL |
 | `time_map_ac` | どの shield(BGO)がどの検出器グループの担当かを、即時の同時計数の割合から判定し、ペアごとの Δt を出す。event_def v1.1 の `tags` + `anti_compton` を書き出す。あいまい・無反応の shield は名指しで出す |
 
-**向きの約束(未確認):** ボードの遅延を D 増やすと、そのボードの時刻は D 小さくなる(CAEN の説明から)。実機の最初の確認ランで決まる(逆なら `sign=-1`)。
+**向きの約束(2026-10-29 実機で確定):** ボードの遅延を D 増やすと、そのボードの時刻は D 小さくなる(CAEN の説明どおり、`sign=+1`)。
+pf-qaq のラン 221/222 → 223: V1730(マスター)の `start_delay` 0 → 160 ns で、パルサーの Δt が −256.72 → −416.77 ns(変化 −160.04 ns)。マスターに入れても Run の出力は遅れない([77_multiboard_start_sync.md](77_multiboard_start_sync.md) §6)。
 
 ### ELIFANT p+¹⁴⁰Ce run 112 での結果(11 ボード、4,130 万ヒット、1 回およそ 10 s)
 
