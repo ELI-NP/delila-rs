@@ -157,5 +157,5 @@ pf-qaq のラン 221/222 → 223: V1730(マスター)の `start_delay` 0 → 160
 - **AC の窓がペアごとに 1 つ:** event_def v1.1 の AC の窓は全ペア共通。HPGe と LaBr3 を混ぜると幅広くなる。ELIADE は Ge だけなので当面は問題にならない。必要になればペアごとの窓を足す。
 - **Operator からの自動化**(§3.3): 較正ランの指定、解析、提案、人の確認の後の適用、MongoDB / eLog への記録。
 - **適用時の範囲(2026-10-07 調査):** DIG1 の `start_delay` は DevTree で **0〜4080 ns、16 ns 刻み**(`docs/devtree_examples/dt5730b_psd1_sn990.json`、デジタイザ JSON では `board.start_delay`、SetInRun 可)。負の値は入らないので、提案の変更量を今の値に足したあと、**全ボードを同じ量だけずらして最小を 0 にする**必要がある(相対的なずれだけが意味を持つ)。¹⁴⁰Ce の幅 524 ns なら収まる。DIG2 の `rundelay` はデジタイザ JSON の型にまだ無い(`extra` で渡すか、型に足す)。
-- **実機で確認 (2026-10-29、TODO 77 §6.4):** DIG2 の `rundelay` は `board.extra` の `"rundelay": N` で効く(S-IN スタートでも)。**実際の遅延は N + 8 ns**(0 以外のとき)。
-  → `time_map_boards` が DIG2 の変更量を提案するとき、0 から 0 以外にする場合は 8 ns 引いた値を設定する必要がある(ツールは未対応)。
+- **実機で確認 (2026-10-29、TODO 77 §6.5):** DIG2 の `rundelay` は `board.extra` の `"rundelay": N` で効く(S-IN スタートでも)。**実際の遅延は N + 0 または N + 8 ns で、ランごとに不定**(0 以外の 5 本で +8 が 4 本)。`rundelay` = 0 なら安定。
+  → 8 ns の不定を避けるなら、DIG2 は `rundelay` = 0 のまま、他のボードの遅延で合わせる。`time_map_verify` の判定はこの 8 ns を許容する必要がある。
