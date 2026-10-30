@@ -63,7 +63,7 @@ The startup script iterates over `[[network.sources]]` and launches either an em
 | `arm_timeout_ms` | u64 | `5000` | Timeout for the Arm phase (ms) |
 | `start_timeout_ms` | u64 | `5000` | Timeout for the Start phase (ms) |
 | `reset_timeout_ms` | u64 | `5000` | Timeout for the Reset phase (ms) |
-| `no_event_warn_secs` | u64 | `1` | While Running, a source whose event count does not grow for this many seconds is shown as "No events" in the UI and logged as a warning. `0` = off. Raise it for low-rate sources |
+| `no_event_warn_secs` | u64 | `5` | While Running, a source whose event count does not grow for this many seconds is shown as "No events" in the UI and logged as a warning. `0` = off. Lower it (e.g. 1) for detectors that should give kHz, raise it for low-rate sources |
 
 ```toml
 [operator]

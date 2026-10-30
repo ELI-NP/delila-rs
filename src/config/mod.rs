@@ -89,7 +89,7 @@ pub struct OperatorFileConfig {
     #[serde(default = "default_drain_stop_timeout_secs")]
     pub drain_stop_timeout_secs: u64,
     /// Warn (UI + log) when a Running source delivers no events for this
-    /// many seconds (TODO 78 a; default 1, 0 = off). A DIG1 S-IN slave whose
+    /// many seconds (TODO 78 a; default 5, 0 = off). A DIG1 S-IN slave whose
     /// start signal never arrives reports Running with no events.
     #[serde(default = "default_no_event_warn_secs")]
     pub no_event_warn_secs: u64,
@@ -533,7 +533,7 @@ fn default_drain_stop_timeout_secs() -> u64 {
 }
 
 fn default_no_event_warn_secs() -> u64 {
-    1
+    5
 }
 
 /// Merger network configuration

@@ -1,6 +1,6 @@
 # TODO 78 — Operator: スタート失敗からの復帰と「Running なのにイベント 0」の警告
 
-**Status: 🚧 (e)(b)(c)(a) 実装済み (2026-10-30、未配備) — 残 = pf-qaq への配備(Operator 再起動、ランの合間に)と実機確認、(d) の確認**
+**Status: 🚧 (e)(b)(c)(a)(d) 実装済み (2026-10-30) — 残 = pf-qaq での実機確認(TODO 77 の T1 と同じ日に)**
 
 **関連:** [77_multiboard_start_sync.md](77_multiboard_start_sync.md) §4(DIG1 スレーブは S-IN が来なくても Running を報告) /
 [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md)(N_Wall は 10 台のカスケード) /
@@ -61,7 +61,8 @@
 
 ## 5. 要確認(ユーザー)
 
-1. ~~無イベント警告の N~~ → 約 1 秒(kHz 以上来るはず)。警告は Grafana でも見られるが、実験者に見える形にする(回答済み)
+1. ~~無イベント警告の N~~ → 約 1 秒(kHz 以上来るはず)。警告は Grafana でも見られるが、実験者に見える形にする(回答済み)。
+   **2026-10-30 ユーザー判断: 既定は 5 秒**(`no_event_warn_secs` で変更可)
 2. ~~10/22 の 8 回の run/start は、手で Start を押したものか~~ → 押していない(グレーアウト)。Force Reset は押した。
    出どころはブラウザの 408 自動再送(§2)
 
@@ -72,8 +73,8 @@
 | (e) | 408 を全廃。Reset / Configure / Arm / Start の待ちが切れたら **504**、コンポーネントが拒否したら 400。どちらも返す前に `tracing::error!`(フェーズ名・失敗したコンポーネント名つき) | `phase_failed` / `phase_rejected`(`src/operator/routes/status.rs`) |
 | (b) | `run_start` の Configure 以降と、`/api/start` の自動 Arm・Start が失敗したら、**全コンポーネントを Reset して Idle に戻す**(Force Reset / Phase 0 と同じコマンド。止まらない Reader の再試行も止まる)。Start の失敗では、Armed のまま残ったソースの名前と「S-IN スレーブならマスターのスタート信号が来ていない」の手がかりを返す。巻き戻しの Reset 自体が失敗したら、その旨と「Force Reset を」を返す | `roll_back_to_idle` / `start_phase_failed` |
 | (c) | UI: **Mixed / Degraded / Error で Stop と Force Reset を押せる**(Error は以前 Reset のみ)。Start が失敗したら赤い「Start failed」の枠に理由を残す(次の Start / Reset の成功か × で消える)。TS の `SystemState` に抜けていた `Degraded` を追加 | `getButtonStates`(`types.ts`)、`control-panel.component.ts` |
-| (a) | Running 中に、あるソースのイベント数が `[operator] no_event_warn_secs`(既定 1 秒、0 で無効)増えないと、`/api/status` の `stalled_sources` に載り、UI に橙の「No events」の枠、ログに警告(出たとき・戻ったとき 1 回ずつ)。1 秒ごとに状態を問い合わせる。ラン中(current_run あり)かつ Tune Up でないときだけ | `src/operator/event_stall.rs`、`src/bin/operator.rs` |
-| (d) | **決定(案、ユーザー確認待ち): 途中のファイルは残す。** Recorder は上書きしないので、同じ番号で Start し直すと名前にタイムスタンプが付いたファイルに書く。エラーの文に「run N はラン履歴にない、途中のファイルがあれば残す」と出す | — |
+| (a) | Running 中に、あるソースのイベント数が `[operator] no_event_warn_secs`(既定 5 秒、0 で無効。ユーザー判断 2026-10-30)増えないと、`/api/status` の `stalled_sources` に載り、UI に橙の「No events」の枠、ログに警告(出たとき・戻ったとき 1 回ずつ)。1 秒ごとに状態を問い合わせる。ラン中(current_run あり)かつ Tune Up でないときだけ | `src/operator/event_stall.rs`、`src/bin/operator.rs` |
+| (d) | **決定(2026-10-30 ユーザー了承: 「何もかも記録する方がしないより良い」): 途中のファイルは残す。** Recorder は上書きしないので、同じ番号で Start し直すと名前にタイムスタンプが付いたファイルに書く。エラーの文に「run N はラン履歴にない、途中のファイルがあれば残す」と出す | — |
 
 - Configure 単独(`/api/configure`、事前確認用)の失敗は巻き戻さない(ログと 400 のみ)。Mixed になっても (c) で Reset できる。
 - Phase 1.5(Reader が設定を拒否)は従来どおり 502・Configured のまま(状態はそろっている)。
@@ -88,5 +89,5 @@
 
 ### 配備と実機確認(未)
 - pf-qaq で Operator を入れ替える(ビルド + Operator 再起動。ランの合間に、ユーザーの了承を得て)。
-- 確認: S-IN スレーブのスタート信号を止めた状態で Start → 画面に「Start failed」と板名、全体 Idle、Operator のログに ERROR。DIG1 スレーブで信号が来ないとき → 「No events」が 1〜2 秒で出る(TODO 77 の T1 と同じ日に)。
+- 確認: S-IN スレーブのスタート信号を止めた状態で Start → 画面に「Start failed」と板名、全体 Idle、Operator のログに ERROR。DIG1 スレーブで信号が来ないとき → 「No events」が約 5 秒で出る(TODO 77 の T1 と同じ日に)。
 

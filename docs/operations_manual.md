@@ -215,12 +215,13 @@ config/digitizers/psd2_56.json   → "digitizer_id": 1   (= TOML の source id 1
 
 ### Running なのに、あるボードのイベントが増えない場合（「No events」の枠）
 
-Running 中に、あるソースのイベント数が `[operator] no_event_warn_secs`（既定 1 秒、
+Running 中に、あるソースのイベント数が `[operator] no_event_warn_secs`（既定 5 秒、
 0 で無効）以上増えないと、画面に橙の「No events」の枠が出て、Operator のログにも
 警告が出る。DIG1（V1725 / V1730 など）の S-IN スレーブは、スタート信号が来なくても
 Running と表示されるので、これが唯一の手がかりになる。そのボードのトリガー、
 S-IN スレーブならマスターからのスタート信号（ケーブル、マスターの Run 出力の設定）を
-確認する。レートの低い線源で頻繁に出る場合は `no_event_warn_secs` を大きくする。
+確認する。早く気づきたいとき（Si など kHz 以上のはずのとき）は小さく（例: 1）、
+レートの低い線源で頻繁に出る場合は大きくする。
 
 ### events が 0 のまま増えない場合
 

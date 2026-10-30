@@ -290,7 +290,7 @@ impl Default for OperatorConfig {
             monitor_http_port: None,
             elog: None,
             drain_stop_timeout_secs: 60,
-            no_event_warn_secs: 1,
+            no_event_warn_secs: 5,
         }
     }
 }
