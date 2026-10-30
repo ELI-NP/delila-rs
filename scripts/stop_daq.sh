@@ -33,8 +33,9 @@ pkill -f "target/release/reader" 2>/dev/null && echo "  Stopped readers"
 pkill -f "target/release/emulator" 2>/dev/null && echo "  Stopped emulators"
 pkill -f "target/release/data_sink" 2>/dev/null && echo "  Stopped data_sink"
 pkill -f "target/release/online_event_builder" 2>/dev/null && echo "  Stopped online_event_builder"
-# root_sink lives outside target/release — match the exact process name.
+# root_sink / nwall_sink live outside target/release — match the exact process name.
 pkill -x root_sink 2>/dev/null && echo "  Stopped root_sink"
+pkill -x nwall_sink 2>/dev/null && echo "  Stopped nwall_sink"
 
 echo -e "${GREEN}All DAQ components stopped.${NC}"
 

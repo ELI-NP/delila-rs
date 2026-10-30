@@ -1,6 +1,6 @@
 # TODO 79 — root_sink の N_Wall 用オンライン表示(TOF・dE/E 相関)と共通の対応表
 
-**Status: 📋 検討中 (2026-10-30: 前提・トリガー・TOF の方針を議論。実装は未着手)**
+**Status: 🚧 nwall_sink v1 実装・合成データで E2E 済み (2026-10-30) — 残 = 同期マーク、pf-qaq への配備(N_Wall の TOML と同時)、実機での確認と較正**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md) §3.1(10 台構成)・§3.3(ビームの位相の復元) /
 [71_generic_event_building.md](71_generic_event_building.md)(イベント定義 v1.1: タグの範囲指定、L2) /
@@ -111,4 +111,42 @@ tools/root_sink/
 4. 構成とプログラム名は OK。**ただし今の `root_sink` は ELIADE(`config_sn01_*.toml`、`config_sn02_*.toml`、
    `config_sn05_*.toml`)も使っている**(2026-10-30 に判明)→ 名前を `thgem_sink` に変えると ELIADE の全ノードの起動が
    変わる。§5.3 を見直してユーザーに確認中。
+
+### 5.6 VX2730 のチャンネル (2026-10-30、ユーザー)
+- **ビーム 0、γ(LaBr3)1〜7、液シン 8〜31**(変わるかもしれない)→ nwall_sink は役割を**対応表から読む**(チャンネル番号に決め打ちしない)。
+- モジュール番号の案(異議なし): 0 = VX2730、1 = dE Sector、2〜4 = dE リング(inner / middle / outer)、5 = E Sector。
+
+## 6. 実装 v1 (2026-10-30)
+
+| もの | 場所 |
+|---|---|
+| nwall_sink 本体(受信・並べ替え・イベント組み・記録は standard の写し、表示は N_Wall 用) | `tools/root_sink/nwall/nwall_sink.cxx` |
+| 対応表の読み込み(Grafana の 4 列 + `det kind index`、行番号つきで全エラー列挙、ラン開始ごとに読み直し・失敗時は前の表を保持) | `nwall/nwall_map.hpp` |
+| バンチの時計(一番近いビームの hit + 周期の整数倍、周期はランごとに測る、格子外の間隔とビーム停止を除外) | `nwall/bunch_clock.hpp` |
+| 単体テスト 56 本 | `nwall/test_nwall.cpp` |
+| 合成データ(6 台、ビーム 1/100、dE/E、中性子と即発 γ、液シン単独、LaBr3、パルサー) | `nwall/make_test_run.C` |
+| イベント定義(E Sector トリガー、L2 で dE 必須を印) | `config/event_def_nwall.json` |
+| 対応表(暫定の結線で記入、112 ch) | `config/channel_map_N_Wall.txt` |
+| 起動: `[network.root_sink] program = "nwall_sink"`(既定は root_sink)、`channel_map` などのキー | `scripts/start_daq.sh`、`stop_daq.sh` |
+
+- **表示の経路:** Writer から、並べ替えた core の hit と組んだイベントを有界のキューで表示へ(落としてよいのは表示だけ、数える)。
+  root_sink の「受け取り順の分岐」は nwall_sink には無いので、表示用に落とす箇所は 1 つのまま。
+- **表示:** `/hits`(hitmap、ボードごとのエネルギー)、`/rf`(ボードごとの RF TOF)、`/ls`(液シンの PSD)、
+  `/events`(pid = dE vs E、dE Sector × E Sector、dE リング × dE Sector、液シン − Si、si_phase、Si が選んだバンチからの液シンの TOF)。
+- **較正:** `si_delay_ns` = si_phase のピーク。`rf_t0_ns` = γ フラッシュを L/c に置くずれ(チャンネルごとの差は時刻オフセットへ)。
+
+### E2E(2026-10-30、Mac、合成データ 2 秒・273,824 hit)
+- 全 hit を記録、イベント 3,939(全部 dE あり)、**check_events.C で IDENTICAL**。
+- 周期を 199.9500 ns と測定(合成データの真値。名目は 199.98)。si_phase のピーク 15 ns(合成の Si 遅れ)。
+  LaBr3 は 3 ns、γ フラッシュは 5.0 ns(1.5 m の L/c)、中性子は 40〜160 ns に。dE Sector × E Sector は 99.95 % が対角。
+- **途中で見つけた不具合:** バンチの時計がビームの hit を 8192 個(約 160 ms)しか覚えず、200 ms のチャンクの前半で
+  バンチが引けなかった(RF TOF が 54 % しか埋まらない)→ 時間で忘れる方式(処理中のチャンクの 10 ms 前まで保持)に直し、
+  テストを追加。直したあとは全 hit に RF TOF。
+- 同じデータを 2 ラン続けて流しても同じ結果(ランごとに時計がリセットされる)。SIGTERM で正常終了。
+
+### 残り
+1. 同期マーク(§5.4): FAN-OUT の数の確認待ち。やるなら、イベントを組む前にマークを除く処理を足す。
+2. N_Wall 用の TOML(`config/config_nwall_pfqaq.toml`、6 台)と pf-qaq への配備(nwall_sink のビルドは
+   `tools/root_sink/nwall/README.md`)。
+3. 実機での確認: パルサーやビームでの表示、`si_delay_ns` と `rf_t0_ns` の較正、低レートの DIG1 ボードの遅れ(`late=`)。
 

@@ -1,29 +1,142 @@
-# Channel map for experiment "N_Wall" (TODO 74 §3.2).
+# Channel map for experiment "N_Wall" (TODO 74 §3.2, TODO 79 §2 / §5).
 #
-# Read by tools/grafana/gen_dashboards.py, which builds the Grafana rate
-# dashboard "Rates — N_Wall" from the DAQ TOML and this file:
-#   python3 tools/grafana/gen_dashboards.py --config config.toml
-# Grafana picks up the regenerated dashboard within ~10 s, no restart.
-# InfluxDB stores only (module, channel): a renamed channel gets its new
-# name on past data too.
+# ONE file for Grafana, nwall_sink and the offline analysis:
+#   module  channel  name  group  det  kind  index  [more columns...]
+# - Columns 1-4 (Grafana, tools/grafana/gen_dashboards.py):
+#     module  = module_id of the [[network.sources]] entry (= its id unless
+#               module_id is set); channel = 0 .. num_channels-1
+#     name    = series name in Grafana; group = one time-series panel per group.
+#               Allowed characters: A-Z a-z 0-9 _ . + - /   (no spaces). Unique.
+#   gen_dashboards.py ignores columns 5+.
+# - Columns 5-7 (nwall_sink, tools/root_sink/nwall/nwall_map.hpp): the role.
+#     det    beam | LaBr | LS | dE | E | pulser | -
+#     kind   ring | sector | -     (dE and E need ring or sector, the rest -)
+#     index  ring / sector number for dE and E (rings: inner 0-14, middle
+#            15-29, outer 30-44 as one running number), '-' for the rest
+#   nwall_sink takes every role from here (none is assumed from channel
+#   numbers) and re-reads this file at every run start. Columns 8+ are left to
+#   the analysis (position, calibration, ...).
+# - '#' starts a comment; blank lines are ignored.
 #
-# Format: one channel per line, whitespace separated (spaces or tabs):
-#   module  channel  name  group  [more columns...]
-# - module  = module_id of the [[network.sources]] entry (= its id unless
-#             module_id is set); channel = 0 .. num_channels-1.
-# - name    = series name in Grafana; group = one time-series panel per group
-#             (e.g. dE_inner, E_sector, LS). Allowed characters for both:
-#             A-Z a-z 0-9 _ . + - /   (no spaces, no quotes). Names are unique.
-# - Columns 5 and later are ignored here: the analysis may append its own
-#   (position, calibration, ...).
-# - '#' starts a comment (to the end of the line); blank lines are ignored.
-# - Channels not listed are shown as M<module>/Ch<channel> in group M<module>.
+# PROVISIONAL (2026-10-30): the planned cabling, not checked against the
+# detectors. Module numbers: 0 VX2730, 1 dE sector, 2-4 dE rings (inner,
+# middle, outer), 5 E sector. VX2730: beam 0, LaBr3 1-7, LS 8-31 (user; may
+# change). The ring / sector order inside a board is assumed to follow the
+# channel number — fix it from the data (dE sector x E sector shows the sector
+# order; the ring order needs the analysis). config/event_def_nwall.json uses
+# the same module / channel numbers.
 #
-# C++: std::getline, drop everything from '#', then
-#   std::istringstream(line) >> module >> channel >> name >> group;
-#
-# Channel names are not known before the experiment: fill this in from the
-# analysis after the first runs. Examples (commented out):
-#   0   0   dE_Ri00   dE_inner
-#   0   1   dE_Ri01   dE_inner
-#   8   5   LS06      LS
+# mod ch  name      group      det    kind    index
+
+0   0   beam      beam       beam   -       -
+0   1   LaBr1     LaBr       LaBr   -       -
+0   2   LaBr2     LaBr       LaBr   -       -
+0   3   LaBr3     LaBr       LaBr   -       -
+0   4   LaBr4     LaBr       LaBr   -       -
+0   5   LaBr5     LaBr       LaBr   -       -
+0   6   LaBr6     LaBr       LaBr   -       -
+0   7   LaBr7     LaBr       LaBr   -       -
+0   8   LS01      LS         LS     -       -
+0   9   LS02      LS         LS     -       -
+0   10  LS03      LS         LS     -       -
+0   11  LS04      LS         LS     -       -
+0   12  LS05      LS         LS     -       -
+0   13  LS06      LS         LS     -       -
+0   14  LS07      LS         LS     -       -
+0   15  LS08      LS         LS     -       -
+0   16  LS09      LS         LS     -       -
+0   17  LS10      LS         LS     -       -
+0   18  LS11      LS         LS     -       -
+0   19  LS12      LS         LS     -       -
+0   20  LS13      LS         LS     -       -
+0   21  LS14      LS         LS     -       -
+0   22  LS15      LS         LS     -       -
+0   23  LS16      LS         LS     -       -
+0   24  LS17      LS         LS     -       -
+0   25  LS18      LS         LS     -       -
+0   26  LS19      LS         LS     -       -
+0   27  LS20      LS         LS     -       -
+0   28  LS21      LS         LS     -       -
+0   29  LS22      LS         LS     -       -
+0   30  LS23      LS         LS     -       -
+0   31  LS24      LS         LS     -       -
+1   0   dE_S00    dE_sector  dE     sector  0
+1   1   dE_S01    dE_sector  dE     sector  1
+1   2   dE_S02    dE_sector  dE     sector  2
+1   3   dE_S03    dE_sector  dE     sector  3
+1   4   dE_S04    dE_sector  dE     sector  4
+1   5   dE_S05    dE_sector  dE     sector  5
+1   6   dE_S06    dE_sector  dE     sector  6
+1   7   dE_S07    dE_sector  dE     sector  7
+1   8   dE_S08    dE_sector  dE     sector  8
+1   9   dE_S09    dE_sector  dE     sector  9
+1   10  dE_S10    dE_sector  dE     sector  10
+1   11  dE_S11    dE_sector  dE     sector  11
+1   12  dE_S12    dE_sector  dE     sector  12
+1   13  dE_S13    dE_sector  dE     sector  13
+1   14  dE_S14    dE_sector  dE     sector  14
+1   15  dE_S15    dE_sector  dE     sector  15
+2   0   dE_R00    dE_inner   dE     ring    0
+2   1   dE_R01    dE_inner   dE     ring    1
+2   2   dE_R02    dE_inner   dE     ring    2
+2   3   dE_R03    dE_inner   dE     ring    3
+2   4   dE_R04    dE_inner   dE     ring    4
+2   5   dE_R05    dE_inner   dE     ring    5
+2   6   dE_R06    dE_inner   dE     ring    6
+2   7   dE_R07    dE_inner   dE     ring    7
+2   8   dE_R08    dE_inner   dE     ring    8
+2   9   dE_R09    dE_inner   dE     ring    9
+2   10  dE_R10    dE_inner   dE     ring    10
+2   11  dE_R11    dE_inner   dE     ring    11
+2   12  dE_R12    dE_inner   dE     ring    12
+2   13  dE_R13    dE_inner   dE     ring    13
+2   14  dE_R14    dE_inner   dE     ring    14
+2   15  pulser2   pulser     pulser -       -
+3   0   dE_R15    dE_middle  dE     ring    15
+3   1   dE_R16    dE_middle  dE     ring    16
+3   2   dE_R17    dE_middle  dE     ring    17
+3   3   dE_R18    dE_middle  dE     ring    18
+3   4   dE_R19    dE_middle  dE     ring    19
+3   5   dE_R20    dE_middle  dE     ring    20
+3   6   dE_R21    dE_middle  dE     ring    21
+3   7   dE_R22    dE_middle  dE     ring    22
+3   8   dE_R23    dE_middle  dE     ring    23
+3   9   dE_R24    dE_middle  dE     ring    24
+3   10  dE_R25    dE_middle  dE     ring    25
+3   11  dE_R26    dE_middle  dE     ring    26
+3   12  dE_R27    dE_middle  dE     ring    27
+3   13  dE_R28    dE_middle  dE     ring    28
+3   14  dE_R29    dE_middle  dE     ring    29
+3   15  pulser3   pulser     pulser -       -
+4   0   dE_R30    dE_outer   dE     ring    30
+4   1   dE_R31    dE_outer   dE     ring    31
+4   2   dE_R32    dE_outer   dE     ring    32
+4   3   dE_R33    dE_outer   dE     ring    33
+4   4   dE_R34    dE_outer   dE     ring    34
+4   5   dE_R35    dE_outer   dE     ring    35
+4   6   dE_R36    dE_outer   dE     ring    36
+4   7   dE_R37    dE_outer   dE     ring    37
+4   8   dE_R38    dE_outer   dE     ring    38
+4   9   dE_R39    dE_outer   dE     ring    39
+4   10  dE_R40    dE_outer   dE     ring    40
+4   11  dE_R41    dE_outer   dE     ring    41
+4   12  dE_R42    dE_outer   dE     ring    42
+4   13  dE_R43    dE_outer   dE     ring    43
+4   14  dE_R44    dE_outer   dE     ring    44
+4   15  pulser4   pulser     pulser -       -
+5   0   E_S00     E_sector   E      sector  0
+5   1   E_S01     E_sector   E      sector  1
+5   2   E_S02     E_sector   E      sector  2
+5   3   E_S03     E_sector   E      sector  3
+5   4   E_S04     E_sector   E      sector  4
+5   5   E_S05     E_sector   E      sector  5
+5   6   E_S06     E_sector   E      sector  6
+5   7   E_S07     E_sector   E      sector  7
+5   8   E_S08     E_sector   E      sector  8
+5   9   E_S09     E_sector   E      sector  9
+5   10  E_S10     E_sector   E      sector  10
+5   11  E_S11     E_sector   E      sector  11
+5   12  E_S12     E_sector   E      sector  12
+5   13  E_S13     E_sector   E      sector  13
+5   14  E_S14     E_sector   E      sector  14
+5   15  E_S15     E_sector   E      sector  15

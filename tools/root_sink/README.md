@@ -30,7 +30,7 @@ they share become a library (TODO 79 §5.3). The directories anticipate that:
 | `common/` | experiment-independent pieces — the library candidates (header-only C++17, no ROOT / ZMQ in the headers) and generic tools | `sink_core.hpp` (wire decode, channel specs, run state; still holds the standard program's Δt / XY matchers), `eb_core.hpp`, `event_def.hpp`, `time_offsets.hpp`, `time_map.hpp`, their tests (`test_sink_core.cpp`, `test_eb_core.cpp`, `test_time_map.cpp`), `test_publisher.cxx`, `time_map.C`, `compare_hits.C`, `check_events.C` |
 | `standard/` | **`root_sink`** — the program this README describes, used by ThGEM (pf-qaq) and ELIADE (SN01–) | `root_sink.cxx`, `hist_config.hpp`, `histograms.json`, `test_hist_config.cpp` |
 | `thgem/` | ThGEM offline reconstruction | `thgem_reco.hpp`, `thgem_events.C`, `delayline_offsets.C`, `test_thgem_reco.cpp` |
-| `nwall/` | N_Wall sink (planned, TODO 79) | — |
+| `nwall/` | **`nwall_sink`** — the N_Wall sink (TODO 79): the same pipeline, N_Wall's display (channel roles from the map, bunch clock, TOF, dE/E) — see `nwall/README.md` | `nwall_sink.cxx`, `nwall_map.hpp`, `bunch_clock.hpp`, `test_nwall.cpp`, `make_test_run.C` |
 
 Files are referred to by name below; the table says where each one lives.
 `../delila2root/TDelila.hpp` (the MessagePack / JSON reader) is shared from

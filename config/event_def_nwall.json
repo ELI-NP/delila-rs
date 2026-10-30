@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "nwall_sink generic event definition (--event-def / TOML event_def_file, TODO 79 section 5) for N_Wall. Modules = the provisional config/channel_map_N_Wall.txt: 0 VX2730 (ch0 beam/100, ch1-7 LaBr3, ch8-31 LS), 1 dE sector, 2-4 dE rings (inner/middle/outer, ch0-14; ch15 = pulser), 5 E sector. Keep these module/channel numbers in step with the map.",
+    "Trigger = any E sector (user, 2026-10-30): the dE vs E particle identification is what matters, and when E fires, dE almost always fires too. The l2 flag hasDE / accept dEE marks events that do have a dE sector hit (flag only: every event is written).",
+    "Window: pre 500 ns, post 1500 ns around the E trigger. The LS neutrons come AFTER the reaction (flight path not fixed yet; 1500 ns covers 0.1 MeV at 2 m, about 460 ns, with margin); pre covers the dE/ring hits and prompt gammas. group_ns 100: E sector hits of one particle (charge sharing) form one event.",
+    "Times are on the ALIGNED axis (time_calib_file is applied first). nwall_sink re-reads this file at every run start: write a temp file and mv it into place."
+  ],
+  "version": "1.1",
+  "window_ns": {"pre": 500, "post": 1500},
+  "group_ns": 100,
+  "tags": {
+    "E_sector": [[5, 0, 15]],
+    "dE_sector": [[1, 0, 15]],
+    "dE_ring": [[2, 0, 14], [3, 0, 14], [4, 0, 14]],
+    "LS": [[0, 8, 31]],
+    "LaBr": [[0, 1, 7]]
+  },
+  "triggers": [
+    {"name": "E", "tags": ["E_sector"]}
+  ],
+  "l2": {
+    "counters": [
+      {"name": "nE", "tags": ["E_sector"]},
+      {"name": "nDE", "tags": ["dE_sector"]},
+      {"name": "nDEring", "tags": ["dE_ring"]},
+      {"name": "nLS", "tags": ["LS"]},
+      {"name": "nLaBr", "tags": ["LaBr"]}
+    ],
+    "flags": [
+      {"name": "hasDE", "counter": "nDE", "op": ">=", "value": 1}
+    ],
+    "accept": [
+      {"name": "dEE", "op": "AND", "flags": ["hasDE"]}
+    ]
+  }
+}

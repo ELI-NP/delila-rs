@@ -46,11 +46,14 @@ for proc in operator monitor recorder merger reader emulator data_sink online_ev
         KILLED=true
     fi
 done
-# root_sink is script-managed but lives outside target/release (deployed to
-# ~/.local/bin / PATH), so match the exact process name — never a broad -f.
-if pkill -x root_sink 2>/dev/null; then
-    KILLED=true
-fi
+# root_sink / nwall_sink are script-managed but live outside target/release
+# (deployed to ~/.local/bin / PATH), so match the exact process name — never a
+# broad -f.
+for sink in root_sink nwall_sink; do
+    if pkill -x "$sink" 2>/dev/null; then
+        KILLED=true
+    fi
+done
 if [ "$KILLED" = true ]; then
     echo -e "${YELLOW}Killed leftover DAQ processes from previous session${NC}"
     # Wait for processes to actually exit (up to 5s), then force kill
@@ -63,6 +66,7 @@ if [ "$KILLED" = true ]; then
             fi
         done
         pgrep -x root_sink &>/dev/null && STILL_RUNNING=true
+        pgrep -x nwall_sink &>/dev/null && STILL_RUNNING=true
         [ "$STILL_RUNNING" = false ] && break
         sleep 0.5
     done
@@ -71,6 +75,7 @@ if [ "$KILLED" = true ]; then
         pkill -9 -f "target/release/$proc" 2>/dev/null
     done
     pkill -9 -x root_sink 2>/dev/null
+    pkill -9 -x nwall_sink 2>/dev/null
     sleep 0.5  # brief wait for kernel to release sockets after SIGKILL
 fi
 
@@ -377,21 +382,35 @@ fi
 ROOT_SINK_LAUNCHED=false
 ROOT_SINK_HTTP_PORT=""
 if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
+    # Which sink program (TODO 79 §5.3): one per experiment. root_sink (the
+    # default: ThGEM, ELIADE) or nwall_sink (N_Wall).
+    RS_PROGRAM=$(get_root_sink_key program)
+    RS_PROGRAM=${RS_PROGRAM:-root_sink}
+    case "$RS_PROGRAM" in
+        root_sink)  RS_SRC_DIR=standard ;;
+        nwall_sink) RS_SRC_DIR=nwall ;;
+        *)          RS_SRC_DIR="" ;;
+    esac
     # Binary search order: ROOT_SINK_BIN env override > PATH > ~/.local/bin >
-    # tools/root_sink/standard. An explicit env override that is not executable is caught
+    # tools/root_sink/<dir>. An explicit env override that is not executable is caught
     # below rather than silently falling through.
-    if [ -z "$ROOT_SINK_BIN" ]; then
-        if command -v root_sink &>/dev/null; then
-            ROOT_SINK_BIN=$(command -v root_sink)
-        elif [ -x "$HOME/.local/bin/root_sink" ]; then
-            ROOT_SINK_BIN="$HOME/.local/bin/root_sink"
-        elif [ -x "./tools/root_sink/standard/root_sink" ]; then
-            ROOT_SINK_BIN="./tools/root_sink/standard/root_sink"
+    if [ -z "$RS_SRC_DIR" ]; then
+        echo -e "  ${YELLOW}[network.root_sink] program = \"$RS_PROGRAM\" is not root_sink or nwall_sink — skipping the sink${NC}"
+        ROOT_SINK_BIN=""
+    elif [ -z "$ROOT_SINK_BIN" ]; then
+        if command -v "$RS_PROGRAM" &>/dev/null; then
+            ROOT_SINK_BIN=$(command -v "$RS_PROGRAM")
+        elif [ -x "$HOME/.local/bin/$RS_PROGRAM" ]; then
+            ROOT_SINK_BIN="$HOME/.local/bin/$RS_PROGRAM"
+        elif [ -x "./tools/root_sink/$RS_SRC_DIR/$RS_PROGRAM" ]; then
+            ROOT_SINK_BIN="./tools/root_sink/$RS_SRC_DIR/$RS_PROGRAM"
         fi
     fi
 
-    if [ -z "$ROOT_SINK_BIN" ] || [ ! -x "$ROOT_SINK_BIN" ]; then
-        echo -e "  ${YELLOW}root_sink configured but binary not found — skipping (build: see tools/root_sink/README.md)${NC}"
+    if [ -z "$RS_SRC_DIR" ]; then
+        :
+    elif [ -z "$ROOT_SINK_BIN" ] || [ ! -x "$ROOT_SINK_BIN" ]; then
+        echo -e "  ${YELLOW}$RS_PROGRAM configured but binary not found — skipping (build: see tools/root_sink/README.md)${NC}"
     else
         # Map TOML key -> CLI flag; only present keys become flags (root_sink has
         # sane defaults for the rest).
@@ -424,6 +443,11 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         fi
         rs_add_arg time_calib_file --time-calib
         rs_add_arg event_def_file  --event-def
+        # nwall_sink only (TODO 79): channel roles and the bunch clock.
+        rs_add_arg channel_map  --channel-map
+        rs_add_arg rf_period_ns --rf-period-ns
+        rs_add_arg rf_t0_ns     --rf-t0-ns
+        rs_add_arg si_delay_ns  --si-delay-ns
         # hits_tree is a plain flag (no value), so rs_add_arg would pass
         # "--hits-tree true". The per-hit tree is opt-in since TODO 71, and
         # root_sink refuses to start when no tree at all is selected.
@@ -438,8 +462,8 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         # Recorder-matching filenames.
         RS_ARGS+=(--operator "http://localhost:${OPERATOR_PORT}")
 
-        echo "  Starting root_sink..."
-        "$ROOT_SINK_BIN" "${RS_ARGS[@]}" > "$LOG_DIR/root_sink.log" 2>&1 &
+        echo "  Starting $RS_PROGRAM..."
+        "$ROOT_SINK_BIN" "${RS_ARGS[@]}" > "$LOG_DIR/$RS_PROGRAM.log" 2>&1 &
         COMP_NAMES+=("RootSink")
         COMP_PIDS+=($!)
         ROOT_SINK_LAUNCHED=true
