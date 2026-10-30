@@ -34,7 +34,7 @@
 #include <string>
 #include <vector>
 
-#include "sink_core.hpp"  // ScalarHit, CoincResult (+ tdelila::json parser)
+#include "../common/sink_core.hpp"  // ScalarHit, CoincResult (+ tdelila::json parser)
 
 namespace rootsink {
 

@@ -15,7 +15,7 @@
 //   ./delila2root --time-calib timeSettings.json in.delila   # aligned times (TODO 70)
 //
 // --time-calib applies root_sink's per-(module, channel) time offsets
-// (../root_sink/time_offsets.hpp, the Rust EB's timeSettings.json):
+// (../root_sink/common/time_offsets.hpp, the Rust EB's timeSettings.json):
 // timestamp_ns = raw - offset_ns for every event, so a converted tree is on the
 // same aligned axis as root_sink's trees. The table is recorded in the tree's
 // UserInfo (TNamed "timeSettings", the same JSON root_sink writes). Without
@@ -43,7 +43,7 @@
 #include "TROOT.h"
 #include "TTree.h"
 
-#include "../root_sink/time_offsets.hpp"  // parse/resolve/provenance, shared with root_sink
+#include "../root_sink/common/time_offsets.hpp"  // parse/resolve/provenance, shared with root_sink
 
 // ROOT compression setting = algorithm*100 + level. ZSTD is algorithm 5, so
 // 505 = ZSTD level 5. Using the integer avoids the ROOT::kZSTD enum, whose

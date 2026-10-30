@@ -378,15 +378,15 @@ ROOT_SINK_LAUNCHED=false
 ROOT_SINK_HTTP_PORT=""
 if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
     # Binary search order: ROOT_SINK_BIN env override > PATH > ~/.local/bin >
-    # tools/root_sink. An explicit env override that is not executable is caught
+    # tools/root_sink/standard. An explicit env override that is not executable is caught
     # below rather than silently falling through.
     if [ -z "$ROOT_SINK_BIN" ]; then
         if command -v root_sink &>/dev/null; then
             ROOT_SINK_BIN=$(command -v root_sink)
         elif [ -x "$HOME/.local/bin/root_sink" ]; then
             ROOT_SINK_BIN="$HOME/.local/bin/root_sink"
-        elif [ -x "./tools/root_sink/root_sink" ]; then
-            ROOT_SINK_BIN="./tools/root_sink/root_sink"
+        elif [ -x "./tools/root_sink/standard/root_sink" ]; then
+            ROOT_SINK_BIN="./tools/root_sink/standard/root_sink"
         fi
     fi
 
@@ -420,7 +420,7 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         # built_tree was retired in TODO 71 (root_sink exits on --built-tree):
         # say so instead of passing it, so an old TOML still starts.
         if [ -n "$(get_root_sink_key built_tree)" ]; then
-            echo -e "  ${YELLOW}[network.root_sink] built_tree is retired (TODO 71) — ignored. Record events with event_def_file and rebuild ThGEM rows with tools/root_sink/thgem_events.C${NC}"
+            echo -e "  ${YELLOW}[network.root_sink] built_tree is retired (TODO 71) — ignored. Record events with event_def_file and rebuild ThGEM rows with tools/root_sink/thgem/thgem_events.C${NC}"
         fi
         rs_add_arg time_calib_file --time-calib
         rs_add_arg event_def_file  --event-def

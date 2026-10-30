@@ -76,11 +76,11 @@
 #include <thread>
 #include <vector>
 
-#include "eb_core.hpp"
-#include "event_def.hpp"
+#include "../common/eb_core.hpp"
+#include "../common/event_def.hpp"
 #include "hist_config.hpp"
-#include "sink_core.hpp"
-#include "time_offsets.hpp"
+#include "../common/sink_core.hpp"
+#include "../common/time_offsets.hpp"
 
 #include "TApplication.h"
 #include "TBranch.h"
@@ -346,7 +346,7 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
                    "root_sink: ERROR --built-tree was retired (TODO 71). Record the generic "
                    "events tree instead (--event-def, TOML event_def_file, e.g. "
                    "config/event_def_thgem.json) and rebuild the ThGEM rows offline with "
-                   "tools/root_sink/thgem_events.C (same branches as the old built tree)\n");
+                   "tools/root_sink/thgem/thgem_events.C (same branches as the old built tree)\n");
       return false;
     } else if (a == "--time-calib") {
       if (!(v = need(i))) return false;

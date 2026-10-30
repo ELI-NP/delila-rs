@@ -20,6 +20,22 @@ the pipeline, so it cannot cause data loss upstream (see *Design notes*).
 Japanese operator manual: [docs/root_sink_manual.md](../../docs/root_sink_manual.md)
 (運用手順・ヒストグラム定義・トラブルシューティング).
 
+## Layout (2026-10-30)
+
+Each experiment gets its own sink program; once several have run, the parts
+they share become a library (TODO 79 §5.3). The directories anticipate that:
+
+| directory | what | files |
+|---|---|---|
+| `common/` | experiment-independent pieces — the library candidates (header-only C++17, no ROOT / ZMQ in the headers) and generic tools | `sink_core.hpp` (wire decode, channel specs, run state; still holds the standard program's Δt / XY matchers), `eb_core.hpp`, `event_def.hpp`, `time_offsets.hpp`, `time_map.hpp`, their tests (`test_sink_core.cpp`, `test_eb_core.cpp`, `test_time_map.cpp`), `test_publisher.cxx`, `time_map.C`, `compare_hits.C`, `check_events.C` |
+| `standard/` | **`root_sink`** — the program this README describes, used by ThGEM (pf-qaq) and ELIADE (SN01–) | `root_sink.cxx`, `hist_config.hpp`, `histograms.json`, `test_hist_config.cpp` |
+| `thgem/` | ThGEM offline reconstruction | `thgem_reco.hpp`, `thgem_events.C`, `delayline_offsets.C`, `test_thgem_reco.cpp` |
+| `nwall/` | N_Wall sink (planned, TODO 79) | — |
+
+Files are referred to by name below; the table says where each one lives.
+`../delila2root/TDelila.hpp` (the MessagePack / JSON reader) is shared from
+`tools/delila2root/`.
+
 ## Requirements
 
 - **ROOT** 6.20+ (for ZSTD). Provides `TFile`/`TTree`/`THttpServer`.
@@ -32,9 +48,10 @@ compiler — so it is unit-testable on any box.
 
 ## Build
 
-Standard (system libzmq, e.g. `apt install libzmq3-dev`):
+Standard (system libzmq, e.g. `apt install libzmq3-dev`), from `standard/`:
 
 ```sh
+cd tools/root_sink/standard
 g++ -O2 -std=c++17 root_sink.cxx $(root-config --cflags --libs) -lRHTTP -lzmq -o root_sink
 ```
 
@@ -138,7 +155,7 @@ are the CLI flag names with hyphens turned into underscores (`--out-dir` →
 `--event-def`, and the boolean `hits_tree = true` → `--hits-tree` (`false` or
 absent: no flag)); only present keys are passed, and `--operator` is derived from the
 `[operator]` port. The binary is resolved in the order `ROOT_SINK_BIN` (env) >
-`PATH` > `~/.local/bin/root_sink` > `tools/root_sink/root_sink`; if none is found
+`PATH` > `~/.local/bin/root_sink` > `tools/root_sink/standard/root_sink`; if none is found
 it warns and skips (not fatal). It is managed symmetrically: both
 `start_daq.sh` and `stop_daq.sh` now `pkill -x root_sink`, so a stale sink is
 cleaned up on restart and stopped on shutdown. See
@@ -806,27 +823,34 @@ reload can safely delete and rebuild the live objects.
 ## Testing
 
 `sink_core.hpp` and `hist_config.hpp` are pure logic and compile with plain
-`g++ -std=c++17` — no ROOT, no ZMQ. `test_sink_core.cpp` covers envelope parse,
+`g++ -std=c++17` — no ROOT, no ZMQ. `test_sink_core.cpp` (`common/`) covers envelope parse,
 batch decode, the coincidence and position matchers (with energies; keyed on
 (module, channel)), channel specs `C` / `M:C` and the `--module` list (all error
 classes), the bare-channel ambiguity watch, run state, the HTTP
-helpers (`split_http_response` / `extract_experiment_name`), and the histogram
-config parser (all error classes + `value_of` / `pass_cut` for both scopes):
+helpers (`split_http_response` / `extract_experiment_name`), time offsets and
+event definitions; `test_hist_config.cpp` (`standard/`) covers the histogram
+config parser (all error classes + `value_of` / `pass_cut` for every scope):
 
 ```sh
-cd tools/root_sink
+cd tools/root_sink/common
 g++ -std=c++17 -O0 -g test_sink_core.cpp -o /tmp/ts && /tmp/ts
+cd ../standard
+g++ -std=c++17 -O0 -g test_hist_config.cpp -o /tmp/thc && /tmp/thc
 ```
 
 It prints `N passed, 0 failed` and exits non-zero on any failure.
 
 The pipeline core (`eb_core.hpp`: Channel, SeqReorder, chunk splitter with the
-H10 boundary rules, Sorter, the generic event layer; `thgem_reco.hpp`) has its own suite —
-also plain g++, but `-pthread` (the Channel tests spawn threads):
+H10 boundary rules, Sorter, the generic event layer) has its own suite —
+also plain g++, but `-pthread` (the Channel tests spawn threads); the ThGEM
+reconstruction (`thgem_reco.hpp`) has `thgem/test_thgem_reco.cpp`:
 
 ```sh
-cd tools/root_sink
+cd tools/root_sink/common
 g++ -std=c++17 -O0 -g -pthread test_eb_core.cpp -o /tmp/teb && /tmp/teb
+g++ -std=c++17 -O0 -g test_time_map.cpp -o /tmp/ttm && /tmp/ttm
+cd ../thgem
+g++ -std=c++17 -O0 -g test_thgem_reco.cpp -o /tmp/tthg && /tmp/tthg
 ```
 
 For E2E work there is a committed replay feeder, `test_publisher.cxx`: it plays

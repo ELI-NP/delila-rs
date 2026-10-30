@@ -181,12 +181,12 @@ safe_horizon_ms = 1000
 # for the hits tree, generic events and monitors (the .delila stays raw). The move
 # to the site changed the ThGEM cables — without this the XY images sat at
 # (-17.5, -29.8) / (-2.5, -15.2) ns. Re-read at every run start (edit via a temp
-# file + mv); regenerate with tools/root_sink/delayline_offsets.C after recabling.
+# file + mv); regenerate with tools/root_sink/thgem/delayline_offsets.C after recabling.
 time_calib_file = "config/time_settings_thgem.json"
 # TODO 71 — needs root_sink, scripts/start_daq.sh and config/event_def_thgem.json
 # from the same commit: an older start_daq.sh silently ignores these keys (the
 # new binary would then run without the hits tree), an older root_sink exits on
 # the flags. The ThGEM `built` tree is retired: rebuild its rows offline from
-# the events tree with tools/root_sink/thgem_events.C (same branches).
+# the events tree with tools/root_sink/thgem/thgem_events.C (same branches).
 hits_tree = true                                  # the per-hit tree is opt-in since TODO 71
 event_def_file = "config/event_def_thgem.json"    # generic events tree (ThGEM1 > ThGEM2, +-2000 ns)

@@ -74,7 +74,7 @@ root -l -b -q 'delila2root.C("in.delila","out.root",{},"delila","ts.json")'   # 
 ```
 
 Applies root_sink's per-(module, channel) time offsets (the Rust EB's
-`timeSettings.json`, parsed by `../root_sink/time_offsets.hpp` — same rules,
+`timeSettings.json`, parsed by `../root_sink/common/time_offsets.hpp` — same rules,
 same errors) to every event: `timestamp_ns = raw − offset_ns` (positive = that
 channel arrives late), so the converted tree sits on the same aligned axis as
 root_sink's trees. A (module, channel) without an entry keeps its raw time
@@ -88,7 +88,7 @@ Check against a raw conversion with root_sink's `compare_hits.C` (aligns the
 raw tree with the same file; keyed on (module, channel)):
 
 ```sh
-root -l -b -q '../root_sink/compare_hits.C("raw.root","aligned.root","delila","ts.json")'
+root -l -b -q '../root_sink/common/compare_hits.C("raw.root","aligned.root","delila","ts.json")'
 ```
 
 Verified 2026-10-07 on a 12-module replay file (4.46 M events, 185 offset

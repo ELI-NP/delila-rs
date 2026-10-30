@@ -43,7 +43,7 @@
 #include <string>
 #include <vector>
 
-#include "../delila2root/TDelila.hpp"  // tdelila::mp::Reader (header-only, no ROOT)
+#include "../../delila2root/TDelila.hpp"  // tdelila::mp::Reader (header-only, no ROOT)
 
 namespace rootsink {
 

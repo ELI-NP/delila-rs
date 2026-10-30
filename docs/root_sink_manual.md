@@ -115,7 +115,7 @@ hits_tree  = true              # hits ツリー。2026-10(TODO 71)から opt-in�
   `hits_tree = true` → `--hits-tree`(値なしのフラグ。`false` や省略ならフラグなし、
   true/false 以外は黄色い警告を出して無視)。指定したキーだけがフラグになり、残りは root_sink の既定値。
 - バイナリ探索順: `ROOT_SINK_BIN`(環境変数) > PATH > `~/.local/bin/root_sink`
-  > `tools/root_sink/root_sink`。見つからなければ黄色い警告を出してスキップ
+  > `tools/root_sink/standard/root_sink`。見つからなければ黄色い警告を出してスキップ
   (致命ではない)。
 - **side3 は反映済み**(2026-07-21、`~daq/delila-rs/config.toml` に上記セクション追記済み。
   `start_daq.sh` からの自動起動とファイル名一致を run 14 で実機検証済み)。
@@ -273,7 +273,7 @@ XY・TOF・addback のような実験ごとの「再構成」はこの上にオ�
 - `priority` は**小さいほど基準として優先**。全トリガーに書くか、全く書かないか
   (書かなければ束の先頭のトリガーが基準)。`_comment` はどこにでも書ける。
 - `group_ns ≤ min(pre, post)` が必要(束の中のトリガーが必ず自分のイベントの窓に入るように)。
-- 検査の詳細は `tools/root_sink/event_def.hpp` の先頭コメント。誤りは全て列挙される。
+- 検査の詳細は `tools/root_sink/common/event_def.hpp` の先頭コメント。誤りは全て列挙される。
 - `"version": "1.1"` ではチャンネル表(`tags`)・AC の印(`anti_compton`)・L2(`l2`)が
   書ける(後述「タグ・AC・L2」)。1.0 のファイルはそのまま読める。
 
@@ -383,7 +383,7 @@ events->Draw("NTriggers");                              // 1 イベントあた�
   root_sink: run 112 L2: GeClean=41439 ScClean=228005 OneRing=262819 | SiGe=33419 AnyGamma=238873 | L2Accept=238873
   ```
 
-- **確認**: `root -l -b -q 'tools/root_sink/check_events.C+("<run>.root")'`(要 `--hits-tree`)が
+- **確認**: `root -l -b -q 'tools/root_sink/common/check_events.C+("<run>.root")'`(要 `--hits-tree`)が
   `HitWithAC` と L2 のブランチも含めて作り直しと比べ、IDENTICAL / MISMATCH を出す。
 
 ### ThGEM の再構成(`thgem_events.C`)
@@ -393,7 +393,7 @@ root_sink は ThGEM の `built` ツリーを書かなくなった(TODO 71 で廃
 `timeSettings` / `eventDef` も写す):
 
 ```bash
-root -l -b -q 'tools/root_sink/thgem_events.C+("run0056_0000_X.root","run0056_0000_X_built.root")'
+root -l -b -q 'tools/root_sink/thgem/thgem_events.C+("run0056_0000_X.root","run0056_0000_X_built.root")'
 # 続く引数: xy1 "T,XL,XR,YU,YD"(既定 "1,2,3,5,4")、xy2(既定 "6,7,8,9,10"、"" で片面)、
 #           gamma の ch(既定 0、-1 で LaBr3/TOF なし)、window_ns(腕と LaBr3 の窓、既定 1000)
 ```
@@ -445,7 +445,7 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
 ## ヒストグラム定義ファイル(`--hists`)
 
 再コンパイルなしでヒストグラムの種類・ビン・レンジ・カットを変えられる。
-標準ファイル `tools/root_sink/histograms.json` はビルトインと同じ 4 ヒスト
+標準ファイル `tools/root_sink/standard/histograms.json` はビルトインと同じ 4 ヒスト
 (dt1 / dt2 / dt2_vs_dt1 / channels)を定義している。
 
 ### フォーマット
@@ -536,15 +536,15 @@ hits ツリー・events ツリー・Δt/XY モニタ・ヒストグラムが全�
   `event_builder time-calib` の旧形式 `{"ref_module","ref_channel","offsets":{"00_02":8.7}}` も可。
 - **符号**: `aligned_ts = raw_ts − offset_ns`。**正 = その ch は遅れて届く**。
 - **測り方(ThGEM の XY 中心合わせ)**: delila2root した生データに
-  `tools/root_sink/delayline_offsets.C` を掛ける。表示する x・y の中心(1/99 % 点の中点)を
+  `tools/root_sink/thgem/delayline_offsets.C` を掛ける。表示する x・y の中心(1/99 % 点の中点)を
   各軸の 2 本の腕に半分ずつ振り分け、トリガーと LaBr3 は 0(TOF は変わらない)。
   ```
-  root -l -b -q 'tools/root_sink/delayline_offsets.C("/tmp/run0056_*.root","1,2,3,5,4","6,7,8,9,10","config/time_settings_thgem.json","run 56")'
+  root -l -b -q 'tools/root_sink/thgem/delayline_offsets.C("/tmp/run0056_*.root","1,2,3,5,4","6,7,8,9,10","config/time_settings_thgem.json","run 56")'
   ```
 - **書き換え**: 次のラン開始から有効(root_sink の再起動不要)。書きかけを読まれないよう
   **一時ファイルに書いてから `mv`** で置き換える。
 - **確認**: `thgem_events.C` で作った `built` のファイルに
-  `root -l -b -q -e '.L tools/root_sink/delayline_offsets.C' -e 'delayline_centres_built("runNNNN_0000_<exp>_built.root")'`
+  `root -l -b -q -e '.L tools/root_sink/thgem/delayline_offsets.C' -e 'delayline_centres_built("runNNNN_0000_<exp>_built.root")'`
   を掛けると像の中心を表示。補正済みの `.root` に `delayline_offsets.C` を掛けると
   「残差」が出る(正しい表なら |残差| < 0.5 ns)。
 - **記録**: 全ツリー(hits / events)の UserInfo に `TNamed "timeSettings"`(使った表・`applied`・`status`・原文)。

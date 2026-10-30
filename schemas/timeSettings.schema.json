@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/aogaki/delila-rs/schemas/timeSettings.schema.json",
   "title": "DELILA-Rust per-channel time offsets (timeSettings.json, tree form)",
-  "description": "Tree-based per-channel time offset table (SPEC v0.5.1 § 4.3). Each entry has a parent reference and an offset to apply at HitSource ingress. Convention: aligned_ts = raw_ts - offset_ns. Multi-root forests are allowed (warn at load). The legacy single-reference TimeCalibration schema is also accepted by `event_builder build` but lives outside this file. Also read by root_sink --time-calib (tools/root_sink/time_offsets.hpp, TODO 70), which applies it once in its Receiver.",
+  "description": "Tree-based per-channel time offset table (SPEC v0.5.1 § 4.3). Each entry has a parent reference and an offset to apply at HitSource ingress. Convention: aligned_ts = raw_ts - offset_ns. Multi-root forests are allowed (warn at load). The legacy single-reference TimeCalibration schema is also accepted by `event_builder build` but lives outside this file. Also read by root_sink --time-calib (tools/root_sink/common/time_offsets.hpp, TODO 70), which applies it once in its Receiver.",
   "type": "object",
   "required": ["version", "entries"],
   "additionalProperties": false,

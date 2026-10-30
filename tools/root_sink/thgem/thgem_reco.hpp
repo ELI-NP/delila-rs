@@ -20,7 +20,7 @@
 #include <limits>
 #include <vector>
 
-#include "eb_core.hpp"  // GenericEvent, EventHit
+#include "../common/eb_core.hpp"  // GenericEvent, EventHit
 
 namespace rootsink {
 namespace eb {

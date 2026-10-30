@@ -159,9 +159,9 @@ else
 
   log "building root_sink"
   # shellcheck disable=SC2086
-  if (cd "$REPO/tools/root_sink" &&
+  if (cd "$REPO/tools/root_sink/standard" &&
       g++ $COMMON root_sink.cxx $LINK -lRHTTP -lzmq -o root_sink) 2>/tmp/root_sink_build.log; then
-    install -m 755 "$REPO/tools/root_sink/root_sink" "$HOME/.local/bin/root_sink"
+    install -m 755 "$REPO/tools/root_sink/standard/root_sink" "$HOME/.local/bin/root_sink"
     ok "root_sink -> ~/.local/bin"
   else
     tail -10 /tmp/root_sink_build.log; warn "root_sink build failed (see /tmp/root_sink_build.log)"
