@@ -76,18 +76,21 @@ Grafana の生成スクリプトは 5 列目以降を読み飛ばすので、そ
   ビームの hit から求める(ラン 217: T = 199.980 ns)。
 - Si ↔ VX2730 のずれは ±50 ns 程度で分かれば足りる: Si と同時の即発 γ(LaBr3 / 液シン)か、§5.4 の同期マークで測る。
 
-### 5.3 `tools/root_sink/` の構成(案)
+### 5.3 `tools/root_sink/` の構成(**2026-10-30 実施、7d33b8b**)
 ```
 tools/root_sink/
-  common/   実験に依らない部分 = 今すでにそうなっているもの(移動のみ、中身は変えない)
-            sink_core.hpp(ThGEM の照合は thgem/ へ)、eb_core.hpp、event_def.hpp、time_offsets.hpp、time_map.hpp、
-            単体テスト、test_publisher.cxx、time_map.C、compare_hits.C
-  thgem/    ThGEM 実験 = 今の root_sink(本体、hist_config.hpp、照合、thgem_reco.hpp、thgem_events.C、delayline_offsets.C)
-  nwall/    N_Wall 実験(新規): 本体は ThGEM の本体の写しから始め、表示を N_Wall 用にする
+  common/    実験に依らない部分(ライブラリの候補): sink_core / eb_core / event_def / time_offsets / time_map の各ヘッダー、
+             その単体テスト、test_publisher.cxx、time_map.C、compare_hits.C、check_events.C
+  standard/  root_sink(名前はそのまま。ThGEM と ELIADE が使う): root_sink.cxx、hist_config.hpp、histograms.json、test_hist_config.cpp
+  thgem/     ThGEM のオフライン解析: thgem_reco.hpp、thgem_events.C、delayline_offsets.C、test_thgem_reco.cpp
+  nwall/     N_Wall 用 nwall_sink(これから)
 ```
-- 受信・並べ替え・イベント組み・記録(Recorder、書き込み失敗の処理、来歴)は、当面 thgem と nwall で重複する。
-  N_Wall が回ったあと、ライブラリにする最初の候補。
-- 起動: `[network.root_sink]` にどのプログラムを使うかのキーを足し、`start_daq.sh` が選ぶ。
+- **今の `root_sink` は ELIADE も使っているので、名前は変えない**(ユーザー選択)。移動だけで中身は変えていない。
+  テストの件数は分割の前後で同じ(754 = 647 + 107、257 = 232 + 25、244)。root_sink・test_publisher・全マクロ(delila2root.C を含む)が新しい場所からコンパイルできることを確認。
+- `sink_core.hpp` には standard の Δt / XY の照合がまだ入っている(ライブラリにするときに standard/ へ移す)。
+- 受信・並べ替え・イベント組み・記録(Recorder、書き込み失敗の処理、来歴)は、nwall_sink では standard からの写しで始める
+  (当面は重複。N_Wall が回ったあと、ライブラリにする最初の候補)。
+- 起動: `[network.root_sink]` にプログラムを選ぶキーを足し、`start_daq.sh` が選ぶ(nwall_sink を作るときに)。
 
 ### 5.4 同期マーク(コモントリガー、案)
 - VX2730 の **Test Pulse**(周期 8 ns 刻み・最大約 34 s、TRG-OUT / GPIO に NIM/TTL で出せる、DevTree で確認)を 1 Hz で出し、
