@@ -87,7 +87,8 @@
 - UI: `operator.service.spec.ts` に Mixed / Degraded / Error のボタン、`stalledSources`。
 - 結果: cargo test 788 通過、clippy(`--all-targets`、`dev-tools` 込み)警告なし、UI 71 通過、`dist/` 再ビルド。
 
-### 配備と実機確認(未)
-- pf-qaq で Operator を入れ替える(ビルド + Operator 再起動。ランの合間に、ユーザーの了承を得て)。
+### 配備と実機確認
+- **pf-qaq 配備済み (2026-10-30 06:25 UTC、0dfde61)**: fast-forward → `cargo build --release --bins --features x743` → Operator だけ再起動(他のコンポーネントと root_sink はそのまま、状態 Configured のまま)。ログに「No-event watcher started … no_event_warn_secs=5」、`/api/status` に `stalled_sources`、新しい UI の chunk が配信されていることを確認。ブラウザは再読み込みが要る。
+- 実機確認(未):
 - 確認: S-IN スレーブのスタート信号を止めた状態で Start → 画面に「Start failed」と板名、全体 Idle、Operator のログに ERROR。DIG1 スレーブで信号が来ないとき → 「No events」が約 5 秒で出る(TODO 77 の T1 と同じ日に)。
 
