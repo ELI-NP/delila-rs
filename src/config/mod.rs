@@ -88,6 +88,11 @@ pub struct OperatorFileConfig {
     /// forced anyway (run status = Error).
     #[serde(default = "default_drain_stop_timeout_secs")]
     pub drain_stop_timeout_secs: u64,
+    /// Warn (UI + log) when a Running source delivers no events for this
+    /// many seconds (TODO 78 a; default 1, 0 = off). A DIG1 S-IN slave whose
+    /// start signal never arrives reports Running with no events.
+    #[serde(default = "default_no_event_warn_secs")]
+    pub no_event_warn_secs: u64,
     /// Opt-in backlog autostop watcher (TODO 68). Section present = the
     /// Operator polls component status and answers `backlog_level == 2`
     /// with a drain-first stop. Components must ALSO set
@@ -170,6 +175,7 @@ impl Default for OperatorFileConfig {
             reset_timeout_ms: None,
             influxdb: None,
             drain_stop_timeout_secs: default_drain_stop_timeout_secs(),
+            no_event_warn_secs: default_no_event_warn_secs(),
             backlog_autostop: None,
             elog: None,
             mongodb: None,
@@ -524,6 +530,10 @@ fn default_backlog_poll_interval_secs() -> u64 {
 
 fn default_drain_stop_timeout_secs() -> u64 {
     60
+}
+
+fn default_no_event_warn_secs() -> u64 {
+    1
 }
 
 /// Merger network configuration

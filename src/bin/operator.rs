@@ -99,6 +99,7 @@ fn load_config(
                 .unwrap_or(defaults.reset_timeout_ms),
             elog: config.operator.elog,
             drain_stop_timeout_secs: config.operator.drain_stop_timeout_secs,
+            no_event_warn_secs: config.operator.no_event_warn_secs,
         };
         // Load emulator settings from config
         let emulator_settings = if let Ok(settings) = config.settings.get_settings() {
@@ -417,6 +418,16 @@ async fn main() -> anyhow::Result<()> {
         let state = app_state.clone();
         tokio::spawn(async move {
             delila_rs::operator::run_guard::run_watcher(state).await;
+        });
+    }
+
+    // No-event watcher (TODO 78 a): a Running source without new events
+    // (e.g. an S-IN slave that never got its start signal) is shown in the UI.
+    if app_state.config.no_event_warn_secs > 0 {
+        let state = app_state.clone();
+        let threshold = std::time::Duration::from_secs(app_state.config.no_event_warn_secs);
+        tokio::spawn(async move {
+            delila_rs::operator::event_stall::run_watcher(state, threshold).await;
         });
     }
 

@@ -10,6 +10,7 @@ import {
   CurrentRunInfo,
   RunNote,
   LastRunInfo,
+  StalledSource,
 } from '../models/types';
 
 @Injectable({
@@ -52,6 +53,8 @@ export class OperatorService {
   readonly isTuneUp = computed(() => this.status()?.tuneup_mode ?? false);
   /** Digitizer ID being tuned */
   readonly tuneupDigitizerId = computed(() => this.status()?.tuneup_digitizer_id ?? null);
+  /** Running sources without new events (TODO 78 a) */
+  readonly stalledSources = computed<StalledSource[]>(() => this.status()?.stalled_sources ?? []);
 
   // Grouped components by role
   readonly sourceComponents = computed(() =>

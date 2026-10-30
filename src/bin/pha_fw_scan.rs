@@ -819,6 +819,7 @@ mod tests {
             tuneup_mode: false,
             tuneup_digitizer_id: None,
             monitor_http_port: None,
+            stalled_sources: Vec::new(),
         })
     }
 

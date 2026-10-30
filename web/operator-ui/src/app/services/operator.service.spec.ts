@@ -175,14 +175,37 @@ describe('OperatorService', () => {
         reset: false,
       });
 
-      // Error state
-      service.status.set({ ...mockSystemStatus, system_state: 'Error' });
+      // Error / Mixed / Degraded: Stop and Reset stay usable so a half-started
+      // or half-failed system can always be brought back from the UI (TODO 78 c)
+      for (const state of ['Error', 'Mixed', 'Degraded'] as const) {
+        service.status.set({ ...mockSystemStatus, system_state: state });
+        expect(service.buttonStates()).withContext(state).toEqual({
+          configure: false,
+          start: false,
+          stop: true,
+          reset: true,
+        });
+      }
+
+      // No status (Operator unreachable): nothing to act on
+      service.status.set(null);
       expect(service.buttonStates()).toEqual({
         configure: false,
         start: false,
         stop: false,
-        reset: true,
+        reset: false,
       });
+    });
+
+    it('should expose stalled sources from the status (TODO 78 a)', () => {
+      service.status.set(mockSystemStatus);
+      expect(service.stalledSources()).toEqual([]);
+
+      service.status.set({
+        ...mockSystemStatus,
+        stalled_sources: [{ name: 'Reader-0', seconds: 3 }],
+      });
+      expect(service.stalledSources()).toEqual([{ name: 'Reader-0', seconds: 3 }]);
     });
   });
 

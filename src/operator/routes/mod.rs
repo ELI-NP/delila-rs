@@ -163,6 +163,9 @@ pub struct AppState {
     /// Reset/Configure/Arm/Start across components (TODO 58 H14). Multi-client
     /// operation is an explicit feature, so the race is realistic.
     pub run_control_lock: tokio::sync::Mutex<()>,
+    /// Running sources without new events, kept by the no-event watcher
+    /// (TODO 78 a) and reported in `/api/status`.
+    pub stalled_sources: RwLock<Vec<crate::operator::event_stall::StalledSource>>,
 }
 
 /// Emulator runtime settings (API model)
@@ -378,6 +381,7 @@ impl AppState {
         UpdateTimeSettingsRequest,
         UpdateL2SettingsRequest,
         tuneup::TuneUpStartRequest,
+        crate::operator::event_stall::StalledSource,
     )),
     tags(
         (name = "DAQ Control", description = "DAQ system control endpoints"),
@@ -507,6 +511,7 @@ impl RouterBuilder {
             monitor_layout: RwLock::new(monitor_layout),
             tuneup_apply_lock: tokio::sync::Mutex::new(()),
             run_control_lock: tokio::sync::Mutex::new(()),
+            stalled_sources: RwLock::new(Vec::new()),
         });
 
         let cors = CorsLayer::new()

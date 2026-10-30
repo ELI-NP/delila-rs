@@ -4,14 +4,124 @@ use std::sync::Arc;
 
 use axum::{extract::State, http::StatusCode, Json};
 
-use crate::common::{Command, RunConfig};
+use crate::common::{Command, ComponentState, RunConfig};
 use crate::config::FirmwareType;
 
 use super::super::{
-    ApiResponse, ConfigureRequest, CurrentRunInfo, RunStats, RunStatus, StartRequest, SystemState,
-    SystemStatus,
+    ApiResponse, CommandResult, ConfigureRequest, CurrentRunInfo, RunStats, RunStatus,
+    StartRequest, SystemState, SystemStatus,
 };
 use super::AppState;
+
+/// A run-control phase did not complete in time, or a component went
+/// offline / into Error while waiting (TODO 78).
+///
+/// Never 408: Chromium silently resends a POST answered with 408 on a reused
+/// keep-alive connection (crbug 377581). On 10/22 that turned one failed
+/// start into eight Reset → Configure → Arm → Start cycles, with no error in
+/// the UI, and the resent request overwrote a Force Reset 5 ms after it ran.
+/// 504 (a downstream component did not answer in time) is not retried, so
+/// the error reaches the UI.
+fn phase_failed(phase: &str, error: &str) -> (StatusCode, Json<ApiResponse>) {
+    tracing::error!(phase, error, "Run control phase failed");
+    (
+        StatusCode::GATEWAY_TIMEOUT,
+        Json(ApiResponse::error(format!(
+            "{} phase failed: {}",
+            phase, error
+        ))),
+    )
+}
+
+/// Components rejected a run-control phase's command (TODO 78: these
+/// returns used to be silent in the Operator log).
+fn phase_rejected(phase: &str, results: Vec<CommandResult>) -> (StatusCode, Json<ApiResponse>) {
+    let failed = results
+        .iter()
+        .filter(|r| !r.success)
+        .map(|r| format!("{}: {}", r.name, r.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    tracing::error!(phase, failed = %failed, "Run control phase rejected by components");
+    (
+        StatusCode::BAD_REQUEST,
+        Json(
+            ApiResponse::error(format!("{} phase failed: {}", phase, failed)).with_results(results),
+        ),
+    )
+}
+
+/// Undo a run start that failed after the components left Idle (TODO 78 b).
+///
+/// A half-started system (Recorder / Merger / master Running, a slave still
+/// Armed with its Reader retrying the hardware start every 5 s) is "Mixed",
+/// which the UI could not act on at all. Reset — the same command as Force
+/// Reset and run_start's Phase 0 — brings every component back to Idle and
+/// stops the retrying Reader.
+async fn roll_back_to_idle(
+    state: &AppState,
+    (status, Json(mut response)): (StatusCode, Json<ApiResponse>),
+) -> (StatusCode, Json<ApiResponse>) {
+    let outcome = match state
+        .client
+        .reset_all_sync(&state.components, state.config.reset_timeout_ms)
+        .await
+    {
+        Ok(results) if results.iter().all(|r| r.success) => {
+            tracing::warn!("Failed run start rolled back: all components reset to Idle");
+            "all components were reset to Idle — fix the cause and press Start again".to_string()
+        }
+        Ok(results) => {
+            let failed = results
+                .iter()
+                .filter(|r| !r.success)
+                .map(|r| format!("{}: {}", r.name, r.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            tracing::error!(failed = %failed, "Rollback Reset after a failed run start was rejected");
+            format!("rollback Reset rejected ({}) — use Force Reset", failed)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Rollback Reset after a failed run start failed");
+            format!("rollback Reset failed ({}) — use Force Reset", e)
+        }
+    };
+    response.message = format!("{} — {}", response.message, outcome);
+    (status, Json(response))
+}
+
+/// Start phase failed: say which sources never started, then roll back.
+async fn start_phase_failed(
+    state: &AppState,
+    run_number: u32,
+    (status, Json(mut response)): (StatusCode, Json<ApiResponse>),
+) -> (StatusCode, Json<ApiResponse>) {
+    let stuck: Vec<String> = state
+        .client
+        .get_all_status(&state.components)
+        .await
+        .into_iter()
+        .filter(|s| s.role == "source" && s.state == ComponentState::Armed)
+        .map(|s| s.name)
+        .collect();
+    if !stuck.is_empty() {
+        response.message = format!(
+            "{} — {} stayed Armed: its acquisition never started. For an S-IN / GPIO slave \
+             this usually means the master's start signal is not arriving (check the \
+             master's Run output and the cable); the CAEN error is in that Reader's log",
+            response.message,
+            stuck.join(", ")
+        );
+    }
+    // TODO 78 (d): the Recorder may already have opened a file for this run.
+    // It is kept (the Recorder never overwrites; a retry with the same
+    // number writes a timestamped name).
+    response.message = format!(
+        "{} — run {} is not in the run history (a partial data file may exist and is kept)",
+        response.message, run_number
+    );
+    roll_back_to_idle(state, (status, Json(response))).await
+}
 
 /// Get system and component status
 #[utoipa::path(
@@ -102,6 +212,7 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         tuneup_mode,
         tuneup_digitizer_id,
         monitor_http_port: state.config.monitor_http_port,
+        stalled_sources: state.stalled_sources.read().await.clone(),
     })
 }
 
@@ -113,7 +224,8 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
     request_body = ConfigureRequest,
     responses(
         (status = 200, description = "Configuration result", body = ApiResponse),
-        (status = 400, description = "Invalid request", body = ApiResponse)
+        (status = 400, description = "Invalid request", body = ApiResponse),
+        (status = 504, description = "Reset phase did not complete", body = ApiResponse)
     )
 )]
 pub(super) async fn configure(
@@ -146,17 +258,9 @@ pub(super) async fn configure(
         .reset_all_sync(&state.components, state.config.reset_timeout_ms)
         .await
     {
-        Err(e) => {
-            return (
-                StatusCode::REQUEST_TIMEOUT,
-                Json(ApiResponse::error(format!("Reset phase failed: {}", e))),
-            );
-        }
+        Err(e) => return phase_failed("Reset", &e),
         Ok(results) if results.iter().any(|r| !r.success) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::error("Reset phase failed").with_results(results)),
-            );
+            return phase_rejected("Reset", results)
         }
         Ok(_) => {}
     }
@@ -165,6 +269,11 @@ pub(super) async fn configure(
         .client
         .configure_all(&state.components, run_config)
         .await;
+    if results.iter().any(|r| !r.success) {
+        // Left as is (possibly Mixed): Configure is a pre-flight, not a run.
+        // The UI offers Reset in Mixed (TODO 78 c).
+        return phase_rejected("Configure", results);
+    }
 
     let mut response =
         ApiResponse::success(format!("Configure command sent for run {}", run_number))
@@ -316,6 +425,7 @@ pub(super) async fn arm(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     responses(
         (status = 200, description = "Start result", body = ApiResponse),
         (status = 400, description = "Invalid state transition", body = ApiResponse),
+        (status = 504, description = "Arm or Start did not complete — all components were reset to Idle", body = ApiResponse),
         (status = 507, description = "Disk below the hard free-space watermark, or a write failure still latched", body = ApiResponse)
     )
 )]
@@ -355,29 +465,19 @@ pub(super) async fn start(
         );
     }
 
-    // If Configured, arm first
+    // If Configured, arm first. A failure from here on rolls back to Idle
+    // (TODO 78 b) — a partly armed / partly running system is Mixed.
     if system_state == SystemState::Configured {
         match state
             .client
             .arm_all_sync(&state.components, state.config.arm_timeout_ms)
             .await
         {
-            Ok(arm_results) => {
-                let arm_response =
-                    ApiResponse::success("Arm command sent").with_results(arm_results);
-                if !arm_response.success {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(ApiResponse::error("Auto-arm failed before start")),
-                    );
-                }
+            Err(e) => return roll_back_to_idle(&state, phase_failed("Auto-arm", &e)).await,
+            Ok(results) if results.iter().any(|r| !r.success) => {
+                return roll_back_to_idle(&state, phase_rejected("Auto-arm", results)).await
             }
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::error(format!("Auto-arm failed: {}", e))),
-                );
-            }
+            Ok(_) => {}
         }
     }
 
@@ -388,14 +488,12 @@ pub(super) async fn start(
         .await;
 
     let mut response = match start_result {
+        Err(e) => return start_phase_failed(&state, run_number, phase_failed("Start", &e)).await,
+        Ok(results) if results.iter().any(|r| !r.success) => {
+            return start_phase_failed(&state, run_number, phase_rejected("Start", results)).await
+        }
         Ok(results) => ApiResponse::success(format!("Start command sent for run {}", run_number))
             .with_results(results),
-        Err(e) => {
-            return (
-                StatusCode::REQUEST_TIMEOUT,
-                Json(ApiResponse::error(format!("Start failed: {}", e))),
-            );
-        }
     };
 
     let status = if response.success {
@@ -862,8 +960,9 @@ pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Js
     responses(
         (status = 200, description = "Run started successfully", body = ApiResponse),
         (status = 400, description = "Failed to start run", body = ApiResponse),
-        (status = 408, description = "Timeout during synchronization", body = ApiResponse),
         (status = 409, description = "System is Running or in Tune Up mode", body = ApiResponse),
+        (status = 502, description = "A Reader rejected its digitizer config (before Arm)", body = ApiResponse),
+        (status = 504, description = "A phase did not complete — after Reset, all components were reset to Idle", body = ApiResponse),
         (status = 507, description = "Disk below the hard free-space watermark", body = ApiResponse)
     )
 )]
@@ -917,17 +1016,9 @@ pub(super) async fn run_start(
         .await;
 
     match reset_result {
-        Err(e) => {
-            return (
-                StatusCode::REQUEST_TIMEOUT,
-                Json(ApiResponse::error(format!("Reset phase failed: {}", e))),
-            );
-        }
+        Err(e) => return phase_failed("Reset", &e),
         Ok(results) if results.iter().any(|r| !r.success) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::error("Reset phase failed").with_results(results)),
-            );
+            return phase_rejected("Reset", results)
         }
         Ok(_) => {}
     }
@@ -942,18 +1033,12 @@ pub(super) async fn run_start(
         )
         .await;
 
+    // From here on a failure rolls back to Idle (TODO 78 b): the components
+    // are no longer in one state, and the UI could not act on "Mixed".
     match configure_result {
-        Err(e) => {
-            return (
-                StatusCode::REQUEST_TIMEOUT,
-                Json(ApiResponse::error(format!("Configure phase failed: {}", e))),
-            );
-        }
+        Err(e) => return roll_back_to_idle(&state, phase_failed("Configure", &e)).await,
         Ok(results) if results.iter().any(|r| !r.success) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::error("Configure phase failed").with_results(results)),
-            );
+            return roll_back_to_idle(&state, phase_rejected("Configure", results)).await
         }
         Ok(_) => {}
     }
@@ -1076,17 +1161,9 @@ pub(super) async fn run_start(
         .await;
 
     match arm_result {
-        Err(e) => {
-            return (
-                StatusCode::REQUEST_TIMEOUT,
-                Json(ApiResponse::error(format!("Arm phase failed: {}", e))),
-            );
-        }
+        Err(e) => return roll_back_to_idle(&state, phase_failed("Arm", &e)).await,
         Ok(results) if results.iter().any(|r| !r.success) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::error("Arm phase failed").with_results(results)),
-            );
+            return roll_back_to_idle(&state, phase_rejected("Arm", results)).await
         }
         Ok(_) => {}
     }
@@ -1098,14 +1175,10 @@ pub(super) async fn run_start(
         .await;
 
     match start_result {
-        Err(e) => (
-            StatusCode::REQUEST_TIMEOUT,
-            Json(ApiResponse::error(format!("Start phase failed: {}", e))),
-        ),
-        Ok(results) if results.iter().any(|r| !r.success) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::error("Start phase failed").with_results(results)),
-        ),
+        Err(e) => start_phase_failed(&state, run_number, phase_failed("Start", &e)).await,
+        Ok(results) if results.iter().any(|r| !r.success) => {
+            start_phase_failed(&state, run_number, phase_rejected("Start", results)).await
+        }
         Ok(results) => {
             let exp_name = &state.config.experiment_name;
             // TODO 58 M16: persistence failures must reach the response.
@@ -1191,5 +1264,198 @@ pub(super) async fn run_start(
                 Json(ApiResponse::success(message).with_results(results)),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Run-control handlers against fake components on ZMQ ipc sockets
+    //! (TODO 78: start failure → no 408, logged, rolled back to Idle).
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::sync::{broadcast, watch, Mutex};
+
+    use super::*;
+    use crate::common::{run_command_task, CommandResponse, ComponentState};
+    use crate::operator::routes::RouterBuilder;
+    use crate::operator::{ComponentConfig, OperatorConfig};
+
+    /// Commanded state of a fake component. GetStatus answers like a Reader:
+    /// a source whose hardware start never happens (a slave whose start
+    /// signal is missing) keeps reporting Armed although it was told to run.
+    struct Fake {
+        target: ComponentState,
+        starts: bool,
+    }
+
+    fn fake_handle(f: &mut Fake, cmd: Command) -> CommandResponse {
+        use ComponentState::*;
+        let next = match cmd {
+            Command::GetStatus => {
+                let reported = if f.target == Running && !f.starts {
+                    Armed
+                } else {
+                    f.target
+                };
+                return CommandResponse::success(reported, "status");
+            }
+            Command::Reset => Idle,
+            Command::Configure(_) if f.target == Idle => Configured,
+            Command::Arm if f.target == Configured => Armed,
+            Command::Start { .. } if f.target == Armed => Running,
+            Command::Stop if f.target == Running => Configured,
+            other => {
+                return CommandResponse::error(
+                    f.target,
+                    format!("{} not valid in {}", other, f.target),
+                )
+            }
+        };
+        f.target = next;
+        CommandResponse::success(next, "ok")
+    }
+
+    static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+    /// One fake per `(name, pipeline_order, source_id, hardware start happens)`.
+    fn spawn_fakes(
+        specs: &[(&'static str, u32, Option<u32>, bool)],
+        shutdown: &broadcast::Sender<()>,
+    ) -> Vec<ComponentConfig> {
+        specs
+            .iter()
+            .map(|&(name, pipeline_order, source_id, starts)| {
+                let address = format!(
+                    "ipc:///tmp/delila-op-test-{}-{}",
+                    std::process::id(),
+                    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+                );
+                let fake = Arc::new(Mutex::new(Fake {
+                    target: ComponentState::Idle,
+                    starts,
+                }));
+                let (state_tx, _) = watch::channel(ComponentState::Idle);
+                tokio::spawn(run_command_task(
+                    address.clone(),
+                    fake,
+                    state_tx,
+                    shutdown.subscribe(),
+                    |f: &mut Fake, _: &watch::Sender<ComponentState>, cmd| fake_handle(f, cmd),
+                    name,
+                ));
+                ComponentConfig {
+                    name: name.to_string(),
+                    address,
+                    pipeline_order,
+                    source_id,
+                    is_digitizer: false,
+                    config_file: None,
+                    source_type: None,
+                }
+            })
+            .collect()
+    }
+
+    /// Recorder + Merger + two sources; `slave_starts = false` is the 10/22
+    /// case (S-IN slave never receives the master's Run signal).
+    fn pipeline(slave_starts: bool, shutdown: &broadcast::Sender<()>) -> Vec<ComponentConfig> {
+        spawn_fakes(
+            &[
+                ("Recorder", 3, None, true),
+                ("Merger", 2, None, true),
+                ("Master", 1, Some(0), true),
+                ("Slave", 1, Some(1), slave_starts),
+            ],
+            shutdown,
+        )
+    }
+
+    fn app_state(components: Vec<ComponentConfig>, dir: &std::path::Path) -> Arc<AppState> {
+        let config = OperatorConfig {
+            reset_timeout_ms: 1000,
+            configure_timeout_ms: 1000,
+            arm_timeout_ms: 1000,
+            start_timeout_ms: 500,
+            ..OperatorConfig::default()
+        };
+        RouterBuilder::new(components)
+            .config(config)
+            .config_dir(dir.to_path_buf())
+            .build()
+            .1
+    }
+
+    fn run_request(run_number: u32) -> ConfigureRequest {
+        ConfigureRequest {
+            run_number,
+            comment: String::new(),
+            exp_name: "test".to_string(),
+        }
+    }
+
+    async fn system_state(state: &AppState) -> SystemState {
+        SystemState::from_components(&state.client.get_all_status(&state.components).await)
+    }
+
+    #[tokio::test]
+    async fn run_start_reaches_running_with_healthy_fakes() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+
+        let (status, Json(resp)) = run_start(State(state.clone()), Json(run_request(1))).await;
+
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+        assert_eq!(system_state(&state).await, SystemState::Running);
+        let _ = shutdown.send(());
+    }
+
+    /// 408 made Chromium silently resend the POST (10/22: eight run/starts,
+    /// Force Reset overwritten 5 ms later). A failed start must answer with a
+    /// status the browser does not retry, name the board that did not start,
+    /// and leave the system in one consistent state instead of Mixed.
+    #[tokio::test]
+    async fn run_start_failure_is_504_names_the_board_and_rolls_back_to_idle() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(false, &shutdown), dir.path());
+
+        let (status, Json(resp)) = run_start(State(state.clone()), Json(run_request(1))).await;
+
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{}", resp.message);
+        assert!(!resp.success);
+        assert!(
+            resp.message.contains("Slave stayed Armed"),
+            "{}",
+            resp.message
+        );
+        assert!(resp.message.contains("reset to Idle"), "{}", resp.message);
+        assert_eq!(system_state(&state).await, SystemState::Idle);
+        assert!(state.current_run.read().await.is_none());
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn start_failure_after_configure_is_504_and_rolls_back_to_idle() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(false, &shutdown), dir.path());
+        let (status, Json(resp)) = configure(State(state.clone()), Json(run_request(1))).await;
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+
+        let (status, Json(resp)) = start(
+            State(state.clone()),
+            Json(StartRequest {
+                run_number: 1,
+                comment: String::new(),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{}", resp.message);
+        assert!(resp.message.contains("Slave"), "{}", resp.message);
+        assert_eq!(system_state(&state).await, SystemState::Idle);
+        let _ = shutdown.send(());
     }
 }

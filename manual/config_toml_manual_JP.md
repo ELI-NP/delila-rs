@@ -63,6 +63,7 @@
 | `arm_timeout_ms` | u64 | `5000` | Arm フェーズのタイムアウト (ms) |
 | `start_timeout_ms` | u64 | `5000` | Start フェーズのタイムアウト (ms) |
 | `reset_timeout_ms` | u64 | `5000` | Reset フェーズのタイムアウト (ms) |
+| `no_event_warn_secs` | u64 | `1` | Running 中にあるソースのイベント数がこの秒数増えないと、UI に「No events」を出しログに警告する。`0` で無効。レートの低い線源では大きくする |
 
 ```toml
 [operator]

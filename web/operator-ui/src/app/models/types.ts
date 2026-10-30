@@ -22,6 +22,7 @@ export type SystemState =
   | 'Stopping'
   | 'Error'
   | 'Mixed'
+  | 'Degraded'
   | 'Offline';
 
 // Metrics for a component
@@ -104,6 +105,15 @@ export interface SystemStatus {
   tuneup_digitizer_id?: number;
   /** Monitor HTTP port (for constructing Monitor API URL) */
   monitor_http_port?: number;
+  /** Running sources that delivered no events for no_event_warn_secs (TODO 78 a) */
+  stalled_sources?: StalledSource[];
+}
+
+/** A Running source whose event count has not moved (TODO 78 a) */
+export interface StalledSource {
+  name: string;
+  /** Seconds since its event count last changed */
+  seconds: number;
 }
 
 // Configure request
@@ -472,7 +482,12 @@ export function getButtonStates(state: SystemState): ButtonStates {
     case 'Running':
       return { configure: false, start: false, stop: true, reset: false };
     case 'Error':
-      return { configure: false, start: false, stop: false, reset: true };
+    case 'Mixed':
+    case 'Degraded':
+      // Components disagree, one failed or one is offline: Stop (ends the run
+      // and its bookkeeping) and Reset (back to Idle) must stay reachable —
+      // on 10/22 a half-started system locked every button (TODO 78 c).
+      return { configure: false, start: false, stop: true, reset: true };
     default:
       // Transitional states - all disabled
       return { configure: false, start: false, stop: false, reset: false };

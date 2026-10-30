@@ -164,6 +164,42 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           </div>
         }
 
+        <!-- TODO 78: the server rolls a failed start back to Idle; keep the
+             reason on screen (the snackbar alone disappears). -->
+        @if (lastStartFailure(); as failure) {
+          <div class="apply-failure-banner">
+            <mat-icon>report_problem</mat-icon>
+            <div class="apply-failure-text">
+              <strong>Start failed</strong>
+              <span class="apply-failure-detail">{{ failure }}</span>
+            </div>
+            <button
+              mat-icon-button
+              class="banner-close"
+              (click)="lastStartFailure.set(null)"
+              aria-label="Dismiss"
+            >
+              <mat-icon>close</mat-icon>
+            </button>
+          </div>
+        }
+
+        @if (operator.stalledSources().length > 0) {
+          <div class="stall-banner">
+            <mat-icon>warning</mat-icon>
+            <div class="apply-failure-text">
+              <strong>No events</strong>
+              @for (s of operator.stalledSources(); track s.name) {
+                <span>{{ s.name }}: no new events for {{ s.seconds }} s</span>
+              }
+              <span class="stall-hint">
+                Check its trigger. For an S-IN slave, check that the master's start
+                signal arrives.
+              </span>
+            </div>
+          </div>
+        }
+
         <!-- Timer controls (folded in from the old standalone Timer panel — CT-6).
              When not running: inline "Run with timer" form sits above Start/Stop.
              When running: countdown + progress bar replaces the form. -->
@@ -361,6 +397,31 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
       color: rgba(0, 0, 0, 0.7);
       word-break: break-word;
     }
+    .banner-close {
+      flex-shrink: 0;
+      margin: -8px -8px 0 auto;
+    }
+    .stall-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 0 0 12px;
+      padding: 10px 14px;
+      border-radius: 4px;
+      background: #fff3e0;
+      border-left: 4px solid #e65100;
+      color: #4e2600;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .stall-banner mat-icon {
+      flex-shrink: 0;
+      color: #e65100;
+    }
+    .stall-hint {
+      margin-top: 4px;
+      color: rgba(0, 0, 0, 0.7);
+    }
 
     /* Timer (CT-6): inline form when idle, full-width countdown when running. */
     .timer-row {
@@ -478,6 +539,8 @@ export class ControlPanelComponent {
   readonly useTimer = signal(false);
   /** Pulses the card background red while the timer-expired alarm dialog is open. */
   readonly alarmFlashing = signal(false);
+  /** Reason of the last failed Start, until the next successful Start / Reset or dismiss. */
+  readonly lastStartFailure = signal<string | null>(null);
 
   // Edit mode state
   private editMode = signal(false);
@@ -682,6 +745,7 @@ export class ControlPanelComponent {
     this.operator.start(runNumber, comment).subscribe({
       next: (res) => {
         if (res.success) {
+          this.lastStartFailure.set(null);
           this.notify.success('Started successfully');
           // CT-6: Start the countdown alongside the run when the operator opted in.
           if (this.useTimer() && !this.timer.isRunning()) {
@@ -690,10 +754,14 @@ export class ControlPanelComponent {
           // Clear override after successful start - next stop will show server's next_run_number
           this.clearOverride();
         } else {
+          this.lastStartFailure.set(res.message);
           this.notify.error(`Start failed: ${res.message}`);
         }
       },
-      error: (err: unknown) => this.notify.error(`Start failed: ${this.extractError(err)}`),
+      error: (err: unknown) => {
+        this.lastStartFailure.set(this.extractError(err));
+        this.notify.error(`Start failed: ${this.extractError(err)}`);
+      },
     });
   }
 
@@ -721,6 +789,7 @@ export class ControlPanelComponent {
     this.operator.reset().subscribe({
       next: (res) => {
         if (res.success) {
+          this.lastStartFailure.set(null);
           this.notify.success('Reset successfully');
           // Clear override on reset as well
           this.clearOverride();

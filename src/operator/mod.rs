@@ -9,6 +9,7 @@ pub mod command_ext;
 mod digitizer_repository;
 pub mod elog;
 mod event_builder_repository;
+pub mod event_stall;
 pub mod influxdb;
 pub(crate) mod routes;
 pub mod run_guard;
@@ -86,6 +87,10 @@ pub struct SystemStatus {
     /// Monitor HTTP port (for frontend to construct Monitor API URL)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor_http_port: Option<u16>,
+    /// Running sources that delivered no events for `no_event_warn_secs`
+    /// (TODO 78 a)
+    #[serde(default)]
+    pub stalled_sources: Vec<event_stall::StalledSource>,
 }
 
 /// Aggregated system state
@@ -267,6 +272,9 @@ pub struct OperatorConfig {
     /// Timeout for the drain-wait phase of a drain-first stop, in seconds
     /// (TODO 68).
     pub drain_stop_timeout_secs: u64,
+    /// Warn when a Running source delivers no events for this many seconds
+    /// (TODO 78 a). 0 = off.
+    pub no_event_warn_secs: u64,
 }
 
 impl Default for OperatorConfig {
@@ -282,6 +290,7 @@ impl Default for OperatorConfig {
             monitor_http_port: None,
             elog: None,
             drain_stop_timeout_secs: 60,
+            no_event_warn_secs: 1,
         }
     }
 }
@@ -556,6 +565,7 @@ mod tests {
             tuneup_mode: false,
             tuneup_digitizer_id: None,
             monitor_http_port: Some(8081),
+            stalled_sources: Vec::new(),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"system_state\":\"Idle\""));
