@@ -187,13 +187,13 @@ pub(super) async fn get_run(
     })
 }
 
-/// Get the next available run number
+/// Get the next run number of the current experiment (same value as /api/status)
 #[utoipa::path(
     get,
     path = "/api/runs/next",
     tag = "Run History",
     responses(
-        (status = 200, description = "Next run number", body = NextRunNumberResponse),
+        (status = 200, description = "Next run number of the current experiment", body = NextRunNumberResponse),
         (status = 503, description = "MongoDB not available", body = ApiResponse)
     )
 )]
@@ -207,15 +207,18 @@ pub(super) async fn get_next_run_number(
         )
     })?;
 
-    let next = repo.get_next_run_number().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error(format!(
-                "Failed to get next run number: {}",
-                e
-            ))),
-        )
-    })?;
+    let next = repo
+        .get_next_run_number_for_experiment(&state.config.experiment_name)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to get next run number: {}",
+                    e
+                ))),
+            )
+        })?;
 
     Ok(Json(NextRunNumberResponse {
         next_run_number: next,

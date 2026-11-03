@@ -670,7 +670,7 @@ struct RunNote {
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/runs/next` | GET | Get next available run number |
+| `/api/runs/next` | GET | Get next run number of the current experiment |
 | `/api/runs/current/note` | POST | Add note to current run |
 | `/api/start` | POST | Start run (includes comment) |
 | `/api/stop` | POST | End run (updates status, duration) |

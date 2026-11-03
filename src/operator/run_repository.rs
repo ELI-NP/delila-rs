@@ -4,13 +4,13 @@
 
 use chrono::Utc;
 use mongodb::{
-    bson::{doc, oid::ObjectId},
+    bson::{doc, oid::ObjectId, Bson},
     options::ClientOptions,
     Client, Collection,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use utoipa::ToSchema;
 
 /// Run status
@@ -135,6 +135,24 @@ pub enum RepositoryError {
 
     #[error("Run already exists: {0}")]
     AlreadyExists(i32),
+}
+
+/// Next run number from a `{ run_number: 1 }` projection of the latest run
+/// (`None` = no runs yet). Takes the raw Document because the projection drops
+/// RunDocument's required fields.
+fn next_run_number_from(doc: Option<mongodb::bson::Document>) -> i32 {
+    let Some(d) = doc else { return 1 };
+    match d.get("run_number") {
+        Some(Bson::Int32(n)) => n + 1,
+        Some(Bson::Int64(n)) => *n as i32 + 1,
+        other => {
+            warn!(
+                ?other,
+                "latest run has no integer run_number; next run number falls back to 1"
+            );
+            1
+        }
+    }
 }
 
 /// MongoDB repository for run history
@@ -399,24 +417,6 @@ impl RunRepository {
         Ok(runs)
     }
 
-    /// Get next run number (max + 1)
-    pub async fn get_next_run_number(&self) -> Result<i32, RepositoryError> {
-        use mongodb::options::FindOneOptions;
-
-        let options = FindOneOptions::builder()
-            .sort(doc! { "run_number": -1 })
-            .projection(doc! { "run_number": 1 })
-            .build();
-
-        let doc = self
-            .collection
-            .find_one(doc! {})
-            .with_options(options)
-            .await?;
-
-        Ok(doc.map(|d| d.run_number + 1).unwrap_or(1))
-    }
-
     /// Get next run number for a specific experiment
     /// Returns the run_number + 1 of the most recent run (by start_time), not the max run_number.
     /// This allows re-running the same run number (e.g., for retakes).
@@ -441,10 +441,7 @@ impl RunRepository {
             .with_options(options)
             .await?;
 
-        Ok(doc
-            .and_then(|d| d.get_i32("run_number").ok())
-            .map(|n| n + 1)
-            .unwrap_or(1))
+        Ok(next_run_number_from(doc))
     }
 
     /// Get the most recent run info for a specific experiment (for pre-filling comment)
@@ -546,5 +543,22 @@ mod tests {
         let info = CurrentRunInfo::from_document(&doc);
         // Allow 1 second tolerance
         assert!(info.elapsed_secs >= 59 && info.elapsed_secs <= 61);
+    }
+
+    #[test]
+    fn test_projected_run_doc_is_not_a_run_document() {
+        // The { run_number: 1 } projection used by the next-run queries. Typed as
+        // RunDocument it fails with "missing field `exp_name`" — /api/runs/next
+        // failed this way on every call (side3, 2026-10-30).
+        let projected = doc! { "_id": ObjectId::new(), "run_number": 5 };
+        assert!(mongodb::bson::from_document::<RunDocument>(projected).is_err());
+    }
+
+    #[test]
+    fn test_next_run_number_from_projection() {
+        assert_eq!(next_run_number_from(None), 1);
+        assert_eq!(next_run_number_from(Some(doc! { "run_number": 5 })), 6);
+        assert_eq!(next_run_number_from(Some(doc! { "run_number": 5_i64 })), 6);
+        assert_eq!(next_run_number_from(Some(doc! { "_id": 1 })), 1);
     }
 }
