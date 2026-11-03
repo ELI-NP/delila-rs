@@ -55,6 +55,9 @@ tools/delila2root/delila2root
 tools/delila2root/delila2root_*
 tools/root_sink/standard/root_sink
 tools/root_sink/nwall/nwall_sink
+tools/root_sink/bench/bench
+tools/root_sink/bench/crash_test
+tools/root_sink/bench/out*/
 __pycache__/
 
 # CAEN library runtime logs. libCAEN* drops these into whatever directory the

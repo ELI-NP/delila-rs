@@ -1,0 +1,56 @@
+# Tue Nov  3 08:24:19 EET 2026 host=mac-m4pro root=6.40.04 N=30000000
+mode,params,order,n_hits,wall_s,cpu_s,cores,hits_per_s,file_MB,file_MB_s,ratio,inversions,maxrss_MB
+ttree,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,6.07,6.05,1.00,4945778,245.2,40.4,1.71,-1,753
+ttree,"comp=501 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,2.19,2.17,0.99,13684691,261.5,119.3,1.61,-1,723
+ttree,"comp=509 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,23.20,23.17,1.00,1292827,232.0,10.0,1.81,-1,818
+ttree,"comp=404 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,6.25,6.23,1.00,4796844,338.2,54.1,1.24,-1,723
+ttree,"comp=101 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,5.69,5.67,1.00,5272188,273.8,48.1,1.53,-1,725
+ttree,"comp=0 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,1.59,1.56,0.98,18905709,420.5,265.0,1.00,-1,706
+ttree,"comp=505 imt=0 thr=4 block=1000000 basket=256000 af=0 clu=0",sorted,30000000,6.57,6.55,1.00,4569612,245.5,37.4,1.71,-1,829
+ttree,"comp=505 imt=0 thr=4 block=1000000 basket=1000000 af=0 clu=0",sorted,30000000,6.20,6.18,1.00,4839957,245.4,39.6,1.71,-1,817
+ttree,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=-100000000 clu=0",sorted,30000000,6.91,6.90,1.00,4342685,244.3,35.4,1.72,-1,748
+ttree,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=1000000 clu=0",sorted,30000000,6.10,6.06,0.99,4917889,245.4,40.2,1.71,-1,742
+ttree,"comp=505 imt=2 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,6.30,6.52,1.03,4758778,245.2,38.9,1.71,-1,759
+ttree,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,6.37,6.86,1.08,4711842,245.2,38.5,1.71,-1,777
+ttree,"comp=505 imt=8 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,6.43,7.54,1.17,4664045,245.2,38.1,1.71,-1,785
+ttree,"comp=505 imt=4 thr=4 block=1000000 basket=1000000 af=0 clu=0",sorted,30000000,5.26,6.53,1.24,5703194,245.4,46.6,1.71,-1,886
+ttree,"comp=509 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,23.94,25.20,1.05,1253271,232.0,9.7,1.81,-1,847
+tbm,"comp=505 imt=0 thr=2 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,4.14,8.18,1.98,7250229,242.8,58.7,1.73,15,992
+tbm,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,2.27,8.37,3.68,13196329,242.8,106.8,1.73,16,1027
+tbm,"comp=505 imt=0 thr=8 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,1.20,8.48,7.08,25074710,242.8,202.9,1.73,15,1099
+tbm,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,2.29,8.40,3.67,13089287,242.8,105.9,1.73,0,1030
+tbm,"comp=505 imt=0 thr=8 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,1.24,8.54,6.88,24158758,242.8,195.5,1.73,0,1101
+tbm,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0 fast",sorted,30000000,2.29,8.41,3.68,13113570,242.8,106.1,1.73,20,1028
+tbm,"comp=505 imt=0 thr=4 block=250000 basket=32000 af=0 clu=0 ordered",sorted,30000000,2.16,8.36,3.87,13878211,242.8,112.3,1.73,0,980
+tbm,"comp=509 imt=0 thr=8 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,1.75,12.22,7.00,17184337,233.6,133.8,1.80,0,1102
+rntuple,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,2.37,2.37,1.00,12641193,215.7,90.9,1.95,0,1136
+rntuple,"comp=505 imt=2 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,1.23,2.42,1.96,24336373,215.7,175.0,1.95,-1,901
+rntuple,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,0.67,2.52,3.76,44892317,215.7,322.7,1.95,0,1222
+rntuple,"comp=505 imt=8 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,0.62,2.65,4.25,48155188,215.7,346.2,1.95,-1,905
+rntuple,"comp=0 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,0.71,0.64,0.90,42004168,420.0,588.1,1.00,-1,812
+rntuple,"comp=404 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,4.97,4.97,1.00,6034617,251.8,50.6,1.67,-1,838
+rntuple,"comp=101 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,4.11,4.11,1.00,7291043,225.3,54.7,1.86,-1,822
+rntuple,"comp=509 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,16.69,16.67,1.00,1797242,211.3,12.7,1.99,-1,828
+rntuple,"comp=509 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,5.98,23.65,3.95,5014886,211.3,35.3,1.99,-1,944
+rntuple,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=32",sorted,30000000,2.30,2.29,1.00,13071806,215.8,94.0,1.95,-1,716
+rntuple,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0 nobuf",sorted,30000000,2.31,2.31,1.00,12974394,215.7,93.3,1.95,-1,675
+rntuple-par,"comp=505 imt=0 thr=2 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,1.17,2.32,1.98,25644071,216.4,185.0,1.94,15,933
+rntuple-par,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,0.66,2.47,3.74,45382526,216.4,327.4,1.94,15,998
+rntuple-par,"comp=505 imt=0 thr=8 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,0.37,2.72,7.32,80756065,216.4,582.6,1.94,18,1088
+rntuple-par,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,0.68,2.52,3.71,44065468,216.4,317.9,1.94,0,1004
+rntuple-par,"comp=505 imt=0 thr=8 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,0.38,2.72,7.11,78308817,216.4,564.9,1.94,0,1083
+rntuple-par,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,0.54,2.58,4.81,56068173,216.4,404.5,1.94,0,1012
+rntuple-par,"comp=509 imt=0 thr=8 block=1000000 basket=32000 af=0 clu=0 ordered",sorted,30000000,3.81,28.21,7.41,7876608,212.4,55.8,1.98,0,1145
+ttree,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",board,30000000,6.12,6.08,0.99,4898139,247.4,40.4,1.70,27000,1034
+rntuple,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",board,30000000,1.94,1.94,1.00,15475335,214.4,110.6,1.96,27000,1150
+ttree,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",board,30000000,6.00,6.43,1.07,4998667,247.4,41.2,1.70,-1,809
+rntuple-par,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0 ordered",board,30000000,0.57,2.12,3.73,52815960,215.5,379.3,1.95,27000,997
+events-ttree,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,9.35,9.32,1.00,3209557,351.4,37.6,1.54,0,983
+events-ttree,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,8.60,9.91,1.15,3489140,351.4,40.9,1.54,-1,981
+events-rntuple,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,4.05,4.05,1.00,7407321,234.9,58.0,2.30,0,949
+events-rntuple,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,1.21,4.62,3.82,24811432,234.9,194.3,2.30,-1,1041
+ttree2,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,15.66,15.62,1.00,1915986,596.4,38.1,0.91,-1,941
+ttree2,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,14.95,16.74,1.12,2006941,596.4,39.9,0.91,-1,1009
+twofile,"comp=505 imt=0 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,9.52,16.04,1.69,3151754,596.5,62.7,0.91,-1,965
+twofile,"comp=505 imt=4 thr=4 block=1000000 basket=32000 af=0 clu=0",sorted,30000000,8.87,17.29,1.95,3384065,596.5,67.3,0.91,-1,1005
+# done Tue Nov  3 08:29:20 EET 2026
