@@ -1,6 +1,6 @@
 # TODO 81 — データを DAQ ホストから外に出すときに `.delila.zst` に圧縮する
 
-**Status: 🚧 実装中 (2026-11-03) — 方針決定済み: マウントしたネットワークストレージへ移すときに mv の代わりのツールで zstd 圧縮、`.zst` を直接読む**
+**Status: ✅ 実装済み (2026-11-03) — `.delila.zst` を直接読む(Rust 5faad2f、C++ 0daf4ff)+ `scripts/delila_mv.sh`。残 = 実際の sshfs / NFS のマウント先での最初の移動、各ホストへの配備**
 
 **関連:** [80_generic_root_sink.md](80_generic_root_sink.md) §6(ディスク予算: 書き込み量の 8 割は `.delila`) /
 [69_write_failure_autostop.md](69_write_failure_autostop.md)(`scripts/archive_sync.sh`) /
@@ -118,6 +118,27 @@ TODO 80 のディスク予算で、書き込む量の 8 割が `.delila`(実デ�
 
 - [x] 波形入りのファイルで §3 を測り直す(2026-11-03、§3.1。実 HPGe は未)
 - [x] §5 を決める(2026-11-03)
-- [ ] ① Rust: `.delila.zst` を直接読む(`DataFileReader` の開き方を 1 か所に)+ `recover validate`
-- [ ] ② `TDelila.hpp`: `.delila.zst`(libzstd があれば使う、なければ `zstd -dc`)
-- [ ] ③ `scripts/delila_mv.sh` + テスト
+- [x] ① Rust: `DataFileReader::open(path)` が `.delila.zst` をメモリに展開して開く(5faad2f)。全ツールがこれで開く。
+  `recover list` が `.zst` も拾う、`recover validate x.delila.zst` がフッタの xxHash64 まで確認。上限 4 GiB(フレームの見出しで先に判定)。
+  テスト 4 本 + 実データ(side3 ThGEM ラン 45)で validate / info / event_dump の出力が `.delila` と完全一致。
+- [x] ② `TDelila.hpp`(0daf4ff): `.zst` はメモリに展開して、前後に飛べる streambuf 経由で今の読み込みに渡す。既定は `zstd -dc`
+  (見つからなければ「zstd not found」)、`-DTDELILA_WITH_ZSTD -lzstd` でライブラリ。`test_tdelila_zst.cpp` で
+  ラン 41(x743、108,554 イベント、全部波形入り)とラン 45 が両方式とも全項目一致、`delila2root` の tree もブランチの中身まで一致。
+- [x] ③ `scripts/delila_mv.sh` + `scripts/delila_mv_test.sh`(47 項目、gant で全合格)。使い方は下。
+- [ ] 実際の sshfs / NFS のマウント先で最初の移動(ユーザー)。`sync` と、キャッシュを捨てる `dd iflag=nocache` が
+  マウントの種類によってどう効くかはここで確かめる(失敗すれば FAIL か warn が出る)
+- [ ] 配備: `delila_mv.sh` は zstd の CLI だけで動くのでいつでも置ける。`.zst` を読む Rust のツールは各ホストで次に再ビルドするとき
+
+### 使い方
+
+```bash
+# 終わったランを、マウントしたネットワークストレージへ(.delila は .delila.zst に、ほかはそのまま)
+scripts/delila_mv.sh /data/N_Wall/run0004_* /mnt/storage/N_Wall/
+scripts/delila_mv.sh -n /data/N_Wall/run0004_* /mnt/storage/N_Wall/   # 何をするかだけ表示
+scripts/delila_mv.sh -l 9 ...                                          # 容量を優先
+```
+
+- 元のファイルを消すのは、移動先から読み直して元とバイト単位で一致し、本来の名前に変えた後だけ。移動先に同じ名前があれば上書きしない。
+- 10 分以内に書かれたファイルと root_sink の `run_inprogress_*` は動かさない(`--min-age`)。
+- 移動先が元と同じファイルシステムなら止まる(マウントし忘れで、空のマウント先 = ローカルのディスクに書いてしまうのを防ぐ。`--same-fs` で許可)。
+- 1 つでも動かせなかったら終了コード 1、そのファイルは元の場所に残る。
