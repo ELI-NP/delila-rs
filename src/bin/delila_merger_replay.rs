@@ -351,17 +351,10 @@ async fn main() -> anyhow::Result<()> {
 
         'replay: loop {
             for path in &args.input {
-                let file = match File::open(path) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        warn!(file = %path.display(), error = %e, "open failed");
-                        continue;
-                    }
-                };
-                let reader = match DataFileReader::new(BufReader::new(file)) {
+                let reader = match DataFileReader::open(path) {
                     Ok(r) => r,
                     Err(e) => {
-                        warn!(file = %path.display(), error = %e, "header parse failed");
+                        warn!(file = %path.display(), error = %e, "open failed");
                         continue;
                     }
                 };

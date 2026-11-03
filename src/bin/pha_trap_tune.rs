@@ -448,9 +448,7 @@ fn run(opts: &Opts) -> Result<(), Box<dyn std::error::Error>> {
     let mut event_rows: Vec<String> = Vec::new();
 
     for path in &opts.files {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut data_reader = DataFileReader::new(reader)?;
+        let mut data_reader = DataFileReader::open(path)?;
 
         for block in data_reader.data_blocks() {
             let batch = block?;
@@ -724,7 +722,7 @@ fn for_each_event(
     mut visit: impl FnMut(&delila_rs::common::EventData, &Waveform),
 ) -> Result<(), Box<dyn std::error::Error>> {
     for path in &opts.files {
-        let mut reader = DataFileReader::new(BufReader::new(File::open(path)?))?;
+        let mut reader = DataFileReader::open(path)?;
         for block in reader.data_blocks() {
             for e in &block?.events {
                 if e.channel != opts.channel || opts.module.is_some_and(|m| m != e.module) {

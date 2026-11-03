@@ -19,7 +19,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use xxhash_rust::xxh64::xxh64;
 
 /// Magic bytes for DELILA data files
@@ -425,6 +427,101 @@ impl FileValidationResult {
     }
 }
 
+/// Largest `.delila.zst` that is decompressed into memory (TODO 81). The
+/// Recorder splits runs at `max_file_size_mb` (default 1 GiB); a file bigger
+/// than this is refused with a hint rather than silently eating the RAM.
+pub const MAX_ZST_DECOMPRESSED_BYTES: u64 = 4 << 30;
+
+/// `*.delila` or `*.delila.zst` — what the DELILA tools take as input.
+pub fn is_delila_file(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.len() > ".delila".len() && (name.ends_with(".delila") || name.ends_with(".delila.zst"))
+}
+
+/// File name without `.delila` / `.delila.zst` ("run0001_0000_x").
+pub fn delila_stem(path: &Path) -> String {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let name = name.strip_suffix(".zst").unwrap_or(name);
+    name.strip_suffix(".delila").unwrap_or(name).to_string()
+}
+
+/// Bytes of a .delila opened by path: the file itself, or a `.delila.zst`
+/// decompressed into memory. The readers seek (footer first, then the blocks)
+/// and a zstd stream cannot, so the whole ~1 GiB file is expanded (~1 s).
+pub enum DelilaSource {
+    File(BufReader<File>),
+    Memory(Cursor<Vec<u8>>),
+}
+
+impl DelilaSource {
+    pub fn open(path: &Path) -> std::io::Result<Self> {
+        Self::open_with_limit(path, MAX_ZST_DECOMPRESSED_BYTES)
+    }
+
+    /// `open` with an explicit cap on the decompressed size of a `.zst`.
+    pub fn open_with_limit(path: &Path, limit: u64) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        if !path.to_string_lossy().ends_with(".zst") {
+            return Ok(Self::File(BufReader::new(file)));
+        }
+        let too_big = |size: String| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{}: decompresses to {size} bytes, more than the {limit}-byte in-memory \
+                     limit — expand it first with `zstd -d`",
+                    path.display()
+                ),
+            )
+        };
+        // The zstd CLI records the content size in the frame header: refuse an
+        // oversized file before decompressing it, and size the buffer once.
+        let mut head = [0u8; 18]; // ZSTD_FRAMEHEADERSIZE_MAX
+        let n = (&file).take(head.len() as u64).read(&mut head)?;
+        let known = zstd::zstd_safe::get_frame_content_size(&head[..n])
+            .ok()
+            .flatten();
+        if let Some(size) = known.filter(|&s| s > limit) {
+            return Err(too_big(size.to_string()));
+        }
+        let mut data = Vec::with_capacity(known.unwrap_or(0) as usize);
+        let mut file = file;
+        file.seek(SeekFrom::Start(0))?;
+        zstd::stream::read::Decoder::new(file)?
+            .take(limit + 1)
+            .read_to_end(&mut data)?;
+        if data.len() as u64 > limit {
+            return Err(too_big(format!("more than {limit}")));
+        }
+        Ok(Self::Memory(Cursor::new(data)))
+    }
+}
+
+impl Read for DelilaSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::File(r) => r.read(buf),
+            Self::Memory(r) => r.read(buf),
+        }
+    }
+}
+
+impl Seek for DelilaSource {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Self::File(r) => r.seek(pos),
+            Self::Memory(r) => r.seek(pos),
+        }
+    }
+}
+
+impl DataFileReader<DelilaSource> {
+    /// Open a `.delila` or `.delila.zst` by path.
+    pub fn open(path: &Path) -> Result<Self, FileFormatError> {
+        Self::new(DelilaSource::open(path)?)
+    }
+}
+
 /// Reader for DELILA data files with recovery support
 pub struct DataFileReader<R> {
     reader: R,
@@ -763,6 +860,7 @@ impl<'a, R: std::io::Read + std::io::Seek> Iterator for DataBlockIterator<'a, R>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_file_header_roundtrip() {
@@ -1014,5 +1112,74 @@ mod tests {
         let blocks: Vec<_> = r.data_blocks().collect();
         assert_eq!(blocks.len(), 3);
         assert!(blocks.iter().all(|b| b.is_ok()));
+    }
+
+    // TODO 81: runs moved to network storage are stored as .delila.zst and
+    // every tool opens them directly by path.
+    fn write_pair(dir: &std::path::Path, bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let plain = dir.join("run0001_0000_t.delila");
+        let zst = dir.join("run0001_0000_t.delila.zst");
+        std::fs::write(&plain, bytes).unwrap();
+        std::fs::write(&zst, zstd::encode_all(bytes, 3).unwrap()).unwrap();
+        (plain, zst)
+    }
+
+    #[test]
+    fn delila_zst_opens_like_the_plain_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for with_footer in [true, false] {
+            let bytes = file_bytes(&[3, 5, 1], with_footer);
+            let (plain, zst) = write_pair(dir.path(), &bytes);
+            let mut a = DataFileReader::open(&plain).unwrap();
+            let mut b = DataFileReader::open(&zst).unwrap();
+            let (va, vb) = (a.validate(), b.validate());
+            assert_eq!(va.is_valid, with_footer);
+            assert_eq!(vb.is_valid, va.is_valid, "errors: {:?}", vb.errors);
+            assert_eq!(vb.recoverable_blocks, va.recoverable_blocks);
+            assert_eq!(vb.recoverable_events, 9);
+            let ts = |r: &mut DataFileReader<DelilaSource>| -> Vec<f64> {
+                r.data_blocks()
+                    .flat_map(|b| b.unwrap().events)
+                    .map(|e| e.timestamp_ns)
+                    .collect()
+            };
+            assert_eq!(ts(&mut b), ts(&mut a));
+        }
+    }
+
+    #[test]
+    fn delila_zst_larger_than_the_limit_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = file_bytes(&[3, 5, 1], true);
+        let (_, zst) = write_pair(dir.path(), &bytes);
+        let limit = bytes.len() as u64 - 1;
+        let err = DelilaSource::open_with_limit(&zst, limit).err().unwrap();
+        assert!(err.to_string().contains("zstd -d"), "{err}");
+        assert!(DelilaSource::open_with_limit(&zst, bytes.len() as u64).is_ok());
+    }
+
+    #[test]
+    fn broken_delila_zst_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.delila.zst");
+        std::fs::write(&path, b"not zstd at all").unwrap();
+        assert!(DataFileReader::open(&path).is_err());
+    }
+
+    #[test]
+    fn delila_file_names() {
+        assert!(is_delila_file(Path::new("/d/run0001_0000_x.delila")));
+        assert!(is_delila_file(Path::new("run0001_0000_x.delila.zst")));
+        assert!(!is_delila_file(Path::new("run0001_0000_x.root")));
+        assert!(!is_delila_file(Path::new("run0001_0000_x.zst")));
+        assert!(!is_delila_file(Path::new("delila")));
+        assert_eq!(
+            delila_stem(Path::new("/d/run1_0000_x.delila")),
+            "run1_0000_x"
+        );
+        assert_eq!(
+            delila_stem(Path::new("/d/run1_0000_x.delila.zst")),
+            "run1_0000_x"
+        );
     }
 }

@@ -73,6 +73,7 @@ rayon = "1.10"
 
 # MPMC channels for event builder pipeline
 crossbeam-channel = "0.5"
+zstd = "0.13"
 
 # SIGTERM for graceful child stop in node_agent (TODO 58 M12) — already in the
 # tree transitively via zeromq-src.

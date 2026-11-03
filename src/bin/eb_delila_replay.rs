@@ -92,10 +92,8 @@ async fn main() -> anyhow::Result<()> {
     let mut source_ids: BTreeSet<u32> = BTreeSet::new();
 
     for path in &args.input {
-        let file = File::open(path)
+        let mut reader = DataFileReader::open(path)
             .map_err(|e| anyhow::anyhow!("Failed to open {}: {e}", path.display()))?;
-        let mut reader = DataFileReader::new(BufReader::new(file))
-            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {e}", path.display()))?;
 
         let mut file_batches: u64 = 0;
         let mut file_events: u64 = 0;

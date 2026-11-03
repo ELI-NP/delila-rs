@@ -653,18 +653,10 @@ fn run_time_calibration(
             }
 
             // Read .delila file → Vec<Hit>
-            let file = match std::fs::File::open(path) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!("Failed to open {}: {:?}", path.display(), e);
-                    return None;
-                }
-            };
-            let buf_reader = BufReader::new(file);
-            let mut reader = match DataFileReader::new(buf_reader) {
+            let mut reader = match DataFileReader::open(path) {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("Failed to parse {}: {:?}", path.display(), e);
+                    warn!("Failed to open {}: {:?}", path.display(), e);
                     return None;
                 }
             };

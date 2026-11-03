@@ -7,11 +7,14 @@
 //!   delila-recover list <directory>     - List all .delila files with status
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use delila_rs::recorder::{ChecksumCalculator, DataFileReader, FileFooter, FileValidationResult};
+use delila_rs::recorder::{
+    delila_stem, is_delila_file, ChecksumCalculator, DataFileReader, FileFooter, FileFormatError,
+    FileValidationResult,
+};
 
 #[derive(Parser)]
 #[command(name = "delila-recover")]
@@ -112,9 +115,7 @@ fn validate_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("Validating: {}", path.display());
     println!();
 
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     let result = data_reader.validate();
     print_validation_result(&result);
@@ -132,9 +133,7 @@ fn validate_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn show_info(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     println!("File: {}", path.display());
     println!("Size: {} bytes", std::fs::metadata(path)?.len());
@@ -194,9 +193,7 @@ fn recover_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Recovering: {}", input_path.display());
 
-    let file = File::open(input_path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(input_path)?;
 
     // Validate first
     let result = data_reader.validate();
@@ -217,9 +214,8 @@ fn recover_file(
 
     // Determine output path
     let output = output_path.unwrap_or_else(|| {
-        let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
         let parent = input_path.parent().unwrap_or(Path::new("."));
-        parent.join(format!("{}_recovered.delila", stem))
+        parent.join(format!("{}_recovered.delila", delila_stem(input_path)))
     });
 
     println!("  Output: {}", output.display());
@@ -329,45 +325,40 @@ fn list_files(directory: &Path, recursive: bool) -> Result<(), Box<dyn std::erro
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         total_size += size;
 
-        let (events, status) = match File::open(path) {
-            Ok(file) => {
-                let reader = BufReader::new(file);
-                match DataFileReader::new(reader) {
-                    Ok(mut data_reader) => {
-                        let result = data_reader.validate();
-                        let events = if result.is_valid {
-                            result
-                                .footer
-                                .as_ref()
-                                .map(|f| f.total_events)
-                                .unwrap_or(result.recoverable_events)
-                        } else {
-                            result.recoverable_events
-                        };
+        let (events, status) = match DataFileReader::open(path) {
+            Ok(mut data_reader) => {
+                let result = data_reader.validate();
+                let events = if result.is_valid {
+                    result
+                        .footer
+                        .as_ref()
+                        .map(|f| f.total_events)
+                        .unwrap_or(result.recoverable_events)
+                } else {
+                    result.recoverable_events
+                };
 
-                        let status = if result.is_valid {
-                            valid_count += 1;
-                            total_events += events;
-                            "\x1b[32m✓ Valid\x1b[0m"
-                        } else if result.needs_recovery() {
-                            needs_recovery_count += 1;
-                            total_events += events;
-                            "\x1b[33m⚠ Needs recovery\x1b[0m"
-                        } else {
-                            corrupted_count += 1;
-                            "\x1b[31m✗ Corrupted\x1b[0m"
-                        };
-                        (events, status)
-                    }
-                    Err(_) => {
-                        corrupted_count += 1;
-                        (0, "\x1b[31m✗ Corrupted\x1b[0m")
-                    }
-                }
+                let status = if result.is_valid {
+                    valid_count += 1;
+                    total_events += events;
+                    "\x1b[32m✓ Valid\x1b[0m"
+                } else if result.needs_recovery() {
+                    needs_recovery_count += 1;
+                    total_events += events;
+                    "\x1b[33m⚠ Needs recovery\x1b[0m"
+                } else {
+                    corrupted_count += 1;
+                    "\x1b[31m✗ Corrupted\x1b[0m"
+                };
+                (events, status)
+            }
+            Err(FileFormatError::Io(_)) => {
+                corrupted_count += 1;
+                (0, "\x1b[31m✗ Unreadable\x1b[0m")
             }
             Err(_) => {
                 corrupted_count += 1;
-                (0, "\x1b[31m✗ Unreadable\x1b[0m")
+                (0, "\x1b[31m✗ Corrupted\x1b[0m")
             }
         };
 
@@ -412,9 +403,7 @@ fn dump_files(files: &[PathBuf], output: &Path) -> Result<(), Box<dyn std::error
     // First pass: count total events across all files
     let mut total_events = 0u64;
     for path in files {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut data_reader = DataFileReader::new(reader)?;
+        let mut data_reader = DataFileReader::open(path)?;
 
         // Try footer first (fast path)
         if let Ok(footer) = data_reader.read_footer() {
@@ -447,9 +436,7 @@ fn dump_files(files: &[PathBuf], output: &Path) -> Result<(), Box<dyn std::error
 
     let mut written = 0u64;
     for path in files {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut data_reader = DataFileReader::new(reader)?;
+        let mut data_reader = DataFileReader::open(path)?;
 
         for batch_result in data_reader.data_blocks() {
             let batch = batch_result?;
@@ -499,10 +486,8 @@ fn collect_delila_files(
         let path = entry.path();
 
         if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext == "delila" {
-                    files.push(path);
-                }
+            if is_delila_file(&path) {
+                files.push(path);
             }
         } else if recursive && path.is_dir() {
             collect_delila_files(&path, recursive, files)?;

@@ -18,8 +18,8 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
-use std::path::PathBuf;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use delila_rs::recorder::DataFileReader;
@@ -55,13 +55,11 @@ impl ModStats {
 }
 
 fn process_single_file(
-    path: &PathBuf,
+    path: &Path,
     count: usize,
     summary_only: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     let mut mod_stats: BTreeMap<u8, ModStats> = BTreeMap::new();
     let mut total_events = 0usize;
@@ -130,14 +128,12 @@ fn process_single_file(
 }
 
 fn process_waveform_dump(
-    path: &PathBuf,
+    path: &Path,
     count: usize,
     channel_filter: Option<u8>,
     output: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     let out = File::create(output)?;
     let mut out = BufWriter::new(out);
@@ -201,14 +197,12 @@ fn process_waveform_dump(
 /// timestamp list, centers the histogram on the sample mean, and reports RMS
 /// (standard deviation). Handy for validating CFD timing resolution.
 fn process_delta_t_hist(
-    path: &PathBuf,
+    path: &Path,
     channel: u8,
     bins: usize,
     range_ns: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     let mut timestamps = Vec::<f64>::new();
     for block_result in data_reader.data_blocks() {
@@ -296,13 +290,11 @@ fn process_delta_t_hist(
 /// baseline, peak index, and sample span. This is the fastest way to tell whether
 /// the readout window is actually capturing the pulse during a parameter sweep.
 fn process_waveform_stats(
-    path: &PathBuf,
+    path: &Path,
     count: usize,
     channel_filter: Option<u8>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     let mut amplitudes: Vec<f64> = Vec::with_capacity(count);
     let mut baselines: Vec<f64> = Vec::with_capacity(count);
@@ -425,11 +417,9 @@ fn process_waveform_stats(
 type FileModSummary = BTreeMap<u8, (f64, f64, usize)>;
 
 fn process_one_file(
-    path: &PathBuf,
+    path: &Path,
 ) -> Result<(String, usize, FileModSummary), Box<dyn std::error::Error + Send + Sync>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut data_reader = DataFileReader::new(reader)?;
+    let mut data_reader = DataFileReader::open(path)?;
 
     let mut file_stats: BTreeMap<u8, ModStats> = BTreeMap::new();
     let mut file_events = 0usize;

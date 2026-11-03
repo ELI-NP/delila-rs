@@ -21,8 +21,9 @@
 mod format;
 
 pub use format::{
-    ChecksumCalculator, DataBlockIterator, DataFileReader, FileFooter, FileFormatError, FileHeader,
-    FileValidationResult, FOOTER_SIZE, FORMAT_VERSION,
+    delila_stem, is_delila_file, ChecksumCalculator, DataBlockIterator, DataFileReader,
+    DelilaSource, FileFooter, FileFormatError, FileHeader, FileValidationResult, FOOTER_SIZE,
+    FORMAT_VERSION, MAX_ZST_DECOMPRESSED_BYTES,
 };
 
 use std::fs::{self, File};

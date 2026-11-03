@@ -247,8 +247,8 @@ fn read_run(data_dir: &Path, run: u32) -> Result<BTreeMap<(u8, u8), Vec<u16>>, B
     }
     let mut out: BTreeMap<(u8, u8), Vec<u16>> = BTreeMap::new();
     for path in &files {
-        let mut reader = DataFileReader::new(BufReader::new(File::open(path)?))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut reader =
+            DataFileReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         for block in reader.data_blocks() {
             let block = block.map_err(|e| format!("{}: {e}", path.display()))?;
             for e in &block.events {

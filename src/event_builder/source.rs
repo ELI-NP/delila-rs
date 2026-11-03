@@ -91,7 +91,6 @@ impl DelilaFileHitSource {
     /// Open the next file and load its batches.
     fn open_next_file(&mut self) -> Result<(), SourceError> {
         use crate::recorder::DataFileReader;
-        use std::io::BufReader;
 
         if self.current_file_index >= self.files.len() {
             self.finished = true;
@@ -99,9 +98,7 @@ impl DelilaFileHitSource {
         }
 
         let path = &self.files[self.current_file_index];
-        let file = std::fs::File::open(path).map_err(|_| SourceError::Disconnected)?;
-        let buf_reader = BufReader::new(file);
-        let mut reader = DataFileReader::new(buf_reader).map_err(|_| SourceError::Disconnected)?;
+        let mut reader = DataFileReader::open(path).map_err(|_| SourceError::Disconnected)?;
 
         // Collect batches: convert EventDataBatch -> Vec<Hit>
         let mut batches = Vec::new();
