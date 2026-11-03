@@ -29,18 +29,33 @@
 //     }
 //   }
 //
+// `.delila.zst` (runs moved to network storage, TODO 81) opens the same way: the
+// file is decompressed into memory first (~1 s per 1 GiB). Compile with
+// -DTDELILA_WITH_ZSTD and link -lzstd to do that in-process; otherwise the
+// `zstd` command (on PATH) is run, which keeps this header dependency-free.
+//
 // License: BSD-3-Clause (same as delila-rs).
 
 #ifndef TDELILA_HPP
 #define TDELILA_HPP
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <istream>
 #include <map>
+#include <memory>
 #include <stdexcept>
+#include <streambuf>
 #include <string>
 #include <vector>
+
+#if defined(TDELILA_WITH_ZSTD)
+#include <zstd.h>
+#else
+#include <sys/wait.h>  // WEXITSTATUS for the `zstd -dc` child
+#endif
 
 namespace tdelila {
 
@@ -710,6 +725,86 @@ class Event {
 // ---------------------------------------------------------------------------
 // TDelila — file reader
 // ---------------------------------------------------------------------------
+// .delila.zst support (TODO 81)
+
+// Largest .delila.zst decompressed into memory, as in the Rust reader
+// (MAX_ZST_DECOMPRESSED_BYTES): runs are split at 1 GiB by default.
+constexpr uint64_t kMaxZstBytes = uint64_t(4) << 30;
+
+inline bool is_zst_path(const std::string& path) {
+  return path.size() > 4 && path.compare(path.size() - 4, 4, ".zst") == 0;
+}
+
+// Read-only, seekable streambuf over a byte buffer (the decompressed file), so
+// the reader keeps its seek-to-footer-then-blocks logic unchanged.
+class MemBuf : public std::streambuf {
+ public:
+  explicit MemBuf(std::vector<char>& d) { setg(d.data(), d.data(), d.data() + d.size()); }
+
+ protected:
+  pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode) override {
+    char* base = dir == std::ios_base::beg ? eback() : dir == std::ios_base::cur ? gptr() : egptr();
+    if (off < eback() - base || off > egptr() - base) return pos_type(off_type(-1));
+    setg(eback(), base + off, egptr());
+    return pos_type(gptr() - eback());
+  }
+  pos_type seekpos(pos_type pos, std::ios_base::openmode m) override {
+    return seekoff(off_type(pos), std::ios_base::beg, m);
+  }
+};
+
+// Decompress a whole .delila.zst into `out`. Returns "" or an error message.
+inline std::string read_zst(const std::string& path, std::vector<char>& out) {
+  const std::string too_big = path + ": decompresses to more than " + std::to_string(kMaxZstBytes) +
+                              " bytes — expand it first with `zstd -d`";
+#if defined(TDELILA_WITH_ZSTD)
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return "cannot open file: " + path;
+  std::vector<char> in((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  unsigned long long size = ZSTD_getFrameContentSize(in.data(), in.size());
+  if (size == ZSTD_CONTENTSIZE_ERROR) return path + ": not a zstd file";
+  if (size != ZSTD_CONTENTSIZE_UNKNOWN && size > kMaxZstBytes) return too_big;
+  if (size != ZSTD_CONTENTSIZE_UNKNOWN) out.reserve(size);
+  std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> dctx(ZSTD_createDCtx(), ZSTD_freeDCtx);
+  ZSTD_inBuffer ib{in.data(), in.size(), 0};
+  std::vector<char> chunk(ZSTD_DStreamOutSize());
+  size_t ret = 1;
+  while (ib.pos < ib.size) {
+    ZSTD_outBuffer ob{chunk.data(), chunk.size(), 0};
+    ret = ZSTD_decompressStream(dctx.get(), &ob, &ib);
+    if (ZSTD_isError(ret)) return path + ": zstd: " + ZSTD_getErrorName(ret);
+    out.insert(out.end(), chunk.data(), chunk.data() + ob.pos);
+    if (out.size() > kMaxZstBytes) return too_big;
+  }
+  if (ret != 0) return path + ": truncated zstd file";
+  return "";
+#else
+  // `zstd -dc` through the shell: single-quote the path ('\'' for a quote).
+  std::string q = "'";
+  for (char c : path) q += c == '\'' ? std::string("'\\''") : std::string(1, c);
+  q += "'";
+  std::FILE* p = popen(("zstd -dcq -- " + q).c_str(), "r");
+  if (!p) return "cannot run zstd for " + path;
+  char buf[1 << 16];
+  size_t n;
+  bool over = false;
+  while ((n = std::fread(buf, 1, sizeof buf, p)) > 0) {
+    out.insert(out.end(), buf, buf + n);
+    if (out.size() > kMaxZstBytes) { over = true; break; }
+  }
+  int st = pclose(p);
+  if (over) return too_big;
+  if (st != 0) {
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    return path + ": `zstd -dc` failed (exit " + std::to_string(code) +
+           (code == 127 ? ": zstd not found — install it or build with -DTDELILA_WITH_ZSTD -lzstd)"
+                        : ")");
+  }
+  return "";
+#endif
+}
+
+// ---------------------------------------------------------------------------
 class TDelila {
  public:
   explicit TDelila(const std::string& path) { open(path); }
@@ -738,8 +833,16 @@ class TDelila {
 
  private:
   void open(const std::string& path) {
-    f_.open(path, std::ios::binary);
-    if (!f_) { fail("cannot open file: " + path); return; }
+    if (is_zst_path(path)) {
+      std::string err = read_zst(path, mem_);
+      if (!err.empty()) { fail(err); return; }
+      membuf_.reset(new MemBuf(mem_));
+      f_.rdbuf(membuf_.get());
+    } else {
+      file_.open(path, std::ios::binary);
+      if (!file_) { fail("cannot open file: " + path); return; }
+      f_.rdbuf(file_.rdbuf());
+    }
     f_.seekg(0, std::ios::end);
     file_size_ = static_cast<uint64_t>(f_.tellg());
     f_.seekg(0, std::ios::beg);
@@ -918,7 +1021,10 @@ class TDelila {
 
   void fail(const std::string& msg) { good_ = false; error_ = msg; }
 
-  std::ifstream f_;
+  std::ifstream file_;            // plain .delila
+  std::vector<char> mem_;         // decompressed .delila.zst
+  std::unique_ptr<MemBuf> membuf_;
+  std::istream f_{nullptr};       // reads from file_ or mem_
   bool good_ = false;
   std::string error_;
   uint64_t file_size_ = 0;

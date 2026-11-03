@@ -104,6 +104,27 @@ of 0/1, `analog_probe_type[3]`, `digital_probe_type[16]`, `ns_per_sample`,
 `trigger_threshold`, `time_resolution`, `analog_probeN_is_signed`). Branches that
 a given firmware doesn't fill are empty and compress to almost nothing.
 
+## Compressed runs (`.delila.zst`)
+
+Runs moved to network storage are kept as zstd-compressed `.delila.zst`
+([TODO 81](../../TODO/81_delila_zst_export.md)). Pass them exactly like a
+`.delila` — `TDelila`, `delila2root` (output `run_0000.root`) and the Rust tools
+(`recover`, `event_dump`, …) all open them directly. The file is decompressed
+into memory first (a 1 GiB run file takes about a second; files that would expand
+beyond 4 GiB are refused — expand those with `zstd -d`).
+
+`TDelila.hpp` stays dependency-free: by default it runs the `zstd` command
+(`zstd -dc`, must be on `PATH`). To decompress in-process instead, build with
+libzstd:
+
+```sh
+g++ -O2 -std=c++17 -DTDELILA_WITH_ZSTD delila2root.C $(root-config --cflags --libs) -lzstd -o delila2root
+```
+
+`test_tdelila_zst.cpp` checks that a `.delila.zst` reads event-for-event (incl.
+every waveform probe) like its `.delila`:
+`zstd -k run.delila && g++ -std=c++17 test_tdelila_zst.cpp -o t && ./t run.delila run.delila.zst`.
+
 ## How it stays in sync with the writer
 
 `.delila` files (format v3+) embed a **self-describing schema** in the header
