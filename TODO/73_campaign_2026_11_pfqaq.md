@@ -1,6 +1,6 @@
 # TODO 73 — 2026-11 実験キャンペーン(pf-qaq: Si + 中性子 → ThGEM + 中性子)
 
-**Status: 📋 起票 (2026-10-22) — 計画と準備状況の親チケット。個別の作業は 74〜76**
+**Status: 🚧 N_Wall 立ち上げ中 (2026-11-04、§5) — 計画と準備状況の親チケット。個別の作業は 74〜79**
 
 **関連:** [74_grafana_event_rate_monitor.md](74_grafana_event_rate_monitor.md) /
 [75_mesytec_hv_monitor.md](75_mesytec_hv_monitor.md) /
@@ -155,3 +155,44 @@ TOML の番号を合わせるだけなので問題なし。V1730 を使うかは
 1. ~~チャンネル対応表と検出器名~~ → **実験前には決まらない**(ユーザー: いつも実験後に解析しながら正解の対応表を作る)。
    Grafana は `Mod, Ch` で始め、名前は後から付ける。やり方は TODO 74 §3.1
 2. 2 本目の「細かいもの」の中身 → **完全に未定**(ユーザー)。決まった時点でこの TODO に足す
+
+## 5. N_Wall の立ち上げ(2026-11-04〜)
+
+### 5.1 決まったこと(ユーザー、2026-11-04)
+- ラン番号はそのまま続ける(N_Wall のラン 1〜4 は VX2730 だけの試験。本番はラン 5 から)。
+- 液シン(VX2730 ch8〜31)の設定は済み。**LaBr3(ch1〜7)はまだ**(今は液シンと同じ初期値)。
+- **V1725 では波形を録らない**(バッファの制限でイベントを落としすぎる)。
+- 11/4 にクロックの結線以外をすべてつなぐ。クロックとスタートの同期は、ケーブルが来てから。
+- Si のバイアスは MHV-4 のまま行くか、CAEN 製の電源に替えるか未定。
+
+### 5.2 用意したもの(2026-11-04)
+| もの | 場所 | 中身 |
+|---|---|---|
+| N_Wall の TOML | `config/config_nwall_pfqaq.toml` | 6 台(module 0 = VX2730、1〜5 = V1725)、nwall_sink、`/data/N_Wall`、eLog `N_Wall`。**今は全ボード独立スタート**、同期への切り替え手順はヘッダー |
+| VX2730 | `config/digitizers/nwall_vx2730_psd2_0.json` | pf-qaq でラン 4 まで使っていた調整済みの設定そのまま(id と名前だけ変更) |
+| V1725 × 5 | `config/digitizers/nwall_v1725_pha_{1..5}.json` | Si の初期値: 台形 2000/1000 ns、極零 50 µs、閾値 100、RC-CR2 平滑 16、粗ゲイン ×1、record 7000 ns(< 7168)、波形 OFF。**極性は推測**(リング NEGATIVE、Sector POSITIVE) |
+| eLog | `docker/elog/elogd_thgem.cfg` | `[N_Wall]` ログブックを追加(属性は ThGEM と同じ) |
+| Grafana | `tools/grafana/gen_dashboards.py --config config/config_nwall_pfqaq.toml` | 6 台・112 ch のレート用ダッシュボード(手元で生成を確認) |
+
+- V1725 の光リンクとノードは**計画値**(リンク 0〜2 に 2 台ずつ)。実際の結線に合わせて直す。
+- 6 台の JSON は DELILA の読み込み処理を通ることを確認済み(`Config::load` → `to_caen_parameters`、V1725 は 35 パラメーター)。
+
+### 5.3 配備(pf-qaq、DAQ が止まっているときに)
+1. pf-qaq のローカル修正を退避して origin/master に進める(ThGEM の TOML はコメント行だけが変わるので衝突しない)。
+2. 上の新しいファイルを置く。
+3. Rust を `--features x743` でビルド(/api/runs/next の修正、`.delila.zst` の読み込み)。nwall_sink をビルドして `~/.local/bin` へ。
+4. eLog を再起動(`docker compose restart elog`、設定ファイルは 1 ファイルの bind mount なので再起動が要る)。
+5. `gen_dashboards.py` で N_Wall のレート用ダッシュボードを生成(Grafana は約 10 秒で読む)。
+6. `ln -sfn config/config_nwall_pfqaq.toml config.toml` → `./scripts/start_daq.sh`。
+
+### 5.4 初日の確認
+1. **各 V1725 の特定**(DAQ を止めて): `caen-toolbox dig1 check -c OPTICAL_LINK -l <link> -n <node>` で型・シリアル・
+   ファームウェア(DPP-PHA)を見て、TOML のリンクとノードを合わせる。シリアルを JSON に写す。
+2. Configure が全 6 台で通る(つながっていないボードはコメントアウト。1 台でも開けないと全体が失敗する)。
+3. **Tune Up で Si の極性**を見る(台形がまともに立つか)。ch15 のパルサーの極性と閾値も合わせる。
+4. 極零: 台形の平らな部分が水平になるように `trap_pole_zero_ns` を合わせる(プリアンプの減衰時間)。
+5. 短いランで、Grafana の「0 Hz のチャンネル」の表と nwall_sink の `/hits` で全チャンネルを確かめる。
+6. LaBr3(VX2730 ch1〜7)を調整する。
+7. **クロックのケーブルが来たら:** TOML のヘッダーの手順で S-IN スタートに切り替え → パルサーのランで `time_map.C`(TODO 72)→
+   スタートディレイと `config/time_settings_nwall.json` → TODO 77 の T1(全ボードが同じクロックで同時に始まるか、3 ラン繰り返し)。
+8. ビームが来たら: nwall_sink の較正(`si_delay_ns` と `rf_t0_ns`、`tools/root_sink/nwall/README.md`)。
