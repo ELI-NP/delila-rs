@@ -1,6 +1,6 @@
 # TODO 79 — root_sink の N_Wall 用オンライン表示(TOF・dE/E 相関)と共通の対応表
 
-**Status: 🚧 nwall_sink v1 実装・合成データで E2E 済み (2026-10-30) — 残 = 同期マーク、pf-qaq への配備(N_Wall の TOML と同時)、実機での確認と較正**
+**Status: 🚧 nwall_sink v1 実装済み・pf-qaq に配備 (2026-11-04、`~/.local/bin/nwall_sink`、合成データで IDENTICAL) — 残 = 同期マーク、実機での確認と較正(N_Wall の TOML = `config/config_nwall_pfqaq.toml`、TODO 73 §5)**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md) §3.1(10 台構成)・§3.3(ビームの位相の復元) /
 [71_generic_event_building.md](71_generic_event_building.md)(イベント定義 v1.1: タグの範囲指定、L2) /
@@ -144,9 +144,15 @@ tools/root_sink/
   テストを追加。直したあとは全 hit に RF TOF。
 - 同じデータを 2 ラン続けて流しても同じ結果(ランごとに時計がリセットされる)。SIGTERM で正常終了。
 
+### 配備 (2026-11-04、pf-qaq)
+- N_Wall の TOML `config/config_nwall_pfqaq.toml`(6 台、`program = "nwall_sink"`)を用意(TODO 73 §5)。
+- pf-qaq で ROOT 6.38.06 でビルド → `~/.local/bin/nwall_sink`。**`root_sink` とは別のプログラム**で、ThGEM・ELIADE の `root_sink` には触っていない
+  (`start_daq.sh` が `program` で選ぶ。節の名前は共通の `[network.root_sink]`)。
+- pf-qaq での確認: 単体テスト 56/56、合成データ 2 s の通し試験で 273,824 ヒット全部・イベント 3,939・T = 199.9500 ns・late 0・
+  `check_events.C` IDENTICAL(Mac と同じ)。まだ実データでは動かしていない(DAQ の再起動待ち)。
+
 ### 残り
 1. 同期マーク(§5.4): FAN-OUT の数の確認待ち。やるなら、イベントを組む前にマークを除く処理を足す。
-2. N_Wall 用の TOML(`config/config_nwall_pfqaq.toml`、6 台)と pf-qaq への配備(nwall_sink のビルドは
-   `tools/root_sink/nwall/README.md`)。
+2. ~~N_Wall 用の TOML と pf-qaq への配備~~ → 2026-11-04 済み(上)。
 3. 実機での確認: パルサーやビームでの表示、`si_delay_ns` と `rf_t0_ns` の較正、低レートの DIG1 ボードの遅れ(`late=`)。
 

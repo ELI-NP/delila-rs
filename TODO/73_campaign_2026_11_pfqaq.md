@@ -1,6 +1,6 @@
 # TODO 73 — 2026-11 実験キャンペーン(pf-qaq: Si + 中性子 → ThGEM + 中性子)
 
-**Status: 🚧 N_Wall 立ち上げ中 (2026-11-04、§5) — 計画と準備状況の親チケット。個別の作業は 74〜79**
+**Status: 🚧 N_Wall 立ち上げ中 (2026-11-04、§5) — 設定・eLog・Grafana・ビルドは pf-qaq に配備済み(7f14ae3)。残 = V1725 接続後の DAQ 再起動と初日の確認 §5.4**
 
 **関連:** [74_grafana_event_rate_monitor.md](74_grafana_event_rate_monitor.md) /
 [75_mesytec_hv_monitor.md](75_mesytec_hv_monitor.md) /
@@ -184,6 +184,21 @@ TOML の番号を合わせるだけなので問題なし。V1730 を使うかは
 4. eLog を再起動(`docker compose restart elog`、設定ファイルは 1 ファイルの bind mount なので再起動が要る)。
 5. `gen_dashboards.py` で N_Wall のレート用ダッシュボードを生成(Grafana は約 10 秒で読む)。
 6. `ln -sfn config/config_nwall_pfqaq.toml config.toml` → `./scripts/start_daq.sh`。
+
+### 5.3.1 実施記録(2026-11-04 午前、pf-qaq、ユーザーの許可を得て)
+DAQ は止まったまま(全コンポーネント Configured、旧バイナリ)。**DAQ の再起動と `config.toml` の切り替えはまだ**。
+
+| 手順 | 結果 |
+|---|---|
+| 1. コミット・push | fb76891(設定・eLog)、7f14ae3(この §5)を GitHub へ |
+| 2. pf-qaq を更新 | 0dfde61 → **7f14ae3**(`git stash` → `merge --ff-only origin/master` → `stash pop`、衝突なし)。ローカル修正 4 つ(ThGEM の TOML の N_Wall 用の書き換え、`monitor_layout.json`、`thgem_v1730_psd1_0.json`、`thgem_vx2730_psd2_1.json`)はそのまま。退避前の差分は `~/pfqaq_local_mods_20261104.patch` |
+| 3a. Rust | `cargo build --release --bins --features x743` 成功(49.6 s、警告 0、ログ `~/build_20261104.log`)。止まっている DAQ は旧バイナリのまま動き続けている |
+| 3b. nwall_sink | ROOT 6.38.06 でビルド → `~/.local/bin/nwall_sink`(sha256 e4e2f5c2…)。単体テスト 56/56。**合成データでの通し試験**(`make_test_run.C` 2 s + `test_publisher`、http 18090): 273,824 ヒットを全部書き込み、イベント 3,939、T = 199.9500 ns、late 0、display_drops 0、`check_events.C` **IDENTICAL** — Mac(10-30)と同じ結果。`root_sink`(ThGEM・ELIADE 用)には触っていない |
+| 4a. eLog | `docker compose restart elog` → `[N_Wall]` と `[ThGEM]` の両方が開く(HTTP 200) |
+| 4b. Grafana | `gen_dashboards.py --config config/config_nwall_pfqaq.toml` → フォルダ N_Wall に「Rates — N_Wall」(uid `rates-n-wall`、6 台・112 ch) |
+
+- 注意: N_Wall のラン 1〜4 は VX2730 が module 1 だったので、このダッシュボードで 11/4 以前を見ると、液シンの ch0〜15 が dE Sector の名前で出る(ラン 5 以降は正しい)。
+- 残り: V1725 がつながったら `ln -sfn config/config_nwall_pfqaq.toml config.toml && ./scripts/start_daq.sh`(→ §5.4)。
 
 ### 5.4 初日の確認
 1. **各 V1725 の特定**(DAQ を止めて): `caen-toolbox dig1 check -c OPTICAL_LINK -l <link> -n <node>` で型・シリアル・
