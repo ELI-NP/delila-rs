@@ -1,0 +1,192 @@
+# DELILA DAQ Configuration - N_Wall experiment @ pf-qaq (daq@192.168.144.142)
+#
+# TODO 73 §3.1, TODO 79 §5.5-5.6. Six boards:
+#   module 0 : VX2730 DPP-PSD (master)   beam/100 ch0, LaBr3 ch1-7, LS ch8-31
+#   module 1 : V1725 DPP-PHA             dE sector 0-15
+#   module 2 : V1725 DPP-PHA             dE ring inner  (ch0-14), ch15 = pulser
+#   module 3 : V1725 DPP-PHA             dE ring middle (ch0-14), ch15 = pulser
+#   module 4 : V1725 DPP-PHA             dE ring outer  (ch0-14), ch15 = pulser
+#   module 5 : V1725 DPP-PHA             E sector 0-15
+# The same numbers are used by config/channel_map_N_Wall.txt (Grafana, nwall_sink,
+# offline) and config/event_def_nwall.json - change them together.
+# Runs 1-4 of N_Wall (2026-10/11, the VX2730 alone, from config_thgem_pfqaq.toml)
+# have the VX2730 as module 1; from run 5 on it is module 0.
+#
+# --- VX2730 ---------------------------------------------------------------
+# Direct 1 GbE on eno1 (172.18.4.50/22) <-> board 172.18.4.57. Its JSON is the
+# file tuned on pf-qaq up to run 4 (LS done; LaBr3 ch1-7 still on the LS defaults).
+#
+# --- V1725 x5 on the A3818 (4 optical links) ------------------------------
+# The link / conet_node below are the PLAN (2 boards per link) - set them to the
+# real cabling. Identify each board with the DAQ STOPPED (board access is
+# exclusive; probing a board a reader holds kills that reader's connection):
+#   caen-toolbox dig1 check -c OPTICAL_LINK -l <link> -n <node>
+# It prints the model, serial (PID) and firmware (must be DPP-PHA); copy the serial
+# into the board's JSON ("serial_number", bookkeeping only).
+# A reader whose board cannot be opened makes Configure fail for the WHOLE DAQ:
+# comment out the blocks of boards that are not connected yet.
+#
+# Si signal polarity (channel_defaults.polarity in each JSON) is a guess: rings
+# NEGATIVE, sectors POSITIVE (opposite faces of the detector; inverting charge
+# preamps). Check the first waveforms in Tune Up and flip it there if needed.
+# The ring boards' ch15 (pulser) uses the board's defaults - adjust its polarity /
+# threshold to the pulser in Tune Up. Waveforms are OFF (user: the V1725 buffer
+# loses too many events with them); record_length 7000 ns stays below the
+# couple-arbiter limit (7168 ns) for Tune Up captures.
+#
+# --- Clock and start -------------------------------------------------------
+# NOW (2026-11-04, no clock cable yet): every board starts on its own
+# (VX2730 SWcmd, V1725 START_MODE_SW) - separate time bases, started a few ms
+# apart and drifting by up to ~ppm. Fine for setting up and per-channel spectra;
+# board-to-board coincidences (dE x E, Si x LS) are meaningless until synchronized.
+# nwall_sink's Sorter tolerates `safe_horizon_ms` (1 s) of disorder between the
+# boards; over many hours the drift can exceed it (counted as late=).
+#
+# WHEN THE CLOCK / START CABLES ARE IN (TODO 77; the VX2730 JSON already
+# outputs Run on GPIO and TRG-OUT and the clock on CLK-OUT):
+#   - VX2730 CLK-OUT -> V1725 CLK-IN (daisy chain, CLK-OUT -> next CLK-IN); the
+#     V1725 clock source is set in HARDWARE on VME boards (user, PLL lock LED).
+#   - VX2730 Run (GPIO / TRG-OUT, NIM) -> every V1725 S-IN (fan-out, or a chain
+#     with gpio_mode = OUT_PROPAGATION_SYNCIN on the V1725s).
+#   - every V1725 JSON: board.start_source = START_MODE_S_IN.
+#   - A V1725 in S_IN mode without the Run signal reports Running with ZERO events
+#     (TODO 77 §4) - watch the per-board rates in Grafana after every Start.
+#   - Then measure the board offsets with a pulser on all boards (TODO 72
+#     time_map.C) and set start delays / config/time_settings_nwall.json.
+#
+# Use:  ln -sfn config/config_nwall_pfqaq.toml config.toml && ./scripts/start_daq.sh
+#   (config.toml is a symlink - re-point it, never `cp` onto it. The Operator
+#    reads config.toml only at startup.)
+# Back to ThGEM: ln -sfn config/config_thgem_pfqaq.toml config.toml
+# Build (as for ThGEM): CAEN_PREFIX=/opt/delila-caen cargo build --release --bins --features x743
+# nwall_sink: tools/root_sink/nwall/README.md (installed in ~/.local/bin).
+
+[operator]
+# Runs are numbered per experiment_name: N_Wall continues at run 5 (user, 2026-11-04).
+experiment_name = "N_Wall"
+# 9091 as for ThGEM on this host.
+port = 9091
+
+# Per-second rates into InfluxDB 3 of the docker/ stack (host 8086 -> 8181).
+[operator.influxdb]
+url = "http://localhost:8086"
+database = "delila"
+interval_secs = 2
+
+# Run summaries auto-posted to the docker/ stack eLog, logbook [N_Wall] in
+# docker/elog/elogd_thgem.cfg (pf-qaq's eLog config, ELOG_CFG in docker/.env).
+[operator.elog]
+url = "http://localhost:8082"
+logbook = "N_Wall"
+
+# MongoDB: start_daq.sh passes the docker/ stack credentials
+# (mongodb://delila:delila_pass@localhost:27017, db delila) by default.
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# --- module 0: VX2730 DPP-PSD, beam / LaBr3 / LS (master) ---
+[[network.sources]]
+id = 0
+name = "PSD2-VX2730-NWall"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/nwall_vx2730_psd2_0.json"
+pipeline_order = 1
+
+# --- modules 1-5: V1725 DPP-PHA (250 MS/s -> 4 ns), Si ---
+# adc_min stays 0 (the default): a sync mark (TODO 79 §5.4) has energy ~0 and
+# would be dropped in the Reader otherwise.
+[[network.sources]]
+id = 1
+name = "PHA1-V1725-dE-Sector"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/nwall_v1725_pha_1.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 2
+name = "PHA1-V1725-dE-RingIn"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+config_file = "config/digitizers/nwall_v1725_pha_2.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 3
+name = "PHA1-V1725-dE-RingMid"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
+config_file = "config/digitizers/nwall_v1725_pha_3.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 4
+name = "PHA1-V1725-dE-RingOut"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=1"
+config_file = "config/digitizers/nwall_v1725_pha_4.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 5
+name = "PHA1-V1725-E-Sector"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=0"
+config_file = "config/digitizers/nwall_v1725_pha_5.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# --- Pipeline components ---
+# [network.merger] has no explicit `subscribe`: it is derived from the source list.
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# /data = nvme1n1 (XFS, 3.5 TB). archive_sync copies /data/N_Wall to
+# /archive/DELILA_data/N_Wall every 15 min (second crontab line, 2026-11-03).
+# Changing this directory means changing that crontab line too.
+output_dir = "/data/N_Wall"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- nwall_sink: ROOT recorder + live N_Wall monitor (JSROOT :8090) ---
+# TODO 79, tools/root_sink/nwall/README.md. Trees: hits (every channel, aligned
+# time) + events (trigger = E sector, L2 flag dEE = with a dE sector hit).
+[network.root_sink]
+program = "nwall_sink"
+subscribe = "tcp://localhost:5557"
+# Must match [network.recorder].output_dir (.delila and .root side by side).
+output_dir = "/data/N_Wall"
+http_port = 8090
+hits_tree = true
+event_def_file = "config/event_def_nwall.json"
+channel_map = "config/channel_map_N_Wall.txt"
+# DIG1 boards deliver up to ~100 ms out of time order (channel-pair aggregates;
+# ThGEM run 52 on this host: 82 ms) - the default 50 ms would drop hits as late.
+safe_horizon_ms = 1000
+autosave_sec = 30
+workers = 3
+# Once measured (TODO 72 time_map.C with the pulser, after the clock cable):
+# time_calib_file = "config/time_settings_nwall.json"
+# Calibration (README "Calibration"): si_delay_ns = peak of /events/si_phase,
+# rf_t0_ns = shift putting the LS gamma flash at L/c.
+# rf_period_ns = 199.980    # nominal; measured per run from the beam channel
+# si_delay_ns = 0.0
+# rf_t0_ns = 0.0
