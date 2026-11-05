@@ -1,6 +1,6 @@
 # TODO 76 — 中性子検出器の HV(CAEN HV クレート)を読み出して Grafana に出す
 
-**Status: 🚧 実装済み・pf-qaq で実機確認済み (2026-10-22) — 残 = systemd への常駐登録(sudo、ユーザー)、TODO 74 P4 の実験別ダッシュボードへの HV パネル**
+**Status: 🚧 実装済み・pf-qaq で実機確認済み (2026-10-22) — 常駐登録済み(enabled、active、2026-11-05 にデータが流れていることを確認) — 残 = TODO 74 P4 の実験別ダッシュボードへの HV パネル**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md)(親) /
 [74_grafana_event_rate_monitor.md](74_grafana_event_rate_monitor.md) /

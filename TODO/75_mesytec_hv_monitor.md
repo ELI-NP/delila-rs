@@ -1,6 +1,6 @@
 # TODO 75 — Si の HV(Mesytec MHV-4)を読み出して Grafana に出す
 
-**Status: 🚧 実装済み・pf-qaq で実機確認済み (2026-10-22) — 残 = systemd への常駐登録(sudo、ユーザー)、TODO 74 P4 の実験別ダッシュボードへのパネル追加**
+**Status: 🚧 実装済み・pf-qaq で実機確認済み (2026-10-22) — 常駐登録済み(enabled、active) — 残 = TODO 74 P4 の実験別ダッシュボードへのパネル追加。**2026-11-05 時点で MHV-4 は USB につながっていない: 11-02 15:14 に I/O エラー、以後 5 分おきに `could not open port`、直近 6 時間の `mhv4` は 0 行。11-05 14:40 に現れた FTDI(Manufacturer FTDI、シリアル番号なし)は MHV-4(mesytec、0915075)ではない。**
 
 **実装と確認の記録 (2026-10-22):**
 `tools/hv_monitor/mhv4_monitor.py`(読み出し専用、送れるのは許可した 21 個の文字列だけ。ポートへの書き込みは

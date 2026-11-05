@@ -1,6 +1,6 @@
 # TODO 74 — Grafana をイベントレートモニタとして使えるようにする(pf-qaq)
 
-**Status: 🚧 P1〜P5 実装・pf-qaq に配備済み (2026-10-22 17:02、ランの合間にユーザー了承で DAQ 再起動) — 残 = 次のランで `channel_rate.rate` と `run_event` の実データ確認、`N_Wall` 用の HV パネル(P4)**
+**Status: 🚧 P1〜P5 実装・pf-qaq に配備済み (2026-10-22 17:02、ランの合間にユーザー了承で DAQ 再起動) — 残 = `N_Wall` 用の HV パネル(P4)。`channel_rate` と `run_event` は 2026-11-05 にラン 5〜44 のデータが入っていることを確認**
 
 **P2〜P5 実装記録 (2026-10-22):**
 - P2/P5: `src/operator/influxdb.rs` — `RateTracker`(実測の経過時間で割る、初回は rate なし、カウンタが戻ったら 0)、
