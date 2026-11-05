@@ -1,0 +1,16 @@
+[Unit]
+Description=CAEN N1408 Si bias: monitor + ON/OFF web page (:8095) -> InfluxDB
+# Independent of the DAQ: no ordering or dependency on any DAQ service.
+After=network.target
+
+[Service]
+User=daq
+# The serial port is root:dialout 0660.
+SupplementaryGroups=dialout
+WorkingDirectory=/home/daq/delila-rs/tools/hv_monitor
+ExecStart=/usr/bin/python3 -u n1408_control.py --config n1408_control_config.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
