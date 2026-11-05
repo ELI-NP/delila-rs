@@ -905,6 +905,10 @@ class TestService(unittest.TestCase):
         with open(self.audit_path) as f:
             return [json.loads(line) for line in f]
 
+    def last_row(self, action):
+        # Not simply the last line: the next poll may have logged a status change after it.
+        return [row for row in self.audit() if row["action"] == action][-1]
+
     def test_status_is_open_and_complete(self):
         self.start(dict(REAL))
         status = self.get("/api/status")
@@ -933,10 +937,8 @@ class TestService(unittest.TestCase):
         self.start(dict(REAL))
         code, body = self.post("/api/control/acquire", {"operator": "x", "passphrase": "guess"})
         self.assertEqual(code, 403, body)
-        rows = self.audit()
-        self.assertEqual(rows[-1]["action"], "acquire")
-        self.assertEqual(rows[-1]["result"], "refused")
-        self.assertNotIn("guess", json.dumps(rows))
+        self.assertEqual(self.last_row("acquire")["result"], "refused")
+        self.assertNotIn("guess", json.dumps(self.audit()))
 
     def test_operator_name_is_required(self):
         self.start(dict(REAL))
@@ -957,7 +959,7 @@ class TestService(unittest.TestCase):
         self.assertEqual(code, 200, body)
         self.assertTrue(body["ok"])
         self.assertEqual(self.port.sets(), [set_cmd(1, "ON")])
-        row = self.audit()[-1]
+        row = self.last_row("on")
         self.assertEqual((row["action"], row["channel"], row["operator"]), ("on", 1, "aogaki"))
         self.assertEqual(row["result"], "done")
         self.assertEqual((row["status_before"], row["status_after"]), (0, 1))
@@ -968,13 +970,13 @@ class TestService(unittest.TestCase):
         code, body = self.post("/api/channel/1/on", {"token": self.acquire()})
         self.assertEqual(code, 409, body)
         self.assertEqual(self.port.sets(), [])
-        self.assertEqual(self.audit()[-1]["result"], "refused")
+        self.assertEqual(self.last_row("on")["result"], "refused")
 
     def test_set_without_effect_is_502(self):
         self.start(with_replies(stat=[0, 0]))
         code, body = self.post("/api/channel/1/on", {"token": self.acquire()})
         self.assertEqual(code, 502, body)
-        self.assertEqual(self.audit()[-1]["result"], "failed")
+        self.assertEqual(self.last_row("on")["result"], "failed")
 
     def test_channel_not_in_control_config(self):
         self.start(dict(REAL))
@@ -1025,7 +1027,7 @@ class TestService(unittest.TestCase):
         self.assertEqual(code, 409, body)
         self.assertIn("run 45", body["message"])
         self.assertEqual(self.port.sets(), [])
-        row = self.audit()[-1]
+        row = self.last_row("on")
         self.assertEqual((row["action"], row["result"]), ("on", "refused"))
 
     def test_settings_are_refused_during_a_run(self):
@@ -1059,7 +1061,7 @@ class TestService(unittest.TestCase):
         code, body = self.post("/api/channel/1/on", {"token": self.acquire()})
         self.assertEqual(code, 200, body)
         self.assertIn("DAQ", body["message"])
-        self.assertIs(self.audit()[-1]["daq_reachable"], False)
+        self.assertIs(self.last_row("on")["daq_reachable"], False)
 
     def test_status_shows_the_run(self):
         self.run_in_progress()
@@ -1074,7 +1076,7 @@ class TestService(unittest.TestCase):
                                                       "value": 25.0, "expected": 20.0})
         self.assertEqual(code, 200, body)
         self.assertEqual(self.port.sets(), [value_cmd(1, "VSET", "25.00")])
-        row = self.audit()[-1]
+        row = self.last_row("set")
         self.assertEqual((row["action"], row["param"], row["operator"]), ("set", "VSET", "aogaki"))
         self.assertEqual((row["value_before"], row["requested"], row["value_after"]), (20.0, 25.0, 25.0))
 
