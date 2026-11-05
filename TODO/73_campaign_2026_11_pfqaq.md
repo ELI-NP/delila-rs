@@ -242,5 +242,8 @@ DAQ は止まったまま(全コンポーネント Configured、旧バイナリ)
   配備: pf-qaq を c105f13 に進めてビルド(48 s、警告 0)、**Operator だけ再起動**(Reader・Merger・Recorder・Monitor・nwall_sink の PID は変わらず、全台 Configured のまま)。
   確認: `/api/runs/5` = N_Wall `Time offset check`、`/api/runs/99` = 404、`/api/runs/next` = 6、`/api/runs/5/config` = 6 台。
 - `X730_ThGEM_Test` のラン 29(2026-08-03)が `running` のまま残っている(side3 から移した記録)。今回の修正で他の実験から書き込まれることはなくなった。消すかはユーザー次第。
-- カスケードの設定(`OUT_PROPAGATION_RUN`、`start_delay`、リングの ch15 = POSITIVE、ch0 = TTL 用)は TODO 77 §6.13 でリポジトリに取り込み済み。**VX2730 ch0 はビームを入れるときに戻す**。
+- カスケードの設定(`OUT_PROPAGATION_RUN`、`start_delay`、リングの ch15 = POSITIVE、ch0 = TTL 用)は TODO 77 §6.13 でリポジトリに取り込み済み。**VX2730 ch0 はビームを入れるときに戻す(ユーザーが行う。TTL をそのまま入れる予定、元が NIM ならそれを使う)**。
+- **mod2〜4 ch15 の E = 0 は、ボードが立てた入力飽和フラグ(EXTRAS bit[4]、UM5678 p.110)と 100 % 一致(TODO 77 §6.14)。** パイルアップではない。E = 0 になる 3 台は `polarity` の既定が NEGATIVE のリングの 3 台と重なる。ラン 18(1 本の配線)では同じ設定で E = 5345。原因は未確認で、確かめ方は §6.14。
+- **+17 ns のランはランごとに補正する**(ユーザー: Si は dE vs E の粒子弁別なので、きっちり合わせなくてよい)。
+- パルサーは、本物の信号をそのまま出せる高級なものを使う予定(ユーザー)。
 

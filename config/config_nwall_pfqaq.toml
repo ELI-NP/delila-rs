@@ -16,7 +16,7 @@
 # Direct 1 GbE on eno1 (172.18.4.50/22) <-> board 172.18.4.57. Its JSON is the
 # file tuned on pf-qaq up to run 4 (LS done; LaBr3 ch1-7 still on the LS defaults).
 # ch0 is set for the PB-5 TTL (Positive, threshold 100, 2026-11-05 time measurements):
-# set it for the beam signal before beam.
+# set it for the beam signal before beam (user: TTL straight in, or NIM if that is the source).
 #
 # --- V1725 x5 on the A3818 (4 optical links) ------------------------------
 # Cabling (user, 2026-11-05; caen-toolbox the same day, ROC 04.25, DPP-PHA on all):
@@ -42,6 +42,8 @@
 # The ring boards' ch15 (pulser) is POSITIVE for the PB-5. Waveforms are OFF (user: the V1725 buffer
 # loses too many events with them); record_length 7000 ns stays below the
 # couple-arbiter limit (7168 ns) for Tune Up captures.
+# E = 0 with EXTRAS bit 4 (input saturation) on the ring boards' ch15: TODO 77 §6.14.
+# Check it again if a ring channel is flipped to POSITIVE.
 #
 # --- Clock and start -------------------------------------------------------
 # Cascade, measured 2026-11-05 with a PB-5 pulser (TODO 77 §6.8-6.13):
