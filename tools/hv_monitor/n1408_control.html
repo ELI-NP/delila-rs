@@ -31,6 +31,10 @@
   .s-OFF, .s-DISABLED, .s-UNKNOWN { color:var(--gray); }
   .s-TRIP, .s-KILL, .s-INTERLOCK { color:var(--red); }
   .flagged { color:var(--red); font-weight:600; }
+  label { white-space:nowrap; }
+  input[type=number] { width:96px; }
+  select { font:inherit; padding:5px 8px; color:var(--text); background:var(--bg);
+           border:1px solid var(--line); border-radius:5px; }
   input { font:inherit; padding:5px 8px; color:var(--text); background:var(--bg);
           border:1px solid var(--line); border-radius:5px; }
   button { font:inherit; padding:5px 12px; border-radius:5px; border:1px solid var(--line);
@@ -76,6 +80,19 @@
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
+  </div>
+
+  <div id="settings" class="card" hidden>
+    <div class="row">
+      <strong>Settings</strong>
+      <label>Channel <select id="setCh"></select></label>
+      <label>VSET [V] <input id="setVSET" type="number" step="0.02" min="0"></label>
+      <label>ISET [µA] <input id="setISET" type="number" step="0.001" min="0"></label>
+      <label>Trip [s] <input id="setTRIP" type="number" step="0.1" min="0" max="999.9"></label>
+      <button id="apply">Apply...</button>
+      <button id="revert">Show current</button>
+    </div>
+    <div id="setNow" class="muted" style="margin-top:6px"></div>
   </div>
 
   <div class="card">
@@ -144,6 +161,68 @@ function powerClick(ch, action) {
   if (confirm(what)) command(`/api/channel/${ch}/${action}`, `${action.toUpperCase()} ch${ch}`);
 }
 
+function daqText(d) {
+  if (!d || !d.reachable) return "not answering (state unknown)";
+  if (d.running) return d.run === null ? "run in progress" : `run ${d.run} in progress`;
+  return d.tuneup ? "Tune Up" : (d.state || "?");
+}
+
+// Settings: the inputs follow the readback until someone types in them.
+const PARAMS = { VSET:{ field:"vset", digits:2, unit:"V" }, ISET:{ field:"iset", digits:3, unit:"µA" },
+                 TRIP:{ field:"trip", digits:1, unit:"s" } };
+let dirty = {};
+for (const p of Object.keys(PARAMS)) $("set" + p).addEventListener("input", () => { dirty[p] = true; });
+
+function renderSettings(s, mine, remote) {
+  const card = $("settings");
+  card.hidden = !mine;
+  if (!mine) return;
+  const select = $("setCh");
+  if (select.options.length !== s.channels.length) {
+    select.textContent = "";
+    for (const c of s.channels) select.add(new Option(`${c.ch} ${c.name}`, c.ch));
+  }
+  const c = s.channels[Number(select.value)];
+  for (const [p, def] of Object.entries(PARAMS)) {
+    const input = $("set" + p);
+    if (!dirty[p]) input.value = c[def.field] === null ? "" : Number(c[def.field]).toFixed(def.digits);
+    input.disabled = !c.control_allowed;
+  }
+  const blocked = busy || !remote || !c.control_allowed || (s.daq && s.daq.running);
+  $("apply").disabled = blocked;
+  $("setNow").textContent = `Now: VSET ${fmt(c.vset,2)} V, ISET ${fmt(c.iset,3)} µA, Trip ${fmt(c.trip,1)} s. `
+    + `VSET cannot go above MAXV ${fmt(c.maxv,0)} V. MAXV, ramp speeds and the trip mode are changed on the panel (LOCAL).`;
+}
+
+async function applySettings() {
+  const c = last.channels[Number($("setCh").value)];
+  const changes = [];
+  for (const [p, def] of Object.entries(PARAMS)) {
+    const text = $("set" + p).value, now = c[def.field];
+    if (!dirty[p] || text === "" || now === null || Number(text).toFixed(def.digits) === Number(now).toFixed(def.digits)) continue;
+    changes.push({ param:p, value:Number(text), expected:now, def });
+  }
+  if (!changes.length) { show("Nothing to change."); return; }
+  const lines = changes.map(x => `${x.param}: ${Number(x.expected).toFixed(x.def.digits)} -> ${x.value.toFixed(x.def.digits)} ${x.def.unit}`);
+  const on = c.flags.includes("ON");
+  if (on && changes.some(x => x.param === "VSET")) lines.push("", `ch${c.ch} is ON: the voltage starts to move right away (${fmt(c.rup,0)} / ${fmt(c.rdw,0)} V/s).`);
+  if (!confirm(`Change ch${c.ch} (${c.name})?\n\n${lines.join("\n")}`)) return;
+  busy = true; render();
+  const done = [];
+  try {
+    for (const x of changes) {
+      const { code, data } = await post(`/api/channel/${c.ch}/set`, { token:memToken, param:x.param, value:x.value, expected:x.expected });
+      if (code === 401) setToken(null);
+      if (!data.ok) { show([...done, `${x.param}: ${data.message || code}`, "Stopped here."].join(" | "), true); break; }
+      dirty[x.param] = false;
+      done.push(`${x.param}: ${data.message}`);
+      if (x === changes[changes.length - 1]) show(done.join(" | "));
+    }
+  } catch (e) { show(`No answer (${e}); check the values`, true); }
+  busy = false;
+  poll();
+}
+
 function render() {
   if (!last) return;
   const s = last, b = s.board || {}, remote = s.connected && b.control === "REMOTE", mine = !!memToken;
@@ -156,7 +235,13 @@ function render() {
     board.append(pair("Panel", b.control || "?", b.control !== "REMOTE"),
                  pair("Interlock", b.interlock || "?", b.interlock !== "NO"),
                  pair("Alarm", b.alarm ?? "?", b.alarm && b.alarm !== "0"),
+                 pair("DAQ", daqText(s.daq), !s.daq || !s.daq.reachable || s.daq.running),
                  pair("Updated", s.age_s === null ? "?" : s.age_s.toFixed(0) + " s ago", s.age_s > 10));
+    if (s.daq && s.daq.running) {
+      const n = document.createElement("span"); n.className = "muted";
+      n.textContent = "During a run only OFF works.";
+      board.append(n);
+    }
     if (b.control === "LOCAL") {
       const n = document.createElement("span"); n.className = "muted";
       n.textContent = "LOCAL: the software cannot switch anything, and a switch going OFF → HV_EN raises the HV.";
@@ -194,9 +279,10 @@ function render() {
     if (mine && c.control_allowed) {
       const on = document.createElement("button"), off = document.createElement("button");
       on.textContent = "ON"; on.className = "on"; off.textContent = "OFF"; off.className = "off";
-      on.disabled = busy || !remote || c.flags.some(f => ["DIS","KILL","ILK","NOCAL"].includes(f)) || ["ON","RAMP_UP"].includes(c.state);
+      const inRun = s.daq && s.daq.running;
+      on.disabled = busy || !remote || inRun || c.flags.some(f => ["DIS","KILL","ILK","NOCAL"].includes(f)) || ["ON","RAMP_UP"].includes(c.state);
       off.disabled = busy || !remote || !c.flags.includes("ON");
-      on.title = c.flags.includes("DIS") ? "The channel switch is at OFF: set it to HV_EN" : "";
+      on.title = inRun ? "During a run only OFF works" : c.flags.includes("DIS") ? "The channel switch is at OFF: set it to HV_EN" : "";
       on.onclick = () => powerClick(c.ch, "on"); off.onclick = () => powerClick(c.ch, "off");
       act.append(on, " ", off);
     } else if (mine) {
@@ -206,13 +292,15 @@ function render() {
     rows.append(tr);
   }
 
+  renderSettings(s, mine, remote);
+
   const list = $("events"); list.textContent = "";
   for (const e of [...(s.events || [])].reverse().slice(0, 12)) {
     const li = document.createElement("li");
     const ch = e.channel === null || e.channel === undefined ? "" : ` ch${e.channel}`;
     const detail = e.action === "status_change"
       ? `${(e.new || []).map(x => "+" + x).join(" ")} ${(e.gone || []).map(x => "-" + x).join(" ")}`
-      : `${e.result}${e.message ? ": " + e.message : ""}`;
+      : `${e.param ? e.param + " " : ""}${e.result}${e.message ? ": " + e.message : ""}`;
     li.textContent = `${(e.time || "").slice(11, 19)}  ${e.operator || "unit"}  ${e.action}${ch}  ${detail}`;
     list.append(li);
   }
@@ -242,6 +330,9 @@ $("acquire").onclick = async () => {
   } else { show(data.message || `Error ${code}`, true); }
   poll();
 };
+$("setCh").onchange = () => { dirty = {}; render(); };
+$("revert").onclick = () => { dirty = {}; render(); };
+$("apply").onclick = applySettings;
 $("pass").addEventListener("keydown", e => { if (e.key === "Enter") $("acquire").click(); });
 $("release").onclick = async () => { await post("/api/control/release", { token:memToken }); setToken(null); show("Control given up."); poll(); };
 $("alloff").onclick = () => { if (confirm("Turn OFF every channel enabled for control?")) command("/api/all_off", "ALL OFF"); };

@@ -17,6 +17,8 @@ import unittest
 import urllib.error
 import urllib.request
 
+import requests
+
 import n1408_control as m
 
 BD = "$BD:00,CMD:"
@@ -32,6 +34,10 @@ def bd(par):
 
 def set_cmd(ch, par):
     return f"{BD}SET,CH:{ch},PAR:{par}"
+
+
+def value_cmd(ch, par, value):
+    return f"{BD}SET,CH:{ch},PAR:{par},VAL:{value}"
 
 
 def ok(value=None):
@@ -102,6 +108,7 @@ def make_config(**over):
         serial_port="/dev/null", board=0, expected_serial="1592", device_name="si_bias",
         poll_interval_sec=2.0, influx_url="http://x/write", http_host="127.0.0.1", http_port=0,
         passphrase_file="/nonexistent", audit_log="", control_idle_timeout_sec=600.0,
+        operator_url="",
         readback_timeout_sec=5.0, channels=channels,
     )
     values.update(over)
@@ -128,11 +135,26 @@ def execute(port, action="on", channel=1, cfg=None):
 
 
 class TestAllowlist(unittest.TestCase):
-    def test_only_set_commands_are_per_channel_on_and_off(self):
+    def test_fixed_set_commands_are_per_channel_on_and_off(self):
         sets = {c for c in m.allowed_commands(0) if ",CMD:SET," in c}
         self.assertEqual(
             sets, {set_cmd(c, p) for c in range(4) for p in ("ON", "OFF")}
         )
+
+    def test_vset_iset_trip_of_one_channel_can_be_sent(self):
+        for cmd in (value_cmd(1, "VSET", "25.00"), value_cmd(0, "ISET", "5.000"),
+                    value_cmd(3, "TRIP", "10.0"), value_cmd(2, "VSET", "0.00")):
+            port = ScriptedPort()
+            m.send_command(port, 0, cmd)
+            self.assertEqual(port.written, [cmd + "\r\n"])
+
+    def test_setting_values_must_have_the_plain_form(self):
+        for value in ("-5.00", "+5.00", "1e2", "abc", "", "5.", ".5", "5.0000", "12345.0", " 5.0",
+                      "5.0 ", "5.0\r\n$BD:00,CMD:SET,CH:1,PAR:ON", "٥.0"):
+            self.assert_rejected(value_cmd(1, "VSET", value))
+
+    def test_settings_of_all_channels_at_once_cannot_be_sent(self):
+        self.assert_rejected(value_cmd(4, "VSET", "5.00"))
 
     def test_everything_else_is_a_monitor_command(self):
         for c in m.allowed_commands(0):
@@ -144,9 +166,9 @@ class TestAllowlist(unittest.TestCase):
             m.send_command(port, 0, cmd)
         self.assertEqual(port.written, [], f"bytes written for {cmd!r}")
 
-    def test_voltage_and_protection_settings_cannot_be_sent(self):
-        for par in ("VSET,VAL:10", "ISET,VAL:1", "MAXV,VAL:100", "RUP,VAL:5", "RDW,VAL:5",
-                    "TRIP,VAL:1", "PDWN,VAL:RAMP", "ZCADJ,VAL:EN", "ZCDTC"):
+    def test_protection_settings_cannot_be_sent(self):
+        for par in ("MAXV,VAL:100", "RUP,VAL:5", "RDW,VAL:5", "PDWN,VAL:RAMP", "ZCADJ,VAL:EN",
+                    "ZCDTC"):
             self.assert_rejected(f"{BD}SET,CH:1,PAR:{par}")
 
     def test_all_channels_on_cannot_be_sent(self):
@@ -424,6 +446,228 @@ class TestExecute(unittest.TestCase):
         self.assertEqual(len(port.sets()), 1)
 
 
+def setting_replies(par, before, after=None, *, control="REMOTE", stat=0, maxv="150", imon="+00.0000",
+                    set_value=None, set_reply="#BD:00,CMD:OK"):
+    """REAL + what one setting command reads on channel 1. Strings as the unit returned them."""
+    replies = dict(REAL)
+    replies[bd("BDCTR")] = ok(control)
+    replies[mon("STAT", 1)] = ok(f"{stat:05d}")
+    replies[mon("MAXV", 1)] = ok(maxv)
+    replies[mon("IMAX", 1)] = ok("21.000")
+    replies[mon("IMON", 1)] = ok(imon)
+    replies[mon(par, 1)] = [ok(before)] + ([ok(after)] if after is not None else [])
+    if set_value is not None:
+        replies[value_cmd(1, par, set_value)] = set_reply
+    return replies
+
+
+def execute_set(port, par, value, expected, channel=1, cfg=None):
+    return m.execute_setting(port, cfg or make_config(), channel, par, value, expected)
+
+
+class TestSettings(unittest.TestCase):
+    def test_vset_as_on_the_real_unit(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00", "025.00", set_value="25.00"))
+        result = execute_set(port, "VSET", 25.0, 20.0)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["result"], "done")
+        self.assertEqual(port.sets(), [value_cmd(1, "VSET", "25.00")])
+        self.assertEqual((result["value_before"], result["value_after"]), (20.0, 25.0))
+
+    def test_iset_and_trip_as_on_the_real_unit(self):
+        port = ScriptedPort(setting_replies("ISET", "09.100", "05.000", set_value="5.000"))
+        self.assertTrue(execute_set(port, "ISET", 5.0, 9.1)["ok"])
+        port = ScriptedPort(setting_replies("TRIP", "0010.0", "0005.0", set_value="5.0"))
+        self.assertTrue(execute_set(port, "TRIP", 5.0, 10.0)["ok"])
+
+    def test_vset_works_while_the_channel_is_on(self):
+        port = ScriptedPort(setting_replies("VSET", "025.00", "030.00", stat=1, set_value="30.00"))
+        self.assertTrue(execute_set(port, "VSET", 30.0, 25.0)["ok"])
+
+    def test_the_units_voltage_step_counts_as_the_same_value(self):
+        # The unit steps VSET in 0.02 V: 80.01 came back as 080.02 (TODO 82 §2.1).
+        port = ScriptedPort(setting_replies("VSET", "020.00", "080.02", maxv="100", set_value="80.01"))
+        self.assertTrue(execute_set(port, "VSET", 80.01, 20.0)["ok"])
+
+    def test_vset_above_maxv_is_refused_because_the_unit_would_take_it(self):
+        # Measured: MAXV 80, VSET 81 -> CMD:OK, readback 081.00.
+        port = ScriptedPort(setting_replies("VSET", "060.00", maxv="080"))
+        result = execute_set(port, "VSET", 81.0, 60.0)
+        self.assertEqual(result["result"], "refused")
+        self.assertIn("MAXV", result["message"])
+        self.assertEqual(port.sets(), [])
+
+    def test_vset_equal_to_maxv_is_allowed(self):
+        port = ScriptedPort(setting_replies("VSET", "060.00", "080.00", maxv="080", set_value="80.00"))
+        self.assertTrue(execute_set(port, "VSET", 80.0, 60.0)["ok"])
+
+    def test_negative_values_are_refused(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00"))
+        self.assertEqual(execute_set(port, "VSET", -5.0, 20.0)["result"], "refused")
+        self.assertEqual(port.sets(), [])
+
+    def test_trip_infinite_is_refused_because_the_unit_would_take_it(self):
+        # Measured: TRIP 1000 -> CMD:OK; the manual: 1000 s = infinite over-current.
+        port = ScriptedPort(setting_replies("TRIP", "0010.0"))
+        result = execute_set(port, "TRIP", 1000.0, 10.0)
+        self.assertEqual(result["result"], "refused")
+        self.assertIn("1000", result["message"])
+        self.assertEqual(port.sets(), [])
+
+    def test_longest_finite_trip_is_allowed(self):
+        port = ScriptedPort(setting_replies("TRIP", "0010.0", "0999.9", set_value="999.9"))
+        self.assertTrue(execute_set(port, "TRIP", 999.9, 10.0)["ok"])
+
+    def test_iset_above_the_units_limit_is_refused(self):
+        port = ScriptedPort(setting_replies("ISET", "09.100"))
+        result = execute_set(port, "ISET", 21.001, 9.1)
+        self.assertEqual(result["result"], "refused")
+        self.assertEqual(port.sets(), [])
+
+    def test_iset_at_or_below_the_present_current_is_refused_while_on(self):
+        for stat in (1, 3):
+            port = ScriptedPort(setting_replies("ISET", "09.100", stat=stat, imon="+02.5000"))
+            result = execute_set(port, "ISET", 2.5, 9.1)
+            self.assertEqual(result["result"], "refused")
+            self.assertIn("trip", result["message"])
+            self.assertEqual(port.sets(), [])
+
+    def test_iset_below_the_old_current_is_fine_while_off(self):
+        port = ScriptedPort(setting_replies("ISET", "09.100", "00.000", imon="+00.0000", set_value="0.000"))
+        self.assertTrue(execute_set(port, "ISET", 0.0, 9.1)["ok"])
+
+    def test_more_digits_than_the_unit_keeps_are_refused_not_rounded(self):
+        for par, value, before in (("VSET", 25.123, 20.0), ("ISET", 5.1234, 9.1), ("TRIP", 5.55, 10.0)):
+            port = ScriptedPort(setting_replies(par, {"VSET": "020.00", "ISET": "09.100", "TRIP": "0010.0"}[par]))
+            result = execute_set(port, par, value, before)
+            self.assertEqual(result["result"], "refused", par)
+            self.assertIn("digits", result["message"])
+            self.assertEqual(port.sets(), [])
+
+    def test_not_a_number_is_refused_before_touching_the_port(self):
+        for value in ("25", None, True, float("nan"), float("inf")):
+            port = ScriptedPort(setting_replies("VSET", "020.00"))
+            self.assertEqual(execute_set(port, "VSET", value, 20.0)["result"], "refused", value)
+            self.assertEqual(port.written, [])
+
+    def test_only_vset_iset_trip_can_be_set(self):
+        for par in ("MAXV", "RUP", "RDW", "PDWN", "ZCADJ", "ON"):
+            port = ScriptedPort()
+            self.assertEqual(execute_set(port, par, 5.0, 5.0)["result"], "refused", par)
+            self.assertEqual(port.written, [])
+
+    def test_someone_else_changed_it_first(self):
+        port = ScriptedPort(setting_replies("VSET", "035.00"))
+        result = execute_set(port, "VSET", 25.0, 20.0)
+        self.assertEqual(result["result"], "refused")
+        self.assertIn("35", result["message"])
+        self.assertEqual(port.sets(), [])
+
+    def test_expected_value_is_required(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00"))
+        self.assertEqual(execute_set(port, "VSET", 25.0, None)["result"], "refused")
+        self.assertEqual(port.written, [])
+
+    def test_same_value_sends_nothing(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00"))
+        result = execute_set(port, "VSET", 20.0, 20.0)
+        self.assertEqual(result["result"], "already")
+        self.assertEqual(port.sets(), [])
+
+    def test_local_panel_refuses_before_any_set(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00", control="LOCAL"))
+        result = execute_set(port, "VSET", 25.0, 20.0)
+        self.assertEqual(result["result"], "refused")
+        self.assertIn("LOCAL", result["message"])
+        self.assertEqual(port.sets(), [])
+
+    def test_channel_not_allowed_touches_nothing(self):
+        port = ScriptedPort()
+        self.assertEqual(execute_set(port, "VSET", 25.0, 20.0, channel=2)["result"], "refused")
+        self.assertEqual(port.written, [])
+
+    def test_error_reply_is_a_failure_with_its_code(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00", set_value="25.00", set_reply="#BD:00,VAL:ERR"))
+        result = execute_set(port, "VSET", 25.0, 20.0)
+        self.assertEqual(result["result"], "failed")
+        self.assertIn("VAL:ERR", result["message"])
+
+    def test_ok_reply_with_another_value_is_a_failure(self):
+        port = ScriptedPort(setting_replies("VSET", "020.00", "020.00", set_value="25.00"))
+        result = execute_set(port, "VSET", 25.0, 20.0)
+        self.assertEqual(result["result"], "failed")
+        self.assertIn("CMD:OK", result["message"])
+        self.assertEqual(result["value_after"], 20.0)
+
+
+class TestDaqState(unittest.TestCase):
+    def state(self, body):
+        return m.daq_state(lambda url, timeout=None: JsonReply(body), "http://operator")
+
+    def test_idle(self):
+        got = self.state({"system_state": "Idle", "tuneup_mode": False})
+        self.assertEqual((got["reachable"], got["running"]), (True, False))
+
+    def test_running(self):
+        got = self.state({"system_state": "Running", "tuneup_mode": False,
+                          "run_info": {"run_number": 45, "status": "running"}})
+        self.assertTrue(got["running"])
+        self.assertEqual(got["run"], 45)
+
+    def test_a_run_with_one_board_in_another_state_is_still_a_run(self):
+        got = self.state({"system_state": "Mixed", "tuneup_mode": False,
+                          "run_info": {"run_number": 45, "status": "running"}})
+        self.assertTrue(got["running"])
+
+    def test_running_without_run_info_is_still_a_run(self):
+        self.assertTrue(self.state({"system_state": "Running", "tuneup_mode": False})["running"])
+
+    def test_tune_up_is_not_a_run(self):
+        # The Si is biased and tuned with Tune Up on (user, 2026-11-05).
+        got = self.state({"system_state": "Running", "tuneup_mode": True})
+        self.assertFalse(got["running"])
+        self.assertTrue(got["tuneup"])
+
+    def test_not_reachable(self):
+        def get(url, timeout=None):
+            raise requests.ConnectionError("refused")
+
+        got = m.daq_state(get, "http://operator")
+        self.assertEqual((got["reachable"], got["running"]), (False, False))
+
+    def test_not_json(self):
+        class Bad:
+            ok = True
+
+            def json(self):
+                raise ValueError("not json")
+
+        self.assertFalse(m.daq_state(lambda url, timeout=None: Bad(), "http://operator")["reachable"])
+
+    def test_an_error_reply_is_not_an_answer(self):
+        class Error(JsonReply):
+            ok = False
+
+        get = lambda url, timeout=None: Error({"system_state": "Idle"})  # noqa: E731
+        self.assertFalse(m.daq_state(get, "http://operator")["reachable"])
+
+    def test_a_reply_without_a_state_is_not_an_answer(self):
+        self.assertFalse(self.state({"message": "something else"})["reachable"])
+
+    def test_a_finished_run_left_in_the_cache_is_not_a_run(self):
+        got = self.state({"system_state": "Configured", "tuneup_mode": False,
+                          "run_info": {"run_number": 44, "status": "completed"}})
+        self.assertFalse(got["running"])
+
+    def test_a_run_marked_running_is_a_run(self):
+        got = self.state({"system_state": "Mixed", "tuneup_mode": False,
+                          "run_info": {"run_number": 45, "status": "running"}})
+        self.assertTrue(got["running"])
+
+    def test_no_url_means_no_operator(self):
+        self.assertFalse(m.daq_state(None, "")["reachable"])
+
+
 class TestStatusChanges(unittest.TestCase):
     def test_no_events_without_a_previous_reading(self):
         self.assertEqual(m.status_changes(None, [0, 0, 0, 0]), [])
@@ -554,12 +798,13 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(cfg.channels[0].control)
         self.assertTrue(cfg.channels[1].control)
 
-    def test_the_repo_config_allows_no_channel_and_holds_no_passphrase(self):
+    def test_the_repo_config_names_channels_and_holds_no_passphrase(self):
         here = os.path.dirname(os.path.abspath(__file__))
         cfg = m.load_config(os.path.join(here, "n1408_control_config.yaml"))
         self.assertEqual(cfg.expected_serial, "1592")
         self.assertTrue(cfg.passphrase_file.startswith("/"))
-        self.assertFalse(any(c.control for c in cfg.channels.values()))
+        self.assertTrue(all(c.control for c in cfg.channels.values()))
+        self.assertEqual([c.name for c in cfg.channels.values()], ["ch0", "ch1", "ch2", "ch3"])
         with open(os.path.join(here, "n1408_control_config.yaml")) as f:
             self.assertNotRegex(f.read(), r"(?m)^passphrase:")
 
@@ -583,8 +828,20 @@ class Reply:
     text = ""
 
 
+class JsonReply:
+    ok = True
+
+    def __init__(self, body):
+        self.body = body
+
+    def json(self):
+        return self.body
+
+
 class TestService(unittest.TestCase):
     """The real Worker thread and HTTP server, on a scripted port and a loopback socket."""
+
+    daq = None  # reply of the Operator's /api/status; None = not reachable
 
     def start(self, replies, passphrase="not a secret", **cfg_over):
         self.dir = tempfile.TemporaryDirectory()
@@ -595,7 +852,8 @@ class TestService(unittest.TestCase):
                 print(passphrase, file=f)
         self.audit_path = os.path.join(self.dir.name, "audit", "n1408.jsonl")
         cfg = make_config(passphrase_file=pass_file, audit_log=self.audit_path,
-                          poll_interval_sec=0.05, readback_timeout_sec=1.0, **cfg_over)
+                          poll_interval_sec=0.05, readback_timeout_sec=1.0,
+                          operator_url="http://operator", **cfg_over)
         self.port = ScriptedPort(replies)
         self.posts = []
 
@@ -603,7 +861,13 @@ class TestService(unittest.TestCase):
             self.posts.append(data)
             return Reply()
 
-        self.app = m.App(cfg, open_port=lambda _cfg: self.port, post=post)
+        def get(url, timeout=None):
+            self.assertEqual(url, "http://operator/api/status")
+            if self.daq is None:
+                raise requests.ConnectionError("refused")
+            return JsonReply(self.daq)
+
+        self.app = m.App(cfg, open_port=lambda _cfg: self.port, post=post, get=get)
         self.app.start()
         self.addCleanup(self.app.stop)
         self.url = f"http://127.0.0.1:{self.app.http_port}"
@@ -750,6 +1014,86 @@ class TestService(unittest.TestCase):
         self.assertEqual(code, 502, body)
         self.assertFalse(body["ok"])
         self.assertEqual([r["ok"] for r in body["results"]], [True, False])
+
+    def run_in_progress(self):
+        self.daq = {"system_state": "Running", "tuneup_mode": False, "run_info": {"run_number": 45, "status": "running"}}
+
+    def test_on_is_refused_during_a_run(self):
+        self.run_in_progress()
+        self.start(with_replies(stat=[0, 1]))
+        code, body = self.post("/api/channel/1/on", {"token": self.acquire()})
+        self.assertEqual(code, 409, body)
+        self.assertIn("run 45", body["message"])
+        self.assertEqual(self.port.sets(), [])
+        row = self.audit()[-1]
+        self.assertEqual((row["action"], row["result"]), ("on", "refused"))
+
+    def test_settings_are_refused_during_a_run(self):
+        self.run_in_progress()
+        self.start(setting_replies("VSET", "020.00", "025.00", set_value="25.00"))
+        code, body = self.post("/api/channel/1/set", {"token": self.acquire(), "param": "VSET",
+                                                      "value": 25.0, "expected": 20.0})
+        self.assertEqual(code, 409, body)
+        self.assertEqual(self.port.sets(), [])
+
+    def test_off_and_all_off_work_during_a_run(self):
+        self.run_in_progress()
+        self.start(with_replies(stat=[1, 5, 5]))
+        token = self.acquire()
+        code, body = self.post("/api/channel/1/off", {"token": token})
+        self.assertEqual(code, 200, body)
+        self.assertEqual(self.port.sets(), [set_cmd(1, "OFF")])
+        code, body = self.post("/api/all_off", {"token": token})
+        self.assertNotEqual(code, 409, body)
+
+    def test_on_works_in_tune_up(self):
+        self.daq = {"system_state": "Running", "tuneup_mode": True}
+        self.start(with_replies(stat=[0, 1]))
+        code, body = self.post("/api/channel/1/on", {"token": self.acquire()})
+        self.assertEqual(code, 200, body)
+
+    def test_daq_not_reachable_does_not_block_and_says_so(self):
+        self.daq = None
+        self.start(with_replies(stat=[0, 1]))
+        self.assertFalse(self.get("/api/status")["daq"]["reachable"])
+        code, body = self.post("/api/channel/1/on", {"token": self.acquire()})
+        self.assertEqual(code, 200, body)
+        self.assertIn("DAQ", body["message"])
+        self.assertIs(self.audit()[-1]["daq_reachable"], False)
+
+    def test_status_shows_the_run(self):
+        self.run_in_progress()
+        self.start(dict(REAL))
+        daq = self.get("/api/status")["daq"]
+        self.assertEqual((daq["running"], daq["run"]), (True, 45))
+
+    def test_set_end_to_end_with_audit(self):
+        self.daq = {"system_state": "Idle", "tuneup_mode": False}
+        self.start(setting_replies("VSET", "020.00", "025.00", set_value="25.00"))
+        code, body = self.post("/api/channel/1/set", {"token": self.acquire(), "param": "VSET",
+                                                      "value": 25.0, "expected": 20.0})
+        self.assertEqual(code, 200, body)
+        self.assertEqual(self.port.sets(), [value_cmd(1, "VSET", "25.00")])
+        row = self.audit()[-1]
+        self.assertEqual((row["action"], row["param"], row["operator"]), ("set", "VSET", "aogaki"))
+        self.assertEqual((row["value_before"], row["requested"], row["value_after"]), (20.0, 25.0, 25.0))
+
+    def test_set_needs_a_token(self):
+        self.start(setting_replies("VSET", "020.00"))
+        code, _ = self.post("/api/channel/1/set", {"token": "wrong", "param": "VSET", "value": 25.0,
+                                                   "expected": 20.0})
+        self.assertEqual(code, 401)
+        self.assertEqual(self.port.sets(), [])
+
+    def test_set_refused_is_409_and_failed_is_502(self):
+        self.start(setting_replies("VSET", "020.00", "020.00", set_value="25.00"))
+        token = self.acquire()
+        code, _ = self.post("/api/channel/1/set", {"token": token, "param": "MAXV", "value": 25.0,
+                                                   "expected": 20.0})
+        self.assertEqual(code, 409)
+        code, _ = self.post("/api/channel/1/set", {"token": token, "param": "VSET", "value": 25.0,
+                                                   "expected": 20.0})
+        self.assertEqual(code, 502)
 
     def test_values_reach_influx(self):
         self.start(dict(REAL))

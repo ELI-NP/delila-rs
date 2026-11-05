@@ -1,4 +1,4 @@
-# CAEN N1408 (Si bias): monitor + per-channel ON/OFF web page -- see TODO/82_n1408_si_hv_control.md
+# CAEN N1408 (Si bias): monitor + per-channel ON/OFF and settings web page -- see TODO/82
 
 # The N1408's USB chip has no serial number, so this path is generic: the program checks
 # BDNAME and BDSNUM below after opening it and refuses any other unit.
@@ -14,6 +14,9 @@ poll_interval_sec: 2.0
 http_host: "0.0.0.0"
 http_port: 8095
 
+# Asked whether a run is going: during a run only OFF works.
+operator_url: "http://localhost:9091"
+
 # One line of plain text on the host, NOT in this repo (the repo is public). It prevents accidents,
 # it is not security. No file = read-only. Read at every login, so no restart is needed.
 passphrase_file: "/home/daq/.config/delila/n1408_passphrase"
@@ -23,9 +26,10 @@ control_idle_timeout_sec: 600
 # Append-only JSON lines: every command and status change.
 audit_log: "/home/daq/hv_audit/n1408_audit.jsonl"
 
-# control: true = ON/OFF allowed from the web page. Everything is read either way.
+# control: true = ON/OFF and settings allowed from the web page. Everything is read either way.
+# A channel not in use: leave its switch at OFF on the panel, it cannot go ON then.
 channels:
-  0: {name: "ch0", control: false}
-  1: {name: "ch1", control: false}
-  2: {name: "ch2", control: false}
-  3: {name: "ch3", control: false}
+  0: {name: "ch0", control: true}
+  1: {name: "ch1", control: true}
+  2: {name: "ch2", control: true}
+  3: {name: "ch3", control: true}

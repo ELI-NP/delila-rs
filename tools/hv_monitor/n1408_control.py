@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""CAEN N1408 (Si bias): monitor + per-channel ON/OFF over USB serial, with a small web page.
+"""CAEN N1408 (Si bias): monitor + per-channel ON/OFF and settings over USB, with a small web page.
 
 Spec: TODO/82_n1408_si_hv_control.md
   Protocol: UM7352 N1408 User Manual rev.2 p.29-32 (9600 8N1, ASCII; STATUS bits p.30-31).
   §2 behaviour measured on the real unit (FW 1.00, SN 1592, pf-qaq, 2026-11-05).
 
-What the web can do is ON and OFF of one channel, nothing else (same rule as tpcdaq-rs SPEC v1.42).
-Voltages, current limits, ramps, trip and power-down settings stay on the panel: every byte written
-to the serial port goes through send_command(), which accepts only the strings in
-allowed_commands(). The final say stays with the unit: REMOTE on the panel and the channel switch
-at HV_EN. LOCAL on the panel locks the software out (LOC:ERR).
+What the web can do, per channel: ON, OFF, and set VSET, ISET and TRIP. MAXV, ramp speeds and the
+trip mode stay on the panel, so the limit is not one click away from the voltage it limits. Every
+byte written to the serial port goes through send_command(), which accepts nothing else. During a
+run only OFF works (user, to avoid confusion); Tune Up is not a run. The final say stays with the
+unit: REMOTE on the panel and the channel switch at HV_EN. LOCAL on the panel locks the software out
+(LOC:ERR).
+
+The unit itself takes VSET above MAXV and TRIP = 1000 (infinite over-current), both measured, so
+those limits are enforced here. Out-of-range values are refused, never clamped.
 
 The passphrase prevents accidents, it is NOT security: plain HTTP, plain text on the host, one shared
 phrase (user's decision, as in tpcdaq-rs). No passphrase file = read-only. Nothing about the channel
@@ -23,8 +27,10 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -128,15 +134,45 @@ def _set_power(board: int, ch: int, action: str) -> str:
     return f"$BD:{board:02d},CMD:SET,CH:{ch},PAR:{action.upper()}"
 
 
+@functools.lru_cache(maxsize=None)
 def allowed_commands(board: int) -> frozenset:
-    """The ONLY strings send_command() will write. Explicit set, no regex: nothing like a second
-    command after a line break, a CH:4 ON or a VSET can slip through."""
+    """Every fixed string send_command() will write: the monitor commands and ON/OFF per channel.
+    Explicit set: nothing like a second command after a line break or a CH:4 ON can slip through."""
     cmds = {_mon_board(board, p) for p, _ in BOARD_QUERIES + IDENTITY_QUERIES}
     cmds |= {_mon_channel(board, ALL_CHANNELS, p) for p, _, _ in CHANNEL_QUERIES}
     for ch in CHANNELS:
-        cmds |= {_mon_channel(board, ch, p) for p in ("STAT", "VSET", "VMON")}
+        cmds |= {_mon_channel(board, ch, p)
+                 for p in ("STAT", "VMON", "IMON", "VSET", "ISET", "TRIP", "MAXV", "IMAX")}
         cmds |= {_set_power(board, ch, a) for a in ("on", "off")}
     return frozenset(cmds)
+
+
+@dataclass(frozen=True)
+class Setting:
+    """What the web may change. decimals = what the unit keeps; tolerance = half of its step, for
+    comparing a readback (it steps VSET in 0.02 V: 80.01 comes back as 080.02, TODO 82 §2.1)."""
+
+    decimals: int
+    tolerance: float
+
+
+SETTINGS = {"VSET": Setting(2, 0.011), "ISET": Setting(3, 0.0006), "TRIP": Setting(1, 0.051)}
+TRIP_MAX_S = 999.9  # 1000 means infinite over-current (UM7352 p.14); the unit would accept it
+
+
+def _set_value(board: int, ch: int, par: str, value: float) -> str:
+    return (f"$BD:{board:02d},CMD:SET,CH:{ch},PAR:{par},"
+            f"VAL:{value:.{SETTINGS[par].decimals}f}")
+
+
+def is_allowed(board: int, cmd: str) -> bool:
+    """A fixed command, or one setting of one channel with a plain number. No sign, no exponent,
+    no line break, no CH:4; MAXV, RUP, RDW, PDWN and the rest are not in the pattern."""
+    if cmd in allowed_commands(board):
+        return True
+    params = "|".join(SETTINGS)
+    return re.fullmatch(rf"\$BD:{board:02d},CMD:SET,CH:[0-3],PAR:({params}),VAL:[0-9]{{1,4}}\.[0-9]{{1,3}}",
+                        cmd) is not None
 
 
 class ForbiddenCommandError(ValueError):
@@ -161,7 +197,7 @@ class IdentityError(Exception):
 
 def send_command(port, board: int, cmd: str) -> None:
     """The only place that writes to the serial port."""
-    if cmd not in allowed_commands(board):
+    if not is_allowed(board, cmd):
         raise ForbiddenCommandError(f"refused to send {cmd!r}")
     port.reset_input_buffer()
     port.write((cmd + "\r\n").encode("ascii"))
@@ -403,6 +439,126 @@ def execute_command(port, cfg: "Config", action: str, channel: int, clock=time.m
                                     f"{cfg.readback_timeout_sec:.0f} s")
 
 
+def execute_setting(port, cfg: "Config", channel: int, param, value, expected) -> dict:
+    """Change one setting of one channel, judged by the readback.
+
+    `expected` is the value the operator saw: if the unit has another one now, someone else changed
+    it and nothing is sent. Limits come from the unit's own readback and refuse, never clamp.
+    """
+    number = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    result = {"action": "set", "channel": channel, "param": str(param),
+              "requested": value if number else str(value), "ok": False, "result": "refused",
+              "value_before": None, "value_after": None, "status_before": None}
+
+    def finish(outcome: str, message: str) -> dict:
+        result["result"] = outcome
+        result["message"] = message
+        result["ok"] = outcome in ("done", "already")
+        return result
+
+    setting = SETTINGS.get(param)
+    if setting is None:
+        return finish("refused", f"{param} cannot be changed from here, only {', '.join(SETTINGS)}")
+    ch_cfg = cfg.channels.get(channel)
+    if ch_cfg is None:
+        return finish("refused", f"no channel {channel}")
+    if not ch_cfg.control:
+        return finish("refused", f"channel {channel} ({ch_cfg.name}) is not enabled for control "
+                                 "in the config")
+    if not number:
+        return finish("refused", f"{value!r} is not a number")
+    if not (isinstance(expected, (int, float)) and not isinstance(expected, bool)
+            and math.isfinite(expected)):
+        return finish("refused", "the value you saw is missing: read the channel first")
+    if value < 0:
+        return finish("refused", f"{value:g} is negative")
+    scaled = value * 10 ** setting.decimals
+    if abs(scaled - round(scaled)) > 1e-6:
+        return finish("refused", f"{param} keeps {setting.decimals} digits after the point")
+
+    board = cfg.board
+
+    def read(par: str) -> float:
+        return _parse_number(query(port, board, _mon_channel(board, channel, par)) or "")
+
+    try:
+        control = query(port, board, _mon_board(board, "BDCTR"))
+        if control != "REMOTE":
+            return finish("refused", f"the panel is {control}: set CONTROL to REMOTE on the N1408")
+        status = _parse_int(query(port, board, _mon_channel(board, channel, "STAT")) or "")
+        result["status_before"] = status
+        before = read(param)
+        result["value_before"] = before
+        if abs(before - expected) > setting.tolerance:
+            return finish("refused", f"{param} is {before:g} now, you saw {expected:g}: someone "
+                                     "changed it. Check it and try again")
+        if param == "VSET":
+            maxv = read("MAXV")
+            if value > maxv:
+                return finish("refused", f"VSET {value:g} V is above MAXV {maxv:g} V. MAXV is set "
+                                         "on the panel (LOCAL)")
+        elif param == "ISET":
+            imax = read("IMAX")
+            if value > imax:
+                return finish("refused", f"ISET {value:g} µA is above the unit's {imax:g} µA")
+            if status & BIT_ON:
+                imon = abs(read("IMON"))
+                if value <= imon:
+                    return finish("refused", f"ISET {value:g} µA is not above the present current "
+                                             f"{imon:g} µA: the channel would trip")
+        elif value > TRIP_MAX_S:
+            return finish("refused", f"TRIP above {TRIP_MAX_S} s is refused: 1000 s means an "
+                                     "over-current never trips")
+    except (ReplyError, ValueError) as e:
+        return finish("refused", f"cannot read the channel before the command: {e}")
+
+    if abs(value - before) <= setting.tolerance:
+        result["value_after"] = before
+        return finish("already", f"{param} is already {before:g}")
+
+    try:
+        query(port, board, _set_value(board, channel, param, value))
+    except ReplyError as e:
+        return finish("failed", f"the unit refused {param} {value:g}: {e.code}")
+    try:
+        after = read(param)
+    except (ReplyError, ValueError) as e:
+        return finish("failed", f"sent {param} {value:g} but cannot read it back: {e}")
+    result["value_after"] = after
+    if abs(after - value) > setting.tolerance:
+        return finish("failed", f"the unit replied CMD:OK but {param} reads {after:g}, not {value:g}")
+    return finish("done", f"{param} {before:g} -> {after:g}")
+
+
+# --- the DAQ: only asked whether a run is going ----------------------------------------------------
+
+OPERATOR_TIMEOUT_S = 1.0
+
+
+def daq_state(get, url: str) -> dict:
+    """From the Operator's /api/status. Tune Up is not a run: the Si is biased and tuned in it.
+    An Operator that does not answer is reported, not guessed: no DAQ running is the usual reason,
+    and HV work must not depend on it."""
+    state = {"reachable": False, "running": False, "run": None, "state": None, "tuneup": False}
+    if not url:
+        return state
+    try:
+        reply = get(url + "/api/status", timeout=OPERATOR_TIMEOUT_S)
+        body = reply.json() if reply.ok else None
+    except (requests.RequestException, ValueError):
+        return state
+    if not isinstance(body, dict) or "system_state" not in body:
+        return state
+    run_info = body.get("run_info") if isinstance(body.get("run_info"), dict) else {}
+    state["reachable"] = True
+    state["state"] = body["system_state"]
+    state["tuneup"] = body.get("tuneup_mode") is True
+    state["run"] = run_info.get("run_number")
+    run_open = run_info.get("status") == "running"
+    state["running"] = (run_open or state["state"] == "Running") and not state["tuneup"]
+    return state
+
+
 # --- operator session ----------------------------------------------------------------------------
 
 
@@ -517,6 +673,7 @@ class Config:
     control_idle_timeout_sec: float = 600.0
     http_host: str = "0.0.0.0"
     http_port: int = 8095
+    operator_url: str = "http://localhost:9091"
 
 
 _REQUIRED_KEYS = ("serial_port", "expected_serial", "device_name", "influx_url", "passphrase_file",
@@ -539,7 +696,8 @@ def config_from_dict(raw) -> Config:
         entry = raw_channels[ch] or {}
         channels[ch] = ChannelConfig(str(entry.get("name", f"ch{ch}")), entry.get("control") is True)
     values = {k: raw[k] for k in ("serial_port", "device_name", "influx_url", "passphrase_file",
-                                  "audit_log", "board", "http_host", "http_port") if k in raw}
+                                  "audit_log", "board", "http_host", "http_port", "operator_url")
+              if k in raw}
     values.update({k: float(raw[k]) for k in _NUMBER_KEYS if k in raw})
     return Config(expected_serial=str(raw["expected_serial"]), channels=channels, **values)
 
@@ -571,10 +729,14 @@ def open_serial_port(cfg: Config):
 
 @dataclass
 class Command:
-    action: str  # "on", "off", "all_off"
+    action: str  # "on", "off", "all_off", "set"
     channel: int | None
     operator: str
     client: str
+    param: object = None  # "set": as received, execute_setting() checks them
+    value: object = None
+    expected: object = None
+    daq_reachable: bool | None = None  # None = not asked (OFF works whatever the DAQ does)
     reply: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=1))
 
 
@@ -707,21 +869,26 @@ class Worker(threading.Thread):
             if cmd.action == "all_off" else [cmd.channel]
         )
         action = "off" if cmd.action == "all_off" else cmd.action
+        who = {"operator": cmd.operator, "client": cmd.client, "daq_reachable": cmd.daq_reachable}
         results = []
         for ch in channels:
             try:
-                result = execute_command(self._port, self._cfg, action, ch)
+                if action == "set":
+                    result = execute_setting(self._port, self._cfg, ch, cmd.param, cmd.value,
+                                             cmd.expected)
+                else:
+                    result = execute_command(self._port, self._cfg, action, ch)
             except ForbiddenCommandError:
                 raise  # a bug in this file, never retried
             except Exception as e:  # noqa: BLE001 -- see _connect
                 result = {"action": action, "channel": ch, "ok": False, "result": "failed",
                           "message": f"lost the unit during the command, the outcome is unknown: "
                                      f"{type(e).__name__}: {e}"}
-                self._record({**result, "operator": cmd.operator, "client": cmd.client})
+                self._record({**result, **who})
                 results.append(result)
                 self._lost(e)
                 break
-            self._record({**result, "operator": cmd.operator, "client": cmd.client})
+            self._record({**result, **who})
             results.append(result)
             if self._previous is not None and result.get("status_after") is not None \
                     and ch in CHANNELS:
@@ -737,7 +904,7 @@ class Worker(threading.Thread):
 # --- HTTP ----------------------------------------------------------------------------------------
 
 _STATUS_FOR_RESULT = {"done": 200, "already": 200, "refused": 409, "failed": 502, "offline": 503}
-_CHANNEL_PATH = re.compile(r"/api/channel/(\d+)/(on|off)")
+_CHANNEL_PATH = re.compile(r"/api/channel/(\d+)/(on|off|set)")
 _MAX_BODY = 64 * 1024
 _PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "n1408_control.html")
 
@@ -798,7 +965,9 @@ class Handler(BaseHTTPRequestHandler):
             if not match:
                 self._json(404, {"message": "not found"})
                 return
-            self._json(*app.command(match[2], int(match[1]), body.get("token"), client))
+            self._json(*app.command(match[2], int(match[1]), body.get("token"), client,
+                                    param=body.get("param"), value=body.get("value"),
+                                    expected=body.get("expected")))
 
 
 class Server(ThreadingHTTPServer):
@@ -810,8 +979,9 @@ class App:
 
     COMMAND_TIMEOUT_S = 60.0
 
-    def __init__(self, cfg: Config, open_port=open_serial_port, post=None):
+    def __init__(self, cfg: Config, open_port=open_serial_port, post=None, get=None):
         self.cfg = cfg
+        self._get = get or requests.get
         warn = WarnLimiter(log)
         self.audit = AuditLog(cfg.audit_log, warn)
         self.session = ControlSession(cfg.control_idle_timeout_sec)
@@ -838,6 +1008,7 @@ class App:
         status["age_s"] = None if updated is None else round(time.time() - updated, 1)
         status["control_enabled"] = read_passphrase(self.cfg.passphrase_file) is not None
         status["holder"] = self.session.holder()
+        status["daq"] = daq_state(self._get, self.cfg.operator_url)
         status["idle_timeout_s"] = self.cfg.control_idle_timeout_sec
         status["events"] = list(self.audit.recent)
         return status
@@ -859,18 +1030,33 @@ class App:
                            "result": "done", "preempted": preempted})
         return 200, {"token": token, "preempted": preempted}
 
-    def command(self, action: str, channel, token, client: str) -> tuple[int, dict]:
+    def command(self, action: str, channel, token, client: str, param=None, value=None,
+                expected=None) -> tuple[int, dict]:
         operator = self.session.authorize(token)
         if operator is None:
             return 401, {"ok": False, "result": "refused",
                          "message": "no control: enter your name and the passphrase"}
-        cmd = Command(action, channel, operator, client)
+        daq_reachable = None
+        if action in ("on", "set"):
+            daq = daq_state(self._get, self.cfg.operator_url)
+            daq_reachable = daq["reachable"]
+            if daq["running"]:
+                run = f"run {daq['run']}" if daq["run"] is not None else "a run"
+                message = f"{run} is in progress: only OFF works during a run"
+                self.audit.record({"action": action, "channel": channel, "param": param,
+                                   "operator": operator, "client": client, "result": "refused",
+                                   "message": message})
+                return 409, {"ok": False, "result": "refused", "message": message}
+        cmd = Command(action, channel, operator, client, param, value, expected, daq_reachable)
         self.worker.commands.put(cmd)
         try:
             result = cmd.reply.get(timeout=self.COMMAND_TIMEOUT_S)
         except queue.Empty:
             return 504, {"ok": False, "result": "failed",
                          "message": "no answer from the serial thread, the outcome is unknown"}
+        if daq_reachable is False:
+            result = {**result, "message": f"{result.get('message', '')} (DAQ state unknown: the "
+                                           "Operator does not answer)"}
         return _STATUS_FOR_RESULT.get(result["result"], 500), result
 
 
