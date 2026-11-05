@@ -242,5 +242,5 @@ DAQ は止まったまま(全コンポーネント Configured、旧バイナリ)
   配備: pf-qaq を c105f13 に進めてビルド(48 s、警告 0)、**Operator だけ再起動**(Reader・Merger・Recorder・Monitor・nwall_sink の PID は変わらず、全台 Configured のまま)。
   確認: `/api/runs/5` = N_Wall `Time offset check`、`/api/runs/99` = 404、`/api/runs/next` = 6、`/api/runs/5/config` = 6 台。
 - `X730_ThGEM_Test` のラン 29(2026-08-03)が `running` のまま残っている(side3 から移した記録)。今回の修正で他の実験から書き込まれることはなくなった。消すかはユーザー次第。
-- pf-qaq の `nwall_vx2730_psd2_0.json` と `nwall_v1725_pha_{1..5}.json` は、UI での変更(S-IN スタート、リングの ch15 = POSITIVE、ch0 = TTL 用)がローカル修正のまま。リポジトリは SW スタートの版。設定が固まったら取り込む。**VX2730 ch0 はビームを入れるときに戻す**。
+- カスケードの設定(`OUT_PROPAGATION_RUN`、`start_delay`、リングの ch15 = POSITIVE、ch0 = TTL 用)は TODO 77 §6.13 でリポジトリに取り込み済み。**VX2730 ch0 はビームを入れるときに戻す**。
 

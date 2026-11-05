@@ -7,7 +7,7 @@
   "num_channels": 16,
   "is_master": false,
   "board": {
-    "start_source": "START_MODE_SW",
+    "start_source": "START_MODE_S_IN",
     "gpio_mode": "OUT_PROPAGATION_RUN",
     "record_length": 7000,
     "waveforms_enabled": false,
@@ -18,7 +18,8 @@
     "io_level": "FPIOTYPE_NIM",
     "extras_enabled": "TRUE",
     "event_aggregation": 1023,
-    "coinc_trgout": 1024
+    "coinc_trgout": 1024,
+    "start_delay": 32
   },
   "channel_defaults": {
     "enabled": "True",
@@ -47,5 +48,9 @@
     "pileup_rejection": "TRUE",
     "trigger_latency": "TRG_LATENCY_MODE_NONE"
   },
-  "channel_overrides": {}
+  "channel_overrides": {
+    "15": {
+      "polarity": "POLARITY_POSITIVE"
+    }
+  }
 }
