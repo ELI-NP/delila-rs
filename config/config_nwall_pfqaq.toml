@@ -40,8 +40,10 @@
 # NEGATIVE, sectors POSITIVE (opposite faces of the detector; inverting charge
 # preamps). Check the first waveforms in Tune Up and flip it there if needed.
 # The ring boards' ch15 (pulser) is POSITIVE for the PB-5. Waveforms are OFF (user: the V1725 buffer
-# loses too many events with them); record_length 7000 ns stays below the
-# couple-arbiter limit (7168 ns) for Tune Up captures.
+# loses too many events with them). record_length: 7000 ns for now, the user will
+# move all boards to 20000 ns while checking them in Tune Up once the Si is in. Above
+# 7168 ns the couple arbiter keeps only one of two simultaneous events of a channel
+# pair in Tune Up captures; runs with waveforms off ignore record_length.
 # E = 0 with EXTRAS bit 4 (input saturation) on the ring boards' ch15: TODO 77 §6.14.
 # Check it again if a ring channel is flipped to POSITIVE.
 #
