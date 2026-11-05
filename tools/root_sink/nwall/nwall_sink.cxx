@@ -12,7 +12,9 @@
 //   Recorder: the same trees as root_sink, each opt-in — hits (--hits-tree)
 //     and the generic events tree (--event-def; for N_Wall the E-sector
 //     trigger of config/event_def_nwall.json). Same write-failure handling,
-//     time offsets (--time-calib) and per-run provenance.
+//     time offsets (--time-calib) and per-run provenance. N_Wall's addition:
+//     events carry BeamTime (the nearest hit of the downscaled beam channel, or
+//     -1), the trees' UserInfo the measured RF period (rfPeriodNs).
 //
 //   Display (THttpServer / JSROOT): fed from the WRITER — time-sorted core
 //     hits plus the built events of every chunk — through a bounded queue
@@ -79,6 +81,7 @@
 #include "THttpServer.h"
 #include "TList.h"
 #include "TNamed.h"
+#include "TParameter.h"
 #include "TROOT.h"
 #include "TRootSniffer.h"
 #include "TString.h"
@@ -127,6 +130,8 @@ struct Options {
 };
 
 static const char* const kEventsTreeName = "events";
+// TParameter<double> in the trees' UserInfo: the RF period measured in this run.
+static const char* const kRfPeriodParam = "rfPeriodNs";
 
 static void print_usage(const char* argv0) {
   std::printf(
@@ -574,6 +579,8 @@ class Recorder {
                           "UserInfo eventDef)");
       events_->Branch("EventID", &ev_id_, "EventID/l");
       events_->Branch("TriggerTime", &ev_t_, "TriggerTime/D");
+      // ALWAYS present (-1 without a beam hit), same reason as HitWithAC below.
+      events_->Branch("BeamTime", &ev_beam_, "BeamTime/D");
       events_->Branch("TriggerMod", &ev_mod_, "TriggerMod/b");
       events_->Branch("TriggerCh", &ev_ch_, "TriggerCh/b");
       events_->Branch("TriggerIdx", &ev_idx_, "TriggerIdx/b");
@@ -631,8 +638,9 @@ class Recorder {
 
   // One generic event -> one entry. EventID is a per-run counter from 0 (it
   // keeps counting across ROOT rollover parts). Never truncates: an event with
-  // more hits than the buffers hold grows them first.
-  void fill_event(const eb::GenericEvent& e) {
+  // more hits than the buffers hold grows them first. `beam_time`: the beam hit
+  // nearest to the event (BunchClock::beam_time).
+  void fill_event(const eb::GenericEvent& e, double beam_time) {
     if (!events_on_) return;
     if (write_failed_ || !events_) {
       ++unwritten_events_;
@@ -641,6 +649,7 @@ class Recorder {
     ensure_hit_capacity(e.hits.size());
     ev_id_ = static_cast<ULong64_t>(events_entries_);
     ev_t_ = e.t;
+    ev_beam_ = beam_time;
     ev_mod_ = e.mod;
     ev_ch_ = e.ch;
     ev_idx_ = e.trig_idx;
@@ -678,6 +687,20 @@ class Recorder {
       return;
     }
     ++events_entries_;
+  }
+
+  // The RF period measured so far, called per chunk: every AutoSave and
+  // MaxTreeSize part carries the value of its time, the last one the whole run's.
+  // Absent from a file whose run never measured it.
+  void set_rf_period(double period_ns) {
+    for (TTree* t : {tree_, events_}) {
+      if (!t) continue;
+      TList* info = t->GetUserInfo();
+      if (auto* p = dynamic_cast<TParameter<double>*>(info->FindObject(kRfPeriodParam)))
+        p->SetVal(period_ns);
+      else
+        info->Add(new TParameter<double>(kRfPeriodParam, period_ns));
+    }
   }
 
   // Flush the current tree(s) so the in-progress file is openable in ROOT while
@@ -986,6 +1009,7 @@ class Recorder {
   // Events-tree buffers: per-event scalars (/l ULong64_t, /i UInt_t) ...
   ULong64_t ev_id_ = 0;
   Double_t ev_t_ = 0.0;
+  Double_t ev_beam_ = nwall::kNoBeamTime;
   UChar_t ev_mod_ = 0, ev_ch_ = 0, ev_idx_ = 0;
   UInt_t ev_ntrig_ = 0, ev_nhits_ = 0;
   // ... and the per-hit arrays, hit_cap_ elements each (ensure_hit_capacity).
@@ -1198,6 +1222,7 @@ struct DisplayMsg {
   eb::Ctrl ctrl = eb::Ctrl::None;
   std::vector<ScalarHit> hits;           // the chunk's core range, time sorted
   std::vector<eb::GenericEvent> events;  // the events emitted with this chunk
+  std::shared_ptr<const nwall::ChannelMap> map;  // RunOpen: this run's map (null = none)
 };
 
 class Display {
@@ -1403,11 +1428,6 @@ int main(int argc, char** argv) {
                  kEventsTreeName);
     return 2;
   }
-  if (map_enabled && !http_enabled)
-    std::fprintf(stderr,
-                 "nwall_sink: WARNING --channel-map %s is only used by the display, which "
-                 "--http-port 0 turns off\n",
-                 opt.channel_map.c_str());
 
   // Startup loads: ANY error is fatal here (at a later run start a bad edit
   // keeps the previous table / definition / map, STALE).
@@ -1473,11 +1493,12 @@ int main(int argc, char** argv) {
     if (map_boot.beam_key < 0)
       std::fprintf(stderr,
                    "nwall_sink: WARNING the channel map has no beam channel — no bunch clock, "
-                   "so no RF TOF, si_phase or ls_tof_si\n");
-  } else if (http_enabled) {
+                   "so no RF TOF, si_phase or ls_tof_si, and BeamTime = -1 in the events tree\n");
+  } else {
     std::fprintf(stderr,
-                 "nwall_sink: WARNING no --channel-map: only the per-board histograms (hitmap, "
-                 "energy) are filled\n");
+                 "nwall_sink: WARNING no --channel-map: no bunch clock, so BeamTime = -1 in the "
+                 "events tree and no rfPeriodNs%s\n",
+                 http_enabled ? "; only the per-board histograms (hitmap, energy) are filled" : "");
   }
   std::printf("nwall_sink: RF period %.4f ns (nominal; measured per run), rf_t0 %.3f ns, "
               "si_delay %.3f ns\n",
@@ -1549,6 +1570,7 @@ int main(int argc, char** argv) {
     std::atomic<bool> writing{false};
     std::atomic<int> toff_entries{-1};
     std::atomic<bool> toff_stale{false};
+    std::atomic<bool> map_stale{false};
     std::atomic<long long> toff_unmapped{0};
     std::atomic<long long> events{0};
     std::atomic<long long> ev_contested{0};
@@ -1837,9 +1859,59 @@ int main(int argc, char** argv) {
     eb::GenericStats run_gstats;
     long long run_core_hits = 0;
     std::shared_ptr<const EventDef> run_def;
+    // This run's channel map: read here so the record path and the display use
+    // the same one. Follows the reload policy of the time offsets: re-read at
+    // every run start; a bad edit keeps the previous map (STALE).
+    auto run_map = std::make_shared<const nwall::ChannelMap>(map_boot);
+    auto reload_map = [&] {
+      std::vector<std::string> errs;
+      auto fresh = std::make_shared<nwall::ChannelMap>();
+      if (load_channel_map(opt.channel_map, *fresh, errs)) {
+        if (counters.map_stale) std::printf("nwall_sink: channel map reloaded OK (was STALE)\n");
+        run_map = std::move(fresh);
+        counters.map_stale = false;
+      } else {
+        std::fprintf(stderr,
+                     "nwall_sink: ERROR channel map reload failed at run start — KEEPING "
+                     "THE PREVIOUS MAP for this run:\n");
+        for (const auto& e : errs) std::fprintf(stderr, "nwall_sink:   - %s\n", e.c_str());
+        counters.map_stale = true;
+      }
+      std::printf("nwall_sink: run channel map [%s%s]: %s\n", opt.channel_map.c_str(),
+                  counters.map_stale ? ", STALE" : "", map_summary(*run_map).c_str());
+    };
+    // BeamTime and the file's RF period. Not the Display's clock: the display
+    // queue may drop chunks, this one sees every chunk, in order.
+    nwall::BunchClock::Config beam_cfg;
+    beam_cfg.period_ns = opt.rf_period_ns;
+    nwall::BunchClock beam_clock(beam_cfg);
+    long long run_events_no_beam = 0;
+    auto feed_beam_clock = [&](const eb::SortedChunk& c) {
+      if (!map_enabled || run_map->beam_key < 0 || c.hits.empty()) return;
+      beam_clock.forget_before(c.hits.front().timestamp_ns - 10e6);
+      // Context included: a chunk reaches a full safe horizon past its last event,
+      // so the nearest beam hit of every event is in it. Sorted, and a beam hit
+      // farther than max_gap_ns is never used: no need to scan the whole horizon.
+      const double stop = c.core_end + beam_cfg.max_gap_ns;
+      for (const ScalarHit& h : c.hits) {
+        if (h.timestamp_ns > stop) break;
+        if (nwall::map_key(h.module, h.channel) == run_map->beam_key)
+          beam_clock.add_new_beam(h.timestamp_ns);
+      }
+    };
+    auto report_beam = [&](const std::string& what) {
+      if (!map_enabled) return;
+      std::printf("nwall_sink: %s beam: T = %.4f ns (%s, %zu gaps, %zu off the grid%s), events "
+                  "without a beam hit: %lld\n",
+                  what.c_str(), beam_clock.period_ns(),
+                  beam_clock.period_measured() ? "measured" : "NOT measured, nominal",
+                  beam_clock.gaps(), beam_clock.off_grid(),
+                  beam_clock.capped() ? ", CAPPED" : "", run_events_no_beam);
+    };
     auto control_to_display = [&](eb::Ctrl c) {
       DisplayMsg d;
       d.ctrl = c;
+      if (c == eb::Ctrl::RunOpen && map_enabled) d.map = run_map;
       display_q.push(std::move(d));  // blocking: control is never dropped
     };
     auto report_events = [&](const std::string& what) {
@@ -1905,8 +1977,14 @@ int main(int argc, char** argv) {
                   if (recorder.fill(r.chunk.hits[i])) ++filled;
                 counters.written += filled;
               }
+              feed_beam_clock(r.chunk);
+              if (beam_clock.period_measured()) recorder.set_rf_period(beam_clock.period_ns());
               if (r.plan.def) {
-                for (const eb::GenericEvent& ev : r.events) recorder.fill_event(ev);
+                for (const eb::GenericEvent& ev : r.events) {
+                  const double beam_time = beam_clock.beam_time(ev.t);
+                  if (beam_time == nwall::kNoBeamTime) ++run_events_no_beam;
+                  recorder.fill_event(ev, beam_time);
+                }
                 run_gstats.add(r.gstats);
                 run_core_hits += n_core;
                 counters.events += static_cast<long long>(r.events.size());
@@ -1931,6 +2009,9 @@ int main(int argc, char** argv) {
               run_gstats = eb::GenericStats();
               run_core_hits = 0;
               run_def = r.event_def;
+              if (map_enabled) reload_map();
+              beam_clock.reset();
+              run_events_no_beam = 0;
               if (events_enabled && !run_def)
                 std::fprintf(stderr,
                              "nwall_sink: ERROR RunOpen without an event definition — no events "
@@ -1964,6 +2045,7 @@ int main(int argc, char** argv) {
                             r.run_number, fn.c_str(), counts.c_str(),
                             recorder.failure_summary().c_str());
               if (events_enabled) report_events("run " + std::to_string(r.run_number));
+              report_beam("run " + std::to_string(r.run_number));
               if (!recorder.provenance().time_offsets_source.empty()) {
                 std::string ts = write_text_sidecar(recorder.final_path(), "_timeSettings.json",
                                                     recorder.provenance().time_offsets_source);
@@ -1999,6 +2081,7 @@ int main(int argc, char** argv) {
     if (recorder.is_open()) {
       recorder.close_unfinalized();
       if (events_enabled) report_events("unfinalized run");
+      report_beam("unfinalized run");
     }
     control_to_display(eb::Ctrl::Shutdown);
   };
@@ -2011,34 +2094,13 @@ int main(int argc, char** argv) {
 
   // --- Display (this thread): histograms + HTTP + status line --------------
   bool display_done = false;
-  nwall::ChannelMap map_in_force = map_boot;
-  bool map_stale = false;
   auto handle_display = [&](DisplayMsg& d) {
     switch (d.ctrl) {
       case eb::Ctrl::None:
         if (display) display->chunk(d);
         break;
       case eb::Ctrl::RunOpen:
-        // The map follows the reload policy of the time offsets: re-read at
-        // every run start; a bad edit keeps the previous map (STALE).
-        if (map_enabled) {
-          std::vector<std::string> errs;
-          nwall::ChannelMap fresh;
-          if (load_channel_map(opt.channel_map, fresh, errs)) {
-            if (map_stale) std::printf("nwall_sink: channel map reloaded OK (was STALE)\n");
-            map_in_force = std::move(fresh);
-            map_stale = false;
-          } else {
-            std::fprintf(stderr,
-                         "nwall_sink: ERROR channel map reload failed at run start — KEEPING "
-                         "THE PREVIOUS MAP for this run:\n");
-            for (const auto& e : errs) std::fprintf(stderr, "nwall_sink:   - %s\n", e.c_str());
-            map_stale = true;
-          }
-          std::printf("nwall_sink: run channel map [%s%s]: %s\n", opt.channel_map.c_str(),
-                      map_stale ? ", STALE" : "", map_summary(map_in_force).c_str());
-          if (display) display->set_map(map_in_force);
-        }
+        if (display && d.map) display->set_map(*d.map);
         if (display) display->run_open();
         break;
       case eb::Ctrl::RunClose:
@@ -2139,7 +2201,7 @@ int main(int argc, char** argv) {
           "late=%lld | toff=%s\n",
           counters.writing ? "WRITING" : "idle", wf.c_str(), rec, written_s, rate,
           (long long)counters.chunks, ev_s, display ? display->status().c_str() : "display off",
-          map_stale ? " map STALE" : "", to_sorter.size(), work_q.size(), writer_q.size(),
+          counters.map_stale ? " map STALE" : "", to_sorter.size(), work_q.size(), writer_q.size(),
           display_q.size(), (long long)counters.display_drops, (long long)counters.other_module,
           (long long)counters.late, toff_s);
       std::fflush(stdout);

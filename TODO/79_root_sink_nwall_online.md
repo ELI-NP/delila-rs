@@ -155,7 +155,35 @@ tools/root_sink/
 1. 同期マーク(§5.4): FAN-OUT の数の確認待ち。やるなら、イベントを組む前にマークを除く処理を足す。
 2. ~~N_Wall 用の TOML と pf-qaq への配備~~ → 2026-11-04 済み(上)。
 3. 実機での確認: パルサーやビームでの表示、`si_delay_ns` と `rf_t0_ns` の較正、低レートの DIG1 ボードの遅れ(`late=`)。
-4. **バンチの時刻が tree に残らない(2026-11-05、ユーザーがビームパルス補完を最優先に指定):** `/rf`、`si_phase`、`ls_tof_si` はヒストグラムだけで、`events` tree に枝がない。イベントの窓は −500〜+1500 ns の 2 µs、1/100 のビームは 20 µs ごとなので、窓の中にビームの hit があるイベントは多くて 1 割。今はオフラインで `hits` tree の ch0 から `bunch_clock.hpp` で作り直すことになる(データは失われない)。
-   案: `events` に `BeamTime`(そのイベントに一番近いビームの hit)を足し、測った周期 T を UserInfo に入れる。較正値は混ぜない: `tb = BeamTime + round((t − si_delay − BeamTime) / T)·T`。ユーザーの判断待ち。
-   精度の根拠: ラン 217 で位相の揺らぎ ≈ 2.5 ns(4 µs)、≈ 2.7 ns(40 µs)、ThGEM と同時計数回路の分を含む。一番近いビームの hit は 10 µs 以内。**ch0 に 1/100 のビームを入れた実データではまだ試していない。**
+4. ~~バンチの時刻が tree に残らない~~ → **2026-11-05 実装(下の「BeamTime」)。pf-qaq へは未配備。**
+
+### BeamTime(2026-11-05、ユーザーがビームパルス補完を最優先に指定)
+
+**問題:** `/rf`、`si_phase`、`ls_tof_si` はヒストグラムだけで、`events` tree に枝がなかった。イベントの窓は −500〜+1500 ns の 2 µs、1/100 のビームは 20 µs ごとなので、窓の中にビームの hit があるイベントは 1 割しかない(合成データで実測 10.1 %)。
+
+**決定(ユーザー):** `events` に `BeamTime` を足し、測った周期 T をファイルに入れる。**ガチのビームの hit の時刻で、補完も較正もしない。** パルスとビームの差はガンマから出す。
+
+**実装:**
+- `BeamTime/D` = イベントの `TriggerTime` に一番近いビームの hit の時刻。1 ms 以内になければ −1(`BeamTime >= 0` で選ぶ)。枝は常にある。時刻軸は `TriggerTime` と同じ(`--time-calib` があれば補正後)。
+- `rfPeriodNs`(`TParameter<double>`、hits と events の UserInfo): そのランで測った T。チャンクごとに更新するので、途中の AutoSave と分割ファイルにはその時点の値が入る。測れなかったランには入らない。
+- 解析: `tb = BeamTime + round((TriggerTime − si_delay − BeamTime) / T)·T`、`TOF = TriggerTime + HitTime[i] − tb`。
+- 時計は表示とは別に Writer に置いた(`feed_beam_clock`)。表示のキューは落としてよいが、こちらは全チャンクを順に見る。チャンクの文脈(前後の重なり)も読むので、チャンクの境目でも本当に一番近い hit になる。重複は `add_new_beam` で数えない。
+- チャンネル対応表の読み直しを表示スレッドから Writer に移し、同じ対応表を `DisplayMsg` で表示へ渡す(記録と表示で別の表を読まないように)。古い「対応表は表示でしか使わない」の警告は削除。
+- ランの最後にログ: `run N beam: T = ... ns (measured, G gaps, K off the grid), events without a beam hit: X`。対応表なしで起動すると、表示の有無によらず警告を出す。
+
+**確認(Mac、合成データ 2 s、T = 199.95 ns):**
+| 確認 | 結果 |
+|---|---|
+| 単体テスト `test_nwall` / `test_eb_core` | 67 / 232 すべて通過 |
+| `BeamTime` が hits tree の一番近いビーム hit と完全一致(`check_beam_time.C`) | 3939 / 3939 イベント |
+| `rfPeriodNs` | 199.9500 ns(真値)、hits・events とも |
+| `check_events.C` | IDENTICAL |
+| tree だけから計算した液シンの TOF | γ のピークが 4〜5 ns のビン(合成データの真値 5.0 ns) |
+| 表示あり、2 ラン、途中で対応表を壊す | 2 本目は ERROR を出して前の表で継続、T は測り直し(gaps 100025 が 2 本とも同じ)、結果も同じ |
+| 対応表なし | `BeamTime` = −1、`rfPeriodNs` なし、起動時に警告 |
+
+**未確認:** ch0 に 1/100 のビームを入れた実データ。MaxTreeSize で分割したときの `rfPeriodNs`。ステータス行の `map STALE` の表示(10 秒ごとの行で、再生のほうが短かった)。
+精度の根拠: ラン 217 で位相の揺らぎ ≈ 2.5 ns(4 µs)、≈ 2.7 ns(40 µs)、ThGEM と同時計数回路の分を含む。一番近いビームの hit は 10 µs 以内。
+
+**配備:** `nwall_sink` を pf-qaq でビルドして `~/.local/bin` へ入れる。次に `nwall_sink` を起動したときから有効。**ランの合間に、ユーザーに確認してから。**
 

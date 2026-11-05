@@ -289,7 +289,8 @@ inline bool is_fixed_branch(const std::string& s) {
   static const char* const fixed[] = {"EventID",   "TriggerTime", "TriggerMod",     "TriggerCh",
                                       "TriggerIdx", "NTriggers",  "NHits",          "HitMod",
                                       "HitCh",      "HitEnergy",  "HitEnergyShort", "HitTime",
-                                      "HitIsTrigger", "HitWithAC", "L2Accept"};
+                                      "HitIsTrigger", "HitWithAC", "L2Accept",
+                                      "BeamTime"};  // nwall_sink only
   for (const char* f : fixed)
     if (s == f) return true;
   return false;

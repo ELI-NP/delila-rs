@@ -35,6 +35,10 @@
 
 namespace nwall {
 
+// beam_time() when no beam hit is near: timestamps are >= 0, so `BeamTime >= 0`
+// selects the events that have one.
+inline constexpr double kNoBeamTime = -1.0;
+
 class BunchClock {
  public:
   struct Config {
@@ -74,6 +78,12 @@ class BunchClock {
     }
   }
 
+  // add_beam for overlapping input: chunks repeat their neighbours' hits as
+  // context, so a hit at or before the newest one has been seen already.
+  void add_new_beam(double t) {
+    if (beams_.empty() || t > beams_.back()) add_beam(t);
+  }
+
   // Drop the beam hits before t (they are no longer needed by the caller).
   void forget_before(double t) {
     while (!beams_.empty() && beams_.front() < t) beams_.pop_front();
@@ -85,6 +95,12 @@ class BunchClock {
   std::size_t off_grid() const { return off_grid_; }
   std::size_t beam_hits() const { return beams_.size(); }
   std::size_t capped() const { return capped_; }  // dropped by the memory guard
+
+  // The beam hit nearest to t, as recorded: no T, no calibration in it.
+  double beam_time(double t) const {
+    double b;
+    return nearest_beam(t, b) ? b : kNoBeamTime;
+  }
 
   // The bunch at or before t (the one a particle seen at t came from, if it
   // took less than one period): b + floor((t − b) / T)·T.

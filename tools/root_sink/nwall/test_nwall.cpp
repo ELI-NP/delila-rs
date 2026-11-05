@@ -229,6 +229,38 @@ static void test_clock_forget_before() {
   CHECK(!c.bunch_at_or_before(1050.0, tb));  // forgotten, and > max_gap from the rest
 }
 
+// Chunks repeat their neighbours' hits as context: what was seen must not count
+// twice, neither as a beam hit nor as a gap for T.
+static void test_clock_overlapping_chunks() {
+  const double T = 200.0;
+  BunchClock c(clock_cfg(T));
+  for (double t : {0.0, 20000.0, 40000.0}) c.add_new_beam(t);
+  for (double t : {20000.0, 40000.0, 60000.0}) c.add_new_beam(t);
+  CHECK(c.beam_hits() == 4);
+  CHECK(c.gaps() == 3);
+  CHECK(c.off_grid() == 0);
+  // Nothing kept: the first hit goes in whatever its time.
+  c.reset();
+  c.add_new_beam(5.0);
+  CHECK(c.beam_hits() == 1);
+}
+
+// BeamTime: the beam hit itself, untouched by T or any calibration.
+static void test_clock_beam_time() {
+  BunchClock c(clock_cfg(200.0));
+  CHECK(c.beam_time(1000.0) == kNoBeamTime);  // no beam hit yet
+  c.add_beam(1000.25);
+  c.add_beam(21003.75);
+  CHECK(c.beam_time(1050.0) == 1000.25);    // nearer the earlier hit
+  CHECK(c.beam_time(20000.0) == 21003.75);  // nearer the later hit
+  CHECK(c.beam_time(500.0) == 1000.25);     // before the first hit
+  CHECK(c.beam_time(30000.0) == 21003.75);  // after the last hit
+  // Beam off: farther than max_gap_ns (1 ms here) from any beam hit.
+  CHECK(c.beam_time(21003.75 + 1.5e6) == kNoBeamTime);
+  c.reset();
+  CHECK(c.beam_time(1050.0) == kNoBeamTime);
+}
+
 int main() {
   test_map_valid();
   test_map_no_beam();
@@ -241,6 +273,8 @@ int main() {
   test_clock_late_insert_and_reset();
   test_clock_cap_bound();
   test_clock_forget_before();
+  test_clock_overlapping_chunks();
+  test_clock_beam_time();
 
   std::printf("\ntest_nwall: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;

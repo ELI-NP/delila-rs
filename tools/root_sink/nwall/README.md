@@ -84,6 +84,29 @@ board-to-board alignment and is immune to the run-to-run 8 ns start jumps
 up to ±100 ns before the wrong bunch is picked — Si board offsets and the 8 ns
 jumps do not matter. The TOF of a slow neutron is therefore not folded at T.
 
+### The beam in the events tree
+
+The histograms above are online only. An event's 2 µs window holds a beam hit in
+only about 1 event of 10 (one beam hit per 20 µs), so the tree says it directly:
+
+| where | name | what |
+|---|---|---|
+| `events` branch | `BeamTime` (D) | the beam hit nearest to `TriggerTime`, as recorded: no T and no calibration in it, same time axis as `TriggerTime`. −1 when none is within 1 ms, so `BeamTime >= 0` selects the events that have one |
+| `hits`, `events` UserInfo | `rfPeriodNs` (`TParameter<double>`) | T measured in this run, absent if it never was. Each AutoSave and MaxTreeSize part has the value of its time; the last one has the whole run's |
+
+```cpp
+auto* p = dynamic_cast<TParameter<double>*>(events->GetUserInfo()->FindObject("rfPeriodNs"));
+const double T = p->GetVal();
+// si_delay, as in Calibration below; HitTime is relative to TriggerTime
+const double tb = BeamTime + std::round((TriggerTime - si_delay - BeamTime) / T) * T;
+const double tof = TriggerTime + HitTime[i] - tb;  // gamma peak = (beam signal vs bunch) + L/c
+```
+
+The record path has its own bunch clock: it sees every chunk, while the display
+queue may drop some. Each finished run logs T, the number of gaps behind it and
+the events without a beam hit. `check_beam_time.C` verifies `BeamTime` and
+`rfPeriodNs` of a file against its hits tree and prints the TOF peak.
+
 ### Calibration
 
 1. `si_delay_ns`: the peak of `/events/si_phase` (where the Si trigger sits
@@ -111,3 +134,8 @@ E2E (2026-10-30, macOS, ROOT 6.40): 273,824 hits / 3,939 events written;
 LaBr3 at 3 ns, gamma flash at 5.0 ns (L/c for 1.5 m); every hit got an RF TOF;
 `sector_dE_vs_E` 99.95 % diagonal; runs repeated with the same clock gave
 identical results (the bunch clock restarts per run).
+
+E2E of `BeamTime` (2026-11-05, same data): `check_beam_time.C` OK on 3,939 of
+3,939 events, `rfPeriodNs` = 199.9500 ns in both trees, 10.1 % of the events with
+a beam hit in their window, TOF from the tree alone peaks in the 4-5 ns bin (the
+gamma flash, 5.0 ns); `check_events.C` still IDENTICAL.
