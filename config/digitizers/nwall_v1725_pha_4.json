@@ -2,7 +2,7 @@
   "digitizer_id": 4,
   "name": "PHA1-V1725-dE-RingOut (dE ring outer 30-44, ch15 pulser)",
   "firmware": "PHA1",
-  "serial_number": "",
+  "serial_number": "208",
   "model": "V1725",
   "num_channels": 16,
   "is_master": false,

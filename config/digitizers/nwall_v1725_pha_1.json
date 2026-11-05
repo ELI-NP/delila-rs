@@ -2,7 +2,7 @@
   "digitizer_id": 1,
   "name": "PHA1-V1725-dE-Sector (dE sector 0-15)",
   "firmware": "PHA1",
-  "serial_number": "",
+  "serial_number": "184",
   "model": "V1725",
   "num_channels": 16,
   "is_master": false,

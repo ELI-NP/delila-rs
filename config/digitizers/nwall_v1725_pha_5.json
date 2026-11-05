@@ -2,8 +2,8 @@
   "digitizer_id": 5,
   "name": "PHA1-V1725-E-Sector (E sector 0-15)",
   "firmware": "PHA1",
-  "serial_number": "",
-  "model": "V1725",
+  "serial_number": "27647",
+  "model": "V1725S",
   "num_channels": 16,
   "is_master": false,
   "board": {

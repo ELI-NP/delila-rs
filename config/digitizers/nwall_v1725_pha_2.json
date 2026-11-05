@@ -2,7 +2,7 @@
   "digitizer_id": 2,
   "name": "PHA1-V1725-dE-RingIn (dE ring inner 0-14, ch15 pulser)",
   "firmware": "PHA1",
-  "serial_number": "",
+  "serial_number": "170",
   "model": "V1725",
   "num_channels": 16,
   "is_master": false,
