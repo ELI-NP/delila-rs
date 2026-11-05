@@ -1,6 +1,6 @@
 # TODO 73 — 2026-11 実験キャンペーン(pf-qaq: Si + 中性子 → ThGEM + 中性子)
 
-**Status: 🚧 N_Wall 立ち上げ中 (2026-11-04、§5) — 設定・eLog・Grafana・ビルドは pf-qaq に配備済み(7f14ae3)。残 = V1725 接続後の DAQ 再起動と初日の確認 §5.4**
+**Status: 🚧 N_Wall 立ち上げ中 (§5) — 2026-11-05 に pf-qaq を 6 台の構成へ切り替え、Configure 成功(今は全ボード独立スタート)。残 = 最初のランと初日の確認 §5.4、クロック結線後の同期**
 
 **関連:** [74_grafana_event_rate_monitor.md](74_grafana_event_rate_monitor.md) /
 [75_mesytec_hv_monitor.md](75_mesytec_hv_monitor.md) /
@@ -211,6 +211,17 @@ DAQ は止まったまま(全コンポーネント Configured、旧バイナリ)
 
 - 注意: N_Wall のラン 1〜4 は VX2730 が module 1 だったので、このダッシュボードで 11/4 以前を見ると、液シンの ch0〜15 が dE Sector の名前で出る(ラン 5 以降は正しい)。
 - 残り: V1725 がつながったら `ln -sfn config/config_nwall_pfqaq.toml config.toml && ./scripts/start_daq.sh`(→ §5.4)。
+
+### 5.3.2 N_Wall の構成への切り替え(2026-11-05 10:09、pf-qaq、DAQ は Configured・ランなしを確認してから)
+- pf-qaq = b4c0499。`config.toml` → `config/config_nwall_pfqaq.toml`、`stop_daq.sh` → `start_daq.sh`(ログ `logs/20261105_100913/`)。
+  新しいバイナリで全 9 コンポーネントと nwall_sink が起動。`/api/runs/next` = 5。
+- **Configure(10:18、ランは始めていない): 6 台とも成功。** VX2730 は 53/53。V1725 は 5 台とも同じ結果で、V1725S(FW 139.137)と 139.10 の差はログに無し:
+  - 丸め: `reclen` 7000 → 7008 ns(7168 未満のまま)、`ch_trap_tflat` 1000 → 1008 ns、`eventaggr` 1023 → 511。
+  - `ch_trg_latency` は 5 台とも CAEN −1 で拒否(DevTree に無い。ログに WARN、Configure は成功)。
+- **Monitor のレイアウトを変更**(`config/digitizers/monitor_layout.json`、pf-qaq のローカル修正のまま): VX2730 のタブ 4 つを source 1 → 0 に、
+  V1730 の `PSD1-SN66` タブを削除(source 0 が VX2730 になるため)、Si のタブ 5 つ(mod1〜5、各 16 ch のエネルギー)を追加。
+  変更前は `~/monitor_layout_before_nwall_20261105.json`。**ThGEM に戻すときはこれを戻す。**
+- 未確認: 実データ(ランをまだ取っていない)。V1725S の時刻とエネルギー、Si の極性、eLog への投稿、Grafana のレートは最初のランで見る。
 
 ### 5.4 初日の確認
 1. **各 V1725 の特定**(DAQ を止めて): `caen-toolbox dig1 check -c OPTICAL_LINK -l <link> -n <node>` で型・シリアル・
