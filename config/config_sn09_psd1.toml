@@ -1,0 +1,67 @@
+# DELILA DAQ Configuration - ELIADE @ SN09 (eliadeSN09, 10.14.0.19)
+# Hardware: 1x V1730SB DPP-PSD ("PSD1"), A3818 optical link 0, conet_node 0.
+#   Probed with caen-toolbox on SN09 2026-11-05 (ROM serial = PID):
+#     link 0 node 0 = V1730SB SN 30478 (the board that was on SN01 until 2026-08)
+#     link 0 nodes 1-7, links 1-3 nodes 0-7, USB: nothing.
+# V1730 timestamp LSB = 2 ns (500 MS/s).
+#
+# Channel settings are SN 30478's own tuning from SN01's working tree. They were
+# tuned for the detector it had there - check polarity, threshold and gates for
+# whatever is plugged in now (Tune Up).
+#
+# Use on SN09 (start_daq.sh reads ./config.toml by default). config.toml is a
+# SYMLINK, as on the other ELIADE nodes - re-point it, never `cp` onto it:
+#   ln -sfn config/config_sn09_psd1.toml config.toml
+# Close caen-toolbox before starting the DAQ (board access is exclusive).
+
+[operator]
+experiment_name = "ELIADE_SN09"
+port = 9090
+
+# Run history -> local native MongoDB (auth disabled, provisioned 2026-07).
+[operator.mongodb]
+uri = "mongodb://localhost:27017"
+database = "delila"
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+[[network.sources]]
+id = 0
+name = "PSD1-V1730-0"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/sn09_v1730_psd.json"
+pipeline_order = 1
+time_step_ns = 2.0
+
+# --- Pipeline components ---
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# Absolute path on purpose: neither the Recorder nor root_sink expands "~".
+output_dir = "/home/eliade/DELILA_data"
+pipeline_order = 3
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+
+# --- root_sink: parallel C++ ROOT recorder + live JSROOT monitor ---
+# hits_tree is required: since TODO 71 root_sink refuses to start with no tree.
+[network.root_sink]
+subscribe = "tcp://localhost:5557"
+output_dir = "/home/eliade/DELILA_data"
+http_port = 8090
+hists = "config/histograms_sn01.json"
+autosave_sec = 30
+hits_tree = true
