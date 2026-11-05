@@ -87,13 +87,16 @@
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const TOKEN_KEY = "n1408_token";
-function token() { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } }
-function setToken(t) {
-  try { t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY); } catch {}
-  memToken = t;
+const TOKEN_KEY = "n1408_token", OPERATOR_KEY = "n1408_operator";
+function stored(key) { try { return sessionStorage.getItem(key); } catch { return null; } }
+function store(key, value) {
+  try { value ? sessionStorage.setItem(key, value) : sessionStorage.removeItem(key); } catch {}
 }
-let memToken = token();
+function setToken(t, operator) {
+  store(TOKEN_KEY, t); store(OPERATOR_KEY, operator);
+  memToken = t; memOperator = operator || null;
+}
+let memToken = stored(TOKEN_KEY), memOperator = stored(OPERATOR_KEY);
 let last = null;
 let busy = false;
 
@@ -219,6 +222,10 @@ async function poll() {
   try {
     const r = await fetch("/api/status");
     last = await r.json();
+    if (memToken && last.holder !== memOperator) {  // taken over, or given up after the idle time
+      show(last.holder ? `${last.holder} took control.` : "Control given up: idle for too long.", true);
+      setToken(null);
+    }
     render();
   } catch (e) {
     show("This page cannot reach the program on the DAQ host: what you see below is old.", true);
@@ -230,7 +237,7 @@ $("acquire").onclick = async () => {
   const { code, data } = await post("/api/control/acquire", { operator:$("op").value, passphrase:$("pass").value });
   $("pass").value = "";
   if (code === 200) {
-    setToken(data.token);
+    setToken(data.token, $("op").value.trim());
     show(data.preempted ? `You took control from ${data.preempted}.` : "You have control.");
   } else { show(data.message || `Error ${code}`, true); }
   poll();
