@@ -5,15 +5,16 @@ Spec: TODO/82_n1408_si_hv_control.md
   Protocol: UM7352 N1408 User Manual rev.2 p.29-32 (9600 8N1, ASCII; STATUS bits p.30-31).
   §2 behaviour measured on the real unit (FW 1.00, SN 1592, pf-qaq, 2026-11-05).
 
-What the web can do, per channel: ON, OFF, and set VSET, ISET and TRIP. MAXV, ramp speeds and the
-trip mode stay on the panel, so the limit is not one click away from the voltage it limits. Every
-byte written to the serial port goes through send_command(), which accepts nothing else. During a
+What the web can do, per channel: ON, OFF, and set VSET, ISET, TRIP, RUP and RDW. MAXV and the trip
+mode stay on the panel, so the limit is not one click away from the voltage it limits. Every byte
+written to the serial port goes through send_command(), which accepts nothing else. During a
 run only OFF works (user, to avoid confusion); Tune Up is not a run. The final say stays with the
 unit: REMOTE on the panel and the channel switch at HV_EN. LOCAL on the panel locks the software out
 (LOC:ERR).
 
-The unit itself takes VSET above MAXV and TRIP = 1000 (infinite over-current), both measured, so
-those limits are enforced here. Out-of-range values are refused, never clamped.
+The unit itself takes VSET above MAXV, TRIP = 1000 (infinite over-current) and ramps up to 100 V/s,
+all measured, so those limits are enforced here (ramps: ramp_max_v_per_s in the config). Out-of-range
+values are refused, never clamped.
 
 The passphrase prevents accidents, it is NOT security: plain HTTP, plain text on the host, one shared
 phrase (user's decision, as in tpcdaq-rs). No passphrase file = read-only. Nothing about the channel
@@ -142,7 +143,8 @@ def allowed_commands(board: int) -> frozenset:
     cmds |= {_mon_channel(board, ALL_CHANNELS, p) for p, _, _ in CHANNEL_QUERIES}
     for ch in CHANNELS:
         cmds |= {_mon_channel(board, ch, p)
-                 for p in ("STAT", "VMON", "IMON", "VSET", "ISET", "TRIP", "MAXV", "IMAX")}
+                 for p in ("STAT", "VMON", "IMON", "VSET", "ISET", "TRIP", "RUP", "RDW", "MAXV",
+                           "IMAX")}
         cmds |= {_set_power(board, ch, a) for a in ("on", "off")}
     return frozenset(cmds)
 
@@ -156,8 +158,16 @@ class Setting:
     tolerance: float
 
 
-SETTINGS = {"VSET": Setting(2, 0.011), "ISET": Setting(3, 0.0006), "TRIP": Setting(1, 0.051)}
+SETTINGS = {
+    "VSET": Setting(2, 0.011),
+    "ISET": Setting(3, 0.0006),
+    "TRIP": Setting(1, 0.051),
+    "RUP": Setting(0, 0.5),
+    "RDW": Setting(0, 0.5),
+}
 TRIP_MAX_S = 999.9  # 1000 means infinite over-current (UM7352 p.14); the unit would accept it
+RAMP_MIN_V_PER_S = 1.0  # the unit's own minimum (RUPMIN, RDWMIN); its maximum is 100
+RAMP_MAX_V_PER_S = 100.0
 
 
 def _set_value(board: int, ch: int, par: str, value: float) -> str:
@@ -171,7 +181,7 @@ def is_allowed(board: int, cmd: str) -> bool:
     if cmd in allowed_commands(board):
         return True
     params = "|".join(SETTINGS)
-    return re.fullmatch(rf"\$BD:{board:02d},CMD:SET,CH:[0-3],PAR:({params}),VAL:[0-9]{{1,4}}\.[0-9]{{1,3}}",
+    return re.fullmatch(rf"\$BD:{board:02d},CMD:SET,CH:[0-3],PAR:({params}),VAL:[0-9]{{1,4}}(\.[0-9]{{1,3}})?",
                         cmd) is not None
 
 
@@ -474,6 +484,8 @@ def execute_setting(port, cfg: "Config", channel: int, param, value, expected) -
         return finish("refused", f"{value:g} is negative")
     scaled = value * 10 ** setting.decimals
     if abs(scaled - round(scaled)) > 1e-6:
+        if setting.decimals == 0:
+            return finish("refused", f"{param} must be a whole number: the unit would cut {value:g}")
         return finish("refused", f"{param} keeps {setting.decimals} digits after the point")
 
     board = cfg.board
@@ -506,9 +518,13 @@ def execute_setting(port, cfg: "Config", channel: int, param, value, expected) -
                 if value <= imon:
                     return finish("refused", f"ISET {value:g} µA is not above the present current "
                                              f"{imon:g} µA: the channel would trip")
-        elif value > TRIP_MAX_S:
-            return finish("refused", f"TRIP above {TRIP_MAX_S} s is refused: 1000 s means an "
-                                     "over-current never trips")
+        elif param == "TRIP":
+            if value > TRIP_MAX_S:
+                return finish("refused", f"TRIP above {TRIP_MAX_S} s is refused: 1000 s means an "
+                                         "over-current never trips")
+        elif not RAMP_MIN_V_PER_S <= value <= cfg.ramp_max_v_per_s:
+            return finish("refused", f"{param} {value:g} V/s is outside {RAMP_MIN_V_PER_S:g} to "
+                                     f"{cfg.ramp_max_v_per_s:g} V/s (ramp_max_v_per_s)")
     except (ReplyError, ValueError) as e:
         return finish("refused", f"cannot read the channel before the command: {e}")
 
@@ -674,12 +690,13 @@ class Config:
     http_host: str = "0.0.0.0"
     http_port: int = 8095
     operator_url: str = "http://localhost:9091"
+    ramp_max_v_per_s: float = 10.0
 
 
 _REQUIRED_KEYS = ("serial_port", "expected_serial", "device_name", "influx_url", "passphrase_file",
                   "audit_log", "channels")
 _NUMBER_KEYS = ("poll_interval_sec", "reply_timeout_sec", "readback_timeout_sec", "retry_delay_sec",
-                "control_idle_timeout_sec")
+                "control_idle_timeout_sec", "ramp_max_v_per_s")
 
 
 def config_from_dict(raw) -> Config:
@@ -699,6 +716,8 @@ def config_from_dict(raw) -> Config:
                                   "audit_log", "board", "http_host", "http_port", "operator_url")
               if k in raw}
     values.update({k: float(raw[k]) for k in _NUMBER_KEYS if k in raw})
+    if not RAMP_MIN_V_PER_S <= values.get("ramp_max_v_per_s", 10.0) <= RAMP_MAX_V_PER_S:
+        raise ValueError(f"ramp_max_v_per_s must be {RAMP_MIN_V_PER_S:g} to {RAMP_MAX_V_PER_S:g}")
     return Config(expected_serial=str(raw["expected_serial"]), channels=channels, **values)
 
 
@@ -1010,6 +1029,7 @@ class App:
         status["holder"] = self.session.holder()
         status["daq"] = daq_state(self._get, self.cfg.operator_url)
         status["idle_timeout_s"] = self.cfg.control_idle_timeout_sec
+        status["ramp_max_v_per_s"] = self.cfg.ramp_max_v_per_s
         status["events"] = list(self.audit.recent)
         return status
 

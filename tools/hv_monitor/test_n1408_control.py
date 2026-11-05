@@ -143,7 +143,8 @@ class TestAllowlist(unittest.TestCase):
 
     def test_vset_iset_trip_of_one_channel_can_be_sent(self):
         for cmd in (value_cmd(1, "VSET", "25.00"), value_cmd(0, "ISET", "5.000"),
-                    value_cmd(3, "TRIP", "10.0"), value_cmd(2, "VSET", "0.00")):
+                    value_cmd(3, "TRIP", "10.0"), value_cmd(2, "VSET", "0.00"),
+                    value_cmd(1, "RUP", "5"), value_cmd(1, "RDW", "10")):
             port = ScriptedPort()
             m.send_command(port, 0, cmd)
             self.assertEqual(port.written, [cmd + "\r\n"])
@@ -155,6 +156,7 @@ class TestAllowlist(unittest.TestCase):
 
     def test_settings_of_all_channels_at_once_cannot_be_sent(self):
         self.assert_rejected(value_cmd(4, "VSET", "5.00"))
+        self.assert_rejected(value_cmd(4, "RUP", "5"))
 
     def test_everything_else_is_a_monitor_command(self):
         for c in m.allowed_commands(0):
@@ -167,8 +169,7 @@ class TestAllowlist(unittest.TestCase):
         self.assertEqual(port.written, [], f"bytes written for {cmd!r}")
 
     def test_protection_settings_cannot_be_sent(self):
-        for par in ("MAXV,VAL:100", "RUP,VAL:5", "RDW,VAL:5", "PDWN,VAL:RAMP", "ZCADJ,VAL:EN",
-                    "ZCDTC"):
+        for par in ("MAXV,VAL:100", "PDWN,VAL:RAMP", "ZCADJ,VAL:EN", "ZCDTC"):
             self.assert_rejected(f"{BD}SET,CH:1,PAR:{par}")
 
     def test_all_channels_on_cannot_be_sent(self):
@@ -550,8 +551,52 @@ class TestSettings(unittest.TestCase):
             self.assertEqual(execute_set(port, "VSET", value, 20.0)["result"], "refused", value)
             self.assertEqual(port.written, [])
 
-    def test_only_vset_iset_trip_can_be_set(self):
-        for par in ("MAXV", "RUP", "RDW", "PDWN", "ZCADJ", "ON"):
+    def test_ramps_as_on_the_real_unit(self):
+        for par in ("RUP", "RDW"):
+            port = ScriptedPort(setting_replies(par, "005", "003", set_value="3"))
+            result = execute_set(port, par, 3.0, 5.0)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(port.sets(), [value_cmd(1, par, "3")])
+
+    def test_ramp_limit_is_inclusive(self):
+        for value, text in ((10.0, "10"), (1.0, "1")):
+            port = ScriptedPort(setting_replies("RUP", "005", f"{int(value):03d}", set_value=text))
+            self.assertTrue(execute_set(port, "RUP", value, 5.0)["ok"], value)
+
+    def test_ramp_above_the_limit_is_refused_though_the_unit_would_take_it(self):
+        # Measured: RUP 100 -> CMD:OK. 10 V/s is this program's limit (user, 2026-11-05).
+        for par in ("RUP", "RDW"):
+            port = ScriptedPort(setting_replies(par, "005"))
+            result = execute_set(port, par, 11.0, 5.0)
+            self.assertEqual(result["result"], "refused")
+            self.assertIn("10", result["message"])
+            self.assertEqual(port.sets(), [])
+
+    def test_ramp_below_the_units_minimum_is_refused(self):
+        port = ScriptedPort(setting_replies("RDW", "005"))
+        self.assertEqual(execute_set(port, "RDW", 0.0, 5.0)["result"], "refused")
+        self.assertEqual(port.sets(), [])
+
+    def test_a_fractional_ramp_is_refused_because_the_unit_would_cut_it(self):
+        # Measured: RUP 5.5 -> CMD:OK, readback 005.
+        port = ScriptedPort(setting_replies("RUP", "005"))
+        result = execute_set(port, "RUP", 5.5, 5.0)
+        self.assertEqual(result["result"], "refused")
+        self.assertIn("whole", result["message"])
+        self.assertEqual(port.written, [])
+
+    def test_the_ramp_limit_comes_from_the_config(self):
+        port = ScriptedPort(setting_replies("RUP", "005", "015", set_value="15"))
+        cfg = make_config(ramp_max_v_per_s=20.0)
+        self.assertTrue(execute_set(port, "RUP", 15.0, 5.0, cfg=cfg)["ok"])
+
+    def test_a_ramp_set_too_fast_on_the_panel_can_be_lowered(self):
+        port = ScriptedPort(setting_replies("RDW", "050", "010", set_value="10"))
+        self.assertTrue(execute_set(port, "RDW", 10.0, 50.0)["ok"])
+
+    def test_only_the_five_settings_can_be_set(self):
+        self.assertEqual(set(m.SETTINGS), {"VSET", "ISET", "TRIP", "RUP", "RDW"})
+        for par in ("MAXV", "PDWN", "ZCADJ", "ON"):
             port = ScriptedPort()
             self.assertEqual(execute_set(port, par, 5.0, 5.0)["result"], "refused", par)
             self.assertEqual(port.written, [])
@@ -808,6 +853,18 @@ class TestConfig(unittest.TestCase):
         with open(os.path.join(here, "n1408_control_config.yaml")) as f:
             self.assertNotRegex(f.read(), r"(?m)^passphrase:")
 
+    def test_ramp_limit(self):
+        self.assertEqual(m.config_from_dict(self.raw()).ramp_max_v_per_s, 10.0)
+        self.assertEqual(m.config_from_dict(self.raw(ramp_max_v_per_s=20)).ramp_max_v_per_s, 20.0)
+        for bad in (0, 0.5, 101):
+            with self.assertRaises(ValueError, msg=bad):
+                m.config_from_dict(self.raw(ramp_max_v_per_s=bad))
+
+    def test_the_repo_config_limits_ramps_to_10(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        cfg = m.load_config(os.path.join(here, "n1408_control_config.yaml"))
+        self.assertEqual(cfg.ramp_max_v_per_s, 10.0)
+
     def test_missing_key_is_an_error(self):
         raw = self.raw()
         del raw["expected_serial"]
@@ -1037,6 +1094,18 @@ class TestService(unittest.TestCase):
                                                       "value": 25.0, "expected": 20.0})
         self.assertEqual(code, 409, body)
         self.assertEqual(self.port.sets(), [])
+
+    def test_ramps_are_refused_during_a_run(self):
+        self.run_in_progress()
+        self.start(setting_replies("RUP", "005", "003", set_value="3"))
+        code, body = self.post("/api/channel/1/set", {"token": self.acquire(), "param": "RUP",
+                                                      "value": 3.0, "expected": 5.0})
+        self.assertEqual(code, 409, body)
+        self.assertEqual(self.port.sets(), [])
+
+    def test_status_shows_the_ramp_limit(self):
+        self.start(dict(REAL))
+        self.assertEqual(self.get("/api/status")["ramp_max_v_per_s"], 10.0)
 
     def test_off_and_all_off_work_during_a_run(self):
         self.run_in_progress()

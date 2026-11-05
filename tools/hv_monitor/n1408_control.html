@@ -89,6 +89,8 @@
       <label>VSET [V] <input id="setVSET" type="number" step="0.02" min="0"></label>
       <label>ISET [µA] <input id="setISET" type="number" step="0.001" min="0"></label>
       <label>Trip [s] <input id="setTRIP" type="number" step="0.1" min="0" max="999.9"></label>
+      <label>Up [V/s] <input id="setRUP" type="number" step="1" min="1"></label>
+      <label>Down [V/s] <input id="setRDW" type="number" step="1" min="1"></label>
       <button id="apply">Apply...</button>
       <button id="revert">Show current</button>
     </div>
@@ -168,8 +170,10 @@ function daqText(d) {
 }
 
 // Settings: the inputs follow the readback until someone types in them.
-const PARAMS = { VSET:{ field:"vset", digits:2, unit:"V" }, ISET:{ field:"iset", digits:3, unit:"µA" },
-                 TRIP:{ field:"trip", digits:1, unit:"s" } };
+// In the order they are applied: the voltage last, so it moves with the new ramp and limits in force.
+const PARAMS = { RUP:{ field:"rup", digits:0, unit:"V/s" }, RDW:{ field:"rdw", digits:0, unit:"V/s" },
+                 ISET:{ field:"iset", digits:3, unit:"µA" }, TRIP:{ field:"trip", digits:1, unit:"s" },
+                 VSET:{ field:"vset", digits:2, unit:"V" } };
 let dirty = {};
 for (const p of Object.keys(PARAMS)) $("set" + p).addEventListener("input", () => { dirty[p] = true; });
 
@@ -188,10 +192,11 @@ function renderSettings(s, mine, remote) {
     if (!dirty[p]) input.value = c[def.field] === null ? "" : Number(c[def.field]).toFixed(def.digits);
     input.disabled = !c.control_allowed;
   }
+  $("setRUP").max = $("setRDW").max = s.ramp_max_v_per_s;
   const blocked = busy || !remote || !c.control_allowed || (s.daq && s.daq.running);
   $("apply").disabled = blocked;
-  $("setNow").textContent = `Now: VSET ${fmt(c.vset,2)} V, ISET ${fmt(c.iset,3)} µA, Trip ${fmt(c.trip,1)} s. `
-    + `VSET cannot go above MAXV ${fmt(c.maxv,0)} V. MAXV, ramp speeds and the trip mode are changed on the panel (LOCAL).`;
+  $("setNow").textContent = `Now: VSET ${fmt(c.vset,2)} V, ISET ${fmt(c.iset,3)} µA, Trip ${fmt(c.trip,1)} s, Up / Down ${fmt(c.rup,0)} / ${fmt(c.rdw,0)} V/s. `
+    + `VSET cannot go above MAXV ${fmt(c.maxv,0)} V, ramps not above ${fmt(s.ramp_max_v_per_s,0)} V/s. MAXV and the trip mode are changed on the panel (LOCAL).`;
 }
 
 async function applySettings() {
@@ -271,7 +276,8 @@ function render() {
     st.append(badge); tr.append(st);
     tr.append(cell(fmt(c.vmon,2),"num"), cell(fmt(c.imon,4),"num"), cell(fmt(c.vset,2),"num"),
               cell(fmt(c.iset,3),"num"), cell(fmt(c.maxv,0),"num"), cell(c.polarity ?? "?"),
-              cell(`${fmt(c.rup,0)} / ${fmt(c.rdw,0)}`,"num"), cell(fmt(c.trip,1),"num"),
+              cell(`${fmt(c.rup,0)} / ${fmt(c.rdw,0)}`, "num" + (c.rup > s.ramp_max_v_per_s || c.rdw > s.ramp_max_v_per_s ? " flagged" : "")),
+              cell(fmt(c.trip,1),"num"),
               cell(c.pdwn ?? "?"));
     const shown = c.flags.filter(f => !["ON","RUP","RDW"].includes(f));
     tr.append(cell(shown.join(" "), shown.some(f => CRITICAL.includes(f)) ? "flagged" : "muted"));

@@ -17,6 +17,9 @@ http_port: 8095
 # Asked whether a run is going: during a run only OFF works.
 operator_url: "http://localhost:9091"
 
+# RUP and RDW can be set from the page up to this [V/s]. The unit itself goes to 100.
+ramp_max_v_per_s: 10
+
 # One line of plain text on the host, NOT in this repo (the repo is public). It prevents accidents,
 # it is not security. No file = read-only. Read at every login, so no restart is needed.
 passphrase_file: "/home/daq/.config/delila/n1408_passphrase"
