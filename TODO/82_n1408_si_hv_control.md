@@ -1,6 +1,6 @@
 # TODO 82 — Si の HV(CAEN N1408): モニタ + ch ごとの ON/OFF と設定(Web、パスフレーズつき)
 
-**Status: 🚧 実装・pf-qaq で実機確認済み、ユーザーがブラウザで操作済み (2026-11-05) — 残 = 本番のパスフレーズ、systemd への登録(sudo、ユーザー)、Si をつないでの確認、本物のランでの拒否の確認、Grafana のパネル(TODO 74 P4)**
+**Status: 🚧 実装・pf-qaq で実機確認済み、ユーザーがブラウザで操作済み (2026-11-05) — 本番のパスフレーズと systemd への登録はユーザーが実施。残 = Si をつないでの確認、本物のランでの拒否の確認、Grafana のパネル(TODO 74 P4)**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md)(親) /
 [75_mesytec_hv_monitor.md](75_mesytec_hv_monitor.md)(MHV-4、N_Wall では N1408 に交代) /
@@ -135,11 +135,11 @@ sudo systemctl disable --now mhv4-monitor
 # パスフレーズ(再起動不要)
 printf '%s\n' '<パスフレーズ>' > ~/.config/delila/n1408_passphrase
 ```
-ページは http://192.168.144.142:8095/ 。今は手で起動(nohup)、試験用のパスフレーズ。
+ページは http://192.168.144.142:8095/ 。2026-11-05 にユーザーがパスフレーズを設定し、systemd で常駐にした。
 
 ## 7. 残り
 1. どの ch がどの検出器かが決まったら `n1408_control_config.yaml` の名前を変える(ユーザーの判断待ち)。
-2. 本番のパスフレーズ、systemd(ユーザー、§6)。
+2. ~~本番のパスフレーズ、systemd~~ → 2026-11-05 ユーザーが実施。
 3. Si をつないでの確認: 極性、VSET、MAXV、ISET、IMON、トリップ。
 4. Grafana の N_Wall ダッシュボードに `n1408` のパネル(TODO 74 P4)。
 5. 最初の本物のランで、ON と設定変更が拒否され OFF が通ることを確かめる。
