@@ -237,7 +237,8 @@ DAQ は止まったまま(全コンポーネント Configured、旧バイナリ)
 8. ビームが来たら: nwall_sink の較正(`si_delay_ns` と `rf_t0_ns`、`tools/root_sink/nwall/README.md`)。
 
 ### 5.5 見つかった問題(2026-11-05)
-- **`GET /api/runs/:n` が実験名で絞らない:** `run_repository.rs` の `get_run` は `run_number` だけで探す。ラン番号は実験ごとなので、`/api/runs/5` が N_Wall ではなく
-  X730_ThGEM_Test のラン 5 を返した。同じファイルの `status: "running"` の更新(285 / 314 / 340 行)も実験名を見ていない。未修正。
+- **`GET /api/runs/:n` が実験名で絞らなかった → 修正済み(f724e75、pf-qaq は未配備):** Runs ページで N_Wall のラン 5 を開くと、詳細は X730_ThGEM_Test のラン 5、設定は N_Wall のラン 5 が混ざって出ていた。
+  実行中のランへの書き込み(ノートなど)も実験名を見ていなかったので、合わせて修正。取り直しでは新しい方を返す。Operator の再起動で入る。
+- `X730_ThGEM_Test` のラン 29(2026-08-03)が `running` のまま残っている(side3 から移した記録)。今回の修正で他の実験から書き込まれることはなくなった。消すかはユーザー次第。
 - pf-qaq の `nwall_vx2730_psd2_0.json` と `nwall_v1725_pha_{1..5}.json` は、UI での変更(S-IN スタート、リングの ch15 = POSITIVE、ch0 = TTL 用)がローカル修正のまま。リポジトリは SW スタートの版。設定が固まったら取り込む。**VX2730 ch0 はビームを入れるときに戻す**。
 
