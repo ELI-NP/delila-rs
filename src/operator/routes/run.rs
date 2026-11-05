@@ -147,7 +147,7 @@ pub(super) async fn get_run_history(
     Ok(Json(runs.into_iter().map(Into::into).collect()))
 }
 
-/// Get a specific run by run number
+/// Get a run of the current experiment by run number (the most recent one for a retake)
 #[utoipa::path(
     get,
     path = "/api/runs/{run_number}",
@@ -172,12 +172,15 @@ pub(super) async fn get_run(
         )
     })?;
 
-    let run = repo.get_run(run_number).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error(format!("Failed to get run: {}", e))),
-        )
-    })?;
+    let run = repo
+        .get_run(run_number, &state.config.experiment_name)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!("Failed to get run: {}", e))),
+            )
+        })?;
 
     run.map(|r| Json(r.into())).ok_or_else(|| {
         (
@@ -265,7 +268,7 @@ pub(super) async fn add_run_note(
     })?;
 
     let note = repo
-        .add_note(run_info.run_number, &request.text)
+        .add_note(run_info.run_number, &run_info.exp_name, &request.text)
         .await
         .map_err(|e| {
             (

@@ -276,6 +276,7 @@ impl DigitizerConfigRepository {
         let snapshot = self
             .snapshots
             .find_one(doc! { "run_number": run_number, "exp_name": exp_name })
+            .sort(doc! { "run_start_time": -1 })
             .await?;
         Ok(snapshot)
     }

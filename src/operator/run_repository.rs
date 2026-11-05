@@ -137,6 +137,22 @@ pub enum RepositoryError {
     AlreadyExists(i32),
 }
 
+/// One experiment's run. Run numbers are per experiment, so the number alone can
+/// match another experiment's run.
+fn run_filter(run_number: i32, exp_name: &str) -> mongodb::bson::Document {
+    doc! { "run_number": run_number, "exp_name": exp_name }
+}
+
+/// The active run of one experiment, for writes. `status: "running"` keeps a
+/// re-used run number (retake) from touching an already-completed document
+/// (TODO 58 H11): without it, find_one may match the OLD completed doc and
+/// overwrite its end_time/duration, while the new doc stays "running" forever.
+fn active_run_filter(run_number: i32, exp_name: &str) -> mongodb::bson::Document {
+    let mut filter = run_filter(run_number, exp_name);
+    filter.insert("status", "running");
+    filter
+}
+
 /// Next run number from a `{ run_number: 1 }` projection of the latest run
 /// (`None` = no runs yet). Takes the raw Document because the projection drops
 /// RunDocument's required fields.
@@ -234,14 +250,10 @@ impl RunRepository {
     ) -> Result<(), RepositoryError> {
         let now_ms = Utc::now().timestamp_millis();
 
-        // Get start time to calculate duration. Filter on status:"running" so a
-        // re-used run number (retake) can never clobber an already-completed
-        // run's document (TODO 58 H11) — without it, find_one may match the OLD
-        // completed doc and overwrite its end_time/duration, while the new doc
-        // stays "running" forever.
+        // Get start time to calculate duration.
         let run_doc = self
             .collection
-            .find_one(doc! { "run_number": run_number, "exp_name": exp_name, "status": "running" })
+            .find_one(active_run_filter(run_number, exp_name))
             .await?
             .ok_or(RepositoryError::NotFound(run_number))?;
 
@@ -258,7 +270,7 @@ impl RunRepository {
         }
         self.collection
             .update_one(
-                doc! { "run_number": run_number, "exp_name": exp_name, "status": "running" },
+                active_run_filter(run_number, exp_name),
                 doc! { "$set": set_doc },
             )
             .await?;
@@ -278,11 +290,12 @@ impl RunRepository {
     pub async fn update_stats(
         &self,
         run_number: i32,
+        exp_name: &str,
         stats: &RunStats,
     ) -> Result<(), RepositoryError> {
         self.collection
             .update_one(
-                doc! { "run_number": run_number, "status": "running" },
+                active_run_filter(run_number, exp_name),
                 doc! {
                     "$set": {
                         "stats": mongodb::bson::to_bson(stats).expect("RunStats serializes to BSON"),
@@ -298,6 +311,7 @@ impl RunRepository {
     pub async fn add_error(
         &self,
         run_number: i32,
+        exp_name: &str,
         component: &str,
         message: &str,
     ) -> Result<(), RepositoryError> {
@@ -307,11 +321,9 @@ impl RunRepository {
             message: message.to_string(),
         };
 
-        // status:"running" keeps errors attached to the ACTIVE run — a re-used
-        // run number must not append errors to an old completed doc (TODO 58 H11).
         self.collection
             .update_one(
-                doc! { "run_number": run_number, "status": "running" },
+                active_run_filter(run_number, exp_name),
                 doc! {
                     "$push": {
                         "errors": mongodb::bson::to_bson(&entry).expect("ErrorLogEntry serializes to BSON"),
@@ -331,13 +343,18 @@ impl RunRepository {
     }
 
     /// Add a note to the current run (append-only)
-    pub async fn add_note(&self, run_number: i32, text: &str) -> Result<RunNote, RepositoryError> {
+    pub async fn add_note(
+        &self,
+        run_number: i32,
+        exp_name: &str,
+        text: &str,
+    ) -> Result<RunNote, RepositoryError> {
         let time_ms = Utc::now().timestamp_millis();
 
         let result = self
             .collection
             .update_one(
-                doc! { "run_number": run_number, "status": "running" },
+                active_run_filter(run_number, exp_name),
                 doc! {
                     "$push": {
                         "notes": {
@@ -371,11 +388,17 @@ impl RunRepository {
         Ok(doc)
     }
 
-    /// Get run by number
-    pub async fn get_run(&self, run_number: i32) -> Result<Option<RunDocument>, RepositoryError> {
+    /// Get one experiment's run by number; for a retake (re-used number), the
+    /// most recent one.
+    pub async fn get_run(
+        &self,
+        run_number: i32,
+        exp_name: &str,
+    ) -> Result<Option<RunDocument>, RepositoryError> {
         let doc = self
             .collection
-            .find_one(doc! { "run_number": run_number })
+            .find_one(run_filter(run_number, exp_name))
+            .sort(doc! { "start_time": -1 })
             .await?;
 
         Ok(doc)
@@ -543,6 +566,22 @@ mod tests {
         let info = CurrentRunInfo::from_document(&doc);
         // Allow 1 second tolerance
         assert!(info.elapsed_secs >= 59 && info.elapsed_secs <= 61);
+    }
+
+    #[test]
+    fn test_run_filters_are_per_experiment() {
+        // Run numbers are per experiment: with the number alone, GET /api/runs/5
+        // on N_Wall returned X730_ThGEM_Test's run 5 (pf-qaq, 2026-11-05).
+        assert_eq!(
+            run_filter(5, "N_Wall"),
+            doc! { "run_number": 5, "exp_name": "N_Wall" }
+        );
+        // Writes reach only this experiment's active run: not a completed retake
+        // (TODO 58 H11), not another experiment's run of the same number.
+        assert_eq!(
+            active_run_filter(5, "N_Wall"),
+            doc! { "run_number": 5, "exp_name": "N_Wall", "status": "running" }
+        );
     }
 
     #[test]
