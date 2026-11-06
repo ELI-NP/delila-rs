@@ -876,7 +876,9 @@ batch decode, the coincidence and position matchers (with energies; keyed on
 classes), the bare-channel ambiguity watch, run state, the HTTP
 helpers (`split_http_response` / `extract_experiment_name`), time offsets and
 event definitions; `test_hist_config.cpp` (`standard/`) covers the histogram
-config parser (all error classes + `value_of` / `pass_cut` for every scope):
+config parser (all error classes + `value_of` / `pass_cut` for every scope);
+`test_energy_calib.cpp` (`common/`, run from that directory) covers the keV table on the
+same fixtures as the Rust reader (`src/monitor/energy_calib.rs`):
 
 ```sh
 cd tools/root_sink/common
