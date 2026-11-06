@@ -376,6 +376,12 @@ class CommittedFilesTest(AssertBounded, unittest.TestCase):
             self.assertNotIn("now()", sql)
             self.assertBounded(sql)
 
+    def test_time_bins_are_never_shorter_than_the_writes(self):
+        for path in DASH_DIR.glob("*/*.json"):
+            for p in json.loads(path.read_text())["panels"]:
+                if any("$__dateBin" in t.get("rawSql", "") for t in p.get("targets", [])):
+                    self.assertEqual(p.get("interval"), g.MIN_INTERVAL, f"{path.name}: {p['title']}")
+
     def test_run_markers_leave_out_tune_up_everywhere(self):
         for path in DASH_DIR.glob("*/*.json"):
             for sql in all_sql(json.loads(path.read_text())):

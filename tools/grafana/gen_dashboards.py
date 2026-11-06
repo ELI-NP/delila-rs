@@ -46,6 +46,9 @@ RANGE = "time >= $__timeFrom AND time <= $__timeTo"
 GRID_WINDOW = "10 seconds"  # "current" rate = mean over the last 10 s of the range
 SILENT_WINDOW = "1 minute"  # silent channel = no count during the last minute
 RUN_LOOKBACK = "30 days"  # how far back to look for the last run start/stop
+# Smallest time bin. The Operator writes every 2 s, and on a short time range Grafana
+# asks for bins below 1 s, for which $__dateBin returned nothing on pf-qaq: "No data".
+MIN_INTERVAL = "2s"
 
 # Cell colours of the module x channel grid (Hz, absolute thresholds):
 # 0 Hz during a run is red, a disabled channel without counts grey ("off"),
@@ -510,6 +513,7 @@ def timeseries_panel(pid: int, title: str, pos: dict, targets: list[dict], uid: 
         "type": "timeseries",
         "title": title,
         "description": description,
+        "interval": MIN_INTERVAL,
         "gridPos": pos,
         "datasource": ds_ref(uid),
         "fieldConfig": {

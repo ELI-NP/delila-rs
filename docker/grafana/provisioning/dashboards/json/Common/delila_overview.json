@@ -96,6 +96,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "Event rate per module (Hz)",
+      "interval": "2s",
       "description": "system_rate.event_rate per source. Board names and per-channel rates: the Rates dashboards (links at the top).",
       "gridPos": {
         "h": 9,
@@ -152,6 +153,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Total events per module",
+      "interval": "2s",
       "description": "system_rate.total_events (events processed this run).",
       "gridPos": {
         "h": 8,
@@ -206,6 +208,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Data rate per module (bytes/s)",
+      "interval": "2s",
       "description": "Derivative of system_rate.bytes (cumulative bytes read). Counter resets (new run) are skipped.",
       "gridPos": {
         "h": 8,
@@ -261,6 +264,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "Backlog queue per component (bytes)",
+      "interval": "2s",
       "description": "backlog.queue_bytes (max per interval) of Merger / Recorder / Monitor / ...",
       "gridPos": {
         "h": 8,
@@ -317,6 +321,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Disk free per writer",
+      "interval": "2s",
       "description": "disk.free_bytes of the output filesystem (min per interval).",
       "gridPos": {
         "h": 8,
@@ -372,6 +377,7 @@
       "id": 6,
       "type": "state-timeline",
       "title": "Health: backlog / disk / write",
+      "interval": "2s",
       "description": "backlog_level and disk_level: 0 OK, 1 below the soft watermark, 2 below the hard one (the Operator stops / refuses Start). write = disk.write_failed (TODO 69).",
       "gridPos": {
         "h": 8,
