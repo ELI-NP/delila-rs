@@ -1,6 +1,15 @@
 # TODO 74 — Grafana をイベントレートモニタとして使えるようにする(pf-qaq)
 
-**Status: 🚧 P1〜P5 実装・pf-qaq に配備済み (2026-10-22 17:02、ランの合間にユーザー了承で DAQ 再起動) — 残 = `N_Wall` 用の HV パネル(P4)。`channel_rate` と `run_event` は 2026-11-05 にラン 5〜44 のデータが入っていることを確認**
+**Status: 🚧 P1〜P5 実装・pf-qaq に配備済み、N1408 のダッシュボードも配備 (2026-11-06) — 残 = admin パスワードの変更(ユーザー)、実際のランでの見え方の確認。`channel_rate` と `run_event` は 2026-11-05 にラン 5〜44 のデータが入っていることを確認**
+
+**2026-11-06 の変更(6b68a67、DAQ は再起動していない):**
+- **`Si HV (N1408)`(uid `si-hv-n1408`)を追加し、`Si HV (MHV-4)` を外した。** 電源が N1408 に替わり、`mhv4` は 11-02 で止まっていた(データは InfluxDB に残っている)。中身 = 現在値の表(状態、VMon、VSet、IMon、ISet、MaxV、ランプ、Trip、アラームのビット)、状態の時系列、VMon、IMon、操作の記録。グラフにラン、HV 操作、アラームの印。状態は `n1408_control.py` の `channel_state` と同じ規則で、記録された 8,384 読み値と合成の 11 パターンで一致を確認。
+- **ランの印から Tune Up を外した。** Tune Up は run 0(`src/operator/routes/tuneup.rs`)で、`run_event` 825 件のうち 470 件を占めていた。
+- **チャンネルが赤になるのはラン中だけにした。** ラン中でないときは、カウントのない ch を `-`、`Silent channels` を空にする。カウントのある ch は Tune Up 中でも青で出る。「ラン中」はカウントでなく `run_event` で判定する(ラン中に DAQ が止まれば赤のまま)。
+
+**落とし穴(実データで発見):** `(SELECT event FROM run_event ... ORDER BY time DESC LIMIT 1) = 'start'` は DataFusion で正しく動かなかった。Idle なのに WHERE で真、ラン中なのに CASE で偽。SQL の文字列を見る単体テストは通るので、`gen_dashboards.py` の SQL は実データの時刻で確かめること。今は `run_state()` の集計(`MAX(start) > MAX(stop)`)を CROSS JOIN している。ラン 4 本とその停止直後、Idle、Tune Up 中で確認済み。
+
+**pf-qaq の現状(2026-11-06):** InfluxDB 3 の Parquet は 22,956 / 上限 50,000(約 740 個/日 → 12 月中旬に到達、失敗するのは全期間のような広いクエリだけ)、ディスク約 300 MB、メモリ約 6 GiB。全期間クエリは 0.3 秒。**admin のパスワードは公開の既定値のまま**: `admin` / `delila` でログインできた(`docker/.env` にキーはあるが、Grafana は初回起動時にしか読まないためと思われる)。変更は `docker exec delila_grafana grafana-cli admin reset-admin-password '...'`。
 
 **P2〜P5 実装記録 (2026-10-22):**
 - P2/P5: `src/operator/influxdb.rs` — `RateTracker`(実測の経過時間で割る、初回は rate なし、カウンタが戻ったら 0)、

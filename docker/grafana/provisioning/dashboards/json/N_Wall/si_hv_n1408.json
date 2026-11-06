@@ -125,6 +125,18 @@
         "overrides": [
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "/.*/"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "-"
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "channel"
             },
@@ -245,6 +257,10 @@
               {
                 "id": "decimals",
                 "value": 2
+              },
+              {
+                "id": "custom.width",
+                "value": 100
               }
             ]
           },
@@ -265,6 +281,10 @@
               {
                 "id": "decimals",
                 "value": 2
+              },
+              {
+                "id": "custom.width",
+                "value": 100
               }
             ]
           },
@@ -285,6 +305,10 @@
               {
                 "id": "decimals",
                 "value": 3
+              },
+              {
+                "id": "custom.width",
+                "value": 100
               }
             ]
           },
@@ -305,6 +329,10 @@
               {
                 "id": "decimals",
                 "value": 3
+              },
+              {
+                "id": "custom.width",
+                "value": 100
               }
             ]
           },
@@ -325,6 +353,10 @@
               {
                 "id": "decimals",
                 "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 80
               }
             ]
           },
@@ -345,6 +377,10 @@
               {
                 "id": "decimals",
                 "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 85
               }
             ]
           },
@@ -365,6 +401,10 @@
               {
                 "id": "decimals",
                 "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 95
               }
             ]
           },
@@ -385,6 +425,10 @@
               {
                 "id": "decimals",
                 "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 75
               }
             ]
           },
@@ -476,16 +520,8 @@
         "defaults": {
           "displayName": "ch ${__field.labels.channel}",
           "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8e8e8e",
-                "value": null
-              }
-            ]
+            "mode": "fixed",
+            "fixedColor": "#8e8e8e"
           },
           "mappings": [
             {
@@ -535,17 +571,6 @@
                   "text": "KILL",
                   "color": "red",
                   "index": 8
-                }
-              }
-            },
-            {
-              "type": "special",
-              "options": {
-                "match": "null",
-                "result": {
-                  "text": "UNKNOWN",
-                  "color": "orange",
-                  "index": 9
                 }
               }
             }
@@ -599,7 +624,6 @@
         "defaults": {
           "displayName": "ch ${__field.labels.channel}",
           "unit": "suffix: V",
-          "decimals": 2,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
@@ -617,9 +641,8 @@
         },
         "legend": {
           "displayMode": "table",
-          "placement": "bottom",
+          "placement": "right",
           "calcs": [
-            "mean",
             "lastNotNull"
           ]
         }
@@ -655,7 +678,6 @@
         "defaults": {
           "displayName": "ch ${__field.labels.channel}",
           "unit": "suffix: µA",
-          "decimals": 3,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
@@ -673,9 +695,8 @@
         },
         "legend": {
           "displayMode": "table",
-          "placement": "bottom",
+          "placement": "right",
           "calcs": [
-            "mean",
             "lastNotNull"
           ]
         }

@@ -6,7 +6,7 @@
 `tools/hv_monitor/mhv4_monitor.py`(読み出し専用、送れるのは許可した 21 個の文字列だけ。ポートへの書き込みは
 `send_command()` の 1 か所)、`mhv4_config.yaml`、`test_mhv4_monitor.py`(39 テスト、Mac の 3.14 と pf-qaq の 3.12 で OK)、
 `mhv4-monitor.service`(system unit、User=daq、DAQ とは無関係に常駐)、
-ダッシュボード `si_hv_mhv4.json`(uid `si-hv-mhv4`)。
+ダッシュボード `si_hv_mhv4.json`(uid `si-hv-mhv4`)。**2026-11-06: Si の電源が N1408 に替わったのでダッシュボードは外した(TODO 82、`Si HV (N1408)`)。JSON は git の履歴にあり、`mhv4` のデータも InfluxDB に残っている。**
 pf-qaq で 13 秒間の実機テスト: 警告 0、2 秒ごとに 7 周期、4 ch とも全フィールド取得
 (上限 27.5 / 0 / 0 / 110.2 V、電流上限 20 / 5.29 / 5 / 12.506 µA、極性はすべて positive、ランプ 5 V/s — 手での確認と一致)。
 ダッシュボードの全クエリを実 InfluxDB で実行して確認、Grafana に読み込まれたことも確認。
