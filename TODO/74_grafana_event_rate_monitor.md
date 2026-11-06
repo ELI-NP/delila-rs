@@ -9,6 +9,12 @@
 
 **落とし穴(実データで発見):** `(SELECT event FROM run_event ... ORDER BY time DESC LIMIT 1) = 'start'` は DataFusion で正しく動かなかった。Idle なのに WHERE で真、ラン中なのに CASE で偽。SQL の文字列を見る単体テストは通るので、`gen_dashboards.py` の SQL は実データの時刻で確かめること。今は `run_state()` の集計(`MAX(start) > MAX(stop)`)を CROSS JOIN している。ラン 4 本とその停止直後、Idle、Tune Up 中で確認済み。
 
+**短い時間範囲でグラフが空になる不具合を修正(454596a):** 数分の範囲だと Grafana が 1 秒未満の bin を要求し、`$__dateBin` のクエリが 0 件を返していた(200 ms で 0 フレーム、1000 ms で 108 点)。`Last 5 minutes` で全グラフが `No data` になる。Operator の書き込みは 2 秒ごとなので、最小間隔 `interval: 2s` を `$__dateBin` を使う全パネルに入れた(テストで固定)。
+
+**ThGEM に戻すとき:** `Rates — X730_ThGEM_Test` は古い生成物のままなので、`gen_dashboards.py` で作り直すこと。pf-qaq のローカルの `config_thgem_pfqaq.toml` は今 `experiment_name` が N_Wall になっているらしく、そのままだと `channel_map_N_Wall.txt` と合わずにエラーになる(何も書き込まれない)。
+
+**残りの見た目の問題(実験後でよい):** `HV Monitor (SY5527)` は `Power Status` の帯が `<1` と出る(`color.mode: thresholds` のせいで、N1408 で直したのと同じ)、`VSet` が `1.3 kV` と丸まる、電流の単位が `muA`。
+
 **pf-qaq の現状(2026-11-06):** InfluxDB 3 の Parquet は 22,956 / 上限 50,000(約 740 個/日 → 12 月中旬に到達、失敗するのは全期間のような広いクエリだけ)、ディスク約 300 MB、メモリ約 6 GiB。全期間クエリは 0.3 秒。**admin のパスワードは公開の既定値のまま**: `admin` / `delila` でログインできた(`docker/.env` にキーはあるが、Grafana は初回起動時にしか読まないためと思われる)。変更は `docker exec delila_grafana grafana-cli admin reset-admin-password '...'`。
 
 **P2〜P5 実装記録 (2026-10-22):**
