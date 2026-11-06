@@ -77,6 +77,7 @@
 #include <vector>
 
 #include "../common/eb_core.hpp"
+#include "../common/energy_calib.hpp"
 #include "../common/event_def.hpp"
 #include "hist_config.hpp"
 #include "../common/sink_core.hpp"
@@ -124,6 +125,8 @@ static volatile sig_atomic_t g_reset = 0;
 static volatile sig_atomic_t g_reload = 0;
 static void request_reset() { g_reset = 1; }
 static void request_reload() { g_reload = 1; }
+static volatile sig_atomic_t g_reload_calib = 0;
+static void request_reload_calib() { g_reload_calib = 1; }
 
 // ---------------------------------------------------------------------------
 // Built-in monitor histograms — file-scope so the main-loop /Reset handler can
@@ -172,6 +175,9 @@ struct Options {
   // --time-calib FILE: per-(module,channel) time offsets (timeSettings.json),
   // re-read at every run start (empty = off, timestamps recorded raw).
   std::string time_calib;
+  // --energy-calib FILE: keV coefficients for the energy_kev histogram variable
+  // (energy_calib.hpp). Display only: the trees keep ADC.
+  std::string energy_calib;
   // --event-def FILE: generic event definition (event_def.hpp) -> the "events"
   // tree; re-read at every run start like --time-calib (empty = off).
   std::string event_def;
@@ -223,6 +229,9 @@ static void print_usage(const char* argv0) {
       "  --chunk-span-ms X   sorter chunk span in data time (default 100)\n"
       "  --safe-horizon-ms X sorter disorder absorption (default 50; must\n"
       "                      exceed the stream's max arrival disorder)\n"
+      "  --energy-calib FILE keV coefficients, 'module channel kev_per_adc offset_kev',\n"
+      "                      for the --hists variable energy_kev (display only, the\n"
+      "                      trees keep ADC); re-read at every run start and /ReloadCalib\n"
       "  --time-calib FILE   per-(module,channel) time offsets: timeSettings.json\n"
       "                      tree form (or legacy time-calib output); aligned =\n"
       "                      raw - offset_ns for every consumer (hits tree, events,\n"
@@ -348,6 +357,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
                    "config/event_def_thgem.json) and rebuild the ThGEM rows offline with "
                    "tools/root_sink/thgem/thgem_events.C (same branches as the old built tree)\n");
       return false;
+    } else if (a == "--energy-calib") {
+      if (!(v = need(i))) return false;
+      opt.energy_calib = v;
     } else if (a == "--time-calib") {
       if (!(v = need(i))) return false;
       opt.time_calib = v;
@@ -1169,15 +1181,16 @@ static void build_live_hists(const std::vector<HistDef>& defs, THttpServer* serv
 }
 
 // Fill every hit-scope histogram for one decoded event.
-static void fill_hit_hists(std::vector<LiveHist>& live, const ScalarHit& h) {
+static void fill_hit_hists(std::vector<LiveHist>& live, const ScalarHit& h,
+                           const ecal::CalibTable& calib) {
   for (auto& lh : live) {
     if (lh.def.scope != Scope::Hit) continue;
     if (!pass_cut(lh.def.cut, h)) continue;
     double x = 0.0;
-    if (!value_of(lh.def.x, h, x)) continue;
+    if (!value_of(lh.def.x, h, calib, x)) continue;
     if (lh.def.is2d) {
       double y = 0.0;
-      if (!value_of(lh.def.y, h, y)) continue;
+      if (!value_of(lh.def.y, h, calib, y)) continue;
       static_cast<TH2*>(lh.h)->Fill(x, y);
     } else {
       lh.h->Fill(x);
@@ -1470,7 +1483,16 @@ int main(int argc, char** argv) {
                      "it can never match\n",
                      u.first.c_str(), ch_spec_name(u.second).c_str(), u.second.module,
                      module_list_str(opt.modules).c_str());
+    if (uses_energy_kev(defs) && opt.energy_calib.empty())
+      std::fprintf(stderr,
+                   "root_sink: WARNING a histogram uses energy_kev but there is no "
+                   "--energy-calib: it stays empty\n");
   };
+  if (!opt.energy_calib.empty() && !use_hists)
+    std::fprintf(stderr,
+                 "root_sink: WARNING --energy-calib %s does nothing without --hists: keV "
+                 "histograms are the ones using the variable energy_kev\n",
+                 opt.energy_calib.c_str());
   if (!opt.hists_file.empty() && !http_enabled)
     std::fprintf(stderr,
                  "root_sink: WARNING --hists %s ignored because --http-port 0 "
@@ -1650,8 +1672,47 @@ int main(int argc, char** argv) {
 
   // --- ROOT monitor objects (created before any TFile; detached from gDirectory
   //     so they persist across runs and are never owned/deleted by a run file) ---
-  THttpServer* server = nullptr;
   std::vector<LiveHist> live_hists;  // populated only in --hists mode
+
+  // Energy calibration (TODO 83): only the histograms using energy_kev read it.
+  // Nothing recorded does, so a bad file keeps the previous table and stops nothing.
+  const bool calib_on = !opt.energy_calib.empty() && use_hists && http_enabled;
+  ecal::ActiveCalib calib;
+  std::set<uint16_t> calib_unmapped;  // channels seen this run without coefficients
+  bool kev_hists = uses_energy_kev(hist_defs);
+  bool calib_started = false;
+  auto reload_calib = [&](const char* why) {
+    if (!calib_on) return;
+    char resolved[4096];
+    const std::string real =
+        ::realpath(opt.energy_calib.c_str(), resolved) ? std::string(resolved) : opt.energy_calib;
+    std::string text;
+    const bool readable = read_file(opt.energy_calib, text);
+    const std::string read_error = readable ? "" : std::strerror(errno);
+    std::vector<std::string> errors;
+    bool changed = false;
+    if (ecal::reload_calib(calib, readable ? &text : nullptr, read_error, real, now_utc_iso(),
+                           errors, changed)) {
+      if (changed) {
+        // The keV histograms would otherwise mix two scales.
+        for (auto& lh : live_hists)
+          if (lh.h && uses_energy_kev(lh.def)) lh.h->Reset();
+        if (calib_started)
+          std::printf("root_sink: energy calibration changed (%s), keV histograms zeroed: %s\n",
+                      why, ecal::calib_status_text(calib, true).c_str());
+      }
+    } else {
+      std::fprintf(stderr, "root_sink: ERROR energy calibration (%s): %s\n", why,
+                   calib.stale ? "STALE, previous table kept" : "keV histograms stay empty");
+      for (const auto& e : errors) std::fprintf(stderr, "root_sink:   - %s\n", e.c_str());
+    }
+  };
+  reload_calib("start-up");
+  std::printf("root_sink: energy calibration: %s\n",
+              ecal::calib_status_text(calib, calib_on).c_str());
+  calib_started = true;
+
+  THttpServer* server = nullptr;
   if (http_enabled) {
     TH1::AddDirectory(kFALSE);
 
@@ -1690,6 +1751,11 @@ int main(int argc, char** argv) {
           "/ReloadHists",
           Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reload)),
           "button;Reload histogram definitions");
+      if (calib_on)
+        server->RegisterCommand(
+            "/ReloadCalib",
+            Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reload_calib)),
+            "button;Reload energy calibration");
     } else {
       g_h_dt1 = new TH1D("dt1", "t(ThGEM1) - t(gamma) [ns];#Deltat_{1} [ns];counts",
                          opt.dt_bins, opt.dt_min, opt.dt_max);
@@ -1723,6 +1789,9 @@ int main(int argc, char** argv) {
     server->CreateItem("/WriteStatus", "run file write status (TODO 69)");
     server->SetItemField("/WriteStatus", "_kind", "Text");
     server->SetItemField("/WriteStatus", "value", "OK");
+    server->CreateItem("/EnergyCalib", "keV coefficients in force (TODO 83, display only)");
+    server->SetItemField("/EnergyCalib", "_kind", "Text");
+    server->SetItemField("/EnergyCalib", "value", ecal::calib_status_text(calib, calib_on).c_str());
     std::printf("root_sink: THttpServer on http://<host>:%d/  (open in a browser; JSROOT)\n",
                 opt.http_port);
   }
@@ -2414,9 +2483,13 @@ int main(int argc, char** argv) {
         if (http_enabled) {
           for (const ScalarHit& h : d.hits) {
             if (bare_watch_on) bare_watch.see(h, on_bare_ambiguous);
-            if (use_hists)
-              fill_hit_hists(live_hists, h);
-            else if (h.channel < 64)
+            if (use_hists) {
+              fill_hit_hists(live_hists, h, calib.table);
+              if (kev_hists && calib_on) {
+                const uint16_t key = ecal::calib_key(h.module, h.channel);
+                if (!calib.table.count(key)) calib_unmapped.insert(key);
+              }
+            } else if (h.channel < 64)
               g_h_channels->Fill(h.channel);
             if (matcher) matcher->push(h, emit);
             if (xy1) xy1->push(h, emit_xy1);
@@ -2429,11 +2502,17 @@ int main(int argc, char** argv) {
         if (matcher) matcher->reset();  // clock may restart between runs
         if (xy1) xy1->reset();
         if (xy2) xy2->reset();
+        calib_unmapped.clear();
+        reload_calib("run start");
         break;
       case eb::Ctrl::RunClose:
         if (matcher) matcher->flush(emit);  // ripen the final partial window
         if (xy1) xy1->flush(emit_xy1);
         if (xy2) xy2->flush(emit_xy2);
+        if (!calib_unmapped.empty())
+          std::printf("root_sink: energy calibration: no coefficients for %zu channel(s) with "
+                      "hits, not in the keV histograms: %s\n",
+                      calib_unmapped.size(), ecal::channel_list(calib_unmapped).c_str());
         break;
       case eb::Ctrl::Shutdown:
         display_done = true;
@@ -2445,6 +2524,12 @@ int main(int argc, char** argv) {
               opt.chunk_span_ms, opt.safe_horizon_ms, n_workers);
   std::printf("root_sink: running. Ctrl-C or SIGTERM to stop.\n");
   std::fflush(stdout);
+
+  auto calib_field = [&] {
+    std::string s = ecal::calib_status_field(calib, calib_on);
+    if (!calib_unmapped.empty()) s += " (" + std::to_string(calib_unmapped.size()) + " unmapped)";
+    return s;
+  };
 
   auto t_last_status = Clock::now();
   long long last_received = 0;
@@ -2460,6 +2545,7 @@ int main(int argc, char** argv) {
     return s;
   };
   std::string shown_write_status = "OK";
+  std::string shown_calib_text = ecal::calib_status_text(calib, calib_on);
 
   while (!display_done) {
     eb::DisplayMsg d;
@@ -2483,6 +2569,11 @@ int main(int argc, char** argv) {
         server->SetItemField("/WriteStatus", "value", ws.c_str());
         shown_write_status = ws;
       }
+      std::string cs = ecal::calib_status_text(calib, calib_on);
+      if (cs != shown_calib_text) {
+        server->SetItemField("/EnergyCalib", "value", cs.c_str());
+        shown_calib_text = cs;
+      }
       gSystem->ProcessEvents();
     }
 
@@ -2500,6 +2591,11 @@ int main(int argc, char** argv) {
         if (g_h_channels) g_h_channels->Reset();
       }
       std::printf("root_sink: /Reset — histograms zeroed\n");
+      std::fflush(stdout);
+    }
+    if (g_reload_calib) {
+      g_reload_calib = 0;  // /ReloadCalib is only registered with --hists --energy-calib
+      reload_calib("/ReloadCalib");
       std::fflush(stdout);
     }
     if (g_reload) {
@@ -2526,6 +2622,7 @@ int main(int argc, char** argv) {
           live_hists.clear();
           build_live_hists(pr.defs, server, live_hists);
           warn_dropped_specs(pr.defs);
+          kev_hists = uses_energy_kev(pr.defs);
           rebuild_bare_watch(pr.defs);
           std::printf("root_sink: /ReloadHists — %zu histogram(s) now live\n",
                       live_hists.size());
@@ -2587,13 +2684,13 @@ int main(int argc, char** argv) {
           "root_sink: %s%s | events=%lld (%s) | %.0f ev/s | chunks=%lld | "
           "ev=%s | matcher_fills=%lld | xy_fills=%lld | q[sort=%zu work=%zu "
           "write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | late=%lld | "
-          "toff=%s\n",
+          "toff=%s | ecal=%s\n",
           counters.writing ? "WRITING" : "idle", wf.c_str(), rec, written_s,
           rate, (long long)counters.chunks, ev_s,
           (long long)counters.matcher_fills, (long long)counters.xy_fills,
           to_sorter.size(), work_q.size(), writer_q.size(), display_q.size(),
           (long long)counters.display_drops, (long long)counters.other_module,
-          (long long)counters.late, toff_s);
+          (long long)counters.late, toff_s, calib_field().c_str());
       std::fflush(stdout);
       t_last_status = now;
       last_received = rec;

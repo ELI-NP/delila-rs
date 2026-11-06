@@ -531,6 +531,53 @@ across runs until you hit `/Reset` (a log line marks each boundary). The
 coincidence *timing* state, on the other hand, is reset per run, because the
 digitizer clock can restart between runs.
 
+## Energy calibration (`--energy-calib`, TODO 83)
+
+Display only: `.delila` and `.root` keep raw ADC, and with or without this option
+the trees are identical (`compare_hits.C`, `check_events.C`). The Web Monitor reads
+the same table (`energy_calib_file` in `[network.monitor]`).
+
+The coefficients are worked out outside delila-rs and arrive as a table of exactly
+four columns, one line per channel (`config/energy_calib_example.txt`):
+
+```
+# module channel kev_per_adc offset_kev      E_keV = kev_per_adc * energy + offset_kev
+5   0   0.30120  -12.4
+```
+
+Give the file as `--energy-calib FILE`, or `energy_calib_file` in
+`[network.root_sink]`. It is read at start-up, at every run start and on
+`/ReloadCalib`. A bad file (wrong column count, slope <= 0, a repeated channel, ...)
+is refused as a whole with line numbers and the previous table stays in force
+(`STALE`); nothing recorded depends on it, so unlike `--time-calib` it never stops
+the program. New coefficients restart the keV histograms, which would otherwise mix
+two scales. Status: `ecal=` in the status line, the JSROOT text item `/EnergyCalib`
+(`curl http://<host>:8090/EnergyCalib/item.json`), and at the end of a run a line
+listing the channels that had hits but no coefficients.
+
+- `nwall_sink` adds `/hits/energy_keV_m<M>` and `/events/pid_keV`.
+- `root_sink` adds the `--hists` variable `energy_kev`.
+
+### What to tell whoever works out the coefficients
+
+1. Find, per channel, `kev_per_adc` and `offset_kev` in
+   `E_keV = kev_per_adc * energy + offset_kev`. The method is yours.
+2. `energy` is the branch of that name in the hits tree `delila` (`UShort_t`, raw
+   ADC), the same in the files from `root_sink`, `nwall_sink` (with `hits_tree =
+   true`) and `delila2root`. In the events tree `HitEnergy[NHits]` is the same
+   quantity. PHA boards give 0..32767 (trapezoid height), PSD boards 0..65535 (long
+   gate charge). It is not `energy_short`.
+3. Name channels by the values of the branches `module` and `channel`, read from the
+   file you calibrated with: the module numbers can change between runs.
+4. Hand back one line per channel: `module channel kev_per_adc offset_kev`. Nothing
+   else is needed.
+5. For a channel you could not calibrate, write no line: 0 or NaN refuses the whole
+   file. That channel simply stays in ADC on screen.
+
+**Checking a table you received:** put it in place with `mv`, press Reload, and read
+the channel count or the line numbers of the errors. Then look at a known line: the
+parser cannot tell swapped columns or coefficients from another run.
+
 ## Custom histograms (`--hists FILE`)
 
 By default the four objects above are hard-coded. Pass `--hists FILE` and that
@@ -582,7 +629,7 @@ gamma energy" expressible.
 
 | kind     | names |
 |----------|-------|
-| variable | `energy`, `energy_short`, `channel`, `module` |
+| variable | `energy`, `energy_short`, `channel`, `module`, `energy_kev` (needs `--energy-calib`, see *Energy calibration*; a channel without coefficients is not filled) |
 | cut      | `channel` (keep hits on that channel: a number `3` = channel 3 on any module, or a string `"3"` / `"10:3"` = the CLI's C / M:C), `energy_range` (`[min,max]` inclusive) |
 
 **coinc scope** — one row per *ripe gamma* coincidence result (needs the Δt

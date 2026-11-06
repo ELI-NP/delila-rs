@@ -37,6 +37,7 @@ safe_horizon_ms = 1000
 # rf_period_ns = 199.980   # nominal; measured per run from the beam channel
 # rf_t0_ns = 0.0           # see "Calibration" below
 # si_delay_ns = 0.0
+# energy_calib_file = "config/energy_calib_nwall.txt"   # keV histograms, see ../README.md
 ```
 
 All boards are clock- and start-synchronized, so no `module` filter is needed.
@@ -69,6 +70,8 @@ never drop). Histograms accumulate across runs until `/Reset`.
 | `/rf` | `tof_rf_m<M>` | t − (bunch at or before t) − rf_t0, per channel (0 … T): the beam itself at 0, the gamma flash at L/c |
 | `/ls` | `ls_psd` | (E_long − E_short) / E_long vs E_long of the LS channels (n/γ) |
 | `/events` | `pid` | dE vs E — the largest dE-sector and E-sector hit of each event |
+| `/hits` | `energy_keV_m<M>` | with `--energy-calib`: energy in keV × channel, per board; channels without coefficients are not in it |
+| `/events` | `pid_keV` | with `--energy-calib`: dE vs E in keV, the largest hit of each **in keV**, among sectors with coefficients |
 | | `sector_dE_vs_E` | dE sector × E sector, every pair in an event (the diagonal = the sector order) |
 | | `dE_ring_vs_sector` | dE ring × dE sector in an event |
 | | `ls_dt_si` | t(LS) − t(E trigger), per LS channel |

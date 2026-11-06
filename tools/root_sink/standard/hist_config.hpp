@@ -8,7 +8,9 @@
 // The ROOT wiring (creating TH1D/TH2D, Register, Fill) stays in root_sink.cxx.
 //
 // KISS: this is a FIXED vocabulary, not an expression engine. Four scopes:
-//   * hit   — per-event scalars: variables energy, energy_short, channel, module;
+//   * hit   — per-event scalars: variables energy, energy_short, channel, module,
+//             energy_kev (needs --energy-calib, see energy_calib.hpp; a channel
+//             without coefficients is not filled);
 //             cuts `channel` and `energy_range` [min,max]. `channel` is a
 //             number C (that channel on ANY module — the pre-Phase-2 meaning)
 //             or a string "C" / "M:C" (sink_core.hpp ChSpec, the CLI spelling).
@@ -34,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "../common/energy_calib.hpp"
 #include "../common/sink_core.hpp"  // ScalarHit, CoincResult (+ tdelila::json parser)
 
 namespace rootsink {
@@ -47,6 +50,7 @@ enum class Var {
   // hit scope
   Energy,
   EnergyShort,
+  EnergyKev,
   Channel,
   Module,
   // coinc scope
@@ -115,6 +119,7 @@ struct ParseResult {
 inline bool var_lookup(const std::string& n, Var& v, Scope& sc) {
   if (n == "energy") { v = Var::Energy; sc = Scope::Hit; return true; }
   if (n == "energy_short") { v = Var::EnergyShort; sc = Scope::Hit; return true; }
+  if (n == "energy_kev") { v = Var::EnergyKev; sc = Scope::Hit; return true; }
   if (n == "channel") { v = Var::Channel; sc = Scope::Hit; return true; }
   if (n == "module") { v = Var::Module; sc = Scope::Hit; return true; }
   if (n == "dt1") { v = Var::Dt1; sc = Scope::Coinc; return true; }
@@ -143,8 +148,9 @@ inline bool cutkey_lookup(const std::string& key, CutKind& k, Scope& sc) {
 // Fill-time value + cut evaluation
 // ---------------------------------------------------------------------------
 
-// Read a hit-scope variable. Always true for the four hit variables; false for a
-// coinc variable (unreachable once the def passed scope validation).
+// Read a hit-scope variable. Always true for the ADC-based hit variables; false for
+// a coinc variable (unreachable once the def passed scope validation) and for
+// energy_kev, which needs the table: see the overload below.
 inline bool value_of(Var v, const ScalarHit& h, double& out) {
   switch (v) {
     case Var::Energy: out = h.energy; return true;
@@ -153,6 +159,15 @@ inline bool value_of(Var v, const ScalarHit& h, double& out) {
     case Var::Module: out = h.module; return true;
     default: return false;
   }
+}
+
+// The same with the keV table: energy_kev is false for a channel without coefficients.
+inline bool value_of(Var v, const ScalarHit& h, const ecal::CalibTable& calib, double& out) {
+  if (v != Var::EnergyKev) return value_of(v, h, out);
+  auto it = calib.find(ecal::calib_key(h.module, h.channel));
+  if (it == calib.end()) return false;
+  out = it->second.to_kev(h.energy);
+  return true;
 }
 
 // Read a coinc-scope variable. False (do not fill) when the value needs a partner
@@ -549,6 +564,17 @@ inline ParseResult parse_hist_config(const std::string& json_text) {
   for (std::size_t i = 0; i < hists->arr.size(); ++i)
     detail::parse_one(hists->arr[i], i, names, pr);
   return pr;
+}
+
+// Histograms filled from the keV table: new coefficients restart them, and they stay
+// empty without --energy-calib.
+inline bool uses_energy_kev(const HistDef& d) {
+  return d.x == Var::EnergyKev || (d.is2d && d.y == Var::EnergyKev);
+}
+inline bool uses_energy_kev(const std::vector<HistDef>& defs) {
+  for (const HistDef& d : defs)
+    if (uses_energy_kev(d)) return true;
+  return false;
 }
 
 }  // namespace rootsink

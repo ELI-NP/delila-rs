@@ -268,6 +268,54 @@ static void test_value_and_cut() {
     CHECK(!pass_cut(Cut{CutKind::EnergyRange, 0, 600, 800}, h));
     CHECK(pass_cut(Cut{CutKind::EnergyRange, 0, 500, 500}, h));  // inclusive edge
   }
+  // energy_kev: a hit-scope variable that needs the keV table (TODO 83).
+  {
+    Var v;
+    Scope sc;
+    CHECK(var_lookup("energy_kev", v, sc) && v == Var::EnergyKev && sc == Scope::Hit);
+
+    ScalarHit h{};
+    h.module = 2;
+    h.channel = 3;
+    h.energy = 100;
+    ecal::CalibTable t;
+    t[ecal::calib_key(2, 3)] = ecal::LinearCalib{0.5, -10.0};
+    double x = 0.0;
+    CHECK(value_of(Var::EnergyKev, h, t, x) && near(x, 40.0));
+    // The other variables read the same with the table.
+    CHECK(value_of(Var::Energy, h, t, x) && near(x, 100.0));
+    // A channel without coefficients is not filled, and neither is an empty table.
+    h.channel = 4;
+    CHECK(!value_of(Var::EnergyKev, h, t, x));
+    CHECK(!value_of(Var::EnergyKev, h, ecal::CalibTable{}, x));
+    CHECK(value_of(Var::Energy, h, t, x));
+    // Without the table it is never filled.
+    CHECK(!value_of(Var::EnergyKev, h, x));
+
+    ParseResult ok = parse_hist_config(R"({"histograms":[
+      { "name": "e", "type": "TH1D", "x": "energy_kev", "bins": 4, "min": 0, "max": 4 },
+      { "name": "m", "type": "TH2D", "x": "energy_kev", "y": "channel",
+        "xbins": 4, "xmin": 0, "xmax": 4, "ybins": 4, "ymin": 0, "ymax": 4 }
+    ]})");
+    CHECK(ok.errors.empty());
+    CHECK(ok.defs.size() == 2);
+    CHECK(uses_energy_kev(ok.defs));
+    CHECK(uses_energy_kev(ok.defs[1]));
+
+    ParseResult adc = parse_hist_config(R"({"histograms":[
+      { "name": "a", "type": "TH1D", "x": "energy", "bins": 4, "min": 0, "max": 4 }
+    ]})");
+    CHECK(adc.errors.empty());
+    CHECK(!uses_energy_kev(adc.defs));
+
+    // Same scope rule as every hit variable.
+    ParseResult mixed = parse_hist_config(R"({"histograms":[
+      { "name": "x", "type": "TH2D", "x": "energy_kev", "y": "dt1",
+        "xbins": 4, "xmin": 0, "xmax": 4, "ybins": 4, "ymin": 0, "ymax": 4 }
+    ]})");
+    CHECK(!mixed.errors.empty());
+  }
+
   // value_of on a coinc — partner-dependent vars are false when the partner is
   // absent; gamma_energy is always valid.
   {

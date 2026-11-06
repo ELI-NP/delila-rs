@@ -15,7 +15,8 @@
 #            15-29, outer 30-44 as one running number), '-' for the rest
 #   nwall_sink takes every role from here (none is assumed from channel
 #   numbers) and re-reads this file at every run start. Columns 8+ are left to
-#   the analysis (position, calibration, ...).
+#   the analysis (position, ...). keV coefficients are not kept here: see
+#   config/energy_calib_example.txt.
 # - '#' starts a comment; blank lines are ignored.
 #
 # PROVISIONAL (2026-10-30): the planned cabling, not checked against the

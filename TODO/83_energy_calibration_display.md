@@ -1,6 +1,6 @@
 # TODO 83 — エネルギー較正の表示(ADC → keV、1 次式、Monitor と root_sink の表示だけ。係数は外で作る)
 
-**Status: 🚧 実装中 (2026-11-06) — 設計はユーザー確認済み(§12)。ブランチ `feat/energy-calib-display`**
+**Status: 🚧 Phase 0〜3 実装済み、Mac の実データなし E2E で確認 (2026-11-06) — ブランチ `feat/energy-calib-display`。残 = master への取り込み、pf-qaq への配備、§10 の実機確認**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md)(N_Wall、最初の使い道の候補) /
 [79_root_sink_nwall_online.md](79_root_sink_nwall_online.md)(nwall_sink の表示) /
@@ -89,10 +89,10 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 
 ### 3.5 root_sink の表示: keV で詰める別のヒストグラムを作る。ADC のものは残す。記録経路には触らない
 - **変換の方法:** **fill のときに keV に換算して、keV で定義したヒストグラムに詰める。** `SetLimits` で軸を貼り替える案は、1 枚に複数 ch が乗る `energy_m<M>`(ch × E)や `pid`(E vs dE、ch をまたぐ)では成り立たない(行ごとに違う 1 次式を 1 本の軸に貼れない)。
-- **nwall_sink(範囲内、N_Wall が使い道):** `/hits/energy_keV_m<M>`(ch × E[keV]、2048 bin)と `/events/pid_keV`(E[keV] vs dE[keV]、512 × 512)を**追加**する。ADC の `energy_m<M>`・`pid`・`ls_psd` はそのまま(データは常にどこかに見える)。**係数の無い ch は keV のヒストグラムには詰めない**(ラン中に 1 回だけ WARN、`ecal_unmapped` に数える。`apply_time_offsets` の `reported`/`on_missing` と同じ形、`time_offsets.hpp:356-366`)。
+- **nwall_sink(範囲内、N_Wall が使い道):** `/hits/energy_keV_m<M>`(ch × E[keV]、2048 bin)と `/events/pid_keV`(E[keV] vs dE[keV]、512 × 512)を**追加**する。ADC の `energy_m<M>`・`pid`・`ls_psd` はそのまま(データは常にどこかに見える)。**係数の無い ch は keV のヒストグラムには詰めない**(ch ごとの WARN は出さない: 表が空だと 100 行を超えるので、ランの終わりに 1 行で一覧を出し、状態行に件数を出す)。
   - **`pid_keV` の「最大のヒット」:** ADC の `pid` は ADC で最大の E sector・dE sector を選ぶ(F9、ゲインが sector ごとに違えば keV では最大でないことがある)。`pid_keV` は**先に keV に換算し、係数の無い ch を除いてから、keV で最大**を選ぶ。ADC の `pid` は変えない。
   - **keV 軸の範囲:** **対応する ADC ヒストグラムの上限を写像する**: `energy_keV_m<M>` は `kev_per_adc × 65536 + offset_kev`(ADC の `energy_m` が 0〜65536)、`pid_keV` は E 側・dE 側それぞれ `kev_per_adc × 32768 + offset_kev`(ADC の `pid` が 0〜32768、PHA1 は 15 bit、F15)。そのヒストグラムに入る ch の最大を上限、`min(0, 最小の offset_kev)` を下限にする。65535 を一律に使うと `pid_keV` の軸の半分が空になるので使わない。
-  - **読み直しで範囲が変わったら、keV のヒストグラムだけ作り直す**(Unregister → delete → new → Register。standard の `/ReloadHists` に同じ手順がある、`root_sink.cxx:2505-2528`)。作り直しはログに出す。ADC のヒストグラムはラン境界で消さない設計(root_sink マニュアル「ライブモニタ」)のままで、keV のものだけ表が変わったときに消えるのは、表示専用なので受け入れる。
+  - **係数の値が変わったら、keV のヒストグラムだけ作り直す**(Unregister → delete、次の fill で新しい範囲で作る)。範囲が同じでも作り直す(古い係数で詰めた分と混ざるため)。同じ値の読み直しでは何もしない。ADC のヒストグラムはラン境界で消さない設計(root_sink マニュアル「ライブモニタ」)のままで、keV のものだけ表が変わったときに消えるのは、表示専用なので受け入れる。
   - 捨てた案: 役割ごとの固定定数、CLI オプション。定数は実験ごとに違い、オプションは増やさない。
 - **standard root_sink(範囲内、最後のフェーズ):** `--hists` に hit スコープの変数 **`energy_kev`** を 1 つ足す。係数の無い ch は `value_of` が false(psd 未定義と同じ、F10)。bin 数と範囲はユーザーが JSON に書く(HPGe なら 0〜3000 keV × 3000 bin のように)。`energy_kev_range` のカットは要望があるまで作らない。ELIADE(`config/histograms_sn01.json`)がそのまま恩恵を受ける。宣言的なので安く、範囲に入れる。
 - **共有コード:** `tools/root_sink/common/energy_calib.hpp`(ROOT に依存しない。空白区切りの読み込み(`nwall_map.hpp` と同じ書き方)、検証、`EnergyCalib` 表、`to_kev`、`axis_limits_kev(table, channels, adc_max)`、`ActiveCalib` + `reload_calib`(`reload_offsets` と同じ方針)、起動行と状態行の文字列)。nwall_sink と root_sink の両方が include する。`sink_core.hpp` / `eb_core.hpp` / `event_def.hpp` は変えない。
@@ -193,8 +193,8 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 ### 6.3 nwall_sink
 - `--energy-calib FILE`(TOML `energy_calib_file`、`start_daq.sh` の `rs_add_arg`)。usage に 1 行。
 - 起動: 読めたら `nwall_sink: energy calibration <realpath> (N channels, keV; axes: energy_keV_m0 0..14500, pid_keV E 0..9900 dE 0..9700, ...) — display only, re-read at every run start and /ReloadCalib`。失敗なら `ERROR ... — display in ADC only` で起動は続ける。指定なしなら `energy calibration: none`。
-- Display: `/hits/energy_keV_m<M>`、`/events/pid_keV` を表から範囲を決めて作る(§3.5)。RunOpen と `/ReloadCalib` で読み直し、表の内容が変わったら範囲を計算し直し、変わっていれば keV のヒストグラムだけ作り直す。失敗は前の表を保持して STALE。
-- 表に無い ch のヒット: keV には詰めない、ランごとに 1 回 `WARN energy calibration: no entry for m2c15 (pulser2): keV histograms skip it`(名前は対応表から)。`ecal_unmapped` に数えて RunClose で一覧。
+- Display: `/hits/energy_keV_m<M>`、`/events/pid_keV` を最初のヒットで、表から範囲を決めて作る(§3.5)。RunOpen と `/ReloadCalib` で読み直し、係数が変わったら keV のヒストグラムを作り直す。失敗は前の表を保持して STALE。
+- 表に無い ch のヒット: keV には詰めない。RunClose で 1 行 `energy calibration: no coefficients for 79 channel(s) with hits, ADC histograms only: m0c0 m0c1 ...`。
 - 状態行(10 秒ごと): `| ecal=off|96|96 STALE|96 (3 unmapped)`。JSROOT に文字列項目 `/EnergyCalib`(`/WriteStatus` と同じ作り): パス、件数、読み込み時刻、STALE/ERROR とその行番号、keV 軸の範囲。
 - `events` tree・hits tree・`BeamTime`・provenance・sidecar: **変更なし**。
 
@@ -288,11 +288,29 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 
 §3 のそれ以外の決定(係数なし ch は ADC と明記して表示、反映は起動時 + ラン開始 + 要求時、standard root_sink の `energy_kev` も範囲内、保存済み keV/MeV View は本物の keV として読む、nwall の keV 軸は ADC 軸の上限を写像、記録ファイルには何も足さない、`P0/p0` は別 issue)は、提示して異論なし。
 
-## 13. 別件で見つけたこと
+## 13. 実装の結果(2026-11-06、Mac、実機なし)
+
+**単体テスト:** Rust 808(`src/monitor/energy_calib.rs` と REST、`on_start`)、Angular 100(`utils/energy-calib.spec.ts`、`histogram-chart.component.spec.ts`)、C++ `test_energy_calib` 94、`test_hist_config` 121、`test_nwall` 67、`test_sink_core` 647、`test_eb_core` 232。パーサは Rust と C++ で同じフィクスチャ(`tools/root_sink/common/fixtures/energy_calib/`)を読む。clippy `--tests` と eslint は警告なし。
+
+**Monitor(エミュレータ + Merger + Recorder + Monitor + Operator、REST でラン、ヘッドレス Chrome):**
+- keV のタブで係数のある ch は keV の軸、ない ch は `ADC` バッジと `ADC (not calibrated)`。ゲインの違う 2 ch がそれぞれの軸になる。
+- 拡大ダイアログのフィットが keV で出る(ADC 500 のピークが 239.9 keV、係数 0.5 / −10)。
+- 2D は `Energy [keV]` と `Energy [ADC, not calibrated]`。PSD のタブに keV は出ない。保存済みの `MeV` は keV として読む。
+- 壊れた表 → `STALE` と行番号、表示は前のまま。別の表 → 単位が変わった ch のズームとフィットが消える。ラン開始で読み直す(ログ)。
+
+**nwall_sink / root_sink(`make_test_run.C` の 273,824 hits を `test_publisher` で再生):**
+- 較正あり / なしで `compare_hits.C` IDENTICAL、`check_events.C` IDENTICAL、サイドカーはバイト一致。
+- `energy_keV_m5` 3,940 件(0〜21,614 keV)、`pid_keV` 3,939 件 = ADC の `pid` と同じ件数。`e_m5c0_kev` は `e_m5c0_adc` と同じ 250 件。
+- 同じ値の `/ReloadCalib` はヒストグラムを保つ。値が変わると keV だけゼロから、ADC は積算のまま。壊れた表は `STALE`。
+
+**設計から変えたところ:** `version` / `loaded_at` でなく係数の値で変更を判定(ラン開始でフィットが消えないように)。Quick Create と energy 軸の 2D にも単位の選択を追加。係数が変わったら範囲が同じでも keV のヒストグラムを作り直す。ch ごとの WARN はやめてランの終わりに 1 行。
+
+**実データでは未確認**(§10)。pf-qaq には未配備。
+
+## 14. 別件で見つけたこと
 - **Monitor の Gaussian フィットの誤差は常に 0。** `fitting.service.ts:155` が `result.parameterError` を配列として読むが、`ml-levenberg-marquardt` は数値を返すので `[0, 0, ...]` に落ちる(e8ff0db から、ADC でも同じ)。`Center: 239.91 ± 0.00 keV` の `± 0.00` と `Area ± 0` は測った値ではない。本チケットでは直していない。
 
-## 14. 仮定(コードを読んだだけで、実行していないもの)
+## 15. 仮定(コードを読んだだけで、実行していないもの)
 - F7 の「UI が作った chSettings を Rust が読むと `p1 = 0.0`」は serde の既定(未知キー無視、`default`)からの推論。実行では確かめていない。
-- ECharts の `value` 軸は負の `min`(`offset_kev < 0` で 0 ADC が負の keV になる)を問題なく描くはず。Phase 1 の V1 で見る。
 - §4 の例の数値は形式を示すためのもので、どの検出器の測定値でもない。
 - N_Wall で較正に使う線源はユーザーが決める(チケットでは特定していない)。

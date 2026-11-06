@@ -1,0 +1,14 @@
+# Energy calibration table: EXAMPLE, these numbers are not a measurement.
+# One line per channel, exactly four columns:
+#
+#   module  channel  kev_per_adc  offset_kev        E_keV = kev_per_adc * energy + offset_kev
+#
+# DISPLAY ONLY (Monitor and root_sink / nwall_sink): .delila and .root keep raw ADC.
+# A channel not listed is shown in ADC and is never labelled keV.
+# Read at start-up, at every run start, and on request (Monitor: the reload button
+# next to the status line; sink: /ReloadCalib). A bad file keeps the previous table.
+# Replace the file with `mv`, so a half-written one is never read.
+# See "Energy calibration" in docs/root_sink_manual.md.
+0   1   0.22180    3.1
+5   0   0.30120  -12.4
+5   1   0.29870  -11.9

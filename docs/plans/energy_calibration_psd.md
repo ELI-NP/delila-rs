@@ -5,6 +5,10 @@
 **GitHub Issue:** #7
 **Reviewed:** Gemini 協議済み (2026-02-19)
 
+> **2026-11-06:** 較正の部分(§2.1、§2.3、§3.7、§4.3〜4.5、§5 の Phase 4〜5)は
+> [TODO 83](../../TODO/83_energy_calibration_display.md) に置き換えた。1 次式のみ、係数は
+> delila-rs の外で作る。PSD の部分は実装済みの記録として残す。
+
 ---
 
 ## 1. 概要

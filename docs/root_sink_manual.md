@@ -469,7 +469,7 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
 
 | スコープ | 変数 | カット |
 |---|---|---|
-| **hit**(全イベント) | `energy` `energy_short` `channel` `module` | `"channel": 3`(どのモジュールの ch 3 でも)または `"channel": "10:3"`(文字列で CLI と同じ `C` / `M:C`)、`"energy_range": [lo,hi]` |
+| **hit**(全イベント) | `energy` `energy_short` `channel` `module` `energy_kev`(`--energy-calib` が必要、係数のない ch は詰めない) | `"channel": 3`(どのモジュールの ch 3 でも)または `"channel": "10:3"`(文字列で CLI と同じ `C` / `M:C`)、`"energy_range": [lo,hi]` |
 | **coinc**(熟成したガンマ毎) | `dt1` `dt2` `gamma_energy` `thgem1_energy` `thgem2_energy` | `"gamma_energy_range"` / `"thgem1_energy_range"` / `"thgem2_energy_range": [lo,hi]` |
 | **pos1**(XY モニタ 1 のトリガー毎) | `xy1_x` `xy1_y` | (なし) |
 | **pos2**(XY モニタ 2 のトリガー毎) | `xy2_x` `xy2_y` | (なし) |
@@ -522,6 +522,36 @@ ev->Draw("tof1", "!TMath::IsNaN(tof1)");                              // LaBr TO
 `.root` の隣にコピーされる(どの設定で取ったかの再現性)。
 
 ---
+
+## エネルギー較正(`--energy-calib`、TODO 83)
+
+表示だけです。`.delila` と `.root` は生の ADC のままで、このオプションの有無でツリーは変わりません。Web の Monitor も同じ表を読みます(`[network.monitor]` の `energy_calib_file`)。
+
+係数は delila-rs の外で作り、1 ch 1 行、4 列ちょうどの表で受け取ります(例: `config/energy_calib_example.txt`)。
+
+```
+# module channel kev_per_adc offset_kev      E_keV = kev_per_adc * energy + offset_kev
+5   0   0.30120  -12.4
+```
+
+`--energy-calib FILE`、または `[network.root_sink]` の `energy_calib_file` で指定します。読むのは起動時、ラン開始時、`/ReloadCalib` のときです。列数が違う、傾きが 0 以下、同じ ch が 2 回などの不正があると、ファイル全体を行番号つきで拒否し、前の表を使い続けます(`STALE`)。記録には関係しないので、`--time-calib` と違ってプログラムは止まりません。係数が変わると keV のヒストグラムはゼロからやり直します(2 つの尺度が混ざるため)。
+
+状態は、ステータス行の `ecal=`、JSROOT のテキスト項目 `/EnergyCalib`(`curl http://<host>:8090/EnergyCalib/item.json`)、それとランの終わりの 1 行(ヒットはあったが係数がない ch の一覧)で分かります。
+
+- `nwall_sink`: `/hits/energy_keV_m<M>` と `/events/pid_keV` が増えます。
+- `root_sink`: `--hists` の変数 `energy_kev` が使えます。
+
+### 係数を作る人に伝えること
+
+1. チャンネルごとに `E_keV = kev_per_adc × energy + offset_kev` の 2 つの係数を求めてください。方法は問いません。
+2. `energy` は hits ツリー `delila` の同名のブランチです(`UShort_t`、生の ADC)。`root_sink`、`nwall_sink`(`hits_tree = true` のとき)、`delila2root` のどのファイルでも同じです。events ツリーの `HitEnergy[NHits]` も同じ量です。PHA のボードは 0〜32767(台形の高さ)、PSD のボードは 0〜65535(長ゲートの電荷)です。`energy_short` ではありません。
+3. チャンネルは、較正に使ったファイルの `module` と `channel` のブランチの値で指定してください。module の番号はランによって変わることがあります。
+4. 返すのは 1 ch 1 行の `module channel kev_per_adc offset_kev` だけです。それ以外は要りません。
+5. 較正できなかった ch は行を書かないでください。0 や NaN を書くとファイルごと拒否されます。書かなかった ch は画面で ADC のまま表示されます。
+
+### 受け取った表の確かめ方
+
+`mv` で置いて Reload を押し、チャンネル数か、エラーの行番号を確認します。そのあと既知の線の位置を見てください。列の取り違えや別のランの係数は、パーサでは分かりません。
 
 ## 時刻オフセット(`--time-calib`、TODO 70)
 
