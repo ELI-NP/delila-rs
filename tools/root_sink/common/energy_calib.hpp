@@ -19,11 +19,11 @@
 #ifndef DELILA_ENERGY_CALIB_HPP
 #define DELILA_ENERGY_CALIB_HPP
 
-#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -71,7 +71,6 @@ inline bool parse_id(const std::string& s, int& out) {
 // Rust reader does not, so hex is refused here to keep the two the same.
 inline bool parse_number(const std::string& s, double& out) {
   if (s.empty() || s.find_first_of("xX") != std::string::npos) return false;
-  errno = 0;
   char* end = nullptr;
   const double v = std::strtod(s.c_str(), &end);
   if (end != s.c_str() + s.size()) return false;
@@ -162,6 +161,48 @@ inline AxisLimits axis_limits_kev(const CalibTable& table, const std::vector<uin
   return a;
 }
 
+// keV of one hit on the display. A channel without coefficients is noted in
+// `unmapped`, for the summary at the end of the run.
+inline bool hit_kev(const CalibTable& table, uint16_t key, double adc,
+                    std::set<uint16_t>& unmapped, double& kev) {
+  auto it = table.find(key);
+  if (it == table.end()) {
+    unmapped.insert(key);
+    return false;
+  }
+  kev = it->second.to_kev(adc);
+  return true;
+}
+
+// The largest energy among `hits` (anything with .key and .energy), compared in keV:
+// channels differ in gain, so the largest in ADC need not be the largest in keV.
+// Channels without coefficients are not candidates. False if none is left.
+template <class Hit>
+inline bool largest_kev(const CalibTable& table, const std::vector<Hit>& hits, double& kev) {
+  bool found = false;
+  for (const Hit& h : hits) {
+    auto it = table.find(h.key);
+    if (it == table.end()) continue;
+    const double v = it->second.to_kev(h.energy);
+    if (!found || v > kev) kev = v;
+    found = true;
+  }
+  return found;
+}
+
+// "m2c15 m3c15 (+7 more)" for a log line.
+inline std::string channel_list(const std::set<uint16_t>& keys, std::size_t max = 30) {
+  std::string s;
+  std::size_t n = 0;
+  for (uint16_t k : keys) {
+    if (n == max) break;
+    if (n++) s += ' ';
+    s += "m" + std::to_string(k >> 8) + "c" + std::to_string(k & 0xff);
+  }
+  if (keys.size() > max) s += " (+" + std::to_string(keys.size() - max) + " more)";
+  return s;
+}
+
 // The table in force, owned by the display.
 struct ActiveCalib {
   CalibTable table;
@@ -215,6 +256,16 @@ inline std::string calib_status_field(const ActiveCalib& a, bool configured) {
   if (a.failed) return "ERROR";
   std::string s = std::to_string(a.table.size());
   if (a.stale) s += " STALE";
+  return s;
+}
+
+// The longer form, for the JSROOT item and the log.
+inline std::string calib_status_text(const ActiveCalib& a, bool configured) {
+  if (!configured) return "none (keV histograms off)";
+  std::string s = a.source_path + ": ";
+  if (a.failed) return s + "ERROR, keV histograms off: " + a.error;
+  s += std::to_string(a.table.size()) + " channels (keV), loaded " + a.loaded_at;
+  if (a.stale) s += "; STALE, previous table kept: " + a.error;
   return s;
 }
 

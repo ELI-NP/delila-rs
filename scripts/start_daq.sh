@@ -442,6 +442,7 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
             echo -e "  ${YELLOW}[network.root_sink] built_tree is retired (TODO 71) — ignored. Record events with event_def_file and rebuild ThGEM rows with tools/root_sink/thgem/thgem_events.C${NC}"
         fi
         rs_add_arg time_calib_file --time-calib
+        rs_add_arg energy_calib_file --energy-calib
         rs_add_arg event_def_file  --event-def
         # nwall_sink only (TODO 79): channel roles and the bunch clock.
         rs_add_arg channel_map  --channel-map

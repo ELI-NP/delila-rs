@@ -29,6 +29,9 @@
 //       /events  pid (dE vs E), sector_dE_vs_E, dE_ring_vs_sector,
 //                ls_dt_si (t_LS - t_trigger), si_phase (Si trigger vs bunch),
 //                ls_tof_si (t_LS - the bunch the Si picked - rf_t0)
+//     With --energy-calib (energy_calib.hpp, display only: the trees keep ADC):
+//       /hits    energy_keV_m<M> (energy in keV x channel)
+//       /events  pid_keV (dE vs E in keV)
 //
 // Build (see README.md):
 //   g++ -O2 -std=c++17 nwall_sink.cxx $(root-config --cflags --libs) -lRHTTP -lzmq -o nwall_sink
@@ -67,6 +70,7 @@
 #include <vector>
 
 #include "../common/eb_core.hpp"
+#include "../common/energy_calib.hpp"
 #include "../common/event_def.hpp"
 #include "../common/sink_core.hpp"
 #include "../common/time_offsets.hpp"
@@ -102,6 +106,8 @@ static void on_signal(int) { g_stop = 1; }
 // the main loop does the work after ProcessEvents.
 static volatile sig_atomic_t g_reset = 0;
 static void request_reset() { g_reset = 1; }
+static volatile sig_atomic_t g_reload_calib = 0;
+static void request_reload_calib() { g_reload_calib = 1; }
 
 // ---------------------------------------------------------------------------
 // CLI options
@@ -124,6 +130,7 @@ struct Options {
   std::string event_def;
   // N_Wall display
   std::string channel_map;       // --channel-map: roles of the channels (nwall_map.hpp)
+  std::string energy_calib;      // --energy-calib: keV coefficients (energy_calib.hpp)
   double rf_period_ns = 199.980;  // nominal RF period (the bunch clock measures it per run)
   double rf_t0_ns = 0.0;          // constant shift of every RF TOF (beam signal vs target)
   double si_delay_ns = 0.0;       // Si trigger time minus its bunch time (from si_phase)
@@ -152,7 +159,10 @@ static void print_usage(const char* argv0) {
       "  --channel-map FILE  channel roles (config/channel_map_N_Wall.txt, columns\n"
       "                      5-7 'det kind index'); re-read at every run start.\n"
       "                      Without it only the per-board histograms are filled\n"
-      "  --rf-period-ns X    nominal RF period (default 199.980; measured per run\n"
+      "  --energy-calib FILE keV coefficients, 'module channel kev_per_adc offset_kev';\n"
+      "                      adds keV histograms (display only, the trees keep ADC).\n"
+      "                      Re-read at every run start and on /ReloadCalib\n"
+      "  --rf-period-ns X   nominal RF period (default 199.980; measured per run\n"
       "                      from the beam channel)\n"
       "  --rf-t0-ns X        shift of every RF TOF (default 0): set it so the\n"
       "                      gamma flash sits at L/c\n"
@@ -234,6 +244,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--time-calib") {
       if (!(v = need(i))) return false;
       opt.time_calib = v;
+    } else if (a == "--energy-calib") {
+      if (!(v = need(i))) return false;
+      opt.energy_calib = v;
     } else if (a == "--event-def") {
       if (!(v = need(i))) return false;
       opt.event_def = v;
@@ -1252,6 +1265,10 @@ class Display {
     ls_tof_si_ = add2("/events", "ls_tof_si",
                       "t(LS) - bunch picked by the Si - rf_t0;TOF [ns];channel", 550, -100, 1000,
                       32, 0, 32);
+    reload_calib("start-up");
+    std::printf("nwall_sink: energy calibration: %s\n",
+                ecal::calib_status_text(calib_, calib_on()).c_str());
+    calib_started_ = true;
   }
 
   void set_map(const nwall::ChannelMap& m) {
@@ -1259,10 +1276,62 @@ class Display {
     for (const auto& kv : m.roles) roles_[kv.first] = kv.second;
     beam_key_ = m.beam_key;
     have_map_ = true;
+    // Which sectors are E and dE sets the pid_keV axes.
+    ecal::AxisLimits e, de;
+    pid_kev_limits(e, de);
+    if (pid_kev_ && !(e == pid_e_ && de == pid_de_)) drop(pid_kev_);
   }
 
   // Run start: the digitizer clocks restart, so does the bunch clock.
-  void run_open() { clock_.reset(); }
+  void run_open() {
+    clock_.reset();
+    calib_unmapped_.clear();
+    reload_calib("run start");
+  }
+
+  // Display only: nothing recorded depends on this table, so a bad file keeps the
+  // previous one and never stops anything. New coefficients restart the keV
+  // histograms, which would otherwise mix two scales.
+  void reload_calib(const char* why) {
+    if (!calib_on()) return;
+    char resolved[4096];
+    const std::string real =
+        ::realpath(opt_.energy_calib.c_str(), resolved) ? std::string(resolved) : opt_.energy_calib;
+    std::string text;
+    const bool readable = read_file(opt_.energy_calib, text);
+    const std::string read_error = readable ? "" : std::strerror(errno);
+    std::vector<std::string> errors;
+    bool changed = false;
+    if (ecal::reload_calib(calib_, readable ? &text : nullptr, read_error, real, now_utc_iso(),
+                           errors, changed)) {
+      if (changed) {
+        drop_kev_hists();
+        if (calib_started_)
+          std::printf("nwall_sink: energy calibration changed (%s): %s\n", why,
+                      ecal::calib_status_text(calib_, true).c_str());
+      }
+    } else {
+      std::fprintf(stderr, "nwall_sink: ERROR energy calibration (%s): %s\n", why,
+                   calib_.stale ? "STALE, previous table kept" : "keV histograms off");
+      for (const auto& e : errors) std::fprintf(stderr, "nwall_sink:   - %s\n", e.c_str());
+    }
+  }
+
+  std::string calib_status() const {
+    std::string s = ecal::calib_status_field(calib_, calib_on());
+    if (!calib_unmapped_.empty())
+      s += " (" + std::to_string(calib_unmapped_.size()) + " unmapped)";
+    return s;
+  }
+  std::string calib_text() const { return ecal::calib_status_text(calib_, calib_on()); }
+
+  // End of a run: which channels had hits but no keV histogram.
+  void calib_run_summary() const {
+    if (calib_on() && !calib_unmapped_.empty())
+      std::printf("nwall_sink: energy calibration: no coefficients for %zu channel(s) with hits, "
+                  "ADC histograms only: %s\n",
+                  calib_unmapped_.size(), ecal::channel_list(calib_unmapped_).c_str());
+  }
 
   void chunk(const DisplayMsg& d) {
     const bool beam = have_map_ && beam_key_ >= 0;
@@ -1279,6 +1348,12 @@ class Display {
       per_module(energy_, h.module, "/hits", "energy_m%d", "board %d;channel;energy [ADC]", 32,
                  0, 32, 1024, 0, 65536)
           ->Fill(h.channel, h.energy);
+      if (calib_on()) {
+        double kev;
+        if (ecal::hit_kev(calib_.table, ecal::calib_key(h.module, h.channel), h.energy,
+                          calib_unmapped_, kev))
+          energy_kev(h.module)->Fill(h.channel, kev);
+      }
       const nwall::Role& r = roles_[nwall::map_key(h.module, h.channel)];
       if (r.det == nwall::Det::LS && h.energy > 0)
         ls_psd_->Fill(h.energy, (static_cast<double>(h.energy) - h.energy_short) / h.energy);
@@ -1313,18 +1388,80 @@ class Display {
   struct SiHit {
     int index;
     uint16_t energy;
+    uint16_t key;
   };
+
+  bool calib_on() const { return !opt_.energy_calib.empty(); }
+
+  void drop(TH2D*& h) {
+    all_.erase(std::remove(all_.begin(), all_.end(), static_cast<TH1*>(h)), all_.end());
+    if (server_) server_->Unregister(h);
+    delete h;
+    h = nullptr;
+  }
+  void drop_kev_hists() {
+    for (auto& kv : energy_kev_) drop(kv.second);
+    energy_kev_.clear();
+    if (pid_kev_) drop(pid_kev_);
+  }
+
+  // One per board. Its axis maps the top of the ADC histogram, energy_m<M>.
+  TH2D* energy_kev(int module) {
+    auto it = energy_kev_.find(module);
+    if (it != energy_kev_.end()) return it->second;
+    std::vector<uint16_t> board;
+    for (const auto& kv : calib_.table)
+      if ((kv.first >> 8) == module) board.push_back(kv.first);
+    const ecal::AxisLimits lim = ecal::axis_limits_kev(calib_.table, board, 65536.0);
+    TH2D* h = add2("/hits", Form("energy_keV_m%d", module),
+                   Form("board %d;channel;energy [keV]", module), 32, 0, 32, 2048, lim.lo, lim.hi);
+    energy_kev_[module] = h;
+    std::printf("nwall_sink: /hits/energy_keV_m%d: 0..%.0f keV\n", module, lim.hi);
+    return h;
+  }
+
+  // Maps the top of the ADC histogram, pid: PHA energies are 15 bit.
+  void pid_kev_limits(ecal::AxisLimits& e, ecal::AxisLimits& de) const {
+    std::vector<uint16_t> e_keys, de_keys;
+    for (const auto& kv : calib_.table) {
+      const nwall::Role& r = roles_[kv.first];
+      if (r.kind != nwall::Kind::Sector) continue;
+      if (r.det == nwall::Det::E) e_keys.push_back(kv.first);
+      if (r.det == nwall::Det::DE) de_keys.push_back(kv.first);
+    }
+    e = ecal::axis_limits_kev(calib_.table, e_keys, 32768.0);
+    de = ecal::axis_limits_kev(calib_.table, de_keys, 32768.0);
+  }
+
+  // Compared in keV: sectors differ in gain, so the largest in ADC need not be
+  // the largest in keV.
+  void fill_pid_kev(const std::vector<SiHit>& e_sec, const std::vector<SiHit>& de_sec) {
+    double e_kev, de_kev;
+    if (!ecal::largest_kev(calib_.table, e_sec, e_kev)) return;
+    if (!ecal::largest_kev(calib_.table, de_sec, de_kev)) return;
+    if (!pid_kev_) {
+      pid_kev_limits(pid_e_, pid_de_);
+      pid_kev_ = add2("/events", "pid_keV",
+                      "dE vs E (largest sector hit of each, in keV);E [keV];dE [keV]", 512,
+                      pid_e_.lo, pid_e_.hi, 512, pid_de_.lo, pid_de_.hi);
+      std::printf("nwall_sink: /events/pid_keV: E 0..%.0f keV, dE 0..%.0f keV\n", pid_e_.hi,
+                  pid_de_.hi);
+    }
+    pid_kev_->Fill(e_kev, de_kev);
+  }
 
   void event(const eb::GenericEvent& ev, bool beam) {
     using nwall::Det;
     using nwall::Kind;
     std::vector<SiHit> e_sec, de_sec, de_ring;
     for (const eb::EventHit& h : ev.hits) {
-      const nwall::Role& r = roles_[nwall::map_key(h.mod, h.ch)];
-      if (r.det == Det::E && r.kind == Kind::Sector) e_sec.push_back({r.index, h.energy});
-      else if (r.det == Det::DE && r.kind == Kind::Sector) de_sec.push_back({r.index, h.energy});
-      else if (r.det == Det::DE && r.kind == Kind::Ring) de_ring.push_back({r.index, h.energy});
+      const uint16_t key = nwall::map_key(h.mod, h.ch);
+      const nwall::Role& r = roles_[key];
+      if (r.det == Det::E && r.kind == Kind::Sector) e_sec.push_back({r.index, h.energy, key});
+      else if (r.det == Det::DE && r.kind == Kind::Sector) de_sec.push_back({r.index, h.energy, key});
+      else if (r.det == Det::DE && r.kind == Kind::Ring) de_ring.push_back({r.index, h.energy, key});
     }
+    if (calib_on()) fill_pid_kev(e_sec, de_sec);
     auto largest = [](const std::vector<SiHit>& v) {
       return std::max_element(v.begin(), v.end(), [](const SiHit& a, const SiHit& b) {
         return a.energy < b.energy;
@@ -1398,6 +1535,13 @@ class Display {
   TH1D* si_phase_ = nullptr;
   TH2D* ls_tof_si_ = nullptr;
   std::map<int, TH2D*> energy_, tof_rf_;
+  // Energy calibration (--energy-calib): the table and everything filled from it.
+  ecal::ActiveCalib calib_;
+  bool calib_started_ = false;
+  std::set<uint16_t> calib_unmapped_;  // channels seen this run without coefficients
+  std::map<int, TH2D*> energy_kev_;
+  TH2D* pid_kev_ = nullptr;
+  ecal::AxisLimits pid_e_, pid_de_;    // the axes pid_kev_ was made with
 };
 
 int main(int argc, char** argv) {
@@ -1539,6 +1683,14 @@ int main(int argc, char** argv) {
     server->CreateItem("/WriteStatus", "run file write status (TODO 69)");
     server->SetItemField("/WriteStatus", "_kind", "Text");
     server->SetItemField("/WriteStatus", "value", "OK");
+    if (!opt.energy_calib.empty()) {
+      server->RegisterCommand(
+          "/ReloadCalib", Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reload_calib)),
+          "button;Reload energy calibration");
+    }
+    server->CreateItem("/EnergyCalib", "keV coefficients in force (TODO 83, display only)");
+    server->SetItemField("/EnergyCalib", "_kind", "Text");
+    server->SetItemField("/EnergyCalib", "value", display->calib_text().c_str());
     std::printf("nwall_sink: THttpServer on http://<host>:%d/  (open in a browser; JSROOT)\n",
                 opt.http_port);
   }
@@ -2107,6 +2259,7 @@ int main(int argc, char** argv) {
         if (display)
           std::printf("nwall_sink: run closed — %s (histograms kept across runs; /Reset zeroes)\n",
                       display->status().c_str());
+        if (display) display->calib_run_summary();
         break;
       case eb::Ctrl::Shutdown:
         display_done = true;
@@ -2130,6 +2283,7 @@ int main(int argc, char** argv) {
     return s;
   };
   std::string shown_write_status = "OK";
+  std::string shown_calib_text = display ? display->calib_text() : "";
 
   while (!display_done) {
     DisplayMsg d;
@@ -2148,12 +2302,24 @@ int main(int argc, char** argv) {
         server->SetItemField("/WriteStatus", "value", ws.c_str());
         shown_write_status = ws;
       }
+      if (display) {
+        std::string cs = display->calib_text();
+        if (cs != shown_calib_text) {
+          server->SetItemField("/EnergyCalib", "value", cs.c_str());
+          shown_calib_text = cs;
+        }
+      }
       gSystem->ProcessEvents();
     }
     if (g_reset) {
       g_reset = 0;
       if (display) display->reset_hists();
       std::printf("nwall_sink: /Reset — histograms zeroed\n");
+      std::fflush(stdout);
+    }
+    if (g_reload_calib) {
+      g_reload_calib = 0;
+      if (display) display->reload_calib("/ReloadCalib");
       std::fflush(stdout);
     }
 
@@ -2198,12 +2364,12 @@ int main(int argc, char** argv) {
       std::printf(
           "nwall_sink: %s%s | hits=%lld (%s) | %.0f hits/s | chunks=%lld | ev=%s | %s%s | "
           "q[sort=%zu work=%zu write=%zu disp=%zu] | display_drops=%lld | other_module=%lld | "
-          "late=%lld | toff=%s\n",
+          "late=%lld | toff=%s | ecal=%s\n",
           counters.writing ? "WRITING" : "idle", wf.c_str(), rec, written_s, rate,
           (long long)counters.chunks, ev_s, display ? display->status().c_str() : "display off",
           counters.map_stale ? " map STALE" : "", to_sorter.size(), work_q.size(), writer_q.size(),
           display_q.size(), (long long)counters.display_drops, (long long)counters.other_module,
-          (long long)counters.late, toff_s);
+          (long long)counters.late, toff_s, display ? display->calib_status().c_str() : "off");
       std::fflush(stdout);
       t_last_status = now;
       last_received = rec;

@@ -142,6 +142,78 @@ static void test_axis_limits() {
   CHECK(!a.valid);
 }
 
+static void test_hit_kev() {
+  CalibTable t;
+  t[calib_key(1, 0)] = LinearCalib{0.5, -10.0};
+  std::set<uint16_t> unmapped;
+  double kev = 0.0;
+  CHECK(hit_kev(t, calib_key(1, 0), 100.0, unmapped, kev));
+  CHECK(kev == 40.0);
+  CHECK(unmapped.empty());
+  CHECK(!hit_kev(t, calib_key(1, 1), 100.0, unmapped, kev));
+  CHECK(!hit_kev(t, calib_key(1, 1), 200.0, unmapped, kev));
+  CHECK(unmapped.size() == 1);
+  CHECK(unmapped.count(calib_key(1, 1)) == 1);
+}
+
+struct TestHit {
+  uint16_t key;
+  uint16_t energy;
+};
+
+// A sector with less ADC but more gain is the larger one in keV.
+static void test_largest_kev() {
+  CalibTable t;
+  t[calib_key(5, 0)] = LinearCalib{0.25, 0.0};
+  t[calib_key(5, 1)] = LinearCalib{1.0, 0.0};
+  double kev = -1.0;
+
+  std::vector<TestHit> hits = {{calib_key(5, 0), 3000}, {calib_key(5, 1), 1000}};
+  CHECK(largest_kev(t, hits, kev));
+  CHECK(kev == 1000.0);  // ch0 is the largest in ADC, 750 keV
+
+  // A channel without coefficients is not a candidate, however large.
+  hits.push_back({calib_key(5, 2), 30000});
+  CHECK(largest_kev(t, hits, kev));
+  CHECK(kev == 1000.0);
+
+  // A negative value is still a value.
+  CalibTable low;
+  low[calib_key(5, 0)] = LinearCalib{1.0, -500.0};
+  std::vector<TestHit> one = {{calib_key(5, 0), 100}};
+  CHECK(largest_kev(low, one, kev));
+  CHECK(kev == -400.0);
+
+  // Nobody left.
+  std::vector<TestHit> none = {{calib_key(5, 2), 30000}};
+  CHECK(!largest_kev(t, none, kev));
+  CHECK(!largest_kev(t, std::vector<TestHit>{}, kev));
+}
+
+static void test_channel_list() {
+  std::set<uint16_t> keys = {calib_key(2, 15), calib_key(3, 15), calib_key(4, 15)};
+  CHECK(channel_list(keys) == "m2c15 m3c15 m4c15");
+  CHECK(channel_list(keys, 2) == "m2c15 m3c15 (+1 more)");
+  CHECK(channel_list({}) == "");
+}
+
+static void test_status_text() {
+  ActiveCalib a;
+  CHECK(has(calib_status_text(a, false), "none"));
+  std::vector<std::string> errors;
+  bool changed = false;
+  reload_calib(a, nullptr, "gone", "p.txt", "t0", errors, changed);
+  CHECK(has(calib_status_text(a, true), "ERROR"));
+  std::string good = "0 1 0.5 -10\n";
+  reload_calib(a, &good, "", "p.txt", "t1", errors, changed);
+  const std::string ok = calib_status_text(a, true);
+  CHECK(has(ok, "p.txt"));
+  CHECK(has(ok, "1 channels"));
+  CHECK(has(ok, "t1"));
+  reload_calib(a, nullptr, "gone", "p.txt", "t2", errors, changed);
+  CHECK(has(calib_status_text(a, true), "STALE"));
+}
+
 static void test_reload_policy() {
   ActiveCalib a;
   std::vector<std::string> errors;
@@ -207,6 +279,10 @@ int main() {
   test_duplicate();
   test_to_kev();
   test_axis_limits();
+  test_hit_kev();
+  test_largest_kev();
+  test_channel_list();
+  test_status_text();
   test_reload_policy();
   std::printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
