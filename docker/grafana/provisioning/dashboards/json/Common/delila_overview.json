@@ -50,8 +50,8 @@
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'start'\nORDER BY time",
-          "query": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'start'\nORDER BY time",
+          "rawSql": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'start' AND run > 0\nORDER BY time",
+          "query": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'start' AND run > 0\nORDER BY time",
           "format": "table"
         }
       },
@@ -70,8 +70,8 @@
             "type": "influxdb",
             "uid": "P951FEA4DE68E13C5"
           },
-          "rawSql": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'stop'\nORDER BY time",
-          "query": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'stop'\nORDER BY time",
+          "rawSql": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'stop' AND run > 0\nORDER BY time",
+          "query": "SELECT time, concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event) AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND event = 'stop' AND run > 0\nORDER BY time",
           "format": "table"
         }
       }

@@ -52,12 +52,15 @@ not provisioned.
 
 ## What the dashboard shows
 
-- Module × channel grid: rate over the last 10 s of the time range. 0 Hz is red,
-  a disabled channel with no counts is grey "off", blue gets darker per decade.
+- Module × channel grid: rate over the last 10 s of the time range. 0 Hz during
+  a run is red, no counts with no run going is "-", a disabled channel with no
+  counts is grey "off", blue gets darker per decade. "A run is going" = the last
+  `run_event` at the end of the time range is a start; Tune Up does not count.
 - Event rate per module (`system_rate.event_rate`), plus a list of the enabled
-  channels with no counts in the last minute.
+  channels with no counts in the last minute of a run.
 - One time-series panel per group.
-- Run start/stop markers from `run_event` (filtered to this experiment).
+- Run start/stop markers from `run_event` (filtered to this experiment, without
+  Tune Up, which runs as run 0).
 
 `channel_rate.rate` and `run_event` are written by the Operator (TODO 74 P2/P5).
 On an older Operator the per-channel panels report "No field named rate", and

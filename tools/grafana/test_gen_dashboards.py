@@ -168,7 +168,7 @@ class SqlTest(AssertBounded, unittest.TestCase):
         self.assertIn("WHEN '2' THEN 'M5 B'", g.module_rate_sql([b]))
 
     def test_grid_sql(self):
-        sql = g.grid_sql(self.boards, self.chans)
+        sql = g.grid_sql(self.boards, self.chans, "N_Wall")
         self.assertBounded(sql)
         self.assertIn("time > $__timeTo - interval '10 seconds' AND time <= $__timeTo", sql)
         for i in range(32):
@@ -180,7 +180,7 @@ class SqlTest(AssertBounded, unittest.TestCase):
         self.assertIn("(0, '0', 'M0 PHA1-Si0'), (1, '1', 'M1 PSD2-LS')", sql)
 
     def test_silent_sql_lists_enabled_channels_only(self):
-        sql = g.silent_sql(self.chans)
+        sql = g.silent_sql(self.chans, "N_Wall")
         self.assertBounded(sql)
         self.assertIn("interval '1 minute'", sql)
         self.assertIn("('1', '5', 1, 5, 'LS06', 'LS')", sql)
@@ -199,6 +199,40 @@ class SqlTest(AssertBounded, unittest.TestCase):
         self.assertIn("exp = 'N_Wall' AND event = 'stop'", sql)
         self.assertIn("AS text", sql)
         self.assertNotIn("exp =", g.run_event_sql("start", None))
+
+    def test_run_markers_leave_out_tune_up(self):
+        # Tune Up runs as run 0 (src/operator/routes/tuneup.rs): more than half of
+        # all run_event rows, and not a run anyone wants a marker for.
+        self.assertIn("run > 0", g.run_event_sql("start", "N_Wall"))
+        self.assertIn("run > 0", g.run_event_sql("stop", None))
+
+    def test_run_state_compares_the_last_start_and_stop(self):
+        sql = g.run_state("N_Wall")
+        self.assertBounded(sql)
+        self.assertIn("exp = 'N_Wall'", sql)
+        self.assertIn("run > 0", sql)
+        self.assertIn("AS running", sql)
+        # This scalar-subquery form gave wrong answers on the real InfluxDB.
+        self.assertNotIn("LIMIT 1", sql)
+
+    def test_a_silent_channel_is_only_red_during_a_run(self):
+        boards = boards_fixture()
+        channels = g.build_channels(boards, [])
+        sql = g.grid_sql(boards, channels, "N_Wall")
+        self.assertBounded(sql)
+        when = sql[sql.index("CASE WHEN r.rate > 0"):sql.index("AS v")]
+        # A counting channel always shows its rate, a disabled one is always off.
+        self.assertLess(when.index("THEN r.rate"), when.index(f"THEN {g.OFF}"))
+        self.assertLess(when.index(f"THEN {g.OFF}"), when.index("WHEN s.running THEN 0"))
+        self.assertIn(f"ELSE {g.IDLE}", when)
+        self.assertIn(g.run_state("N_Wall"), sql)
+
+    def test_silent_list_is_empty_when_no_run_is_going(self):
+        channels = g.build_channels(boards_fixture(), [])
+        sql = g.silent_sql(channels, "N_Wall")
+        self.assertBounded(sql)
+        self.assertIn("COALESCE(r.rate, 0) = 0 AND s.running", sql)
+        self.assertIn(g.run_state("N_Wall"), sql)
 
 
 class DashboardTest(AssertBounded, unittest.TestCase):
@@ -342,10 +376,36 @@ class CommittedFilesTest(AssertBounded, unittest.TestCase):
             self.assertNotIn("now()", sql)
             self.assertBounded(sql)
 
-    def test_template_maps_parse(self):
-        for exp in ("N_Wall", "X730_ThGEM_Test"):
-            text = (REPO / f"config/channel_map_{exp}.txt").read_text()
-            self.assertEqual(g.parse_map(text, boards_fixture()), [], exp)
+    def test_run_markers_leave_out_tune_up_everywhere(self):
+        for path in DASH_DIR.glob("*/*.json"):
+            for sql in all_sql(json.loads(path.read_text())):
+                if "FROM run_event" in sql:
+                    self.assertIn("run > 0", sql, path.name)
+
+    def test_si_bias_dashboard_is_the_n1408(self):
+        self.assertFalse((DASH_DIR / "N_Wall/si_hv_mhv4.json").exists())
+        dash = json.loads((DASH_DIR / "N_Wall/si_hv_n1408.json").read_text())
+        self.assertEqual(dash["uid"], "si-hv-n1408")
+        panels = {p["title"]: p for p in dash["panels"]}
+        self.assertTrue(any("FROM n1408_event" in s for s in all_sql(dash)))
+        for p in panels.values():
+            for t in p["targets"]:
+                self.assertEqual(t["datasource"], {"type": "influxdb", "uid": g.DEFAULT_DS_UID})
+                self.assertRegex(t["rawSql"], r"FROM (?:\(SELECT .*)?n1408")
+        # Without `query`, Grafana's InfluxDB plugin turns it into an InfluxQL annotation.
+        for a in dash["annotations"]["list"]:
+            if "target" in a:
+                self.assertEqual(a["target"]["query"], a["target"]["rawSql"])
+                self.assertIn("$__timeFrom", a["target"]["rawSql"])
+
+    def test_template_map_parses(self):
+        text = (REPO / "config/channel_map_X730_ThGEM_Test.txt").read_text()
+        self.assertEqual(g.parse_map(text, boards_fixture()), [])
+
+    def test_n_wall_map_fits_its_config(self):
+        _, boards = g.load_config(REPO / "config/config_nwall_pfqaq.toml")
+        text = (REPO / "config/channel_map_N_Wall.txt").read_text()
+        self.assertEqual(len(g.parse_map(text, boards)), 112)
 
     def test_generated_dashboards_are_gitignored(self):
         text = (REPO / ".gitignore").read_text()

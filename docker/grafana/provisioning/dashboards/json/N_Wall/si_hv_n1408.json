@@ -1,0 +1,853 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P951FEA4DE68E13C5"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "green",
+        "name": "Run start",
+        "target": {
+          "refId": "Anno",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, concat('Run ', CAST(run AS VARCHAR), ' start') AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND exp = 'N_Wall' AND event = 'start' AND run > 0\nORDER BY time",
+          "query": "SELECT time, concat('Run ', CAST(run AS VARCHAR), ' start') AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND exp = 'N_Wall' AND event = 'start' AND run > 0\nORDER BY time",
+          "format": "table"
+        }
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P951FEA4DE68E13C5"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "red",
+        "name": "Run stop",
+        "target": {
+          "refId": "Anno",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, concat('Run ', CAST(run AS VARCHAR), ' stop') AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND exp = 'N_Wall' AND event = 'stop' AND run > 0\nORDER BY time",
+          "query": "SELECT time, concat('Run ', CAST(run AS VARCHAR), ' stop') AS text\nFROM run_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND exp = 'N_Wall' AND event = 'stop' AND run > 0\nORDER BY time",
+          "format": "table"
+        }
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P951FEA4DE68E13C5"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "blue",
+        "name": "HV operation",
+        "target": {
+          "refId": "Anno",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, concat('ch', CAST(channel AS VARCHAR), ' ', action, ' by ', operator) AS text\nFROM n1408_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND action IN ('on', 'off', 'set') AND result = 'done'\nORDER BY time",
+          "query": "SELECT time, concat('ch', CAST(channel AS VARCHAR), ' ', action, ' by ', operator) AS text\nFROM n1408_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND action IN ('on', 'off', 'set') AND result = 'done'\nORDER BY time",
+          "format": "table"
+        }
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P951FEA4DE68E13C5"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "orange",
+        "name": "HV alarm",
+        "target": {
+          "refId": "Anno",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, concat('ch', CAST(channel AS VARCHAR), ' ', message) AS text\nFROM n1408_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND action = 'status_change' AND regexp_like(message, 'new: \\[[^]]*(TRIP|KILL|ILK|OVC|OVV|OVP|OVT)')\nORDER BY time",
+          "query": "SELECT time, concat('ch', CAST(channel AS VARCHAR), ' ', message) AS text\nFROM n1408_event\nWHERE time >= $__timeFrom AND time <= $__timeTo AND action = 'status_change' AND regexp_like(message, 'new: \\[[^]]*(TRIP|KILL|ILK|OVC|OVV|OVP|OVT)')\nORDER BY time",
+          "format": "table"
+        }
+      }
+    ]
+  },
+  "description": "CAEN N1408 (Si bias, 4 ch), from tools/hv_monitor/n1408_control.py (TODO 82). The page that changes things is on pf-qaq port 8095; this one only shows.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Current values (latest read per channel, last 1 min)",
+      "description": "Latest reading of each channel from the last minute, whatever time range is selected. State follows the control page (tools/hv_monitor/n1408_control.py): ON means VMon has reached VSet; SETTLING = the ON bit is set but VMon is not there yet. DISABLED = the channel switch on the panel is not at HV_EN. Flags are the unit's own alarm bits. Empty table = nothing written for a minute: is n1408-control running?",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center"
+          },
+          "noValue": "no reading for a minute: is n1408-control running?"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "channel"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Channel"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "State"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "OFF",
+                        "color": "#8e8e8e",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "ON",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "RAMP UP",
+                        "color": "blue",
+                        "index": 2
+                      },
+                      "3": {
+                        "text": "RAMP DOWN",
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "4": {
+                        "text": "SETTLING",
+                        "color": "yellow",
+                        "index": 4
+                      },
+                      "5": {
+                        "text": "DISABLED",
+                        "color": "#5a5a5a",
+                        "index": 5
+                      },
+                      "6": {
+                        "text": "TRIP",
+                        "color": "red",
+                        "index": 6
+                      },
+                      "7": {
+                        "text": "INTERLOCK",
+                        "color": "red",
+                        "index": 7
+                      },
+                      "8": {
+                        "text": "KILL",
+                        "color": "red",
+                        "index": 8
+                      }
+                    }
+                  },
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "null",
+                      "result": {
+                        "text": "UNKNOWN",
+                        "color": "orange",
+                        "index": 9
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vmon"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "VMon"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: V"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vset"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "VSet"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: V"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "imon"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "IMon"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: µA"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "iset"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "ISet"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: µA"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "maxv"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "MaxV"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: V"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rup"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ramp up"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: V/s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rdw"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ramp down"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: V/s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trip"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Trip"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "flags"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Flags"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Read at"
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Channel",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT channel, CASE WHEN status IS NULL THEN NULL WHEN (status & 2048) <> 0 THEN 8 WHEN (status & 4096) <> 0 THEN 7 WHEN (status & 128) <> 0 THEN 6 WHEN (status & 1) = 0 THEN CASE WHEN (status & 1024) <> 0 THEN 5 ELSE 0 END WHEN (status & 4) <> 0 THEN 3 WHEN (status & 2) <> 0 THEN 2 WHEN (status & 32) <> 0 THEN 1 WHEN vmon IS NULL OR vset IS NULL OR vmon < vset - 2.5 THEN 4 ELSE 1 END AS state, vmon, vset, imon, iset, maxv, rup, rdw, trip, trim(concat(CASE WHEN (status & 8) <> 0 THEN 'OVC ' ELSE '' END, CASE WHEN (status & 16) <> 0 THEN 'OVV ' ELSE '' END, CASE WHEN (status & 32) <> 0 THEN 'UNV ' ELSE '' END, CASE WHEN (status & 64) <> 0 THEN 'MAXV ' ELSE '' END, CASE WHEN (status & 128) <> 0 THEN 'TRIP ' ELSE '' END, CASE WHEN (status & 256) <> 0 THEN 'OVP ' ELSE '' END, CASE WHEN (status & 512) <> 0 THEN 'OVT ' ELSE '' END, CASE WHEN (status & 1024) <> 0 THEN 'DIS ' ELSE '' END, CASE WHEN (status & 2048) <> 0 THEN 'KILL ' ELSE '' END, CASE WHEN (status & 4096) <> 0 THEN 'ILK ' ELSE '' END, CASE WHEN (status & 8192) <> 0 THEN 'NOCAL ' ELSE '' END)) AS flags, time FROM (SELECT time, channel, status, vmon, vset, imon, iset, maxv, rup, rdw, trip, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY time DESC) AS rn FROM n1408 WHERE time >= now() - interval '1 minute') AS latest WHERE rn = 1 ORDER BY channel",
+          "format": "table"
+        }
+      ],
+      "id": 1
+    },
+    {
+      "title": "State",
+      "description": "State of each channel over time, same words as the table above. Gaps = no reading.",
+      "type": "state-timeline",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "ch ${__field.labels.channel}",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8e8e8e",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OFF",
+                  "color": "#8e8e8e",
+                  "index": 0
+                },
+                "1": {
+                  "text": "ON",
+                  "color": "green",
+                  "index": 1
+                },
+                "2": {
+                  "text": "RAMP UP",
+                  "color": "blue",
+                  "index": 2
+                },
+                "3": {
+                  "text": "RAMP DOWN",
+                  "color": "blue",
+                  "index": 3
+                },
+                "4": {
+                  "text": "SETTLING",
+                  "color": "yellow",
+                  "index": 4
+                },
+                "5": {
+                  "text": "DISABLED",
+                  "color": "#5a5a5a",
+                  "index": 5
+                },
+                "6": {
+                  "text": "TRIP",
+                  "color": "red",
+                  "index": 6
+                },
+                "7": {
+                  "text": "INTERLOCK",
+                  "color": "red",
+                  "index": 7
+                },
+                "8": {
+                  "text": "KILL",
+                  "color": "red",
+                  "index": 8
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNKNOWN",
+                  "color": "orange",
+                  "index": 9
+                }
+              }
+            }
+          ],
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "spanNulls": false,
+            "insertNulls": 10000
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "alignValue": "center",
+        "rowHeight": 0.8,
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, CASE WHEN status IS NULL THEN NULL WHEN (status & 2048) <> 0 THEN 8 WHEN (status & 4096) <> 0 THEN 7 WHEN (status & 128) <> 0 THEN 6 WHEN (status & 1) = 0 THEN CASE WHEN (status & 1024) <> 0 THEN 5 ELSE 0 END WHEN (status & 4) <> 0 THEN 3 WHEN (status & 2) <> 0 THEN 2 WHEN (status & 32) <> 0 THEN 1 WHEN vmon IS NULL OR vset IS NULL OR vmon < vset - 2.5 THEN 4 ELSE 1 END AS state, channel FROM n1408 WHERE time >= $__timeFrom AND time <= $__timeTo AND status IS NOT NULL ORDER BY time",
+          "format": "time_series"
+        }
+      ],
+      "id": 2
+    },
+    {
+      "title": "Voltage (VMon)",
+      "description": "Measured output voltage per channel. Gaps = no reading.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "ch ${__field.labels.channel}",
+          "unit": "suffix: V",
+          "decimals": 2,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "insertNulls": 10000,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, vmon, channel FROM n1408 WHERE time >= $__timeFrom AND time <= $__timeTo ORDER BY time",
+          "format": "time_series"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "title": "Current (IMon)",
+      "description": "Measured current per channel. Gaps = no reading.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "ch ${__field.labels.channel}",
+          "unit": "suffix: µA",
+          "decimals": 3,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "insertNulls": 10000,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, imon, channel FROM n1408 WHERE time >= $__timeFrom AND time <= $__timeTo ORDER BY time",
+          "format": "time_series"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "title": "Operations and status changes",
+      "description": "Commands from the control page and status bits the unit changed by itself, newest first (the full record is the audit log on pf-qaq).",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          },
+          "noValue": "nothing in this time range"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Time"
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "channel"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Channel"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "action"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Action"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "result"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Result"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "operator"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Operator"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Message"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "rawSql": "SELECT time, channel, action, result, operator, message FROM n1408_event WHERE time >= $__timeFrom AND time <= $__timeTo ORDER BY time DESC LIMIT 200",
+          "format": "table"
+        }
+      ],
+      "id": 5
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [
+    "delila",
+    "hv",
+    "n1408"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Si HV (N1408)",
+  "uid": "si-hv-n1408",
+  "version": 1
+}

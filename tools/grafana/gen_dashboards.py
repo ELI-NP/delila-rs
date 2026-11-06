@@ -45,10 +45,11 @@ INT_RE = re.compile(r"^[0-9]+$")
 RANGE = "time >= $__timeFrom AND time <= $__timeTo"
 GRID_WINDOW = "10 seconds"  # "current" rate = mean over the last 10 s of the range
 SILENT_WINDOW = "1 minute"  # silent channel = no count during the last minute
+RUN_LOOKBACK = "30 days"  # how far back to look for the last run start/stop
 
 # Cell colours of the module x channel grid (Hz, absolute thresholds):
-# 0 Hz is red, a disabled channel without counts grey ("off"), counting
-# channels get darker per decade.
+# 0 Hz during a run is red, a disabled channel without counts grey ("off"),
+# no counts with no run going dim ("-"), counting channels darker per decade.
 GRID_THRESHOLDS = [
     {"color": "red", "value": None},
     {"color": "super-light-blue", "value": 1e-9},
@@ -59,6 +60,7 @@ GRID_THRESHOLDS = [
     {"color": "purple", "value": 100000},
 ]
 OFF = -1  # grid value of a disabled channel with no counts
+IDLE = -2  # grid value of an enabled channel with no counts and no run going
 
 
 class GenError(Exception):
@@ -367,10 +369,29 @@ def module_rate_sql(boards: list[Board]) -> str:
     )
 
 
-def grid_sql(boards: list[Board], channels: list[Channel]) -> str:
+def run_state(experiment: str) -> str:
+    """A one-row table: `running` = a run was going at the end of the dashboard's
+    time range, that is, the last run start/stop by then is a start. Tune Up (run 0)
+    does not count: its markers are left out, and it is not a run a channel can be
+    silent in. Knowing it this way, rather than from the counts, keeps a DAQ that
+    stopped counting during a run red.
+
+    An aggregate joined in, not `(SELECT event ... ORDER BY time DESC LIMIT 1) = 'start'`:
+    InfluxDB 3 (DataFusion) got that scalar subquery wrong on pf-qaq, true when idle in
+    a WHERE and false during a run in a CASE. An aggregate always gives exactly one row."""
+    started = "MAX(CASE WHEN event = 'start' THEN time END)"
+    stopped = "MAX(CASE WHEN event = 'stop' THEN time END)"
+    return (
+        f"(SELECT COALESCE({started} > {stopped}, {started} IS NOT NULL) AS running\n"
+        "    FROM run_event\n"
+        f"    WHERE {last(RUN_LOOKBACK)} AND exp = {lit(experiment)} AND run > 0) AS s"
+    )
+
+
+def grid_sql(boards: list[Board], channels: list[Channel], experiment: str) -> str:
     """One row per board, one column per channel: mean rate over the last
-    GRID_WINDOW of the range. 0 = no counts, -1 = disabled and no counts,
-    NULL = the board has no such channel."""
+    GRID_WINDOW of the range. 0 = no counts during a run, -1 = disabled and no
+    counts, -2 = no counts and no run going, NULL = the board has no such channel."""
     nmax = max(b.num_channels for b in boards)
     cols = ",\n".join(f"  MAX(CASE WHEN c.ch = '{i}' THEN c.v END) AS \"{i}\"" for i in range(nmax))
     board_rows = ", ".join(f"({i}, {lit(b.tag)}, {lit(b.label)})" for i, b in enumerate(boards))
@@ -382,10 +403,12 @@ def grid_sql(boards: list[Board], channels: list[Channel]) -> str:
         f"{cols}\n"
         f"FROM (VALUES {board_rows}) AS b(pos, tag, board)\n"
         "JOIN (\n"
-        f"  SELECT m.tag, m.ch, CASE WHEN r.rate > 0 THEN r.rate WHEN m.en THEN 0 ELSE {OFF} END AS v\n"
+        f"  SELECT m.tag, m.ch, CASE WHEN r.rate > 0 THEN r.rate WHEN NOT m.en THEN {OFF}\n"
+        f"    WHEN s.running THEN 0 ELSE {IDLE} END AS v\n"
         "  FROM (VALUES\n"
         f"      {ch_rows}\n"
         "  ) AS m(tag, ch, en)\n"
+        f"  CROSS JOIN {run_state(experiment)}\n"
         "  LEFT JOIN (\n"
         "    SELECT module, channel, AVG(rate) AS rate FROM channel_rate\n"
         f"    WHERE {last(GRID_WINDOW)}\n"
@@ -397,14 +420,15 @@ def grid_sql(boards: list[Board], channels: list[Channel]) -> str:
     )
 
 
-def silent_sql(channels: list[Channel]) -> str:
-    """Enabled channels without a count during the last SILENT_WINDOW
-    (also those the Operator wrote no row for: it skips count = 0)."""
+def silent_sql(channels: list[Channel], experiment: str) -> str:
+    """Enabled channels without a count during the last SILENT_WINDOW of a run
+    (also those the Operator wrote no row for: it skips count = 0). Nothing when
+    no run is going: then every channel is silent, and that says nothing."""
     rows = [
         f"({lit(c.board.tag)}, '{c.channel}', {c.board.module}, {c.channel}, {lit(c.name)}, {lit(c.group)})"
         for c in channels if c.enabled
     ]
-    keep = "COALESCE(r.rate, 0) = 0"
+    keep = "COALESCE(r.rate, 0) = 0 AND s.running"
     if not rows:  # every channel disabled: keep the SQL valid, list nothing
         rows, keep = ["('', '', -1, -1, '', '')"], "false"
     return (
@@ -412,6 +436,7 @@ def silent_sql(channels: list[Channel]) -> str:
         "FROM (VALUES\n"
         "    " + ",\n    ".join(rows) + "\n"
         ") AS m(tag, ch, module, channel, name, grp)\n"
+        f"CROSS JOIN {run_state(experiment)}\n"
         "LEFT JOIN (\n"
         "  SELECT module, channel, MAX(rate) AS rate FROM channel_rate\n"
         f"  WHERE {last(SILENT_WINDOW)}\n"
@@ -423,7 +448,8 @@ def silent_sql(channels: list[Channel]) -> str:
 
 
 def run_event_sql(event: str, experiment: str | None) -> str:
-    """Annotation query on run_event (written by the Operator at Start/Stop)."""
+    """Annotation query on run_event (written by the Operator at Start/Stop).
+    Tune Up runs as run 0 and gets no marker."""
     if experiment is None:
         text = "concat(exp, ' run ', CAST(run AS VARCHAR), ' ', event)"
         exp_filter = ""
@@ -433,7 +459,7 @@ def run_event_sql(event: str, experiment: str | None) -> str:
     return (
         f"SELECT time, {text} AS text\n"
         "FROM run_event\n"
-        f"WHERE {RANGE}{exp_filter} AND event = {lit(event)}\n"
+        f"WHERE {RANGE}{exp_filter} AND event = {lit(event)} AND run > 0\n"
         "ORDER BY time"
     )
 
@@ -502,12 +528,15 @@ def timeseries_panel(pid: int, title: str, pos: dict, targets: list[dict], uid: 
     }
 
 
-def grid_panel(pid: int, pos: dict, boards: list[Board], channels: list[Channel], uid: str) -> dict:
+def grid_panel(pid: int, pos: dict, boards: list[Board], channels: list[Channel], uid: str,
+               experiment: str) -> dict:
     return {
         "id": pid,
         "type": "table",
         "title": f"Rate per channel (Hz, mean of the last {GRID_WINDOW} of the time range)",
-        "description": "Red = 0 Hz (no counts). Grey 'off' = disabled in the digitizer JSON and no counts. "
+        "description": "Red = 0 Hz during a run. '-' = no counts and no run going at the end of the time "
+                       "range (Tune Up does not count as a run). Grey 'off' = disabled in the digitizer JSON "
+                       "and no counts. "
                        "Blue shades per decade (10, 100, 1k, 10k Hz), purple >= 100 kHz. "
                        "Columns are channel numbers; names are in the panels below.",
         "gridPos": pos,
@@ -518,7 +547,10 @@ def grid_panel(pid: int, pos: dict, boards: list[Board], channels: list[Channel]
                 "color": {"mode": "thresholds"},
                 "thresholds": {"mode": "absolute", "steps": GRID_THRESHOLDS},
                 "mappings": [
-                    {"type": "value", "options": {str(OFF): {"text": "off", "color": "#808080", "index": 0}}},
+                    {"type": "value", "options": {
+                        str(OFF): {"text": "off", "color": "#808080", "index": 0},
+                        str(IDLE): {"text": "-", "color": "transparent", "index": 2},
+                    }},
                     {"type": "special", "options": {"match": "null", "result": {"text": "", "color": "transparent", "index": 1}}},
                 ],
                 "custom": {"align": "center", "minWidth": 40,
@@ -534,21 +566,22 @@ def grid_panel(pid: int, pos: dict, boards: list[Board], channels: list[Channel]
             }],
         },
         "options": {"showHeader": True, "cellHeight": "sm", "footer": {"show": False}},
-        "targets": [target(grid_sql(boards, channels), "table", uid)],
+        "targets": [target(grid_sql(boards, channels, experiment), "table", uid)],
     }
 
 
-def silent_panel(pid: int, pos: dict, channels: list[Channel], uid: str) -> dict:
+def silent_panel(pid: int, pos: dict, channels: list[Channel], uid: str, experiment: str) -> dict:
     return {
         "id": pid,
         "type": "table",
         "title": f"Silent channels (0 Hz, last {SILENT_WINDOW})",
-        "description": "Enabled channels without a single count during the last minute of the time range. "
-                       "Channels disabled in the digitizer JSON are not listed.",
+        "description": "During a run: enabled channels without a single count during the last minute of the "
+                       "time range. Empty when no run is going. Channels disabled in the digitizer JSON are "
+                       "not listed.",
         "gridPos": pos,
         "datasource": ds_ref(uid),
         "fieldConfig": {
-            "defaults": {"noValue": "none - every enabled channel counts", "custom": {"align": "left"}},
+            "defaults": {"noValue": "none, or no run going", "custom": {"align": "left"}},
             "overrides": [{
                 "matcher": {"id": "byName", "options": "Name"},
                 "properties": [
@@ -561,7 +594,7 @@ def silent_panel(pid: int, pos: dict, channels: list[Channel], uid: str) -> dict
             } for col, width in (("Name", 100), ("Group", 90), ("Module", 70), ("Channel", 70))],
         },
         "options": {"showHeader": True, "cellHeight": "sm", "footer": {"show": False}},
-        "targets": [target(silent_sql(channels), "table", uid)],
+        "targets": [target(silent_sql(channels, experiment), "table", uid)],
     }
 
 
@@ -578,13 +611,13 @@ def rates_dashboard(experiment: str, boards: list[Board], channels: list[Channel
 
     # Title + header + horizontal scrollbar + one ~34 px row per board (grid unit = 38 px).
     grid_h = max(5, -(-(120 + 34 * len(boards)) // 38))
-    panels.append(grid_panel(next_id(), {"h": grid_h, "w": 24, "x": 0, "y": 0}, boards, channels, uid))
+    panels.append(grid_panel(next_id(), {"h": grid_h, "w": 24, "x": 0, "y": 0}, boards, channels, uid, experiment))
     y = grid_h
     panels.append(timeseries_panel(
         next_id(), "Event rate per module (Hz)", {"h": 9, "w": 16, "x": 0, "y": y},
         [target(module_rate_sql(boards), "time_series", uid)], uid, "Hz", "${__field.labels.board}",
         calcs=("mean", "max", "lastNotNull")))
-    panels.append(silent_panel(next_id(), {"h": 9, "w": 8, "x": 16, "y": y}, channels, uid))
+    panels.append(silent_panel(next_id(), {"h": 9, "w": 8, "x": 16, "y": y}, channels, uid, experiment))
     y += 9
     panels.append({"id": next_id(), "type": "row", "title": "Channel rates by group", "collapsed": False,
                    "gridPos": {"h": 1, "w": 24, "x": 0, "y": y}, "panels": []})
