@@ -1,6 +1,6 @@
 # TODO 83 — エネルギー較正の表示(ADC → keV、1 次式、Monitor と root_sink の表示だけ。係数は外で作る)
 
-**Status: 🚧 Phase 0〜3 実装済み、Mac の実データなし E2E で確認 (2026-11-06) — ブランチ `feat/energy-calib-display`。残 = master への取り込み、pf-qaq への配備、§10 の実機確認**
+**Status: 🚧 Phase 0〜3 実装済み、Mac の合成データで確認、master に取り込み済み (2026-11-06、d5c1d10) — 残 = pf-qaq への配備(ユーザー承認済み、VPN 待ち)、§10 の実機確認、学生の表を置く**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md)(N_Wall、最初の使い道の候補) /
 [79_root_sink_nwall_online.md](79_root_sink_nwall_online.md)(nwall_sink の表示) /
@@ -257,6 +257,8 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 - 各 Phase の終わりに `cargo fmt && cargo clippy --tests -- -D warnings && cargo test`、C++ の単体テスト、`npm run build`。
 
 ## 10. 実機・実データでの確認(メインセッションとユーザーが行う。サブエージェントは実機を触らない)
+
+**pf-qaq への配備(ランの合間に):** `system_state` が Running でないこと、Tune Up 中でないことを確かめる → `git pull`(ローカルの設定変更は触らない)→ `monitor` と `nwall_sink` をビルド → 古い `nwall_sink` を残して入れ替え → `monitor` と `nwall_sink` を再起動。UI は `dist/` をファイルで配信するので Operator の再起動は要らない。表を置くまでは ADC の表示のまま。
 
 | # | いつ | 確認 |
 |---|---|---|
