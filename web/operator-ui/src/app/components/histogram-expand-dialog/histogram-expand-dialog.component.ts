@@ -10,6 +10,15 @@ import { HistogramService } from '../../services/histogram.service';
 import { FittingService } from '../../services/fitting.service';
 import { DigitizerService } from '../../services/digitizer.service';
 import { ViewCell, ViewCellFitResult, Histogram1D, Histogram2D, XAxisLabel, HistogramType, AxisSource, AxisView, AXIS_SOURCE_LABEL, defaultYAxisSource } from '../../models/histogram.types';
+import {
+  axisName1D,
+  axisName2D,
+  calibrateHistogram1D,
+  calibrateHistogram2D,
+  kevCellView,
+  lookupCalib,
+  tabShowsKev,
+} from '../../utils/energy-calib';
 
 export interface ExpandDialogData {
   cell: ViewCell;
@@ -94,24 +103,24 @@ export interface ExpandDialogResult {
         <div class="chart-container">
           @if (data.histogramType !== '2d') {
             <app-histogram-chart
-              [histogram]="histogram()"
+              [histogram]="displayHistogram()"
               [xRange]="cell().xRange"
               [yRange]="cell().yRange"
               [showDataZoom]="true"
               [logScale]="cell().logScale ?? false"
-              [xAxisLabel]="data.xAxisLabel"
+              [xAxisLabel]="xAxisName1d()"
               [fitResult]="cell().fitResult ?? null"
-              [xView]="data.xView ?? null"
+              [xView]="chartXView()"
               (rangeChange)="onRangeChange($event)"
             ></app-histogram-chart>
           } @else {
             <app-heatmap-chart
-              [histogram]="histogram2d()"
+              [histogram]="displayHistogram2d()"
               [logScale]="cell().logScale ?? true"
-              [xAxisLabel]="axisLabel(xAxis())"
-              [yAxisLabel]="axisLabel(yAxis())"
-              [xView]="data.xView ?? null"
-              [yView]="data.yView ?? null"
+              [xAxisLabel]="xAxisName2d()"
+              [yAxisLabel]="yAxisName2d()"
+              [xView]="chartXView()"
+              [yView]="chartYView()"
             ></app-heatmap-chart>
           }
         </div>
@@ -242,8 +251,64 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
   readonly data = inject<ExpandDialogData>(MAT_DIALOG_DATA);
   private readonly dialogRef = inject(MatDialogRef<HistogramExpandDialogComponent, ExpandDialogResult>);
 
+  /** In a keV view this cell's numbers are in keV if it has coefficients (TODO 83). */
+  private readonly showsKev = tabShowsKev(this.data);
+  private readonly calib = computed(() =>
+    this.showsKev
+      ? lookupCalib(
+          this.histogramService.calibration(),
+          this.data.cell.sourceId,
+          this.data.cell.channelId,
+        )
+      : null,
+  );
+  private readonly xIsEnergy = this.data.histogramType === '2d'
+    ? (this.data.xAxis ?? 'energy') === 'energy'
+    : this.data.histogramType === 'energy';
+  private readonly yIsEnergy = this.data.histogramType === '2d' && this.data.yAxis === 'energy';
+
+  /** What the chart and the fit see: the same counts, on a mapped range. */
+  readonly displayHistogram = computed(() => {
+    const h = this.histogram();
+    return h ? calibrateHistogram1D(h, this.calib()) : null;
+  });
+  readonly displayHistogram2d = computed(() => {
+    const h = this.histogram2d();
+    if (!h) return null;
+    const c = this.calib();
+    return calibrateHistogram2D(h, this.xIsEnergy ? c : null, this.yIsEnergy ? c : null);
+  });
+
+  readonly chartXView = computed<AxisView | null>(() => {
+    const view = this.data.xView;
+    if (!this.showsKev || !this.xIsEnergy) return view ?? null;
+    const cfg =
+      this.data.histogramType === '2d'
+        ? this.displayHistogram2d()?.x_config
+        : this.displayHistogram()?.config;
+    return cfg ? kevCellView(view, cfg, this.calib() !== null) : null;
+  });
+  readonly chartYView = computed<AxisView | null>(() => {
+    const view = this.data.yView;
+    if (!this.showsKev || !this.yIsEnergy) return view ?? null;
+    const cfg = this.displayHistogram2d()?.y_config;
+    return cfg ? kevCellView(view, cfg, this.calib() !== null) : null;
+  });
+
   constructor() {
     this.cell = signal<ViewCell>(this.data.cell);
+  }
+
+  xAxisName1d(): string {
+    return axisName1D(this.showsKev, this.calib() !== null);
+  }
+  xAxisName2d(): string {
+    const x = this.xAxis();
+    return axisName2D(this.axisLabel(x), x, this.showsKev, this.calib() !== null);
+  }
+  yAxisName2d(): string {
+    const y = this.yAxis();
+    return axisName2D(this.axisLabel(y), y, this.showsKev, this.calib() !== null);
   }
 
   ngOnInit(): void {
@@ -327,7 +392,7 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
 
   canFit(): boolean {
     const c = this.cell();
-    const hist = this.histogram();
+    const hist = this.displayHistogram();
     return c.isLocked && c.xRange !== 'auto' && hist !== null;
   }
 
@@ -361,7 +426,7 @@ export class HistogramExpandDialogComponent implements OnInit, OnDestroy {
   }
 
   onFit(): void {
-    const hist = this.histogram();
+    const hist = this.displayHistogram();
     const c = this.cell();
 
     if (!hist || c.xRange === 'auto') return;

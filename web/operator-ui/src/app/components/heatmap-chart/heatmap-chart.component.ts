@@ -9,6 +9,7 @@ import { NgxEchartsDirective } from 'ngx-echarts';
 import type { ECharts, EChartsCoreOption } from 'echarts/core';
 import { AxisView, Histogram2D } from '../../models/histogram.types';
 import { rebin2d } from '../../utils/rebin';
+import { formatAxisValue } from '../../utils/energy-calib';
 
 @Component({
   selector: 'app-heatmap-chart',
@@ -181,12 +182,12 @@ export class HeatmapChartComponent implements OnChanges {
     const xLabels: string[] = [];
     for (let i = 0; i < xBins; i++) {
       const v = xMin + i * xStep;
-      xLabels.push(Math.round(v).toString());
+      xLabels.push(formatAxisValue(v, xStep));
     }
     const yLabels: string[] = [];
     for (let i = 0; i < yBins; i++) {
       const v = yMin + i * yStep;
-      yLabels.push(v.toFixed(2));
+      yLabels.push(formatAxisValue(v, yStep));
     }
 
     // Convert flat bins to [x, y, value] triplets, skip zeros for sparse

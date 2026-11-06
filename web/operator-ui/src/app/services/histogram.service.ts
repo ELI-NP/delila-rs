@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, interval, switchMap, catchError, of, tap, Subject, takeUntil } from 'rxjs';
 import {
   AxisSource,
+  CalibrationResponse,
   Histogram1D,
   Histogram2D,
   HistogramListResponse,
@@ -19,6 +20,7 @@ import { OperatorService } from './operator.service';
 })
 export class HistogramService {
   private readonly refreshInterval = 1000; // 1 second
+  private readonly calibrationInterval = 5000; // 5 seconds: changes are rare
 
   private readonly http = inject(HttpClient);
   private readonly operator = inject(OperatorService);
@@ -38,6 +40,8 @@ export class HistogramService {
   readonly histogramCache = signal<Map<string, Histogram1D>>(new Map());
   readonly isPolling = signal(false);
   readonly error = signal<string | null>(null);
+  /** keV table in force on the Monitor; null until it has answered. */
+  readonly calibration = signal<CalibrationResponse | null>(null);
 
   // Computed values
   readonly totalEvents = computed(() => this.status()?.total_events ?? 0);
@@ -87,7 +91,21 @@ export class HistogramService {
       )
       .subscribe();
 
+    // Poll the keV table, so every browser shows the same state
+    interval(this.calibrationInterval)
+      .pipe(
+        takeUntil(this.stopPolling$),
+        switchMap(() => this.fetchCalibration()),
+        tap((calibration) => {
+          if (calibration) this.calibration.set(calibration);
+        }),
+      )
+      .subscribe();
+
     // Initial fetch
+    this.fetchCalibration().subscribe((calibration) => {
+      if (calibration) this.calibration.set(calibration);
+    });
     this.fetchStatus().subscribe((status) => {
       if (status) this.status.set(status);
     });
@@ -183,6 +201,21 @@ export class HistogramService {
         params: { x, y },
       })
       .pipe(catchError(() => of(null)));
+  }
+
+  fetchCalibration(): Observable<CalibrationResponse | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http.get<CalibrationResponse>(`${url}/calibration`).pipe(catchError(() => of(null)));
+  }
+
+  /** Ask the Monitor to read the file now; a bad file comes back as a status, not an error. */
+  reloadCalibration(): Observable<CalibrationResponse | null> {
+    const url = this.monitorBaseUrl();
+    if (!url) return of(null);
+    return this.http.post<CalibrationResponse>(`${url}/calibration/reload`, {}).pipe(
+      tap((calibration) => this.calibration.set(calibration)),
+    );
   }
 
   clearHistograms(): Observable<void | null> {

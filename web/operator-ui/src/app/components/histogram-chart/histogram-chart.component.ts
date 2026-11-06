@@ -11,7 +11,8 @@ import {
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { ECharts } from 'echarts/core';
-import { AxisView, Histogram1D, XAxisLabel, ViewCellFitResult } from '../../models/histogram.types';
+import { AxisView, Histogram1D, ViewCellFitResult } from '../../models/histogram.types';
+import { fitTextLines, formatAxisValue, unitOfAxisName } from '../../utils/energy-calib';
 import { rebin1d } from '../../utils/rebin';
 import { evaluatePiecewiseBg, BG_RANGE } from '../../services/fitting.service';
 import { siCountFormatter } from '../echarts-base/echarts-base.utils';
@@ -66,7 +67,9 @@ export class HistogramChartComponent implements OnChanges {
   @Input() yRange: { min: number; max: number } | 'auto' = 'auto';
   @Input() showDataZoom = true;
   @Input() logScale = false;
-  @Input() xAxisLabel: XAxisLabel = 'Channel';
+  /** Axis name: 'Channel', 'keV' or ADC_NOT_CALIBRATED. It also sets the unit of the
+   *  tooltip and the fit text, so the words cannot disagree with the axis. */
+  @Input() xAxisLabel = 'Channel';
   @Input() fitResult: ViewCellFitResult | null = null;
   /** Client-side view (range + bin count). Falls back to native server config. */
   @Input() xView: AxisView | null = null;
@@ -76,6 +79,7 @@ export class HistogramChartComponent implements OnChanges {
 
   private chartInstance: ECharts | null = null;
   private data = signal<number[][]>([]);
+  private binWidth = 1;
 
   readonly chartOptions = computed<EChartsCoreOption>(() => this.buildChartOptions());
   readonly mergeOptions = signal<EChartsCoreOption>({});
@@ -84,7 +88,13 @@ export class HistogramChartComponent implements OnChanges {
     if ((changes['histogram'] || changes['xView']) && this.histogram) {
       this.updateData();
     }
-    if (changes['xRange'] || changes['yRange'] || changes['logScale'] || changes['fitResult']) {
+    if (
+      changes['xRange'] ||
+      changes['yRange'] ||
+      changes['logScale'] ||
+      changes['fitResult'] ||
+      changes['xAxisLabel']
+    ) {
       this.updateMergeOptions();
     }
   }
@@ -183,6 +193,7 @@ export class HistogramChartComponent implements OnChanges {
 
     const { bins, config } = view;
     const binWidth = (config.max_value - config.min_value) / config.num_bins;
+    this.binWidth = binWidth;
 
     // Convert to [x, y] pairs for bar chart
     const chartData: number[][] = bins.map((count, i) => {
@@ -267,15 +278,7 @@ export class HistogramChartComponent implements OnChanges {
 
     // Add fit result text overlay
     if (this.fitResult) {
-      const fit = this.fitResult;
-      const chi2Ndf = fit.ndf > 0 ? (fit.chi2 / fit.ndf).toFixed(2) : '---';
-      const fitText = [
-        `Center: ${fit.center.toFixed(1)} ± ${fit.centerError.toFixed(1)}`,
-        `Sigma: ${fit.sigma.toFixed(1)} ± ${fit.sigmaError.toFixed(1)}`,
-        `FWHM: ${fit.fwhm.toFixed(1)}`,
-        `Area: ${fit.netArea.toFixed(0)} ± ${fit.netAreaError.toFixed(0)}`,
-        `χ²/ndf: ${chi2Ndf}`,
-      ].join('\n');
+      const fitText = fitTextLines(this.fitResult, unitOfAxisName(this.xAxisLabel)).join('\n');
 
       mergeOpts['graphic'] = [
         {
@@ -439,7 +442,8 @@ export class HistogramChartComponent implements OnChanges {
           const histSeries = data?.find(d => d.seriesIndex === SERIES_HISTOGRAM);
           if (histSeries) {
             const [x, y] = histSeries.data;
-            return `Channel: ${x.toFixed(0)}<br/>Counts: ${y}`;
+            const name = unitOfAxisName(this.xAxisLabel) || this.xAxisLabel;
+            return `${name}: ${formatAxisValue(x, this.binWidth)}<br/>Counts: ${y}`;
           }
           return '';
         },

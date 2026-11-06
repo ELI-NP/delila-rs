@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         if let Some(ref cmd) = monitor.command {
             monitor_config.command_address = cmd.clone();
         }
+        monitor_config.energy_calib_file = monitor.energy_calib_file.clone();
         // PSD histogram config from TOML
         monitor_config.psd_histogram_config = HistogramConfig {
             num_bins: monitor.psd_bins,

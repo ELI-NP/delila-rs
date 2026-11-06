@@ -1,0 +1,7 @@
+# Energy calibration example (values are not a measurement).
+#   E_keV = kev_per_adc * energy + offset_kev
+# mod ch  kev_per_adc  offset_kev
+
+0   1     0.22180      3.1
+5	0	0.30120	-12.4
+5   1     2.5e-1       0      # a comment after the numbers is fine

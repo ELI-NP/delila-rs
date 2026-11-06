@@ -28,6 +28,16 @@ import {
   DEFAULT_AXIS_VIEW,
   defaultYAxisSource,
 } from '../../models/histogram.types';
+import {
+  LinearCalib,
+  axisName1D,
+  axisName2D,
+  calibrateHistogram1D,
+  calibrateHistogram2D,
+  kevCellView,
+  lookupCalib,
+  tabShowsKev,
+} from '../../utils/energy-calib';
 
 @Component({
   selector: 'app-view-tab',
@@ -110,6 +120,14 @@ import {
             </label>
           }
         </div>
+        @if (showsKev()) {
+          <span
+            class="calib-count"
+            title="Cells in keV; the others have no coefficients and are shown in ADC"
+          >
+            keV: {{ calibratedCount() }} / {{ usedCellCount() }} cells
+          </span>
+        }
         @if (!is2dHistType(histType())) {
           <span class="toolbar-hint">
             Drag to select range, Ctrl+Scroll for X-axis zoom
@@ -135,29 +153,32 @@ import {
                 @if (cell.isLocked) {
                   <span class="lock-icon">🔒</span>
                 }
+                @if (showsKev() && cellCalibs()[i] === null) {
+                  <span class="adc-badge" title="No keV coefficients for this channel">ADC</span>
+                }
               </div>
               <div class="chart-wrapper">
                 @if (!is2dHistType(histType())) {
                   <app-histogram-chart
                     #chartRef
-                    [histogram]="histograms()[i] ?? null"
+                    [histogram]="displayHistograms()[i] ?? null"
                     [xRange]="cell.xRange"
                     [yRange]="cell.yRange"
                     [showDataZoom]="true"
                     [logScale]="cell.logScale ?? false"
-                    [xAxisLabel]="tab.xAxisLabel"
-                    [xView]="xView()"
+                    [xAxisLabel]="xAxisName1d(i)"
+                    [xView]="cellXViews()[i]"
                     (rangeChange)="onRangeChange(i, $event)"
                   ></app-histogram-chart>
                 } @else {
                   <app-heatmap-chart
                     #chartRef
-                    [histogram]="histograms2d()[i] ?? null"
+                    [histogram]="displayHistograms2d()[i] ?? null"
                     [logScale]="cell.logScale ?? true"
-                    [xAxisLabel]="axisLabel(xAxis())"
-                    [yAxisLabel]="axisLabel(yAxis())"
-                    [xView]="xView()"
-                    [yView]="yView()"
+                    [xAxisLabel]="xAxisName2d(i)"
+                    [yAxisLabel]="yAxisName2d(i)"
+                    [xView]="cellXViews()[i]"
+                    [yView]="cellYViews()[i]"
                   ></app-heatmap-chart>
                 }
               </div>
@@ -274,6 +295,21 @@ import {
       margin-left: 2px;
     }
 
+    .adc-badge {
+      margin-left: 4px;
+      padding: 0 4px;
+      border-radius: 2px;
+      background: #ffb300;
+      color: #000;
+      font-weight: 700;
+    }
+
+    .calib-count {
+      font-size: 12px;
+      color: #444;
+      white-space: nowrap;
+    }
+
     .chart-wrapper {
       flex: 1;
       min-height: 0;
@@ -354,6 +390,75 @@ export class ViewTabComponent implements OnInit, OnDestroy {
     () => this.tab.yAxis ?? defaultYAxisSource(this.digitizerService.allAMax()),
   );
 
+  /** This view is in keV wherever a cell has coefficients (TODO 83). */
+  readonly showsKev = computed(() => tabShowsKev(this.tab));
+  private readonly xIsEnergy = computed(() =>
+    this.is2dHistType(this.histType()) ? this.xAxis() === 'energy' : this.histType() === 'energy',
+  );
+  private readonly yIsEnergy = computed(
+    () => this.is2dHistType(this.histType()) && this.yAxis() === 'energy',
+  );
+
+  /** Coefficients per cell; null = shown in ADC (always, in an ADC view). */
+  readonly cellCalibs = computed<(LinearCalib | null)[]>(() => {
+    const calibration = this.histogramService.calibration();
+    const kev = this.showsKev();
+    return this.tab.cells.map((c) =>
+      kev && !c.isEmpty ? lookupCalib(calibration, c.sourceId, c.channelId) : null,
+    );
+  });
+  readonly calibratedCount = computed(() => this.cellCalibs().filter((c) => c !== null).length);
+  readonly usedCellCount = computed(() => this.tab.cells.filter((c) => !c.isEmpty).length);
+
+  /** What the charts and fits see: the same counts, on a mapped range. */
+  readonly displayHistograms = computed(() => {
+    const calibs = this.cellCalibs();
+    return this.histograms().map((h, i) => (h ? calibrateHistogram1D(h, calibs[i] ?? null) : null));
+  });
+  readonly displayHistograms2d = computed(() => {
+    const calibs = this.cellCalibs();
+    const x = this.xIsEnergy();
+    const y = this.yIsEnergy();
+    return this.histograms2d().map((h, i) => {
+      if (!h) return null;
+      const c = calibs[i] ?? null;
+      return calibrateHistogram2D(h, x ? c : null, y ? c : null);
+    });
+  });
+
+  /** Per-cell view: gains differ, so in keV each cell's range is its own. */
+  readonly cellXViews = computed<AxisView[]>(() => {
+    const base = this.xView();
+    if (!this.showsKev() || !this.xIsEnergy()) return this.tab.cells.map(() => base);
+    const calibs = this.cellCalibs();
+    const two = this.is2dHistType(this.histType());
+    return this.tab.cells.map((_, i) => {
+      const cfg = two ? this.displayHistograms2d()[i]?.x_config : this.displayHistograms()[i]?.config;
+      return cfg ? kevCellView(this.tab.xView, cfg, calibs[i] !== null) : base;
+    });
+  });
+  readonly cellYViews = computed<AxisView[]>(() => {
+    const base = this.yView();
+    if (!this.showsKev() || !this.yIsEnergy()) return this.tab.cells.map(() => base);
+    const calibs = this.cellCalibs();
+    return this.tab.cells.map((_, i) => {
+      const cfg = this.displayHistograms2d()[i]?.y_config;
+      return cfg ? kevCellView(this.tab.yView, cfg, calibs[i] !== null) : base;
+    });
+  });
+
+  xAxisName1d(i: number): string {
+    return axisName1D(this.showsKev(), this.cellCalibs()[i] !== null);
+  }
+  xAxisName2d(i: number): string {
+    const x = this.xAxis();
+    return axisName2D(this.axisLabel(x), x, this.showsKev(), this.cellCalibs()[i] !== null);
+  }
+  yAxisName2d(i: number): string {
+    const y = this.yAxis();
+    return axisName2D(this.axisLabel(y), y, this.showsKev(), this.cellCalibs()[i] !== null);
+  }
+
   /**
    * Live view config — the chart components apply this client-side rebin.
    * Falls back to the matching `DEFAULT_AXIS_VIEW` for the current axis when
@@ -387,10 +492,11 @@ export class ViewTabComponent implements OnInit, OnDestroy {
   }
 
   private resolveView(view: AxisView | undefined, axis: AxisSource, nativeBins: number): AxisView {
-    const def = DEFAULT_AXIS_VIEW[axis];
+    // The defaults are in ADC. In keV the energy axis has none: see cellXViews.
+    const def = this.showsKev() && axis === 'energy' ? undefined : DEFAULT_AXIS_VIEW[axis];
     return {
-      min: view?.min ?? def.min,
-      max: view?.max ?? def.max,
+      min: view?.min ?? def?.min,
+      max: view?.max ?? def?.max,
       // Default = server's native bin count → rebin factor 1 (no rebin).
       bins: view?.bins ?? nativeBins,
     };
@@ -597,9 +703,12 @@ export class ViewTabComponent implements OnInit, OnDestroy {
       : this.tab.cells.find((cell) => cell.isLocked);
     if (!refCell?.isLocked) return;
 
-    // Apply its range to all non-empty cells in this tab
-    const cells = this.tab.cells.map((cell) => {
-      if (cell.isEmpty) return cell;
+    // Apply its range to all non-empty cells in this tab that use the same unit:
+    // a keV range means nothing to a cell still in ADC.
+    const calibs = this.cellCalibs();
+    const refCalibrated = calibs[this.tab.cells.indexOf(refCell)] !== null;
+    const cells = this.tab.cells.map((cell, i) => {
+      if (cell.isEmpty || (calibs[i] !== null) !== refCalibrated) return cell;
       return {
         ...cell,
         xRange: refCell.xRange,

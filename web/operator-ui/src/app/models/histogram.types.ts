@@ -89,8 +89,28 @@ export interface MonitorState {
   activeTabId: string | null; // null = Setup tab is active
 }
 
-// X-axis label type
-export type XAxisLabel = 'Channel' | 'keV' | 'MeV';
+// X-axis unit of a view: 'Channel' = ADC, 'keV' = calibrated where coefficients exist
+// (utils/energy-calib.ts). Older layouts may hold 'MeV', migrated when they are loaded.
+export type XAxisLabel = 'Channel' | 'keV';
+
+/** One line of the keV table (`GET /api/calibration`, TODO 83). */
+export interface CalibrationEntry {
+  module: number;
+  channel: number;
+  kev_per_adc: number;
+  offset_kev: number;
+}
+
+/** Body of `GET /api/calibration` and `POST /api/calibration/reload`. */
+export interface CalibrationResponse {
+  configured: boolean;
+  path: string | null;
+  status: 'none' | 'ok' | 'stale' | 'error';
+  unit: 'keV';
+  loaded_at: string | null;
+  entries: CalibrationEntry[];
+  errors: string[];
+}
 
 /**
  * Source of a 2D plot axis. Mirrors the backend `AxisSource` enum 1:1

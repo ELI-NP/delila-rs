@@ -10,7 +10,9 @@
 //! histogram display.
 
 mod axis;
+pub mod energy_calib;
 pub use axis::AxisSource;
+use energy_calib::{ActiveCalib, CalibResponse};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -65,6 +67,8 @@ pub struct MonitorConfig {
     pub histogram2d_overrides: HashMap<AxisSource, HistogramConfig>,
     /// Internal channel capacity
     pub channel_capacity: usize,
+    /// Table of keV coefficients for the display (TODO 83). None = ADC only.
+    pub energy_calib_file: Option<String>,
 }
 
 impl Default for MonitorConfig {
@@ -86,6 +90,7 @@ impl Default for MonitorConfig {
             },
             histogram2d_overrides: HashMap::new(),
             channel_capacity: 1000,
+            energy_calib_file: None,
         }
     }
 }
@@ -724,6 +729,8 @@ pub struct AppState {
     histogram_tx: mpsc::UnboundedSender<HistogramMessage>,
     /// Component state for status
     pub component_state: Arc<tokio::sync::Mutex<ComponentSharedState>>,
+    /// keV coefficients for the UI. Never reaches the histogram task (TODO 83).
+    energy_calib: Arc<parking_lot::RwLock<ActiveCalib>>,
 }
 
 // =============================================================================
@@ -889,6 +896,26 @@ async fn clear_histograms(State(state): State<AppState>) -> StatusCode {
     StatusCode::OK
 }
 
+/// GET /api/calibration - The keV coefficients in force and how they were read
+async fn get_calibration(State(state): State<AppState>) -> Json<CalibResponse> {
+    Json(state.energy_calib.read().response())
+}
+
+/// POST /api/calibration/reload - Read the file now, without starting a run.
+///
+/// A file that cannot be used is a state to show, not an HTTP error: the reply says
+/// `stale` or `error` with the line numbers. 404 only if no file is configured.
+async fn reload_calibration(
+    State(state): State<AppState>,
+) -> Result<Json<CalibResponse>, StatusCode> {
+    let mut calib = state.energy_calib.write();
+    if !calib.is_configured() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    calib.reload();
+    Ok(Json(calib.response()))
+}
+
 // =============================================================================
 // Waveform API Endpoints
 // =============================================================================
@@ -1015,6 +1042,11 @@ pub fn create_router(state: AppState) -> Router {
             "/api/histograms2d/:module_id/:channel_id",
             get(get_histogram2d),
         )
+        .route("/api/calibration", get(get_calibration))
+        .route(
+            "/api/calibration/reload",
+            axum::routing::post(reload_calibration),
+        )
         .route("/api/waveforms", get(list_waveforms))
         .route("/api/waveforms/:module_id/:channel_id", get(get_waveform))
         .layer(cors)
@@ -1030,6 +1062,7 @@ pub fn create_router(state: AppState) -> Router {
 struct MonitorCommandExt {
     histogram_tx: mpsc::UnboundedSender<HistogramMessage>,
     atomic_stats: Arc<AtomicStats>,
+    energy_calib: Arc<parking_lot::RwLock<ActiveCalib>>,
 }
 
 impl CommandHandlerExt for MonitorCommandExt {
@@ -1043,6 +1076,8 @@ impl CommandHandlerExt for MonitorCommandExt {
         let _ = self.histogram_tx.send(HistogramMessage::Clear);
         let _ = self.histogram_tx.send(HistogramMessage::SetStartTime);
         self.atomic_stats.reset();
+        // A bad file shows in GET /api/calibration; the run must start regardless.
+        self.energy_calib.write().reload();
         Ok(())
     }
 
@@ -1090,6 +1125,7 @@ pub struct Monitor {
     atomic_stats: Arc<AtomicStats>,
     state_rx: watch::Receiver<ComponentState>,
     state_tx: watch::Sender<ComponentState>,
+    energy_calib: Arc<parking_lot::RwLock<ActiveCalib>>,
 }
 
 impl Monitor {
@@ -1104,12 +1140,20 @@ impl Monitor {
             "Monitor created"
         );
 
+        // A bad file does not stop the Monitor: it only changes what is on screen.
+        let mut energy_calib = ActiveCalib::new(config.energy_calib_file.clone());
+        if !energy_calib.is_configured() {
+            info!("No energy calibration file: histograms are shown in ADC");
+        }
+        energy_calib.reload();
+
         Ok(Self {
             config,
             shared_state: Arc::new(tokio::sync::Mutex::new(ComponentSharedState::new())),
             atomic_stats: Arc::new(AtomicStats::new()),
             state_rx,
             state_tx,
+            energy_calib: Arc::new(parking_lot::RwLock::new(energy_calib)),
         })
     }
 
@@ -1144,6 +1188,7 @@ impl Monitor {
         let app_state = AppState {
             histogram_tx: hist_tx.clone(),
             component_state: self.shared_state.clone(),
+            energy_calib: self.energy_calib.clone(),
         };
         let router = create_router(app_state);
 
@@ -1171,6 +1216,7 @@ impl Monitor {
         let shutdown_for_cmd = shutdown.resubscribe();
         let hist_tx_for_cmd = hist_tx.clone();
         let atomic_stats_for_cmd = self.atomic_stats.clone();
+        let energy_calib_for_cmd = self.energy_calib.clone();
 
         let cmd_handle = tokio::spawn(async move {
             run_command_task(
@@ -1193,6 +1239,7 @@ impl Monitor {
                     let mut ext = MonitorCommandExt {
                         histogram_tx: hist_tx_for_cmd.clone(),
                         atomic_stats: atomic_stats_for_cmd.clone(),
+                        energy_calib: energy_calib_for_cmd.clone(),
                     };
                     handle_command(state, tx, cmd, Some(&mut ext))
                 },
@@ -1530,6 +1577,80 @@ impl Monitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn calib_state(path: Option<String>) -> AppState {
+        let (histogram_tx, _rx) = mpsc::unbounded_channel();
+        AppState {
+            histogram_tx,
+            component_state: Arc::new(tokio::sync::Mutex::new(ComponentSharedState::new())),
+            energy_calib: Arc::new(parking_lot::RwLock::new(ActiveCalib::new(path))),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_calibration_reload_without_a_file_is_not_found() {
+        let state = calib_state(None);
+        assert_eq!(
+            reload_calibration(State(state.clone())).await.err(),
+            Some(StatusCode::NOT_FOUND)
+        );
+        let Json(response) = get_calibration(State(state)).await;
+        assert!(!response.configured);
+    }
+
+    #[tokio::test]
+    async fn test_calibration_reload_reports_a_bad_file_as_a_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("calib.txt");
+        std::fs::write(&path, "0 1 0.5 -10\n").expect("write");
+        let state = calib_state(Some(path.to_string_lossy().into_owned()));
+
+        let Ok(Json(response)) = reload_calibration(State(state.clone())).await else {
+            panic!("expected the table");
+        };
+        assert_eq!(response.status, energy_calib::CalibStatus::Ok);
+        assert_eq!(response.entries.len(), 1);
+
+        // A broken file is a 200 that says stale, with the old table still there.
+        std::fs::write(&path, "0 1 -1 0\n").expect("write");
+        let Ok(Json(response)) = reload_calibration(State(state.clone())).await else {
+            panic!("expected a state, not an HTTP error");
+        };
+        assert_eq!(response.status, energy_calib::CalibStatus::Stale);
+        assert_eq!(response.entries.len(), 1);
+        assert!(!response.errors.is_empty());
+
+        let Json(response) = get_calibration(State(state)).await;
+        assert_eq!(response.status, energy_calib::CalibStatus::Stale);
+    }
+
+    #[test]
+    fn test_run_start_rereads_the_calibration() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("calib.txt");
+        std::fs::write(&path, "0 1 0.5 -10\n").expect("write");
+        let (histogram_tx, _rx) = mpsc::unbounded_channel();
+        let energy_calib = Arc::new(parking_lot::RwLock::new(ActiveCalib::new(Some(
+            path.to_string_lossy().into_owned(),
+        ))));
+        let mut ext = MonitorCommandExt {
+            histogram_tx,
+            atomic_stats: Arc::new(AtomicStats::new()),
+            energy_calib: energy_calib.clone(),
+        };
+
+        ext.on_start(1).expect("start");
+        assert_eq!(energy_calib.read().response().entries[0].kev_per_adc, 0.5);
+
+        std::fs::write(&path, "0 1 0.75 -10\n").expect("write");
+        ext.on_start(2).expect("start");
+        assert_eq!(energy_calib.read().response().entries[0].kev_per_adc, 0.75);
+
+        // A bad file must not stop the run.
+        std::fs::write(&path, "broken\n").expect("write");
+        ext.on_start(3).expect("a bad table must not stop the run");
+        assert_eq!(energy_calib.read().response().entries[0].kev_per_adc, 0.75);
+    }
 
     #[test]
     fn test_histogram_config_default() {

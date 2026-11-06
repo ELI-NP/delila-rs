@@ -694,6 +694,11 @@ pub struct MonitorNetworkConfig {
     /// PSD 2D histogram: Y axis (PSD) bins (default: 200)
     #[serde(default = "default_psd2d_y_bins")]
     pub psd2d_y_bins: u32,
+
+    /// Table of keV coefficients for the display: `module channel kev_per_adc
+    /// offset_kev`. Histograms stay in ADC; the web UI maps the axes (TODO 83).
+    #[serde(default)]
+    pub energy_calib_file: Option<String>,
 }
 
 fn default_psd_bins() -> u32 {
@@ -988,6 +993,7 @@ output_dir = "/data/runs"
 [network.monitor]
 subscribe = "tcp://localhost:5557"
 http_port = 9000
+energy_calib_file = "config/energy_calib_test.txt"
 
 [settings]
 source = "file"
@@ -1000,6 +1006,14 @@ batch_interval_ms = 50
 
         // Network
         assert_eq!(config.network.cluster_name, "daq-cluster-1");
+        assert_eq!(
+            config
+                .network
+                .monitor
+                .as_ref()
+                .and_then(|m| m.energy_calib_file.as_deref()),
+            Some("config/energy_calib_test.txt")
+        );
         assert_eq!(config.network.sources.len(), 2);
         assert_eq!(config.network.sources[0].id, 1);
         assert_eq!(

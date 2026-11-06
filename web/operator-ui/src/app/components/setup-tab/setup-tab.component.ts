@@ -24,6 +24,7 @@ import {
   createDefaultSetupCell,
   defaultYAxisSource,
 } from '../../models/histogram.types';
+import { tabShowsKev } from '../../utils/energy-calib';
 
 @Component({
   selector: 'app-setup-tab',
@@ -57,6 +58,18 @@ import {
             }
           </mat-select>
         </mat-form-field>
+        @if (unitSelectable()) {
+          <mat-form-field appearance="outline" class="axis-label-select">
+            <mat-label>Unit</mat-label>
+            <mat-select
+              [value]="config.xAxisLabel"
+              (selectionChange)="onXAxisLabelChange($event.value)"
+            >
+              <mat-option value="Channel">ADC</mat-option>
+              <mat-option value="keV">keV</mat-option>
+            </mat-select>
+          </mat-form-field>
+        }
         <button
           mat-raised-button
           color="accent"
@@ -155,16 +168,16 @@ import {
               }
             </mat-select>
           </mat-form-field>
-        } @else {
+        }
+        @if (unitSelectable()) {
           <mat-form-field appearance="outline" class="axis-label-select">
-            <mat-label>X-Axis</mat-label>
+            <mat-label>Unit</mat-label>
             <mat-select
               [value]="config.xAxisLabel"
               (selectionChange)="onXAxisLabelChange($event.value)"
             >
-              <mat-option value="Channel">Channel</mat-option>
+              <mat-option value="Channel">ADC</mat-option>
               <mat-option value="keV">keV</mat-option>
-              <mat-option value="MeV">MeV</mat-option>
             </mat-select>
           </mat-form-field>
         }
@@ -185,14 +198,14 @@ import {
            initial values. -->
       <div class="binning-rows">
         <div class="binning-row">
-          <span class="binning-section">{{ is2d() ? 'X (' + axisLabel(xAxisFor1dOr2d()) + '):' : 'Range:' }}</span>
+          <span class="binning-section">{{ is2d() ? 'X (' + axisLabel(xAxisFor1dOr2d()) + ')' : 'Range' }}{{ rangeUnit(xAxisFor1dOr2d()) }}:</span>
           <mat-form-field appearance="outline" class="binning-input">
             <mat-label>Min</mat-label>
-            <input matInput type="number" [value]="xMin()" (change)="onXMinChange($any($event.target).value)" />
+            <input matInput type="number" [value]="xMin() ?? ''" (change)="onXMinChange($any($event.target).value)" />
           </mat-form-field>
           <mat-form-field appearance="outline" class="binning-input">
             <mat-label>Max</mat-label>
-            <input matInput type="number" [value]="xMax()" (change)="onXMaxChange($any($event.target).value)" />
+            <input matInput type="number" [value]="xMax() ?? ''" (change)="onXMaxChange($any($event.target).value)" />
           </mat-form-field>
           <mat-form-field appearance="outline" class="binning-input">
             <mat-label>Bins</mat-label>
@@ -207,14 +220,14 @@ import {
 
         @if (is2d()) {
           <div class="binning-row">
-            <span class="binning-section">Y ({{ axisLabel(yAxisOrDefault()) }}):</span>
+            <span class="binning-section">Y ({{ axisLabel(yAxisOrDefault()) }}){{ rangeUnit(yAxisOrDefault()) }}:</span>
             <mat-form-field appearance="outline" class="binning-input">
               <mat-label>Min</mat-label>
-              <input matInput type="number" [value]="yMin()" (change)="onYMinChange($any($event.target).value)" />
+              <input matInput type="number" [value]="yMin() ?? ''" (change)="onYMinChange($any($event.target).value)" />
             </mat-form-field>
             <mat-form-field appearance="outline" class="binning-input">
               <mat-label>Max</mat-label>
-              <input matInput type="number" [value]="yMax()" (change)="onYMaxChange($any($event.target).value)" />
+              <input matInput type="number" [value]="yMax() ?? ''" (change)="onYMaxChange($any($event.target).value)" />
             </mat-form-field>
             <mat-form-field appearance="outline" class="binning-input">
               <mat-label>Bins</mat-label>
@@ -470,8 +483,33 @@ export class SetupTabComponent {
     this.emitConfigChange(patch);
   }
 
+  /** keV applies to the energy axis only (see `tabShowsKev`). */
+  unitSelectable(): boolean {
+    if (this.is2d()) {
+      return this.xAxisFor1dOr2d() === 'energy' || this.yAxisOrDefault() === 'energy';
+    }
+    return this.config.histogramType === 'energy';
+  }
+
   onXAxisLabelChange(value: XAxisLabel): void {
-    this.emitConfigChange({ xAxisLabel: value });
+    // A range typed in one unit means nothing in the other; the bin count still does.
+    const patch: Partial<SetupConfig> = { xAxisLabel: value };
+    if (this.xAxisFor1dOr2d() === 'energy' && this.config.xView) {
+      patch.xView = { bins: this.config.xView.bins };
+    }
+    if (this.is2d() && this.yAxisOrDefault() === 'energy' && this.config.yView) {
+      patch.yView = { bins: this.config.yView.bins };
+    }
+    this.emitConfigChange(patch);
+  }
+
+  /** In keV a blank range means "all of each cell", since gains differ. */
+  private axisInKev(axis: AxisSource): boolean {
+    return axis === 'energy' && tabShowsKev(this.config);
+  }
+
+  rangeUnit(axis: AxisSource): string {
+    return this.axisInKev(axis) ? ' [keV]' : '';
   }
 
   onXAxisChange(value: AxisSource): void {
@@ -518,18 +556,19 @@ export class SetupTabComponent {
    *  inputs always show *something* concrete. */
   private resolveView(view: AxisView | undefined, axis: AxisSource): AxisView {
     const def = DEFAULT_AXIS_VIEW[axis];
+    const inKev = this.axisInKev(axis);
     return {
-      min: view?.min ?? def.min,
-      max: view?.max ?? def.max,
+      min: view?.min ?? (inKev ? undefined : def.min),
+      max: view?.max ?? (inKev ? undefined : def.max),
       bins: view?.bins ?? def.bins,
     };
   }
 
-  xMin(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).min!; }
-  xMax(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).max!; }
+  xMin(): number | undefined { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).min; }
+  xMax(): number | undefined { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).max; }
   xBins(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).bins!; }
-  yMin(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).min!; }
-  yMax(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).max!; }
+  yMin(): number | undefined { return this.resolveView(this.config.yView, this.yAxisOrDefault()).min; }
+  yMax(): number | undefined { return this.resolveView(this.config.yView, this.yAxisOrDefault()).max; }
   yBins(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).bins!; }
 
   private patchXView(patch: Partial<AxisView>): void {
@@ -541,11 +580,15 @@ export class SetupTabComponent {
     this.emitConfigChange({ yView: next });
   }
 
-  onXMinChange(raw: string | number): void { this.patchXView({ min: Number(raw) }); }
-  onXMaxChange(raw: string | number): void { this.patchXView({ max: Number(raw) }); }
+  private rangeValue(raw: string | number): number | undefined {
+    return raw === '' ? undefined : Number(raw);
+  }
+
+  onXMinChange(raw: string | number): void { this.patchXView({ min: this.rangeValue(raw) }); }
+  onXMaxChange(raw: string | number): void { this.patchXView({ max: this.rangeValue(raw) }); }
   onXBinsChange(raw: string | number): void { this.patchXView({ bins: Math.max(1, Math.floor(Number(raw))) }); }
-  onYMinChange(raw: string | number): void { this.patchYView({ min: Number(raw) }); }
-  onYMaxChange(raw: string | number): void { this.patchYView({ max: Number(raw) }); }
+  onYMinChange(raw: string | number): void { this.patchYView({ min: this.rangeValue(raw) }); }
+  onYMaxChange(raw: string | number): void { this.patchYView({ max: this.rangeValue(raw) }); }
   onYBinsChange(raw: string | number): void { this.patchYView({ bins: Math.max(1, Math.floor(Number(raw))) }); }
 
   /** Drop the explicit overrides so the inputs fall back to the per-axis
@@ -631,7 +674,7 @@ export class SetupTabComponent {
         name,
         gridRows: rows,
         gridCols: cols,
-        xAxisLabel: 'Channel',
+        xAxisLabel: this.config.xAxisLabel,
         histogramType: this.config.histogramType,
         cells,
       });

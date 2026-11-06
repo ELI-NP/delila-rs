@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal, computed, effect, untracked } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
@@ -16,6 +16,7 @@ import {
 import { HistogramService } from '../../services/histogram.service';
 import { DigitizerService } from '../../services/digitizer.service';
 import {
+  CalibrationResponse,
   MonitorState,
   SetupConfig,
   ViewTab,
@@ -23,6 +24,12 @@ import {
   createViewTabFromSetup,
   migrateLegacyHistType,
 } from '../../models/histogram.types';
+import {
+  calibStatusDetail,
+  calibStatusText,
+  dropStaleCalibState,
+  migrateXAxisLabel,
+} from '../../utils/energy-calib';
 
 const STORAGE_KEY = 'delila-monitor-state';
 
@@ -72,6 +79,25 @@ const STORAGE_KEY = 'delila-monitor-state';
             </mat-chip>
           }
         </mat-chip-set>
+        @if (histogramService.calibration(); as cal) {
+          <span
+            class="calib-status"
+            [class.calib-bad]="cal.status === 'stale' || cal.status === 'error'"
+            [title]="calibDetail(cal)"
+          >
+            {{ calibText(cal) }}
+          </span>
+          @if (cal.configured) {
+            <button
+              mat-icon-button
+              class="calib-reload"
+              (click)="onReloadCalibration()"
+              title="Reload calibration: read the keV table now, without starting a run"
+            >
+              <mat-icon>refresh</mat-icon>
+            </button>
+          }
+        }
         <button
           mat-stroked-button
           class="clear-button"
@@ -160,6 +186,22 @@ const STORAGE_KEY = 'delila-monitor-state';
       flex-shrink: 0;
     }
 
+    .calib-status {
+      font-size: 12px;
+      color: #666;
+      max-width: 40%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .calib-status.calib-bad {
+      color: #b71c1c;
+      font-weight: 500;
+    }
+    .calib-reload {
+      flex-shrink: 0;
+    }
+
     .tab-content {
       flex: 1;
       min-height: 0;
@@ -189,6 +231,44 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
     const tab = this.activeViewTab();
     return tab ? [tab] : [];
   });
+
+  readonly calibText = calibStatusText;
+  readonly calibDetail = calibStatusDetail;
+  private lastCalibration: CalibrationResponse | null = null;
+
+  constructor() {
+    effect(() => {
+      const next = this.histogramService.calibration();
+      untracked(() => this.onCalibrationUpdate(next));
+    });
+  }
+
+  /** Fits made with old coefficients no longer match what is drawn: drop them. */
+  private onCalibrationUpdate(next: CalibrationResponse | null): void {
+    if (!next) return;
+    const prev = this.lastCalibration;
+    this.lastCalibration = next;
+    if (!prev) return;
+    const { tabs, changed, fitsCleared } = dropStaleCalibState(this.viewTabs(), prev, next);
+    if (!changed) return;
+    this.viewTabs.set(tabs);
+    this.saveState();
+    if (fitsCleared > 0) {
+      this.notify.info(`Energy calibration changed: ${fitsCleared} fit(s) cleared`);
+    }
+  }
+
+  onReloadCalibration(): void {
+    this.histogramService.reloadCalibration().subscribe({
+      next: (cal) => {
+        if (!cal) return;
+        const text = calibStatusText(cal);
+        if (cal.status === 'ok') this.notify.success(text);
+        else this.notify.error(calibStatusDetail(cal));
+      },
+      error: (err) => this.notify.error('Reload failed: ' + (err.error?.message ?? err.message)),
+    });
+  }
 
   ngOnInit(): void {
     this.loadState();
@@ -377,11 +457,14 @@ export class MonitorPageComponent implements OnInit, OnDestroy {
     // Migrate Phase 1 legacy values (`histogramType: 'psd2d' | 'amax2d'`) into
     // the Phase 2 representation (`'2d'` + explicit `xAxis` / `yAxis`). Pass-
     // through anything that's already in the new shape.
-    const setup = MonitorPageComponent.migrateLegacyConfig(
-      state.setupConfig ?? createDefaultSetupConfig(),
-    );
+    const savedSetup = state.setupConfig ?? createDefaultSetupConfig();
+    const setup = {
+      ...MonitorPageComponent.migrateLegacyConfig(savedSetup),
+      xAxisLabel: migrateXAxisLabel(savedSetup.xAxisLabel),
+    };
     const tabs = (state.viewTabs ?? []).map((t) => ({
       ...MonitorPageComponent.migrateLegacyConfig(t),
+      xAxisLabel: migrateXAxisLabel(t.xAxisLabel),
       cells: t.cells,
       id: t.id,
       lastModifiedCellIndex: t.lastModifiedCellIndex,
