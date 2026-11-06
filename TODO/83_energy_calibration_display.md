@@ -260,7 +260,7 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 
 **pf-qaq への配備(2026-11-06 10:24 EET、ユーザー承認、Idle、Tune Up なし):** `git merge --ff-only origin/master`(db13b73、ローカルの設定変更と重なりなし)→ `cargo build --release --bins --features x743`(45 s、警告 0)→ `/tmp` で `nwall_sink`、`root_sink` をビルド(警告なし)→ 入れ替える前に pf-qaq の上で単体テスト(94、67、121)と合成データの確認(別ポート、`compare_hits` と `check_events` IDENTICAL、`energy_keV_m5` 3,940、`pid_keV` 3,939)→ `nwall_sink` と `monitor` だけ SIGTERM で止め、`/proc` から取った元の引数と環境で起動(ログは同じファイルに追記)。Reader、Merger、Recorder、Operator の PID は変わらず、Operator は Idle のまま。古いバイナリは `~/.local/bin/nwall_sink.before_ecal`、`root_sink.before_ecal`。UI は `dist/` をファイルで配信するので Operator の再起動は不要。
 
-確認: `GET :8081/api/calibration` = `configured:false`、`:8090/EnergyCalib` = `none`、Monitor のページに `Energy calibration: none configured`、保存済みの 10 タブはすべて ADC。再起動で表示のヒストグラムは 0 に戻った。**TOML の `energy_calib_file` はまだ設定していない**(Monitor と sink が読むのは起動時なので、設定するときは両方の再起動が要る。表の中身の差し替えには要らない)。
+確認: `GET :8081/api/calibration` = `configured:false`、`:8090/EnergyCalib` = `none`、Monitor のページに `Energy calibration: none configured`、保存済みの 10 タブはすべて ADC。再起動で表示のヒストグラムは 0 に戻った。**受け口(同日 10:27 EET、188c067):** 空の表 `config/energy_calib_nwall.txt` を追加し、`config_nwall_pfqaq.toml` の 2 か所で `energy_calib_file` を有効にして、`monitor` と `nwall_sink` をもう一度再起動した(Monitor と sink がパスを読むのは起動時)。**これ以降は、表を `mv` で置いて Reload を押すだけで、再起動は要らない。** Idle の本番プロセスで確認: 2 行の表 → Monitor と sink とも `2 channels`、壊れた表 → `stale` と行番号で前の表を保持、元に戻すと `0 channels`。最後は空の表に戻してある。学生の表を置くと、その `config/energy_calib_nwall.txt` は pf-qaq のローカル変更になる。
 
 | # | いつ | 確認 |
 |---|---|---|
