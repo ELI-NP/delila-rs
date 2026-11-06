@@ -1,0 +1,12 @@
+# N_Wall energy calibration table (TODO 83): no channel is calibrated yet.
+#
+# One line per channel, exactly four columns:
+#
+#   module  channel  kev_per_adc  offset_kev        E_keV = kev_per_adc * energy + offset_kev
+#
+# DISPLAY ONLY (Monitor and nwall_sink): .delila and .root keep raw ADC.
+# A channel not listed is shown in ADC and is never labelled keV.
+#
+# To put a table in place: write it to a temp file, `mv` it here, and press Reload
+# (Monitor: the button next to the status line; nwall_sink: /ReloadCalib). It is also
+# read at every run start. A bad file keeps the previous table. No restart is needed.

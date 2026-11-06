@@ -174,8 +174,9 @@ subscribe = "tcp://localhost:5557"
 command = "tcp://*:5590"
 http_port = 8081
 pipeline_order = 3
-# keV coefficients for the display (TODO 83, config/energy_calib_example.txt).
-# energy_calib_file = "config/energy_calib_nwall.txt"
+# keV coefficients for the display (TODO 83). The table is empty until someone hands
+# one in: mv it into place and press Reload, no restart needed.
+energy_calib_file = "config/energy_calib_nwall.txt"
 
 # --- nwall_sink: ROOT recorder + live N_Wall monitor (JSROOT :8090) ---
 # TODO 79, tools/root_sink/nwall/README.md. Trees: hits (every channel, aligned
@@ -197,7 +198,7 @@ workers = 3
 # Once measured (TODO 72 time_map.C with the pulser, after the clock cable):
 # time_calib_file = "config/time_settings_nwall.json"
 # The same table as [network.monitor]: adds /hits/energy_keV_m<M> and /events/pid_keV.
-# energy_calib_file = "config/energy_calib_nwall.txt"
+energy_calib_file = "config/energy_calib_nwall.txt"
 # Calibration (README "Calibration"): si_delay_ns = peak of /events/si_phase,
 # rf_t0_ns = shift putting the LS gamma flash at L/c.
 # rf_period_ns = 199.980    # nominal; measured per run from the beam channel
