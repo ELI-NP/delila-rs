@@ -226,9 +226,24 @@ describe('energy calibration (TODO 83)', () => {
       expect(kev).toContain('Center: 1332.46 ± 0.03 keV');
       expect(kev).toContain('FWHM: 3.53 keV');
       const adc = fitTextLines(FIT, 'ADC').join('\n');
-      expect(adc).toContain('Center: 1332.5 ± 0.0 ADC');
+      expect(adc).toContain('Center: 1332.46 ± 0.03 ADC');
       expect(adc).not.toContain('keV');
-      expect(fitTextLines(FIT, '').join('\n')).toContain('FWHM: 3.5\n');
+      expect(fitTextLines(FIT, '').join('\n')).toContain('FWHM: 3.53\n');
+    });
+
+    it('gives the resolution as FWHM / mean', () => {
+      expect(fitTextLines(FIT, 'keV')).toContain('Resolution: 0.27 %');
+      expect(fitTextLines({ ...FIT, center: 100, fwhm: 12.5 }, 'ADC')).toContain('Resolution: 12.50 %');
+    });
+
+    it('says so when a value does not exist, rather than a number', () => {
+      expect(fitTextLines({ ...FIT, center: 0 }, 'keV')).toContain('Resolution: ---');
+      expect(fitTextLines({ ...FIT, center: -5 }, 'keV')).toContain('Resolution: ---');
+      const noError = fitTextLines({ ...FIT, centerError: NaN }, 'keV').join('\n');
+      expect(noError).toContain('Center: 1332.46 ± --- keV');
+      // A layout saved as JSON turns NaN into null.
+      const saved = JSON.parse(JSON.stringify({ ...FIT, netAreaError: NaN })) as ViewCellFitResult;
+      expect(fitTextLines(saved, 'keV').join('\n')).toContain('Area: 1000 ± ---');
     });
   });
 

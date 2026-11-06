@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { FittingService, FitInput, evaluatePiecewiseBg, BG_RANGE } from './fitting.service';
+import { FittingService, FitInput, GaussianFitResult, evaluatePiecewiseBg, BG_RANGE } from './fitting.service';
 
 describe('FittingService', () => {
   let service: FittingService;
@@ -346,3 +346,184 @@ function generateGaussianWithPiecewiseBg(
 
   return bins;
 }
+
+// Statistical errors are checked against what they promise: over many toy
+// histograms, the scatter of a fitted value must match the error the fit reports.
+describe('FittingService statistical errors', () => {
+  const service = new FittingService();
+
+  /** Small seeded generator (mulberry32), so a failure can be reproduced. */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function poisson(random: () => number, mean: number): number {
+    const limit = Math.exp(-mean);
+    let k = 0;
+    let p = random();
+    while (p > limit) {
+      k++;
+      p *= random();
+    }
+    return k;
+  }
+
+  interface Toy {
+    center: number;
+    sigma: number;
+    amplitude: number;
+    background: number;
+  }
+
+  function toyBins(toy: Toy, seed: number): number[] {
+    const random = rng(seed);
+    const bins: number[] = [];
+    for (let i = 0; i < 1000; i++) {
+      const g = toy.amplitude * Math.exp(-0.5 * Math.pow((i + 0.5 - toy.center) / toy.sigma, 2));
+      bins.push(poisson(random, g + toy.background));
+    }
+    return bins;
+  }
+
+  function summary(values: number[]): { mean: number; rms: number } {
+    const mean = values.reduce((s, v) => s + v, 0) / values.length;
+    const variance = values.reduce((s, v) => s + (v - mean) * (v - mean), 0) / values.length;
+    return { mean, rms: Math.sqrt(variance) };
+  }
+
+  function fitToys(toy: Toy, rangeMin: number, rangeMax: number, toys: number): GaussianFitResult[] {
+    const fits: GaussianFitResult[] = [];
+    for (let seed = 1; seed <= toys; seed++) {
+      const fit = service.fitGaussian({
+        bins: toyBins(toy, seed),
+        binWidth: 1,
+        minValue: 0,
+        fitRangeMin: rangeMin,
+        fitRangeMax: rangeMax,
+      });
+      if (fit) fits.push(fit);
+    }
+    expect(fits.length).toBe(toys);
+    return fits;
+  }
+
+  /** Reported error / observed scatter; 1 means the error is right. */
+  function errorScale(
+    fits: GaussianFitResult[],
+    value: (f: GaussianFitResult) => number,
+    error: (f: GaussianFitResult) => number,
+  ): number {
+    return summary(fits.map(error)).mean / summary(fits.map(value)).rms;
+  }
+
+  function expectHonest(scale: number, name: string): void {
+    expect(scale).withContext(name).toBeGreaterThan(0.75);
+    expect(scale).withContext(name).toBeLessThan(1.33);
+  }
+
+  function expectHonestErrors(fits: GaussianFitResult[]): void {
+    expectHonest(errorScale(fits, (f) => f.center, (f) => f.centerError), 'center');
+    expectHonest(errorScale(fits, (f) => f.sigma, (f) => f.sigmaError), 'sigma');
+    expectHonest(errorScale(fits, (f) => f.netArea, (f) => f.netAreaError), 'area');
+  }
+
+  it('match the scatter of a peak on a flat background', () => {
+    expectHonestErrors(fitToys({ center: 500, sigma: 20, amplitude: 100, background: 5 }, 350, 650, 100));
+  });
+
+  it('match the scatter of a peak with few counts per bin', () => {
+    expectHonestErrors(fitToys({ center: 500, sigma: 40, amplitude: 12, background: 1 }, 250, 750, 100));
+  });
+
+  // With no background at all the clamp at 0 makes the fit non-linear: the errors of
+  // sigma and the area come out about 30 % small (TODO 83 section 14). The center holds.
+  it('match the scatter of the center with no background', () => {
+    const fits = fitToys({ center: 500, sigma: 20, amplitude: 100, background: 0 }, 350, 650, 100);
+    expectHonest(errorScale(fits, (f) => f.center, (f) => f.centerError), 'center');
+  });
+
+  it('are within a factor of about 2 of sigma / sqrt(N) for the center', () => {
+    const toy = { center: 500, sigma: 20, amplitude: 100, background: 5 };
+    const fit = service.fitGaussian({
+      bins: toyBins(toy, 7),
+      binWidth: 1,
+      minValue: 0,
+      fitRangeMin: 350,
+      fitRangeMax: 650,
+    });
+    expect(fit).not.toBeNull();
+    const ideal = toy.sigma / Math.sqrt(toy.amplitude * toy.sigma * Math.sqrt(2 * Math.PI));
+    expect(fit!.centerError).toBeGreaterThan(ideal);
+    expect(fit!.centerError).toBeLessThan(ideal * 2.2);
+  });
+
+  function medianSigma(fits: GaussianFitResult[]): number {
+    const sorted = fits.map((f) => f.sigma).sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+
+  // One noisy bin used to set the start: the fit locked on to it and gave sigma 18,
+  // and failed outright in a third of these.
+  it('finds a broad peak with very few counts per bin, not a noise spike', () => {
+    const fits = fitToys({ center: 500, sigma: 40, amplitude: 3, background: 0.2 }, 250, 750, 60);
+    expect(medianSigma(fits)).toBeGreaterThan(35);
+    expect(medianSigma(fits)).toBeLessThan(45);
+  });
+
+  // ... and smoothing alone would miss this one, by starting it too wide.
+  it('finds a narrow peak in a wide range', () => {
+    const fits = fitToys({ center: 500, sigma: 5, amplitude: 200, background: 1 }, 0, 1000, 25);
+    expect(medianSigma(fits)).toBeGreaterThan(4.5);
+    expect(medianSigma(fits)).toBeLessThan(5.5);
+  });
+
+  it('survive a range with no background side bins', () => {
+    const toy = { center: 500, sigma: 40, amplitude: 100, background: 5 };
+    const fit = service.fitGaussian({
+      bins: toyBins(toy, 3),
+      binWidth: 1,
+      minValue: 0,
+      fitRangeMin: 440,
+      fitRangeMax: 560,
+    });
+    expect(fit).not.toBeNull();
+    expect(Number.isFinite(fit!.centerError)).toBeTrue();
+    expect(fit!.centerError).toBeGreaterThan(0);
+  });
+
+  it('scale with the axis, and the area stays in counts', () => {
+    const toy = { center: 500, sigma: 20, amplitude: 100, background: 5 };
+    const bins = toyBins(toy, 11);
+    const adc = service.fitGaussian({
+      bins,
+      binWidth: 1,
+      minValue: 0,
+      fitRangeMin: 350,
+      fitRangeMax: 650,
+    })!;
+    // The same counts on a keV axis: E = 0.5 ADC - 10.
+    const kev = service.fitGaussian({
+      bins,
+      binWidth: 0.5,
+      minValue: -10,
+      fitRangeMin: 165,
+      fitRangeMax: 315,
+    })!;
+    expect(kev.center).toBeCloseTo(0.5 * adc.center - 10, 2);
+    expect(kev.sigma).toBeCloseTo(0.5 * adc.sigma, 2);
+    expect(kev.centerError).toBeCloseTo(0.5 * adc.centerError, 2);
+    expect(kev.sigmaError).toBeCloseTo(0.5 * adc.sigmaError, 2);
+    expect(kev.netArea).toBeCloseTo(adc.netArea, 0);
+    expect(kev.netAreaError).toBeCloseTo(adc.netAreaError, 0);
+    // The peak holds amplitude * sigma * sqrt(2 pi) counts.
+    expect(adc.netArea).toBeGreaterThan(4800);
+    expect(adc.netArea).toBeLessThan(5200);
+  });
+});

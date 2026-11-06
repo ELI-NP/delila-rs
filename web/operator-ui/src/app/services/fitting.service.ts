@@ -1,8 +1,12 @@
 import { Injectable } from '@angular/core';
 import { levenbergMarquardt } from 'ml-levenberg-marquardt';
+import { Matrix, pseudoInverse } from 'ml-matrix';
 
 /** Boundary for piecewise BG: left/right BG applies outside μ ± BG_RANGE*σ */
 export const BG_RANGE = 2.5;
+
+/** Singular values below this (columns scaled to 1) are directions the data cannot see. */
+const COVARIANCE_RCOND = 1e-6;
 
 export interface FitInput {
   bins: number[];
@@ -30,9 +34,10 @@ export interface GaussianFitResult {
 
   // Derived values
   fwhm: number;
+  /** Counts in the peak, whatever the unit of the X axis. */
   netArea: number;
 
-  // Errors (from covariance matrix)
+  // Statistical errors, NaN if they could not be worked out
   centerError: number;
   sigmaError: number;
   amplitudeError: number;
@@ -56,6 +61,16 @@ export function evaluatePiecewiseBg(
   leftLine: LinearFit,
   rightLine: LinearFit,
 ): number {
+  return Math.max(0, unclampedPiecewiseBg(x, center, sigma, leftLine, rightLine));
+}
+
+function unclampedPiecewiseBg(
+  x: number,
+  center: number,
+  sigma: number,
+  leftLine: LinearFit,
+  rightLine: LinearFit,
+): number {
   const limitLow = center - BG_RANGE * sigma;
   const limitHigh = center + BG_RANGE * sigma;
 
@@ -71,7 +86,7 @@ export function evaluatePiecewiseBg(
     bg = yLow + slope * (x - limitLow);
   }
 
-  return Math.max(0, bg);
+  return bg;
 }
 
 @Injectable({
@@ -103,19 +118,23 @@ export class FittingService {
       return null;
     }
 
-    // Estimate initial parameters [A, μ, σ, b_L, m_L, b_R, m_R]
-    const initialParams = this.estimateInitialParams(xData, yData);
-    if (!initialParams) {
-      return null;
+    // Start from both the raw and a smoothed spectrum, and keep the better fit. With few
+    // counts per bin one noisy bin sets the raw top and width, and the fit locks on to
+    // that spike. Smoothing cures that but starts a narrow peak in a wide range too wide
+    // to converge.
+    const starts = [this.estimateInitialParams(xData, yData)];
+    const smoothWidth = Math.floor(xData.length / 20);
+    if (smoothWidth >= 2) {
+      starts.push(this.estimateInitialParams(xData, this.smooth(yData, smoothWidth)));
     }
 
     // 7-parameter piecewise model
-    const piecewiseModel = (params: number[]) => (x: number) => {
+    const makeModel = (bgAt: typeof evaluatePiecewiseBg) => (params: number[]) => (x: number) => {
       const [A, mu, sigma, bL, mL, bR, mR] = params;
       const absSigma = Math.abs(sigma);
 
       const gaussian = A * Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2));
-      const bg = evaluatePiecewiseBg(
+      const bg = bgAt(
         x, mu, absSigma,
         { intercept: bL, slope: mL },
         { intercept: bR, slope: mR },
@@ -123,46 +142,67 @@ export class FittingService {
 
       return gaussian + bg;
     };
+    const piecewiseModel = makeModel(evaluatePiecewiseBg);
 
     try {
-      const result = levenbergMarquardt(
-        { x: xData, y: yData },
-        piecewiseModel,
-        {
-          damping: 1.5,
-          initialValues: initialParams,
-          gradientDifference: 1e-6,
-          maxIterations: 200,
-          errorTolerance: 1e-8,
+      let result: { parameterValues: number[] } | null = null;
+      let bestDeviance = Infinity;
+      for (const initialValues of starts) {
+        if (!initialValues) continue;
+        const candidate = levenbergMarquardt(
+          { x: xData, y: yData },
+          piecewiseModel,
+          {
+            damping: 1.5,
+            initialValues,
+            gradientDifference: 1e-6,
+            maxIterations: 200,
+            errorTolerance: 1e-8,
+          }
+        );
+        // Validate results
+        const [a, , s] = candidate.parameterValues;
+        if (s <= 0 || a <= 0) continue;
+        const deviance = this.poissonDeviance(xData, yData, piecewiseModel(candidate.parameterValues));
+        if (deviance < bestDeviance) {
+          bestDeviance = deviance;
+          result = candidate;
         }
-      );
-
-      const [amplitude, center, sigma, bL, mL, bR, mR] = result.parameterValues;
-
-      // Validate results
-      if (sigma <= 0 || amplitude <= 0) {
+      }
+      if (!result) {
         return null;
       }
+
+      const [amplitude, center, sigma, bL, mL, bR, mR] = result.parameterValues;
 
       // Calculate chi-squared (7 parameters)
       const { chi2, ndf } = this.calculateChi2(xData, yData, result.parameterValues, piecewiseModel);
 
       const absSigma = Math.abs(sigma);
       const fwhm = 2.355 * absSigma;
-      const netArea = amplitude * absSigma * Math.sqrt(2 * Math.PI);
+      // The bins hold counts per bin: dividing by the bin width gives counts, not
+      // counts x axis unit.
+      const netArea = amplitude * absSigma * Math.sqrt(2 * Math.PI) / binWidth;
 
-      // Parameter errors
-      const paramErrors = Array.isArray(result.parameterError)
-        ? result.parameterError
-        : [0, 0, 0, 0, 0, 0, 0];
-      const amplitudeError = paramErrors[0] ?? 0;
-      const centerError = paramErrors[1] ?? 0;
-      const sigmaError = paramErrors[2] ?? 0;
-
-      const netAreaError = netArea * Math.sqrt(
-        Math.pow(amplitudeError / amplitude, 2) +
-        Math.pow(sigmaError / absSigma, 2)
+      // Sensitivities without the clamp at 0: where the fitted background sits at 0 it
+      // is still free to take up counts, and the errors have to include that.
+      const cov = this.parameterCovariance(
+        xData,
+        result.parameterValues,
+        makeModel(unclampedPiecewiseBg),
+        piecewiseModel(result.parameterValues),
       );
+      const amplitudeError = cov ? Math.sqrt(cov[0][0]) : NaN;
+      const centerError = cov ? Math.sqrt(cov[1][1]) : NaN;
+      const sigmaError = cov ? Math.sqrt(cov[2][2]) : NaN;
+
+      // A and sigma are correlated: a wider peak fits with a lower top.
+      const areaRelVariance = cov
+        ? cov[0][0] / (amplitude * amplitude) +
+          cov[2][2] / (absSigma * absSigma) +
+          (2 * cov[0][2]) / (amplitude * absSigma)
+        : NaN;
+      const netAreaError = netArea * Math.sqrt(Math.max(areaRelVariance, 0));
 
       const leftLine: LinearFit = { slope: mL, intercept: bL };
       const rightLine: LinearFit = { slope: mR, intercept: bR };
@@ -194,6 +234,77 @@ export class FittingService {
       };
     } catch {
       console.error('Fitting failed');
+      return null;
+    }
+  }
+
+  /**
+   * Covariance of the fitted parameters from the Poisson scatter of the bins.
+   *
+   * The fit is unweighted least squares, so near the minimum the parameters follow
+   * the data as dp = J+ dy, and Cov(p) = J+ V (J+)^T with V = diag(expected counts).
+   * (J^T W J)^-1 is what a weighted fit would give, which this one is not.
+   *
+   * The pseudo-inverse copes with parameters the data cannot see: a background
+   * clamped at 0, or a range with no bins beside the peak to fix a slope.
+   * Returns null if it cannot be worked out, so that no error is ever made up.
+   */
+  private parameterCovariance(
+    xData: number[],
+    params: number[],
+    model: (params: number[]) => (x: number) => number,
+    expected: (x: number) => number,
+  ): number[][] | null {
+    try {
+      const [amplitude, , sigma] = params;
+      const span = Math.max(xData[xData.length - 1] - xData[0], 1e-9);
+      const bgStep = 1e-3 * Math.max(amplitude, 1);
+      const steps = [
+        1e-3 * amplitude,
+        1e-3 * sigma,
+        1e-3 * sigma,
+        bgStep,
+        bgStep / span,
+        bgStep,
+        bgStep / span,
+      ];
+
+      // Jacobian by central differences, columns scaled to length 1 so that an
+      // intercept and a slope of very different size stay comparable.
+      const n = xData.length;
+      const jacobian = Matrix.zeros(n, params.length);
+      const scale: number[] = [];
+      for (let k = 0; k < params.length; k++) {
+        const up = [...params];
+        const down = [...params];
+        up[k] += steps[k];
+        down[k] -= steps[k];
+        const fUp = model(up);
+        const fDown = model(down);
+        let norm2 = 0;
+        const column: number[] = [];
+        for (let i = 0; i < n; i++) {
+          const d = (fUp(xData[i]) - fDown(xData[i])) / (2 * steps[k]);
+          column.push(d);
+          norm2 += d * d;
+        }
+        const norm = Math.sqrt(norm2);
+        scale.push(norm > 0 ? 1 / norm : 0);
+        for (let i = 0; i < n; i++) jacobian.set(i, k, column[i] * scale[k]);
+      }
+
+      const pinv = pseudoInverse(jacobian, COVARIANCE_RCOND);
+      const variance = xData.map((x) => Math.max(expected(x), 0));
+      const cov = params.map((_, a) =>
+        params.map((_, b) => {
+          let sum = 0;
+          for (let i = 0; i < n; i++) sum += pinv.get(a, i) * pinv.get(b, i) * variance[i];
+          return sum * scale[a] * scale[b];
+        }),
+      );
+      return cov.every((row) => row.every(Number.isFinite)) ? cov : null;
+    } catch (e) {
+      console.error('Fit errors could not be worked out', e);
       return null;
     }
   }
@@ -344,6 +455,33 @@ export class FittingService {
       leftFit.intercept, leftFit.slope,
       rightFit.intercept, rightFit.slope,
     ];
+  }
+
+  /**
+   * How well counts fit a model: twice the Poisson log-likelihood ratio. Used to pick
+   * between solutions, where plain squared residuals would favour a tall spike over
+   * the broad peak the counts really come from.
+   */
+  private poissonDeviance(xData: number[], yData: number[], model: (x: number) => number): number {
+    let deviance = 0;
+    for (let i = 0; i < xData.length; i++) {
+      const y = yData[i];
+      const f = Math.max(model(xData[i]), 1e-9);
+      deviance += 2 * (f - y + (y > 0 ? y * Math.log(y / f) : 0));
+    }
+    return deviance;
+  }
+
+  /** Moving average over `width` bins. */
+  private smooth(y: number[], width: number): number[] {
+    const half = Math.floor(width / 2);
+    const prefix = [0];
+    for (const v of y) prefix.push(prefix[prefix.length - 1] + v);
+    return y.map((_, i) => {
+      const lo = Math.max(0, i - half);
+      const hi = Math.min(y.length, i + half + 1);
+      return (prefix[hi] - prefix[lo]) / (hi - lo);
+    });
   }
 
   /**

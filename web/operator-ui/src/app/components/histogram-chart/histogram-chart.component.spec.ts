@@ -70,6 +70,6 @@ describe('HistogramChartComponent units (TODO 83)', () => {
     const text = render(chart);
     expect(text).not.toContain('keV');
     expect(text).toContain('Channel: 101');
-    expect(text).toContain('Center: 500.0 ± 0.5\n');
+    expect(text).toContain('Center: 500.00 ± 0.50\n');
   });
 });

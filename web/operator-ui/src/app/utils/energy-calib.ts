@@ -115,15 +115,21 @@ export function formatAxisValue(value: number, step: number): string {
   return value.toFixed(Math.min(3, Math.ceil(-Math.log10(step))));
 }
 
+/** A number as text; '---' if there is none (a layout saved as JSON holds NaN as null). */
+function fitNumber(value: number | null | undefined, digits: number): string {
+  return value != null && Number.isFinite(value) ? value.toFixed(digits) : '---';
+}
+
 export function fitTextLines(fit: ViewCellFitResult, unit: string): string[] {
-  const digits = unit === 'keV' ? 2 : 1;
   const u = unit ? ` ${unit}` : '';
   const chi2Ndf = fit.ndf > 0 ? (fit.chi2 / fit.ndf).toFixed(2) : '---';
+  const resolution = fit.center > 0 ? `${((100 * fit.fwhm) / fit.center).toFixed(2)} %` : '---';
   return [
-    `Center: ${fit.center.toFixed(digits)} ± ${fit.centerError.toFixed(digits)}${u}`,
-    `Sigma: ${fit.sigma.toFixed(digits)} ± ${fit.sigmaError.toFixed(digits)}${u}`,
-    `FWHM: ${fit.fwhm.toFixed(digits)}${u}`,
-    `Area: ${fit.netArea.toFixed(0)} ± ${fit.netAreaError.toFixed(0)}`,
+    `Center: ${fitNumber(fit.center, 2)} ± ${fitNumber(fit.centerError, 2)}${u}`,
+    `Sigma: ${fitNumber(fit.sigma, 2)} ± ${fitNumber(fit.sigmaError, 2)}${u}`,
+    `FWHM: ${fitNumber(fit.fwhm, 2)}${u}`,
+    `Resolution: ${resolution}`,
+    `Area: ${fitNumber(fit.netArea, 0)} ± ${fitNumber(fit.netAreaError, 0)}`,
     `χ²/ndf: ${chi2Ndf}`,
   ];
 }
