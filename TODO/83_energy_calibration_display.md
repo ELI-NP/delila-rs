@@ -1,6 +1,6 @@
 # TODO 83 — エネルギー較正の表示(ADC → keV、1 次式、Monitor と root_sink の表示だけ。係数は外で作る)
 
-**Status: 🚧 Phase 0〜3 実装済み、Mac の合成データで確認、master に取り込み済み (2026-11-06、d5c1d10) — 残 = pf-qaq への配備(ユーザー承認済み、VPN 待ち)、§10 の実機確認、学生の表を置く**
+**Status: 🚧 Phase 0〜3 実装済み、master に取り込み、pf-qaq に配備 (2026-11-06) — 残 = §10 の実データでの確認、学生の表を置く**
 
 **関連:** [73_campaign_2026_11_pfqaq.md](73_campaign_2026_11_pfqaq.md)(N_Wall、最初の使い道の候補) /
 [79_root_sink_nwall_online.md](79_root_sink_nwall_online.md)(nwall_sink の表示) /
@@ -258,7 +258,9 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 
 ## 10. 実機・実データでの確認(メインセッションとユーザーが行う。サブエージェントは実機を触らない)
 
-**pf-qaq への配備(ランの合間に):** `system_state` が Running でないこと、Tune Up 中でないことを確かめる → `git pull`(ローカルの設定変更は触らない)→ `monitor` と `nwall_sink` をビルド → 古い `nwall_sink` を残して入れ替え → `monitor` と `nwall_sink` を再起動。UI は `dist/` をファイルで配信するので Operator の再起動は要らない。表を置くまでは ADC の表示のまま。
+**pf-qaq への配備(2026-11-06 10:24 EET、ユーザー承認、Idle、Tune Up なし):** `git merge --ff-only origin/master`(db13b73、ローカルの設定変更と重なりなし)→ `cargo build --release --bins --features x743`(45 s、警告 0)→ `/tmp` で `nwall_sink`、`root_sink` をビルド(警告なし)→ 入れ替える前に pf-qaq の上で単体テスト(94、67、121)と合成データの確認(別ポート、`compare_hits` と `check_events` IDENTICAL、`energy_keV_m5` 3,940、`pid_keV` 3,939)→ `nwall_sink` と `monitor` だけ SIGTERM で止め、`/proc` から取った元の引数と環境で起動(ログは同じファイルに追記)。Reader、Merger、Recorder、Operator の PID は変わらず、Operator は Idle のまま。古いバイナリは `~/.local/bin/nwall_sink.before_ecal`、`root_sink.before_ecal`。UI は `dist/` をファイルで配信するので Operator の再起動は不要。
+
+確認: `GET :8081/api/calibration` = `configured:false`、`:8090/EnergyCalib` = `none`、Monitor のページに `Energy calibration: none configured`、保存済みの 10 タブはすべて ADC。再起動で表示のヒストグラムは 0 に戻った。**TOML の `energy_calib_file` はまだ設定していない**(Monitor と sink が読むのは起動時なので、設定するときは両方の再起動が要る。表の中身の差し替えには要らない)。
 
 | # | いつ | 確認 |
 |---|---|---|
@@ -307,7 +309,7 @@ GitHub issue ELI-NP/delila-rs#7(open、「keV, MeV に換算したヒストグ�
 
 **設計から変えたところ:** `version` / `loaded_at` でなく係数の値で変更を判定(ラン開始でフィットが消えないように)。Quick Create と energy 軸の 2D にも単位の選択を追加。係数が変わったら範囲が同じでも keV のヒストグラムを作り直す。ch ごとの WARN はやめてランの終わりに 1 行。
 
-**実データでは未確認**(§10)。
+**実データでは未確認**(§10、V1〜V8 はこれから)。
 
 ## 14. Monitor の Gaussian フィットの修正(2026-11-06、ユーザー依頼)
 
