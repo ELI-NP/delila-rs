@@ -338,6 +338,13 @@ name = "zmq_boundary_bench"
 path = "src/bin/zmq_boundary_bench.rs"
 required-features = ["dev-tools"]
 
+# Monitor overload reproduction (TODO 84 §8): paced PUB → in-process Monitor,
+# reports stalls, command/HTTP latency and RSS. Not for production.
+[[bin]]
+name = "monitor_overload_bench"
+path = "src/bin/monitor_overload_bench.rs"
+required-features = ["dev-tools"]
+
 [[example]]
 name = "test_oxyroot"
 required-features = ["root"]

@@ -1,13 +1,43 @@
 //! Monitor component - receives event data and provides histogram visualization
 //!
 //! Architecture (Lock-Free):
-//! - Receiver task: ZMQ SUB → mpsc channel (non-blocking)
-//! - Histogram task: mpsc channel → histogram update (owns state, no locks in hot path)
+//! - Receive thread: plain OS thread, blocking ZMQ SUB → header parse →
+//!   bounded mpsc of raw frames (`zmq::Message`, not yet deserialized)
+//! - Histogram task: raw frame → msgpack decode → histogram update (owns
+//!   state, no locks in hot path)
 //! - Command task: REP socket for control commands
 //! - HTTP server: REST API + static files for web UI (reads histogram via channel query)
 //!
 //! This module provides real-time monitoring of DAQ data with browser-based
 //! histogram display.
+//!
+//! # Why the SUB socket lives on its own OS thread (TODO 84 §8, 2026-11-07)
+//!
+//! On pf-qaq at 2.8-5 MHz the processed counter froze for 8-16 s every
+//! ~25 s with one thread at 100 %. The receiver used to be a tokio task
+//! polling a `tmq` SUB socket. Three things combined:
+//!
+//! 1. `tmq` answers `next()` straight from `ZMQ_EVENTS` while data is
+//!    queued, without touching tokio's `AsyncFd` or the coop budget, and the
+//!    other `select!` branches give their budget back when `Pending`. The
+//!    receiver therefore never yielded as long as ZMQ had a backlog.
+//! 2. The consumer's wake-up from `try_send` was issued on the receiver's
+//!    worker thread, so tokio put it in that worker's LIFO slot, which no
+//!    other worker may steal, and notified nobody.
+//! 3. The receiver's worker was usually the one holding the I/O+time driver
+//!    when the data arrived, and nobody else turned the driver afterwards:
+//!    timers, the HTTP listener and the REP socket went dead with it.
+//!
+//! A dedicated thread with a blocking `zmq::Socket` sidesteps all three: it
+//! never runs on a worker, wakes the consumer through tokio's inject queue,
+//! and the ZMQ file descriptor never enters tokio's driver. The thread only
+//! parses the header (nanoseconds), so it drains the SUB pipe at wire speed
+//! and the HWM=0 buffer on our side stays empty; memory is bounded by
+//! `MonitorConfig::channel_capacity` raw frames. Deserialization (~9 ms per
+//! 33k-event batch) happens in the histogram task, which yields after every
+//! batch so HTTP and commands keep their turn. When the consumer is behind,
+//! whole frames are dropped before deserialization; drops are counted in
+//! `dropped_batches` and logged (display path only, CLAUDE.md exception).
 
 mod axis;
 pub mod energy_calib;
@@ -15,9 +45,9 @@ pub use axis::AxisSource;
 use energy_calib::{ActiveCalib, CalibResponse};
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -26,10 +56,9 @@ use axum::{
     routing::get,
     Router,
 };
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tmq::{subscribe, Context};
+use tmq::AsZmqSocket;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -65,7 +94,14 @@ pub struct MonitorConfig {
     /// `bin/monitor.rs`) and to let operators tune ranges without
     /// recompiling.
     pub histogram2d_overrides: HashMap<AxisSource, HistogramConfig>,
-    /// Internal channel capacity
+    /// Capacity of the raw-frame channel between the receive thread and the
+    /// histogram task, in batches (one Merger batch ≈ 770 KB at high rate).
+    /// This is the only buffer on the Monitor side: the SUB pipe is drained
+    /// at wire speed. When it is full, further batches are dropped before
+    /// deserialization (counted). Keep it small: under sustained overload
+    /// the channel is permanently full, and its depth divided by the decode
+    /// rate (~90 batches/s per thread) is the lag of the display.
+    /// Default 64 ≈ 50 MB and ≈ 0.7 s of lag.
     pub channel_capacity: usize,
     /// Table of keV coefficients for the display (TODO 83). None = ADC only.
     pub energy_calib_file: Option<String>,
@@ -89,7 +125,7 @@ impl Default for MonitorConfig {
                 max_value: 16384.0,
             },
             histogram2d_overrides: HashMap::new(),
-            channel_capacity: 1000,
+            channel_capacity: 64,
             energy_calib_file: None,
         }
     }
@@ -106,6 +142,9 @@ pub enum MonitorError {
 
     #[error("HTTP server error: {0}")]
     Http(String),
+
+    #[error("Receive thread error: {0}")]
+    Thread(String),
 }
 
 /// Histogram configuration
@@ -655,6 +694,15 @@ impl AtomicStats {
             self.dropped_batches.load(Ordering::Relaxed),
         )
     }
+
+    /// Batches received but neither processed nor dropped yet: the raw-frame
+    /// channel occupancy as seen through the counters.
+    fn queued_batches(&self) -> u64 {
+        let received = self.received_batches.load(Ordering::Relaxed);
+        let done = self.processed_batches.load(Ordering::Relaxed)
+            + self.dropped_batches.load(Ordering::Relaxed);
+        received.saturating_sub(done)
+    }
 }
 
 /// Internal channel summary data (used between histogram_task and HTTP handler)
@@ -1096,11 +1144,11 @@ impl CommandHandlerExt for MonitorCommandExt {
     }
 
     fn get_metrics(&self) -> Option<crate::common::ComponentMetrics> {
-        let (recv, proc, _drop) = self.atomic_stats.snapshot();
+        let (_recv, proc, _drop) = self.atomic_stats.snapshot();
         Some(crate::common::ComponentMetrics {
             events_processed: proc,
             bytes_transferred: 0, // Monitor doesn't track bytes
-            queue_size: (recv.saturating_sub(proc)) as u32,
+            queue_size: self.atomic_stats.queued_batches() as u32,
             queue_max: 0,
             queue_bytes: 0,
             queue_bytes_peak: 0,
@@ -1115,6 +1163,23 @@ impl CommandHandlerExt for MonitorCommandExt {
             trigger_loss_rate: 0.0,
             channel_counts: None,
         })
+    }
+}
+
+/// `RCVTIMEO` of the blocking SUB socket: how long the receive thread can go
+/// without re-checking the stop flag and the component state.
+const RECV_POLL_MS: i32 = 100;
+
+/// Minimum spacing of the "batches skipped" warning from the receive thread.
+const DROP_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Lets the blocking `zmq::Socket` go through the shared HWM=0 helper
+/// (`sub_no_hwm`), which is written against tmq's `AsZmqSocket`.
+struct RawSocket<'a>(&'a zmq::Socket);
+
+impl AsZmqSocket for RawSocket<'_> {
+    fn get_socket(&self) -> &zmq::Socket {
+        self.0
     }
 }
 
@@ -1166,18 +1231,25 @@ impl Monitor {
     pub async fn run(&mut self, mut shutdown: broadcast::Receiver<()>) -> Result<(), MonitorError> {
         // Create channels
         let (hist_tx, hist_rx) = mpsc::unbounded_channel::<HistogramMessage>();
-        // Bounded data channel: Monitor is display-only, skip batches when full
-        // to prevent unbounded memory growth at high data rates.
+        // Bounded raw-frame channel: Monitor is display-only, frames are
+        // dropped (counted) when full. This bounds the Monitor's memory.
         let data_channel_capacity = self.config.channel_capacity;
-        let (data_tx, data_rx) = mpsc::channel::<EventDataBatch>(data_channel_capacity);
+        let (data_tx, data_rx) = mpsc::channel::<zmq::Message>(data_channel_capacity);
 
-        // Create ZMQ SUB socket
-        let context = Context::new();
-        let socket = subscribe(&context)
-            .connect(&self.config.subscribe_address)?
-            .subscribe(b"")?;
-        // Never drop messages — buffer in memory instead (DAQ: no data loss)
-        sub_no_hwm(&socket).map_err(tmq::TmqError::from)?;
+        // Blocking ZMQ SUB socket, owned by the receive thread (see module
+        // docs for why this is not a tmq socket on the runtime).
+        let zmq_context = zmq::Context::new();
+        let socket = zmq_context.socket(zmq::SUB).map_err(tmq::TmqError::from)?;
+        socket
+            .connect(&self.config.subscribe_address)
+            .map_err(tmq::TmqError::from)?;
+        socket.set_subscribe(b"").map_err(tmq::TmqError::from)?;
+        // Never drop messages in ZMQ — buffer in memory instead (CLAUDE.md HWM=0)
+        sub_no_hwm(&RawSocket(&socket)).map_err(tmq::TmqError::from)?;
+        // Periodic timeout so the thread can notice shutdown and state changes.
+        socket
+            .set_rcvtimeo(RECV_POLL_MS)
+            .map_err(tmq::TmqError::from)?;
 
         info!(
             address = %self.config.subscribe_address,
@@ -1248,20 +1320,23 @@ impl Monitor {
             .await;
         });
 
-        // Spawn receiver task
-        let shutdown_for_recv = shutdown.resubscribe();
+        // Spawn the receive thread (plain OS thread, outside the runtime)
+        let recv_stop = Arc::new(AtomicBool::new(false));
+        let stop_for_recv = recv_stop.clone();
         let atomic_stats_for_recv = self.atomic_stats.clone();
         let state_rx_for_recv = self.state_rx.clone();
-        let recv_handle = tokio::spawn(async move {
-            Self::receiver_task(
-                socket,
-                data_tx,
-                shutdown_for_recv,
-                atomic_stats_for_recv,
-                state_rx_for_recv,
-            )
-            .await
-        });
+        let recv_thread = std::thread::Builder::new()
+            .name("monitor-recv".to_string())
+            .spawn(move || {
+                Self::receive_thread(
+                    socket,
+                    data_tx,
+                    stop_for_recv,
+                    atomic_stats_for_recv,
+                    state_rx_for_recv,
+                )
+            })
+            .map_err(|e| MonitorError::Thread(e.to_string()))?;
 
         // Spawn histogram task
         let monitor_config_for_hist = self.config.clone();
@@ -1308,8 +1383,13 @@ impl Monitor {
         let _ = shutdown.recv().await;
         info!("Monitor received shutdown signal");
 
-        // Wait for tasks to complete
-        let _ = recv_handle.await;
+        // Stop the receive thread first (it drops data_tx, which ends the
+        // histogram task's data loop), then wait for the tasks.
+        recv_stop.store(true, Ordering::Relaxed);
+        let joined = tokio::task::spawn_blocking(move || recv_thread.join()).await;
+        if !matches!(joined, Ok(Ok(()))) {
+            warn!("Monitor receive thread did not shut down cleanly");
+        }
         let _ = hist_handle.await;
         let _ = evict_handle.await;
         let _ = cmd_handle.await;
@@ -1326,115 +1406,125 @@ impl Monitor {
         Ok(())
     }
 
-    /// Receiver task: ZMQ SUB → bounded channel (non-blocking)
+    /// Receive thread: blocking ZMQ SUB → bounded channel of raw frames.
     ///
-    /// IMPORTANT: Always drains ZMQ socket to prevent internal buffer growth.
-    /// When not Running, data is discarded immediately.
-    /// When Running but channel full, batches are skipped (Monitor is display-only).
-    async fn receiver_task(
-        mut socket: subscribe::Subscribe,
-        tx: mpsc::Sender<EventDataBatch>,
-        mut shutdown: broadcast::Receiver<()>,
+    /// Runs on its own OS thread, never on a tokio worker (module docs).
+    /// Always drains the socket so the HWM=0 pipe cannot grow:
+    /// - not Running: frames are discarded;
+    /// - Running, channel has room: the raw frame is handed over untouched
+    ///   (deserialization is the histogram task's job);
+    /// - Running, channel full: the frame is dropped before deserialization,
+    ///   counted in `dropped_batches` and reported in a rate-limited warning.
+    ///
+    /// `RCVTIMEO` bounds every `recv` so the loop re-checks `stop` and the
+    /// component state at least every `RECV_POLL_MS`.
+    fn receive_thread(
+        socket: zmq::Socket,
+        tx: mpsc::Sender<zmq::Message>,
+        stop: Arc<AtomicBool>,
         atomic_stats: Arc<AtomicStats>,
         mut state_rx: watch::Receiver<ComponentState>,
     ) {
-        loop {
-            let is_running = *state_rx.borrow() == ComponentState::Running;
+        let mut is_running = *state_rx.borrow() == ComponentState::Running;
+        let mut dropped_since_log = 0u64;
+        let mut last_drop_log = Instant::now();
+        info!("Monitor receive thread started");
 
-            tokio::select! {
-                biased;
+        while !stop.load(Ordering::Relaxed) {
+            if state_rx.has_changed().unwrap_or(false) {
+                let current = *state_rx.borrow_and_update();
+                is_running = current == ComponentState::Running;
+                info!(state = %current, "Monitor receiver state changed");
+            }
 
-                _ = shutdown.recv() => {
-                    info!("Monitor receiver task shutting down");
-                    break;
-                }
-
-                _ = state_rx.changed() => {
-                    let current = *state_rx.borrow();
-                    info!(state = %current, "Monitor receiver state changed");
+            let frame = match socket.recv_msg(0) {
+                Ok(frame) => frame,
+                // RCVTIMEO expired or interrupted: loop to re-check the flags
+                Err(zmq::Error::EAGAIN) | Err(zmq::Error::EINTR) => continue,
+                Err(e) => {
+                    warn!(error = %e, "ZMQ receive error");
                     continue;
                 }
+            };
+            // Only the first part of a multipart carries the message
+            // (same as before); swallow any extra parts.
+            while frame.get_more() {
+                if socket.recv_msg(0).is_err() {
+                    break;
+                }
+            }
 
-                // Always receive from ZMQ to drain the socket buffer
-                // Data is only forwarded when Running, otherwise discarded
-                msg = socket.next() => {
-                    match msg {
-                        Some(Ok(multipart)) => {
-                            // Not running - discard data to prevent ZMQ buffer growth
-                            if !is_running {
-                                continue;
-                            }
+            // Not running: discard to keep the ZMQ pipe empty
+            if !is_running {
+                continue;
+            }
 
-                            if let Some(data) = multipart.into_iter().next() {
-                                // Lightweight header parse first (no allocation)
-                                match MessageHeader::parse(&data) {
-                                    Some(MessageHeader::Data { .. }) => {
-                                        atomic_stats.record_received();
-
-                                        // Skip expensive deserialization if channel is full.
-                                        // Monitor is display-only: dropping batches is acceptable.
-                                        if tx.capacity() == 0 {
-                                            atomic_stats.record_drop();
-                                            continue;
-                                        }
-
-                                        // Only deserialize when histogram task can accept data
-                                        match Message::from_msgpack(&data) {
-                                            Ok(Message::Data(batch)) => {
-                                                // try_send is still needed (race between
-                                                // capacity check and send)
-                                                match tx.try_send(batch) {
-                                                    Ok(()) => {}
-                                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                                        atomic_stats.record_drop();
-                                                    }
-                                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                                        info!("Histogram channel closed, exiting");
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            _ => {
-                                                warn!("Header said Data but deserialization failed");
-                                            }
-                                        }
-                                    }
-                                    Some(MessageHeader::EndOfStream { source_id }) => {
-                                        let (recv, proc, dropped) = atomic_stats.snapshot();
-                                        info!(
-                                            source_id,
-                                            received_batches = recv,
-                                            processed_batches = proc,
-                                            dropped_batches = dropped,
-                                            "Received EOS - data stream complete"
-                                        );
-                                    }
-                                    Some(MessageHeader::Heartbeat { source_id }) => {
-                                        debug!(source_id, "Received heartbeat");
-                                    }
-                                    None => {
-                                        warn!("Failed to parse message header");
-                                    }
-                                }
+            // Lightweight header parse (no allocation, no deserialization)
+            match MessageHeader::parse(&frame) {
+                Some(MessageHeader::Data { .. }) => {
+                    atomic_stats.record_received();
+                    match tx.try_send(frame) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            // Consumer is behind: drop the whole frame before
+                            // deserializing it. Display only; counted.
+                            atomic_stats.record_drop();
+                            dropped_since_log += 1;
+                            if last_drop_log.elapsed() >= DROP_LOG_INTERVAL {
+                                let (recv, _proc, dropped) = atomic_stats.snapshot();
+                                warn!(
+                                    dropped_recently = dropped_since_log,
+                                    dropped_total = dropped,
+                                    received_total = recv,
+                                    "Monitor behind the data rate: batches skipped before \
+                                     deserialization (display only, recording unaffected)"
+                                );
+                                dropped_since_log = 0;
+                                last_drop_log = Instant::now();
                             }
                         }
-                        Some(Err(e)) => {
-                            warn!(error = %e, "ZMQ receive error");
-                        }
-                        None => {
-                            info!("Socket closed");
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            info!("Histogram channel closed, exiting");
                             break;
                         }
                     }
                 }
+                Some(MessageHeader::EndOfStream { source_id }) => {
+                    let (recv, proc, dropped) = atomic_stats.snapshot();
+                    info!(
+                        source_id,
+                        received_batches = recv,
+                        processed_events = proc,
+                        dropped_batches = dropped,
+                        "Received EOS - data stream complete"
+                    );
+                }
+                Some(MessageHeader::Heartbeat { source_id }) => {
+                    debug!(source_id, "Received heartbeat");
+                }
+                None => {
+                    warn!("Failed to parse message header");
+                }
             }
         }
+
+        if dropped_since_log > 0 {
+            let (recv, _proc, dropped) = atomic_stats.snapshot();
+            warn!(
+                dropped_recently = dropped_since_log,
+                dropped_total = dropped,
+                received_total = recv,
+                "Monitor skipped batches before stopping (display only)"
+            );
+        }
+        info!("Monitor receive thread stopped");
     }
 
-    /// Histogram task: owns MonitorState, processes batches and HTTP queries
+    /// Histogram task: owns MonitorState, decodes raw frames into batches,
+    /// fills histograms and answers HTTP queries.
     async fn histogram_task(
         mut cmd_rx: mpsc::UnboundedReceiver<HistogramMessage>,
-        mut data_rx: mpsc::Receiver<EventDataBatch>,
+        mut data_rx: mpsc::Receiver<zmq::Message>,
         monitor_config: MonitorConfig,
         atomic_stats: Arc<AtomicStats>,
     ) {
@@ -1549,13 +1639,29 @@ impl Monitor {
                     }
                 }
 
-                // Data batches
-                batch = data_rx.recv() => {
-                    match batch {
-                        Some(batch) => {
-                            let event_count = batch.events.len() as u64;
-                            state.process_batch(batch);
-                            atomic_stats.record_processed(event_count);
+                // Raw frames from the receive thread: decode here, on the
+                // consumer side, so the receive thread stays at wire speed.
+                frame = data_rx.recv() => {
+                    match frame {
+                        Some(frame) => {
+                            match Message::from_msgpack(&frame) {
+                                Ok(Message::Data(batch)) => {
+                                    let event_count = batch.events.len() as u64;
+                                    state.process_batch(batch);
+                                    atomic_stats.record_processed(event_count);
+                                }
+                                Ok(_) => {
+                                    warn!("Header said Data but payload is not a batch");
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "Failed to deserialize batch");
+                                }
+                            }
+                            drop(frame);
+                            // ~10 ms of CPU per batch: hand the worker back so
+                            // HTTP handlers and commands are never queued
+                            // behind a run of batches.
+                            tokio::task::yield_now().await;
                         }
                         None => {
                             info!("Data channel closed");
@@ -1971,5 +2077,319 @@ mod tests {
         assert_eq!(recv, 2);
         assert_eq!(events, 10);
         assert_eq!(drop, 1);
+    }
+}
+
+/// Overload reproduction (TODO 84 §8): the Merger PUB at 2.8-5 MHz made the
+/// histogram consumer stop for 8-16 s while the receiver stayed at 100 %.
+/// This drives the whole Monitor (commands over its REP socket, data over a
+/// real PUB) and watches the processed counter from outside.
+#[cfg(test)]
+mod overload_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    use crate::common::RunConfig;
+
+    const EVENTS_PER_BATCH: usize = 33_000;
+    /// 300 batches/s ≈ 10 M events/s: well above what one thread can decode.
+    const BATCHES_PER_SEC: u64 = 300;
+    const OBSERVE: Duration = Duration::from_secs(4);
+    const SAMPLE: Duration = Duration::from_millis(100);
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+            .port()
+    }
+
+    /// One batch shaped like the Merger's output at high rate: many events,
+    /// no waveforms, a handful of channels on two modules.
+    fn batch_bytes(n: usize) -> Vec<u8> {
+        let mut batch = EventDataBatch::with_capacity(0, 1, n);
+        for i in 0..n {
+            let mut ev = EventData::zeroed();
+            ev.module = (i % 2) as u8;
+            ev.channel = (i % 16) as u8;
+            ev.energy = (i % 60_000) as u16;
+            ev.energy_short = ev.energy / 2;
+            ev.timestamp_ns = i as f64 * 100.0;
+            batch.push(ev);
+        }
+        Message::Data(batch).to_msgpack().expect("msgpack")
+    }
+
+    fn send_command(ctx: &zmq::Context, addr: &str, cmd: &Command) -> CommandResponse {
+        let req = ctx.socket(zmq::REQ).expect("REQ socket");
+        req.set_rcvtimeo(10_000).expect("rcvtimeo");
+        req.set_linger(0).expect("linger");
+        req.connect(addr).expect("connect");
+        req.send(&cmd.to_json().expect("json")[..], 0)
+            .expect("send command");
+        let reply = req.recv_bytes(0).expect("command reply");
+        CommandResponse::from_json(&reply).expect("parse reply")
+    }
+
+    /// Longest run of samples in which `processed` did not move while
+    /// `received` did, in seconds.
+    fn longest_stall(samples: &[(f64, u64, u64)]) -> f64 {
+        let mut longest = 0.0f64;
+        let mut stall_start: Option<f64> = None;
+        for w in samples.windows(2) {
+            let (t0, recv0, proc0) = w[0];
+            let (t1, recv1, proc1) = w[1];
+            let flowing = recv1 > recv0;
+            if flowing && proc1 == proc0 {
+                let start = *stall_start.get_or_insert(t0);
+                longest = longest.max(t1 - start);
+            } else {
+                stall_start = None;
+            }
+        }
+        longest
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_consumer_keeps_progressing_under_overload() {
+        let zctx = zmq::Context::new();
+        let publisher = zctx.socket(zmq::PUB).expect("PUB socket");
+        publisher.set_sndhwm(0).expect("sndhwm");
+        publisher.set_linger(0).expect("linger");
+        publisher.bind("tcp://127.0.0.1:*").expect("bind PUB");
+        let sub_addr = publisher
+            .get_last_endpoint()
+            .expect("endpoint")
+            .expect("utf8 endpoint");
+
+        let cmd_addr = format!("tcp://127.0.0.1:{}", free_port());
+        let http_port = free_port();
+        let config = MonitorConfig {
+            subscribe_address: sub_addr,
+            command_address: cmd_addr.clone(),
+            http_port,
+            ..MonitorConfig::default()
+        };
+        let mut monitor = Monitor::new(config).await.expect("monitor");
+        let stats = monitor.atomic_stats.clone();
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let run_handle = tokio::spawn(async move { monitor.run(shutdown_rx).await });
+
+        // Idle → Configured → Armed → Running, like the Operator does.
+        let ctx_for_cmd = zctx.clone();
+        let addr_for_cmd = cmd_addr.clone();
+        tokio::task::spawn_blocking(move || {
+            for cmd in [
+                Command::Configure(RunConfig {
+                    run_number: 1,
+                    comment: String::new(),
+                    exp_name: "overload_test".to_string(),
+                }),
+                Command::Arm,
+                Command::Start { run_number: 1 },
+            ] {
+                let reply = send_command(&ctx_for_cmd, &addr_for_cmd, &cmd);
+                assert!(reply.success, "{cmd} failed: {}", reply.message);
+            }
+        })
+        .await
+        .expect("command thread");
+
+        // Paced blaster: a pre-serialized batch, no per-send allocation.
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_pub = stop.clone();
+        let bytes = batch_bytes(EVENTS_PER_BATCH);
+        let blaster = std::thread::spawn(move || {
+            let period = Duration::from_micros(1_000_000 / BATCHES_PER_SEC);
+            let mut next = Instant::now();
+            let mut sent = 0u64;
+            while !stop_for_pub.load(Ordering::Relaxed) {
+                publisher.send(&bytes[..], 0).expect("send batch");
+                sent += 1;
+                next += period;
+                let now = Instant::now();
+                if next > now {
+                    std::thread::sleep(next - now);
+                } else {
+                    next = now;
+                }
+            }
+            sent
+        });
+
+        // Sample (t, received, processed) while data flows.
+        let t0 = Instant::now();
+        let mut samples = Vec::new();
+        let mut max_status_latency = Duration::ZERO;
+        let client = reqwest::Client::new();
+        let status_url = format!("http://127.0.0.1:{http_port}/api/status");
+        let mut ticks = 0u32;
+        while t0.elapsed() < OBSERVE {
+            tokio::time::sleep(SAMPLE).await;
+            let (recv, proc, _drop) = stats.snapshot();
+            samples.push((t0.elapsed().as_secs_f64(), recv, proc));
+            ticks += 1;
+            if ticks.is_multiple_of(5) {
+                let started = Instant::now();
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(2), client.get(&status_url).send())
+                        .await;
+                max_status_latency = max_status_latency.max(started.elapsed());
+            }
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        let sent = blaster.join().expect("blaster");
+        let (received, processed, dropped) = stats.snapshot();
+        let stall = longest_stall(&samples);
+        eprintln!(
+            "sent={sent} received={received} processed_events={processed} dropped={dropped} \
+             longest_stall={stall:.2}s max_status_latency={max_status_latency:?} \
+             samples={} ticks={ticks}",
+            samples.len()
+        );
+
+        let _ = shutdown_tx.send(());
+        if tokio::time::timeout(Duration::from_secs(10), run_handle)
+            .await
+            .is_err()
+        {
+            eprintln!("Monitor::run did not return within 10 s after shutdown");
+        }
+
+        assert!(received > 0, "no batches received");
+        assert!(processed > 0, "consumer never processed a batch");
+        // The runtime's timers must keep firing too (the old receiver took
+        // the I/O+time driver down with it: one 100 ms sleep lasted 33 s).
+        assert!(
+            samples.len() >= 20,
+            "sampler got only {} samples in {OBSERVE:?}: runtime timers were starved",
+            samples.len()
+        );
+        assert!(
+            stall < 1.0,
+            "histogram consumer stalled for {stall:.2} s while data was flowing"
+        );
+        assert!(
+            max_status_latency < Duration::from_secs(1),
+            "GET /api/status took {max_status_latency:?}"
+        );
+    }
+
+    /// The receive thread alone, on an inproc pair: discard while not
+    /// Running, hand over raw frames while Running, count drops when the
+    /// channel is full, ignore EOS/heartbeat for the counters.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_receive_thread_discards_counts_and_drops() {
+        let zctx = zmq::Context::new();
+        let publisher = zctx.socket(zmq::PUB).expect("PUB");
+        publisher.bind("inproc://monitor-recv-test").expect("bind");
+        let sub = zctx.socket(zmq::SUB).expect("SUB");
+        sub.connect("inproc://monitor-recv-test").expect("connect");
+        sub.set_subscribe(b"").expect("subscribe");
+        sub.set_rcvtimeo(20).expect("rcvtimeo");
+
+        let (tx, mut rx) = mpsc::channel::<zmq::Message>(2);
+        let stats = Arc::new(AtomicStats::new());
+        let (state_tx, state_rx) = watch::channel(ComponentState::Idle);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stats_for_thread = stats.clone();
+        let stop_for_thread = stop.clone();
+        let thread = std::thread::spawn(move || {
+            Monitor::receive_thread(sub, tx, stop_for_thread, stats_for_thread, state_rx)
+        });
+        // Let the inproc subscription propagate before the first send.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let data = batch_bytes(10);
+        // Idle: data is discarded without touching the counters.
+        publisher.send(&data[..], 0).expect("send idle");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(stats.snapshot(), (0, 0, 0));
+        assert!(rx.try_recv().is_err());
+
+        // Running: 3 batches into a channel of 2, plus EOS and heartbeat.
+        state_tx.send(ComponentState::Running).expect("state");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        for _ in 0..3 {
+            publisher.send(&data[..], 0).expect("send data");
+        }
+        let eos = Message::EndOfStream {
+            source_id: 7,
+            run_number: 1,
+        }
+        .to_msgpack()
+        .expect("eos");
+        publisher.send(&eos[..], 0).expect("send eos");
+        let heartbeat = Message::Heartbeat(crate::common::Heartbeat::new(7, 1))
+            .to_msgpack()
+            .expect("heartbeat");
+        publisher.send(&heartbeat[..], 0).expect("send heartbeat");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stats.snapshot().0 < 3 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (received, processed, dropped) = stats.snapshot();
+        assert_eq!(received, 3, "every Data frame is counted as received");
+        assert_eq!(processed, 0, "the receive thread never processes");
+        assert_eq!(dropped, 1, "the third frame did not fit and was dropped");
+        let first = rx.recv().await.expect("first frame");
+        assert!(matches!(
+            MessageHeader::parse(&first),
+            Some(MessageHeader::Data { .. })
+        ));
+        assert!(rx.recv().await.is_some(), "second frame");
+
+        stop.store(true, Ordering::Relaxed);
+        thread.join().expect("receive thread");
+        assert!(rx.recv().await.is_none(), "data_tx dropped with the thread");
+    }
+
+    /// The histogram task decodes raw frames itself, survives a frame that
+    /// is not a batch, and still answers queries in between.
+    #[tokio::test]
+    async fn test_histogram_task_decodes_raw_frames() {
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (data_tx, data_rx) = mpsc::channel::<zmq::Message>(8);
+        let stats = Arc::new(AtomicStats::new());
+        let handle = tokio::spawn(Monitor::histogram_task(
+            cmd_rx,
+            data_rx,
+            MonitorConfig::default(),
+            stats.clone(),
+        ));
+
+        data_tx
+            .send(zmq::Message::from(&b"not a batch"[..]))
+            .await
+            .expect("send garbage");
+        let batch = batch_bytes(10);
+        data_tx
+            .send(zmq::Message::from(&batch[..]))
+            .await
+            .expect("send batch");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stats.snapshot().1 < 10 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(stats.snapshot().1, 10, "10 events processed");
+
+        let (tx, rx) = oneshot::channel();
+        cmd_tx
+            .send(HistogramMessage::GetListSummary(tx))
+            .expect("send query");
+        let summary = rx.await.expect("summary");
+        assert_eq!(summary.total_events, 10);
+
+        drop(cmd_tx);
+        drop(data_tx);
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("histogram task ends when its channels close")
+            .expect("join");
     }
 }
