@@ -94,3 +94,6 @@ scripts/mongodb.local.env
 # Grafana dashboards generated on each host by tools/grafana/gen_dashboards.py
 # into json/<experiment_name>/ (one Grafana folder per experiment). Never commit.
 docker/grafana/provisioning/dashboards/json/*/rates_*.json
+
+# Host-local symlink to the active config (start_daq.sh reads it; re-point with ln -sfn)
+/config.toml

@@ -28,298 +28,1295 @@
   },
   "viewTabs": [
     {
-      "id": "ef9c5e42-498f-4ea6-beac-abb5e10576ac",
-      "name": "2D master",
+      "id": "1aedff72-c51a-41b9-8c2b-ab4528dda0d3",
+      "name": "PSD2-VX2730-LS Ch0-15",
       "gridRows": 4,
       "gridCols": 4,
       "xAxisLabel": "Channel",
-      "histogramType": "2d",
-      "xAxis": "energy",
-      "yAxis": "user_info0",
-      "xView": {
-        "min": 0,
-        "max": 10000,
-        "bins": 1024
-      },
-      "yView": {
-        "min": 5000,
-        "max": 10000,
-        "bins": 42
-      },
+      "histogramType": "energy",
       "cells": [
         {
           "sourceId": 0,
           "channelId": 0,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 1,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 2,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 3,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 4,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 5,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 6,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 7,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 8,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 9,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 10,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 11,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 12,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 13,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 14,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
           "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
         },
         {
           "sourceId": 0,
           "channelId": 15,
+          "xRange": {
+            "min": 0,
+            "max": 2295.809523809524
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ],
+      "lastModifiedCellIndex": 1,
+      "xView": {
+        "min": 0,
+        "max": 65536,
+        "bins": 65536
+      }
+    },
+    {
+      "id": "dcf6301d-beb4-4fb4-8bd7-f3defbb3aeef",
+      "name": "PSD2-VX2730-LS Ch16-31",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "cells": [
+        {
+          "sourceId": 0,
+          "channelId": 16,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 17,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 18,
+          "xRange": {
+            "min": 0,
+            "max": 2705.3864541832672
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 19,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 20,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 21,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 22,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 23,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 24,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 25,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 26,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 27,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 28,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 29,
+          "xRange": {
+            "min": 0,
+            "max": 12220.791131352673
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 30,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 0,
+          "channelId": 31,
+          "xRange": {
+            "min": 0,
+            "max": 5611.592058003098
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ],
+      "lastModifiedCellIndex": 2
+    },
+    {
+      "id": "eac37aab-465c-4e17-ba62-534e9ad72d1c",
+      "name": "dE Sector (mod1)",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "lastModifiedCellIndex": 0,
+      "cells": [
+        {
+          "sourceId": 1,
+          "channelId": 0,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 1,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
         }
       ]
     },
     {
-      "id": "72be30f0-9674-468c-85ba-4adb0799f539",
-      "name": "2D slave ",
+      "id": "646d125e-16fd-466f-8358-00c0eff045df",
+      "name": "E Sector (mod2)",
       "gridRows": 4,
       "gridCols": 4,
       "xAxisLabel": "Channel",
-      "histogramType": "2d",
-      "xAxis": "energy",
-      "yAxis": "user_info0",
-      "xView": {
-        "min": 0,
-        "max": 10000,
-        "bins": 1024
-      },
-      "yView": {
-        "min": 5000,
-        "max": 10000,
-        "bins": 1024
-      },
+      "histogramType": "energy",
+      "lastModifiedCellIndex": 0,
       "cells": [
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 0,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 1,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 2,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 3,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 4,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
-          "channelId": 15,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false
-        },
-        {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 5,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 6,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 7,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 8,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 9,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 10,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 11,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 12,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
-          "isEmpty": false
+          "isEmpty": false,
+          "logScale": true
         },
         {
-          "sourceId": 1,
+          "sourceId": 2,
           "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 2,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "ee75e1c0-4185-4283-98bb-243ede5f0e14",
+      "name": "dE Ring3 (mod3)",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "lastModifiedCellIndex": 2,
+      "cells": [
+        {
+          "sourceId": 3,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 2,
+          "xRange": {
+            "min": 0,
+            "max": 776.1666666666666
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 3,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "8dd1b3fd-bfbf-4944-9715-ff4b821d6260",
+      "name": "dE Ring2 (mod4)",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "lastModifiedCellIndex": 0,
+      "cells": [
+        {
+          "sourceId": 4,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 4,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "d3e94e3d-3c84-4990-85cb-7f21cda2664d",
+      "name": "dE Ring1 (mod5)",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "lastModifiedCellIndex": 0,
+      "cells": [
+        {
+          "sourceId": 5,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        },
+        {
+          "sourceId": 5,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false,
+          "logScale": true
+        }
+      ]
+    },
+    {
+      "id": "a3bbfa30-db7c-42c0-be95-e9abb9f19d7d",
+      "name": "PSD1",
+      "gridRows": 3,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "2d",
+      "xAxis": "energy",
+      "yAxis": "psd",
+      "cells": [
+        {
+          "sourceId": 0,
+          "channelId": 31,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
           "isEmpty": false
         },
         {
-          "sourceId": 1,
-          "channelId": 14,
+          "sourceId": 0,
+          "channelId": 30,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 29,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 28,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 27,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 26,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 25,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 24,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 23,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 22,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 21,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 20,
           "xRange": "auto",
           "yRange": "auto",
           "isLocked": false,
@@ -328,5 +1325,5 @@
       ]
     }
   ],
-  "activeTabId": "72be30f0-9674-468c-85ba-4adb0799f539"
+  "activeTabId": "a3bbfa30-db7c-42c0-be95-e9abb9f19d7d"
 }

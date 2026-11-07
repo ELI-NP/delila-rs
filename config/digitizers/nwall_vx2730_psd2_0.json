@@ -16,14 +16,14 @@
     "waveforms_enabled": false,
     "io_level": "NIM",
     "extra": {
-      "boardvetosource": "Disabled",
-      "clocksource": "Internal",
-      "syncoutmode": "Disabled",
-      "boardvetopolarity": "ActiveHigh",
-      "trgoutmode": "Run",
       "rundelay": 0,
+      "syncoutmode": "Disabled",
+      "trgoutmode": "Run",
+      "boardvetowidth": 0,
+      "clocksource": "Internal",
       "enclockoutfp": "True",
-      "boardvetowidth": 0
+      "boardvetosource": "Disabled",
+      "boardvetopolarity": "ActiveHigh"
     }
   },
   "channel_defaults": {
@@ -64,21 +64,21 @@
     "digital_probe_3": "CFDFilterArmed"
   },
   "channel_overrides": {
+    "31": {
+      "trigger_threshold": 50
+    },
+    "30": {
+      "trigger_threshold": 30,
+      "gate_short_ns": 50
+    },
     "0": {
       "polarity": "Positive",
       "trigger_threshold": 100,
       "cfd_delay_ns": 4,
       "energy_coarse_gain": "x4"
     },
-    "31": {
-      "trigger_threshold": 50
-    },
     "25": {
       "trigger_threshold": 150
-    },
-    "30": {
-      "trigger_threshold": 30,
-      "gate_short_ns": 50
     }
   }
 }

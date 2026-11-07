@@ -5,10 +5,10 @@
 //
 //   root -l -b -q 'make_test_run.C("nwall_test.root", 2.0)'
 //
-// Board layout (TODO 79 §5.5, the provisional config/channel_map_N_Wall.txt):
+// Board layout (config/channel_map_N_Wall.txt):
 //   module 0 VX2730: ch0 beam (1/100 of the RF), ch1-7 LaBr3, ch8-31 LS
-//   module 1 dE sector ch0-15, modules 2-4 dE rings ch0-14 (ch15 pulser),
-//   module 5 E sector ch0-15
+//   module 1 dE sector ch0-15, module 2 E sector ch0-15,
+//   modules 3, 4, 5 dE Ring3, Ring2, Ring1 ch0-14 (ch15 pulser)
 //
 // What is in it (rates per second of data time):
 //   * beam: every 100th bunch, T = 199.95 ns (not the nominal 199.98, so the
@@ -19,7 +19,7 @@
 //     (L = 1.5 m, 0.5-5 MeV), 20 % with a prompt gamma in one LS
 //   * LS singles: gamma flash 50 kHz (t = bunch + 5 ns), neutrons 20 kHz
 //   * LaBr3 prompt gammas 10 kHz (bunch + 3 ns)
-//   * pulser 100 Hz on modules 2-4 ch15 together
+//   * pulser 100 Hz on modules 3-5 ch15 together
 // LS pulse shape: (E - Es)/E ≈ 0.25 for neutrons, 0.10 for gammas.
 //
 // License: BSD-3-Clause (same as delila-rs).
@@ -70,9 +70,9 @@ void make_test_run(const char* out = "nwall_test.root", double seconds = 2.0,
     const double E = rng.Uniform(1000, 20000);
     const double band = rng.Rndm() < 0.7 ? 1.0 : 3.5;  // "protons" and "alphas"
     const double dE = band * 2.0e6 / (E + 2000.0) + rng.Gaus(0, 60);
-    hits.push_back({5, static_cast<UChar_t>(sec), clamp16(E), 0, tsi + rng.Gaus(0, 3)});
+    hits.push_back({2, static_cast<UChar_t>(sec), clamp16(E), 0, tsi + rng.Gaus(0, 3)});
     hits.push_back({1, static_cast<UChar_t>(sec), clamp16(dE), 0, tsi + rng.Gaus(0, 3)});
-    hits.push_back({static_cast<UChar_t>(2 + ring / 15), static_cast<UChar_t>(ring % 15),
+    hits.push_back({static_cast<UChar_t>(5 - ring / 15), static_cast<UChar_t>(ring % 15),
                     clamp16(dE * rng.Uniform(0.9, 1.1)), 0, tsi + rng.Gaus(0, 3)});
     const double u = rng.Rndm();
     if (u < 0.3) ls(tb + tof_n(rng.Uniform(0.5, 5.0)), true, rng.Uniform(500, 20000));
@@ -89,7 +89,7 @@ void make_test_run(const char* out = "nwall_test.root", double seconds = 2.0,
                     clamp16(rng.Uniform(500, 40000)), 0, bunch(t) + 3.0 + rng.Gaus(0, 0.5)});
   // pulser on the three ring boards together
   for (double t = t_start + 1234.0; t < t_end; t += 1e7)
-    for (UChar_t m = 2; m <= 4; ++m) hits.push_back({m, 15, 30000, 0, t});
+    for (UChar_t m = 3; m <= 5; ++m) hits.push_back({m, 15, 30000, 0, t});
 
   std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.t < b.t; });
   TFile f(out, "RECREATE");

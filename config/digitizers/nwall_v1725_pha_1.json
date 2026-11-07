@@ -9,37 +9,37 @@
   "board": {
     "start_source": "START_MODE_S_IN",
     "gpio_mode": "OUT_PROPAGATION_RUN",
-    "record_length": 7000,
+    "record_length": 20000,
     "waveforms_enabled": false,
     "vtrace_probe_0": "VPROBE_TRAPEZOID",
     "vtrace_probe_1": "VPROBE_INPUT",
     "vtrace_probe_2": "VPROBE_TRIGGER",
     "vtrace_probe_3": "VPROBE_PEAKING",
     "io_level": "FPIOTYPE_NIM",
+    "start_delay": 96,
     "extras_enabled": "TRUE",
     "event_aggregation": 1023,
-    "coinc_trgout": 1024,
-    "start_delay": 96
+    "coinc_trgout": 1024
   },
   "channel_defaults": {
     "enabled": "True",
     "polarity": "POLARITY_POSITIVE",
     "dc_offset": 20.0,
     "baseline_avg": "BLINE_NSMEAN_256",
-    "pre_trigger_ns": 2000,
+    "pre_trigger_ns": 4000,
     "coarse_gain": "COARSE_GAIN_X1",
-    "trigger_threshold": 100,
+    "trigger_threshold": 150,
     "cfd_interpolation_point": 0,
     "trigger_holdoff_ns": 496,
-    "fast_discr_smoothing": "RCCR2_SMTH_16",
-    "input_rise_time_ns": 96,
+    "fast_discr_smoothing": "RCCR2_SMTH_128",
+    "input_rise_time_ns": 160,
     "self_trigger": "TRUE",
     "global_trigger_gen": "FALSE",
     "trigger_out_propagate": "FALSE",
-    "trap_rise_time_ns": 2000,
-    "trap_flat_top_ns": 1000,
+    "trap_rise_time_ns": 4800,
+    "trap_flat_top_ns": 1200,
     "trap_pole_zero_ns": 50000,
-    "peaking_time": 80.0,
+    "peaking_time": 60.0,
     "peak_nsmean": "PEAK_NSMEAN_1",
     "peak_holdoff_ns": 960,
     "energy_fine_gain": 1.0,
@@ -47,5 +47,14 @@
     "ch_veto_source": "VETO_SRC_DISABLED",
     "pileup_rejection": "TRUE",
     "trigger_latency": "TRG_LATENCY_MODE_NONE"
+  },
+  "channel_overrides": {
+    "10": {
+      "trap_rise_time_ns": 5000
+    },
+    "9": {
+      "baseline_avg": "BLINE_NSMEAN_4096",
+      "trap_pole_zero_ns": 10000
+    }
   }
 }

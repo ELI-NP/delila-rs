@@ -2,15 +2,19 @@
 #
 # TODO 73 §3.1, TODO 79 §5.5-5.6. Six boards:
 #   module 0 : VX2730 DPP-PSD (master)   beam/100 ch0, LaBr3 ch1-7, LS ch8-31
-#   module 1 : V1725 DPP-PHA             dE sector 0-15
-#   module 2 : V1725 DPP-PHA             dE ring inner  (ch0-14), ch15 = pulser
-#   module 3 : V1725 DPP-PHA             dE ring middle (ch0-14), ch15 = pulser
-#   module 4 : V1725 DPP-PHA             dE ring outer  (ch0-14), ch15 = pulser
-#   module 5 : V1725 DPP-PHA             E sector 0-15
+#   module 1 : V1725  DPP-PHA  SN 184    dE sector 0-15
+#   module 2 : V1725  DPP-PHA  SN 170    E sector 0-15
+#   module 3 : V1725  DPP-PHA  SN 147    dE Ring3 (ch0-14), ch15 = pulser
+#   module 4 : V1725  DPP-PHA  SN 208    dE Ring2 (ch0-14), ch15 = pulser
+#   module 5 : V1725S DPP-PHA  SN 27647  dE Ring1 (ch0-14), ch15 = pulser
+# The module id stays with the serial number (user, 2026-11-06). Which of Ring1/2/3
+# is inner, middle or outer is not known: the analysis decides (user, 2026-11-06).
 # The same numbers are used by config/channel_map_N_Wall.txt (Grafana, nwall_sink,
 # offline) and config/event_def_nwall.json - change them together.
 # Runs 1-4 of N_Wall (2026-10/11, the VX2730 alone, from config_thgem_pfqaq.toml)
 # have the VX2730 as module 1; from run 5 on it is module 0.
+# Runs 5-44 (pulser only, no Si) were taken with modules 2-4 = rings in/mid/out and
+# module 5 = E sector; these roles apply from run 45 on.
 #
 # --- VX2730 ---------------------------------------------------------------
 # Direct 1 GbE on eno1 (172.18.4.50/22) <-> board 172.18.4.57. Its JSON is the
@@ -19,12 +23,12 @@
 # set it for the beam signal before beam (user: TTL straight in, or NIM if that is the source).
 #
 # --- V1725 x5 on the A3818 (4 optical links) ------------------------------
-# Cabling (user, 2026-11-05; caen-toolbox the same day, ROC 04.25, DPP-PHA on all):
-#   link 1 node 0 = module 1   V1725  PID 184    AMC 139.10  b5614
-#   link 1 node 1 = module 2   V1725  PID 170    AMC 139.10  b5614
-#   link 1 node 2 = module 3   V1725  PID 147    AMC 139.10  b5614
-#   link 0 node 0 = module 4   V1725  PID 208    AMC 139.10  b5614
-#   link 0 node 1 = module 5   V1725S PID 27647  AMC 139.137 b7110
+# Cabling (user, 2026-11-06; serials by caen-toolbox the same day, ROC 04.25, DPP-PHA on all):
+#   link 0 node 0 = module 2   V1725  PID 170    AMC 139.10  b5614   E sector
+#   link 1 node 0 = module 1   V1725  PID 184    AMC 139.10  b5614   dE sector
+#   link 2 node 0 = module 3   V1725  PID 147    AMC 139.10  b5614   dE Ring3
+#   link 2 node 1 = module 4   V1725  PID 208    AMC 139.10  b5614   dE Ring2
+#   link 2 node 2 = module 5   V1725S PID 27647  AMC 139.137 b7110   dE Ring1
 # A link that fails as fast as an empty one (~0.25 s, not the ~0.9 s of a missing
 # node on a live chain) has no light: on 2026-11-05 link 1's fibre had R/T swapped.
 # The V1725S firmware is new to DELILA: fine with the pulser (time and energy,
@@ -36,19 +40,18 @@
 # A reader whose board cannot be opened makes Configure fail for the WHOLE DAQ:
 # comment out the blocks of boards that are not connected yet.
 #
-# Si signal polarity (channel_defaults.polarity in each JSON) is a guess: rings
-# NEGATIVE, sectors POSITIVE (opposite faces of the detector; inverting charge
-# preamps). Check the first waveforms in Tune Up and flip it there if needed.
+# Si settings come from side3's Si_Test runs 4-7 (TODO 73 §5.6-5.7): sectors POSITIVE,
+# rings NEGATIVE. Which side3 board goes with which Ring is by number only (TODO 73 §5.7).
 # The ring boards' ch15 (pulser) is POSITIVE for the PB-5. Waveforms are OFF (user: the V1725 buffer
-# loses too many events with them). record_length: 7000 ns for now, the user will
-# move all boards to 20000 ns while checking them in Tune Up once the Si is in. Above
+# loses too many events with them). record_length is 20000 ns as on side3. Above
 # 7168 ns the couple arbiter keeps only one of two simultaneous events of a channel
 # pair in Tune Up captures; runs with waveforms off ignore record_length.
-# E = 0 with EXTRAS bit 4 (input saturation) on the ring boards' ch15: TODO 77 §6.14.
-# Check it again if a ring channel is flipped to POSITIVE.
+# E = 0 with EXTRAS bit 4 (input saturation) on ch15 of SN 170, 147, 208 with the pulser
+# on a T (2026-11-05, modules 2-4 at the time): TODO 77 §6.14.
 #
 # --- Clock and start -------------------------------------------------------
-# Cascade, measured 2026-11-05 with a PB-5 pulser (TODO 77 §6.8-6.13):
+# Cascade, measured 2026-11-05 with a PB-5 pulser (TODO 77 §6.8-6.13). The 2026-11-06
+# recabling left this chain as it was (user):
 #   VX2730 TRG-OUT (Run) -> mod1 S-IN, mod1 TRG-OUT -> mod2 S-IN, ... -> mod5 S-IN;
 #   the clock is common to all boards (drift <= 0.004 ns/s).
 #   - V1725: START_MODE_S_IN, mod1-4 gpio_mode = OUT_PROPAGATION_RUN. With
@@ -118,36 +121,36 @@ time_step_ns = 4.0
 
 [[network.sources]]
 id = 2
-name = "PHA1-V1725-dE-RingIn"
+name = "PHA1-V1725-E-Sector"
 type = "pha1"
-digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
 config_file = "config/digitizers/nwall_v1725_pha_2.json"
 pipeline_order = 1
 time_step_ns = 4.0
 
 [[network.sources]]
 id = 3
-name = "PHA1-V1725-dE-RingMid"
+name = "PHA1-V1725-dE-Ring3"
 type = "pha1"
-digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=2"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=0"
 config_file = "config/digitizers/nwall_v1725_pha_3.json"
 pipeline_order = 1
 time_step_ns = 4.0
 
 [[network.sources]]
 id = 4
-name = "PHA1-V1725-dE-RingOut"
+name = "PHA1-V1725-dE-Ring2"
 type = "pha1"
-digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=1"
 config_file = "config/digitizers/nwall_v1725_pha_4.json"
 pipeline_order = 1
 time_step_ns = 4.0
 
 [[network.sources]]
 id = 5
-name = "PHA1-V1725-E-Sector"
+name = "PHA1-V1725-dE-Ring1"
 type = "pha1"
-digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=2"
 config_file = "config/digitizers/nwall_v1725_pha_5.json"
 pipeline_order = 1
 time_step_ns = 4.0
@@ -193,6 +196,9 @@ channel_map = "config/channel_map_N_Wall.txt"
 # DIG1 boards deliver up to ~100 ms out of time order (channel-pair aggregates;
 # ThGEM run 52 on this host: 82 ms) - the default 50 ms would drop hits as late.
 safe_horizon_ms = 1000
+# Uncompressed ROOT (user, 2026-11-07): /archive is ZFS with its own compression, and
+# ZSTD-5 costs nwall_sink's writer CPU at high rate (TODO 84). nwall_sink default is 505.
+compression = 0
 autosave_sec = 30
 workers = 3
 # Once measured (TODO 72 time_map.C with the pulser, after the clock cable):

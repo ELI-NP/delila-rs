@@ -1,0 +1,332 @@
+{
+  "setupConfig": {
+    "name": "",
+    "gridRows": 2,
+    "gridCols": 2,
+    "xAxisLabel": "Channel",
+    "histogramType": "energy",
+    "xAxis": "energy",
+    "yAxis": "psd",
+    "cells": [
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      },
+      {
+        "sourceId": null,
+        "channelId": null
+      }
+    ]
+  },
+  "viewTabs": [
+    {
+      "id": "ef9c5e42-498f-4ea6-beac-abb5e10576ac",
+      "name": "2D master",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "2d",
+      "xAxis": "energy",
+      "yAxis": "user_info0",
+      "xView": {
+        "min": 0,
+        "max": 10000,
+        "bins": 1024
+      },
+      "yView": {
+        "min": 5000,
+        "max": 10000,
+        "bins": 42
+      },
+      "cells": [
+        {
+          "sourceId": 0,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 0,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        }
+      ]
+    },
+    {
+      "id": "72be30f0-9674-468c-85ba-4adb0799f539",
+      "name": "2D slave ",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "2d",
+      "xAxis": "energy",
+      "yAxis": "user_info0",
+      "xView": {
+        "min": 0,
+        "max": 10000,
+        "bins": 1024
+      },
+      "yView": {
+        "min": 5000,
+        "max": 10000,
+        "bins": 1024
+      },
+      "cells": [
+        {
+          "sourceId": 1,
+          "channelId": 0,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 1,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 2,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 3,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 4,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 15,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 5,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 6,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 7,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 8,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 9,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 10,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 11,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 12,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 13,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 14,
+          "xRange": "auto",
+          "yRange": "auto",
+          "isLocked": false,
+          "isEmpty": false
+        }
+      ]
+    }
+  ],
+  "activeTabId": "72be30f0-9674-468c-85ba-4adb0799f539"
+}
