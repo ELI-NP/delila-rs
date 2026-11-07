@@ -11,6 +11,7 @@ import {
   RunNote,
   LastRunInfo,
   StalledSource,
+  AutoStopNotice,
 } from '../models/types';
 
 @Injectable({
@@ -55,6 +56,8 @@ export class OperatorService {
   readonly tuneupDigitizerId = computed(() => this.status()?.tuneup_digitizer_id ?? null);
   /** Running sources without new events (TODO 78 a) */
   readonly stalledSources = computed<StalledSource[]>(() => this.status()?.stalled_sources ?? []);
+  /** The last run the Operator stopped on its own, until the next run starts (TODO 84) */
+  readonly autoStop = computed<AutoStopNotice | null>(() => this.status()?.auto_stop ?? null);
 
   // Grouped components by role
   readonly sourceComponents = computed(() =>

@@ -107,6 +107,22 @@ export interface SystemStatus {
   monitor_http_port?: number;
   /** Running sources that delivered no events for no_event_warn_secs (TODO 78 a) */
   stalled_sources?: StalledSource[];
+  /** The last run the Operator stopped on its own, until the next run starts (TODO 84) */
+  auto_stop?: AutoStopNotice;
+}
+
+/** A run the Operator stopped on its own (backlog autostop / run guard, TODO 84) */
+export interface AutoStopNotice {
+  cause: 'rate_too_high' | 'disk_low' | 'write_failure';
+  /** stopping = sources stopped, queued data still being written */
+  phase: 'stopping' | 'stopped' | 'incomplete';
+  run_number?: number;
+  /** What triggered it, e.g. "Recorder: 21.0 GB waiting to be written" */
+  reason: string;
+  /** Unix ms when the stop began (also identifies the notice) */
+  started_ms: number;
+  /** Result of the stop, empty while in progress */
+  message: string;
 }
 
 /** A Running source whose event count has not moved (TODO 78 a) */

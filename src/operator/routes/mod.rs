@@ -166,6 +166,10 @@ pub struct AppState {
     /// Running sources without new events, kept by the no-event watcher
     /// (TODO 78 a) and reported in `/api/status`.
     pub stalled_sources: RwLock<Vec<crate::operator::event_stall::StalledSource>>,
+    /// The last run the Operator stopped on its own, for the UI banner
+    /// (TODO 84). Set by the backlog watcher and the run guard, cleared when
+    /// a run starts.
+    pub auto_stop: RwLock<Option<crate::operator::auto_stop::AutoStopNotice>>,
 }
 
 /// Emulator runtime settings (API model)
@@ -382,6 +386,9 @@ impl AppState {
         UpdateL2SettingsRequest,
         tuneup::TuneUpStartRequest,
         crate::operator::event_stall::StalledSource,
+        crate::operator::auto_stop::AutoStopNotice,
+        crate::operator::auto_stop::AutoStopCause,
+        crate::operator::auto_stop::AutoStopPhase,
     )),
     tags(
         (name = "DAQ Control", description = "DAQ system control endpoints"),
@@ -512,6 +519,7 @@ impl RouterBuilder {
             tuneup_apply_lock: tokio::sync::Mutex::new(()),
             run_control_lock: tokio::sync::Mutex::new(()),
             stalled_sources: RwLock::new(Vec::new()),
+            auto_stop: RwLock::new(None),
         });
 
         let cors = CorsLayer::new()

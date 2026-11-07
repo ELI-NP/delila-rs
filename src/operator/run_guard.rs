@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use tracing::{error, info, warn};
 
+use crate::operator::auto_stop::{self, AutoStopCause};
 use crate::operator::routes::AppState;
 use crate::operator::ComponentStatus;
 
@@ -157,6 +158,18 @@ pub async fn run_watcher(state: Arc<AppState>) {
             continue;
         }
 
+        // Tell the UI why the run is ending (TODO 84).
+        let run_number = state
+            .current_run
+            .read()
+            .await
+            .as_ref()
+            .map(|r| r.run_number);
+        let (cause, reason) = match &action {
+            GuardAction::ImmediateStop(r) => (AutoStopCause::WriteFailure, r),
+            GuardAction::DrainStop(r) => (AutoStopCause::DiskLow, r),
+        };
+        auto_stop::begin(&state.auto_stop, run_number, cause, reason).await;
         let (status, response) = match action {
             GuardAction::ImmediateStop(reason) => {
                 crate::operator::routes::status::failure_stop(&state, &reason).await
@@ -166,6 +179,7 @@ pub async fn run_watcher(state: Arc<AppState>) {
                 crate::operator::routes::status::drain_first_stop(&state, &reason, timeout_ms).await
             }
         };
+        auto_stop::finish(&state.auto_stop, response.0.success, &response.0.message).await;
         info!(
             http_status = %status,
             message = %response.0.message,

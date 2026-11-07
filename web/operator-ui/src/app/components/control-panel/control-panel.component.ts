@@ -15,6 +15,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { OperatorService } from '../../services/operator.service';
+import { AutoStopNotice } from '../../models/types';
 import { DigitizerService } from '../../services/digitizer.service';
 import { TimerService } from '../../services/timer.service';
 import { TimerAlarmDialogComponent } from '../timer/timer-alarm-dialog.component';
@@ -162,6 +163,41 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
               <span class="apply-failure-detail">{{ failure.message }}</span>
             </div>
           </div>
+        }
+
+        <!-- TODO 84: a run the Operator stopped on its own (rate too high,
+             disk nearly full, write failure). The server keeps the notice
+             until the next run starts. -->
+        @if (operator.autoStop(); as a) {
+          @if (dismissedAutoStop() !== a.started_ms) {
+            <div class="apply-failure-banner" data-testid="auto-stop-banner">
+              <mat-icon>{{ a.phase === 'stopping' ? 'hourglass_top' : 'block' }}</mat-icon>
+              <div class="apply-failure-text">
+                <strong class="auto-stop-title">{{ autoStopTitle(a) }}</strong>
+                <span>{{ a.reason }} (at {{ autoStopTime(a) }})</span>
+                <span>{{ autoStopPhaseText(a) }}</span>
+                @if (a.phase === 'incomplete' && a.message) {
+                  <span class="apply-failure-detail">{{ a.message }}</span>
+                }
+                @if (a.cause === 'rate_too_high' && a.phase !== 'stopping') {
+                  <span class="stall-hint">
+                    Find the channels that were ringing (Grafana rates, Monitor) and raise
+                    their thresholds or disable them before starting again.
+                  </span>
+                }
+              </div>
+              @if (a.phase !== 'stopping') {
+                <button
+                  mat-icon-button
+                  class="banner-close"
+                  (click)="dismissedAutoStop.set(a.started_ms)"
+                  aria-label="Dismiss"
+                >
+                  <mat-icon>close</mat-icon>
+                </button>
+              }
+            </div>
+          }
         }
 
         <!-- TODO 78: the server rolls a failed start back to Idle; keep the
@@ -401,6 +437,9 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
       flex-shrink: 0;
       margin: -8px -8px 0 auto;
     }
+    .auto-stop-title {
+      font-size: 15px;
+    }
     .stall-banner {
       display: flex;
       align-items: flex-start;
@@ -541,6 +580,38 @@ export class ControlPanelComponent {
   readonly alarmFlashing = signal(false);
   /** Reason of the last failed Start, until the next successful Start / Reset or dismiss. */
   readonly lastStartFailure = signal<string | null>(null);
+  /** started_ms of the automatic-stop notice the user closed (TODO 84). */
+  readonly dismissedAutoStop = signal<number | null>(null);
+
+  autoStopTitle(a: AutoStopNotice): string {
+    const run = a.run_number != null ? `Run ${a.run_number}` : 'The run';
+    switch (a.cause) {
+      case 'rate_too_high':
+        return `${run} stopped automatically: data rate too high`;
+      case 'disk_low':
+        return `${run} stopped automatically: disk nearly full`;
+      case 'write_failure':
+        return `${run} stopped: writing to disk failed`;
+    }
+  }
+
+  autoStopPhaseText(a: AutoStopNotice): string {
+    const drains = a.cause !== 'write_failure';
+    switch (a.phase) {
+      case 'stopping':
+        return drains
+          ? 'Sources are stopped. Writing the queued data to disk — do not stop or restart the DAQ until this finishes.'
+          : 'Stopping the run…';
+      case 'stopped':
+        return drains ? 'All queued data was written; the files are complete.' : 'The run is stopped.';
+      case 'incomplete':
+        return 'The stop did not finish cleanly:';
+    }
+  }
+
+  autoStopTime(a: AutoStopNotice): string {
+    return new Date(a.started_ms).toLocaleTimeString();
+  }
 
   // Edit mode state
   private editMode = signal(false);

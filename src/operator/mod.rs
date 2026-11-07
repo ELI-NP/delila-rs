@@ -3,6 +3,7 @@
 //! Provides HTTP endpoints to control DAQ components via ZeroMQ.
 //! Includes Swagger UI for API documentation.
 
+pub mod auto_stop;
 pub mod backlog_watch;
 mod client;
 pub mod command_ext;
@@ -91,6 +92,10 @@ pub struct SystemStatus {
     /// (TODO 78 a)
     #[serde(default)]
     pub stalled_sources: Vec<event_stall::StalledSource>,
+    /// The last run the Operator stopped on its own (rate too high, disk low,
+    /// write failure), kept until the next run starts (TODO 84)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_stop: Option<auto_stop::AutoStopNotice>,
 }
 
 /// Aggregated system state
@@ -566,6 +571,7 @@ mod tests {
             tuneup_digitizer_id: None,
             monitor_http_port: Some(8081),
             stalled_sources: Vec::new(),
+            auto_stop: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"system_state\":\"Idle\""));

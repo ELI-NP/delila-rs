@@ -101,10 +101,11 @@
 ### 8.2 実施した変更(ユーザーの依頼、未コミット)
 - **`nwall_sink --compression N`**(既定 505 = ZSTD-5、0 = 圧縮なし)、TOML の `compression` → `start_daq.sh` が渡す。**N_Wall の TOML に `compression = 0`**(最終保存先が ZFS で圧縮されるため)。pf-qaq に配備・N_Wall で有効(起動ログ "ROOT compression 0 (uncompressed)")。旧版は `~/.local/bin/nwall_sink.before_compression`。単体テスト 67 本通過。
 
-### 8.3 ユーザー判断待ち
-- N_Wall で自動停止を有効にするか(推奨: `backlog_hard_limit_mb = 40000`、`drain_stop_timeout_secs = 1800`)。
-- コミット(§8.2 と、これまでの未コミット分)。
-- ラン 45 の 62 GB と `run_inprogress_1793986014.root` の削除。
+### 8.3 ユーザーの判断(2026-11-07)と対応
+- **自動停止を N_Wall で有効化**(「そのレベルならどうせ手で止めていた」): `[operator.backlog_autostop]`、Recorder の `backlog_hard_limit_mb = 40000`、`drain_stop_timeout_secs = 1800`。**UI にはっきり出すこと**(ユーザー)→ Operator が自動停止の通知(原因 = レート過多 / ディスク不足 / 書き込み失敗、段階 = 書き込み中 / 完了 / 不完全、ラン番号、理由)を持ち `/api/status` の `auto_stop` で返す。次のランの Start で消える。UI は制御パネルに赤い枠で「Run N stopped automatically: data rate too high」、書き込み中は「do not stop or restart the DAQ」、完了後は「the files are complete」と次にすることを出す(`src/operator/auto_stop.rs`、`control-panel.component.ts`)。run guard(ディスク不足、書き込み失敗)も同じ枠に出る。テスト: Rust 3 + 状態取得 1、UI 5(サービス 1、制御パネル 4、制御パネルのテストはこれが最初)。
+- **コミットと push**: 22c3052〜9315924。pf-qaq のローカル変更(ThGEM 用の設定など)は `~/delila-rs-local/pfqaq_local_changes_20261107.patch` に保存してから作業ツリーを origin に合わせた。ThGEM の Monitor レイアウトは `config/monitor_layouts/monitor_layout_thgem.json`(戻すときは `config/digitizers/monitor_layout.json` へコピー)。
+- **ラン 45 の 62 GB と `run_inprogress_1793986014.root` は残す**(「ゴミも立派なデータ」、ディスクは余っている)。
+- **Monitor の停止は Fable に修正を依頼**(実機は触らせない、配備と実機確認はメインのセッション)。
 
 ## 7. 測定の後で決めること(今はコードを変えない)
 

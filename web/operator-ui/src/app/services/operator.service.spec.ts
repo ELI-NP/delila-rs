@@ -207,6 +207,22 @@ describe('OperatorService', () => {
       });
       expect(service.stalledSources()).toEqual([{ name: 'Reader-0', seconds: 3 }]);
     });
+
+    it('should expose the automatic stop notice from the status (TODO 84)', () => {
+      service.status.set(mockSystemStatus);
+      expect(service.autoStop()).toBeNull();
+
+      const notice = {
+        cause: 'rate_too_high' as const,
+        phase: 'stopping' as const,
+        run_number: 45,
+        reason: 'Recorder: 21.0 GB waiting to be written',
+        started_ms: 1794043048998,
+        message: '',
+      };
+      service.status.set({ ...mockSystemStatus, auto_stop: notice });
+      expect(service.autoStop()).toEqual(notice);
+    });
   });
 
   describe('getStatus()', () => {

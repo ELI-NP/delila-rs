@@ -213,6 +213,7 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         tuneup_digitizer_id,
         monitor_http_port: state.config.monitor_http_port,
         stalled_sources: state.stalled_sources.read().await.clone(),
+        auto_stop: state.auto_stop.read().await.clone(),
     })
 }
 
@@ -497,6 +498,8 @@ pub(super) async fn start(
     };
 
     let status = if response.success {
+        // A new run is going: the previous automatic stop is history (TODO 84).
+        *state.auto_stop.write().await = None;
         let exp_name = &state.config.experiment_name;
         // TODO 58 M16: MongoDB persistence failures were warn-only + HTTP 200 —
         // run-history gaps were invisible to the operator. The run itself still
@@ -1180,6 +1183,8 @@ pub(super) async fn run_start(
             start_phase_failed(&state, run_number, phase_rejected("Start", results)).await
         }
         Ok(results) => {
+            // A new run is going: the previous automatic stop is history (TODO 84).
+            *state.auto_stop.write().await = None;
             let exp_name = &state.config.experiment_name;
             // TODO 58 M16: persistence failures must reach the response.
             let mut mongo_warnings: Vec<String> = Vec::new();
@@ -1396,6 +1401,34 @@ mod tests {
 
     async fn system_state(state: &AppState) -> SystemState {
         SystemState::from_components(&state.client.get_all_status(&state.components).await)
+    }
+
+    /// TODO 84: an automatic stop stays visible in /api/status until the next
+    /// run starts, so the operator learns why the run ended.
+    #[tokio::test]
+    async fn auto_stop_notice_is_reported_until_the_next_run_starts() {
+        use crate::operator::auto_stop::{self, AutoStopCause};
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+
+        auto_stop::begin(
+            &state.auto_stop,
+            Some(45),
+            AutoStopCause::RateTooHigh,
+            "Recorder: 21.0 GB waiting to be written",
+        )
+        .await;
+        let Json(st) = get_status(State(state.clone())).await;
+        let n = st.auto_stop.expect("notice in /api/status");
+        assert_eq!(n.cause, AutoStopCause::RateTooHigh);
+        assert_eq!(n.run_number, Some(45));
+
+        let (status, Json(resp)) = run_start(State(state.clone()), Json(run_request(46))).await;
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+        let Json(st) = get_status(State(state.clone())).await;
+        assert!(st.auto_stop.is_none(), "cleared by the new run");
+        let _ = shutdown.send(());
     }
 
     #[tokio::test]

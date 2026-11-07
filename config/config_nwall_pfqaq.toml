@@ -78,6 +78,17 @@
 experiment_name = "N_Wall"
 # 9091 as for ThGEM on this host.
 port = 9091
+# Drain-first stops (backlog autostop below, low disk) may take minutes to write
+# the queue: 21 GB took 258 s on this host (TODO 84). The default 60 s is too short.
+drain_stop_timeout_secs = 1800
+
+# Stop the run when the input rate is more than the recording path can write
+# (user, 2026-11-07, TODO 84): when the Recorder queue passes
+# [network.recorder].backlog_hard_limit_mb, the sources are stopped, the queue is
+# written to disk, and the Operator UI shows "stopped automatically: data rate too
+# high". nwall_sink is not watched (its own queue): see TODO 84 §8.
+[operator.backlog_autostop]
+poll_interval_secs = 2
 
 # Per-second rates into InfluxDB 3 of the docker/ stack (host 8086 -> 8181).
 [operator.influxdb]
@@ -171,6 +182,10 @@ command = "tcp://*:5580"
 # Changing this directory means changing that crontab line too.
 output_dir = "/data/N_Wall"
 pipeline_order = 3
+# Hard watermark for [operator.backlog_autostop] (TODO 84): 40 GB of queue. The
+# Recorder writes about 2.7 M ev/s here; a 6.5 MHz noise run reaches 40 GB in about
+# 10 min and takes about 8 min to write out. RAM is 251 GB and nwall_sink grows too.
+backlog_hard_limit_mb = 40000
 
 [network.monitor]
 subscribe = "tcp://localhost:5557"

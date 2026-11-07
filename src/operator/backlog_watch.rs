@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::config::BacklogAutostopConfig;
+use crate::operator::auto_stop;
 use crate::operator::routes::AppState;
 
 pub async fn run_watcher(config: BacklogAutostopConfig, state: Arc<AppState>) {
@@ -71,8 +72,30 @@ pub async fn run_watcher(config: BacklogAutostopConfig, state: Arc<AppState>) {
 
         let reason = format!("backlog_hard_limit exceeded by {}", trigger);
         let timeout_ms = state.config.drain_stop_timeout_secs * 1000;
+        // Tell the UI before the (minutes-long) drain starts (TODO 84).
+        let run_number = state
+            .current_run
+            .read()
+            .await
+            .as_ref()
+            .map(|r| r.run_number);
+        let plain = critical
+            .iter()
+            .map(|(name, bytes)| {
+                format!("{}: {} waiting to be written", name, auto_stop::gb(*bytes))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        auto_stop::begin(
+            &state.auto_stop,
+            run_number,
+            auto_stop::AutoStopCause::RateTooHigh,
+            &plain,
+        )
+        .await;
         let (status, response) =
             crate::operator::routes::status::drain_first_stop(&state, &reason, timeout_ms).await;
+        auto_stop::finish(&state.auto_stop, response.0.success, &response.0.message).await;
         info!(
             http_status = %status,
             message = %response.0.message,
