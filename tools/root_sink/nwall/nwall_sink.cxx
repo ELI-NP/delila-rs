@@ -95,7 +95,9 @@
 using namespace rootsink;
 using Clock = std::chrono::steady_clock;
 
-// ROOT compression = algorithm*100 + level. 505 = ZSTD level 5 (as delila2root).
+// ROOT compression = algorithm*100 + level. 505 = ZSTD level 5 (as delila2root),
+// the default. --compression 0 writes uncompressed (pf-qaq: the archive is ZFS
+// with its own compression, and ZSTD-5 costs writer CPU at high rate, TODO 84).
 static const int kDelilaCompression = 505;
 
 // SIGINT + SIGTERM flip a flag; the main loop drains and closes the file.
@@ -126,6 +128,7 @@ struct Options {
   int workers = 3;
   double chunk_span_ms = 100.0;
   double safe_horizon_ms = 1000.0;  // DIG1 aggregates arrive up to ~100 ms late (pf-qaq run 52)
+  int compression = kDelilaCompression;  // --compression: ROOT setting, 0 = none
   std::string time_calib;
   std::string event_def;
   // N_Wall display
@@ -172,6 +175,8 @@ static void print_usage(const char* argv0) {
       "  --workers N         event-build worker threads (default 3)\n"
       "  --chunk-span-ms X   sorter chunk span in data time (default 100)\n"
       "  --safe-horizon-ms X sorter disorder absorption (default 1000)\n"
+      "  --compression N     ROOT compression, algorithm*100 + level (default 505 =\n"
+      "                      ZSTD 5); 0 = uncompressed\n"
       "  --help              this message\n",
       argv0);
 }
@@ -241,6 +246,14 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
       if (!(v = need(i)) || !number(a.c_str(), v, opt.chunk_span_ms)) return false;
     } else if (a == "--safe-horizon-ms") {
       if (!(v = need(i)) || !number(a.c_str(), v, opt.safe_horizon_ms)) return false;
+    } else if (a == "--compression") {
+      if (!(v = need(i)) || !number(a.c_str(), v, x)) return false;
+      // ROOT: 0 = none, else algorithm*100 + level with level 1..9.
+      if (x != static_cast<int>(x) || x < 0 || x > 509 || (x > 0 && static_cast<int>(x) % 100 == 0)) {
+        std::fprintf(stderr, "nwall_sink: --compression wants 0 or algorithm*100 + level 1-9, got '%s'\n", v);
+        return false;
+      }
+      opt.compression = static_cast<int>(x);
     } else if (a == "--time-calib") {
       if (!(v = need(i))) return false;
       opt.time_calib = v;
@@ -529,6 +542,8 @@ class Recorder {
   long long entries() const { return entries_; }
   // The path chosen by the last finalize() (for pairing the hists-config copy).
   const std::string& final_path() const { return final_path_; }
+  // ROOT compression setting for the files opened from now on (--compression).
+  void set_compression(int c) { compression_ = c; }
   // What open_run recorded about this run (time offsets, event definition) —
   // for the sidecars.
   const eb::RunProvenance& provenance() const { return prov_; }
@@ -560,7 +575,7 @@ class Recorder {
     unwritten_hits_ = 0;
     unwritten_events_ = 0;
     provisional_ = dir + "/run_inprogress_" + std::to_string((long long)::time(nullptr)) + ".root";
-    file_ = TFile::Open(provisional_.c_str(), "RECREATE", "", kDelilaCompression);
+    file_ = TFile::Open(provisional_.c_str(), "RECREATE", "", compression_);
     if (!file_ || file_->IsZombie()) {
       delete file_;
       file_ = nullptr;
@@ -1005,6 +1020,7 @@ class Recorder {
   std::string exp_name_ = "data";
   std::string provisional_;
   std::string final_path_;
+  int compression_ = kDelilaCompression;
   long long entries_ = 0;         // successful Fills only
   long long events_entries_ = 0;
   // Which trees this run asked for (open_run) — they count unwritten entries
@@ -2004,6 +2020,7 @@ int main(int argc, char** argv) {
   //     and the source of the display queue ---------------------------------
   auto writer_loop = [&] {
     Recorder recorder;
+    recorder.set_compression(opt.compression);
     eb::SeqReorder<eb::WorkMsg> reorder;
     int pills = 0;
     auto t_last_autosave = Clock::now();
@@ -2270,6 +2287,8 @@ int main(int argc, char** argv) {
   std::printf("nwall_sink: pipeline receiver -> sorter(span=%.0fms horizon=%.0fms) -> %d "
               "worker(s) -> writer -> display\n",
               opt.chunk_span_ms, opt.safe_horizon_ms, n_workers);
+  std::printf("nwall_sink: ROOT compression %d%s\n", opt.compression,
+              opt.compression == 0 ? " (uncompressed)" : "");
   std::printf("nwall_sink: running. Ctrl-C or SIGTERM to stop.\n");
   std::fflush(stdout);
 

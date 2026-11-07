@@ -436,6 +436,8 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg workers      --workers
         rs_add_arg chunk_span_ms --chunk-span-ms
         rs_add_arg safe_horizon_ms --safe-horizon-ms
+        # nwall_sink only (TODO 84): ROOT compression, 0 = uncompressed.
+        rs_add_arg compression  --compression
         # built_tree was retired in TODO 71 (root_sink exits on --built-tree):
         # say so instead of passing it, so an old TOML still starts.
         if [ -n "$(get_root_sink_key built_tree)" ]; then

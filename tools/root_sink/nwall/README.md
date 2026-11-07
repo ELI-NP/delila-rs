@@ -34,6 +34,7 @@ event_def_file = "config/event_def_nwall.json"
 channel_map = "config/channel_map_N_Wall.txt"
 time_calib_file = "config/time_settings_nwall.json"   # once measured (TODO 72)
 safe_horizon_ms = 1000
+compression = 0            # ROOT compression; 0 = none, default 505 = ZSTD 5 (TODO 84)
 # rf_period_ns = 199.980   # nominal; measured per run from the beam channel
 # rf_t0_ns = 0.0           # see "Calibration" below
 # si_delay_ns = 0.0
