@@ -7,6 +7,13 @@
 - **ランの印から Tune Up を外した。** Tune Up は run 0(`src/operator/routes/tuneup.rs`)で、`run_event` 825 件のうち 470 件を占めていた。
 - **チャンネルが赤になるのはラン中だけにした。** ラン中でないときは、カウントのない ch を `-`、`Silent channels` を空にする。カウントのある ch は Tune Up 中でも青で出る。「ラン中」はカウントでなく `run_event` で判定する(ラン中に DAQ が止まれば赤のまま)。
 
+**`Rates — N_Wall` の整理(2026-11-06、ユーザー、未コミット、pf-qaq に配備済み、DAQ は再起動していない):**
+- **pulser のパネルを外した。** チャンネルマップのグループ列 `-` = 監視しない(パネルなし、`Silent channels` に出ない、カウントがなければ表は灰色の `off`)。`nwall_sink` はグループ列を見ないので影響なし(`nwall_map.hpp` で確認)、役割の列 `pulser` はそのまま。
+- **Ring 3 枚を最下段の 1 行に並べた(幅 8 × 3)。** 同じ名前で番号だけ違うグループが、隣り合って**ちょうど 3 つ**あれば 1 行にまとめ、番号順に並べる(`panel_widths`)。凡例は 15 行のうち約 10 行が見え、残りはスクロール(LS のデータを当てた一時ダッシュボードで確認、確認後に削除)。
+- **Si とそれ以外でレートのグラフを分ける案**は、ユーザーの判断で見送り。
+
+テストは Mac で 37 本すべて通過。pf-qaq では 2 本失敗するが、どちらも古い生成物 `rates_x730-thgem-test.json` が原因で(ThGEM に戻すときに作り直す)、今回の変更とは無関係。
+
 **落とし穴(実データで発見):** `(SELECT event FROM run_event ... ORDER BY time DESC LIMIT 1) = 'start'` は DataFusion で正しく動かなかった。Idle なのに WHERE で真、ラン中なのに CASE で偽。SQL の文字列を見る単体テストは通るので、`gen_dashboards.py` の SQL は実データの時刻で確かめること。今は `run_state()` の集計(`MAX(start) > MAX(stop)`)を CROSS JOIN している。ラン 4 本とその停止直後、Idle、Tune Up 中で確認済み。
 
 **短い時間範囲でグラフが空になる不具合を修正(454596a):** 数分の範囲だと Grafana が 1 秒未満の bin を要求し、`$__dateBin` のクエリが 0 件を返していた(200 ms で 0 フレーム、1000 ms で 108 点)。`Last 5 minutes` で全グラフが `No data` になる。Operator の書き込みは 2 秒ごとなので、最小間隔 `interval: 2s` を `$__dateBin` を使う全パネルに入れた(テストで固定)。

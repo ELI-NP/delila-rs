@@ -250,3 +250,82 @@ DAQ は止まったまま(全コンポーネント Configured、旧バイナリ)
 - **Si の電源は CAEN N1408 に決定(2026-11-05、ユーザー)。モニタと ch ごとの ON/OFF・`VSET`・`ISET`・`TRIP`・`RUP`・`RDW`(10 V/s まで)の Web ページを実装、ラン中は OFF だけ(TODO 82、http://192.168.144.142:8095/)。** MHV-4 は使わない。Grafana の `channel_rate`、`run_event`、eLog への投稿(Run #41〜44 を確認)は動いている。対応表 `config/channel_map_N_Wall.txt` はまだ PROVISIONAL(Si の順番は実配線と未照合)。
 - **優先はビームパルスと中性子の時間関係、つまりイベントビルドのビームパルス補完(ユーザー)。** 200 ns 刻みで考えてほぼ問題ない精度で来る。**`events` tree に `BeamTime` と周期 T を追加した(TODO 79「BeamTime」、合成データで確認、pf-qaq に配備済み。実際のビームでは未確認)。** パルスとビームの差はガンマから出す。
 
+### 5.6 side3 の Si 設定の取り込み(2026-11-06、ユーザーの依頼)
+**pf-qaq の V1725 5 台に、side3 の `Si_Test`(S7 1000 µm、run 7 まで)の設定を Operator の REST(PUT + save)で入れた。** ハードにはまだ書いていない(次の Configure か Tune Up で入る)。リポジトリには未コミットで、pf-qaq のローカル変更のまま。元の JSON と side3 の JSON は pf-qaq の `~/nwall_v1725_before_si_import_20261106/`。
+side3 の設定は run 4〜7 で同じ(スナップショットで確認)。ユーザーの記憶「dE から E で変えていない」と合う。
+
+| pf-qaq | side3 | 極性 | DC | ゲイン | しきい値 | input rise | trap rise | flat | PZ | peaking |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mod1 dE sector、mod5 E sector | mod0 | POS | 20 | X1 | 150 | 160 | 4800 | 1200 | 50000 | 60 |
+| mod2 dE ring in | mod1 | NEG | 10 | X4 | 20 | 64 | 3296 | 1200 | 50000 | 80 |
+| mod3 dE ring mid | mod2 | NEG | 20 | X4 | 50 | 96 | 3296 | 1200 | 50000 | 80 |
+| mod4 dE ring out | mod3 | NEG | 20 | X4 | 20 | 96 | 3296 | 1200 | 50000 | 80 |
+
+共通: `pre_trigger` 4000、`fast_discr_smoothing` SMTH_128、`record_length` 20000。sector の 2 台には side3 mod0 の個別設定(ch9 BL 4096・PZ 10000、ch10 rise 5000)も入れた。
+**取り込まなかったもの:** `start_source`、`gpio_mode`、`start_delay`(カスケードの値)、`waveforms_enabled` は false のまま、TOML の `adc_min` は 0 のまま(同期マークのため)。リングの ch15 はパルサー用に POSITIVE、X1、しきい値 100 を個別設定で残した。
+
+**未確認(ユーザーの配線しだい):**
+- リング 3 枚の割り当ては番号順に置いただけ。side3 のボードとリング位置の対応は、JSON にも Monitor のタブにもシリアルにも残っていない。
+- side3 のピーク(同じ X4): mod1、mod2 は約 4800、**mod3 だけ約 1000**。信号の大きさが違うのでプリアンプごとの差とみている(未確認)。
+- **side3 mod2 の ch0、ch1 は run 6、7 とも信号なし**(run 7 で 4 件と 7 件、E は 10 以下)。dE と E のどちらのテストでも同じ ch なので、検出器ではなく、使った差動 → シングルのコンバータの問題らしい(ユーザーの見立て、未確認)。同じコンバータを使うなら pf-qaq でも出ない。
+- sector ch9 の上書きは本物の調整に見える(ピークは他より約 25 % 高いが FWHM は run 6 で 1.3 %、run 7 で 0.8 %。他は run 6 で 1.5〜2.8 %、run 7 で 0.9〜1.5 %)。ただ dE と E のどちらでも同じなので、検出器でなくプリアンプかボードの ch についている可能性がある。sector の 2 台とも必要かは未確認。
+- **ゲイン変更が 1 ラン効かなかった形跡:** side3 mod0 は run 3 で X4 → run 4 で X1 に変えた記録だが、run 4 のエネルギーの平均は run 5 のちょうど 4.00 倍(ch0 24405 / 6099、ch9 30010 / 7500)。mod1 は変わらず、DAQ の再起動も挟んでいない。原因は未確認。今回リングは X1 → X4 なので、最初のランでピークの位置を確かめる。
+
+### 5.7 デジタイザの配線変更(2026-11-06、ユーザー)
+**§5.6 の表のボード割り当てはこの節で置き換わった。** ユーザーが配線を変更し、link / node と信号の対応を連絡。**ID と SN は変えない**(ユーザー)。SN は DAQ を止めて `caen-toolbox dig1 check` で全 link / node(0〜3 × 0〜3)を読んだ。ほかにボードはない。
+
+| link | node | SN | ID | 信号 | 設定の出どころ | 今までの役割 |
+|---|---|---|---|---|---|---|
+| 0 | 0 | 170 | 2 | E-Sector | side3 mod0 | dE ring in |
+| 1 | 0 | 184 | 1 | dE-Sector | side3 mod0 | 同じ(設定も URL も不変) |
+| 2 | 0 | 147 | 3 | dE-Ring3 | side3 mod3(仮) | dE ring mid |
+| 2 | 1 | 208 | 4 | dE-Ring2 | side3 mod2(仮) | dE ring out |
+| 2 | 2 | 27647(V1725S) | 5 | dE-Ring1 | side3 mod1(仮) | E sector |
+
+- **Ring1/2/3 と Inner/Middle/Outer の対応は不明。** 検出器側の担当者も分からないとの回答で、そのまま使い、解析で決める(ユーザー)。`index` は Ring1 0〜14、Ring2 15〜29、Ring3 30〜44 の通し番号で、ボードをまたぐと半径の順序を意味しない。
+- **信号についていくもの:** `channel_defaults`、`channel_overrides`、`record_length`、vtrace プローブ。**ボードに残すもの:** `start_source`、`gpio_mode`、`start_delay`、`io_level`、`extras`、`event_aggregation`、`coinc_trgout`、波形 OFF。リングの ch15 はパルサー用(POSITIVE、X1、しきい値 100)。旧 mod2 の ch15 だけにあった `RCCR2_SMTH_1` は SN 170 のパルサー用だったので捨てた。
+- **変更したファイル:** `config_nwall_pfqaq.toml`、`channel_map_N_Wall.txt`、`event_def_nwall.json`(E = mod2、dE ring = mod3〜5)、`make_test_run.C`、pf-qaq の `nwall_v1725_pha_{2..5}.json`、`monitor_layout.json`(タブ名のみ)、Grafana の `Rates — N_Wall`(`gen_dashboards.py` で再生成)。ラン 5〜44 はパルサーのみで旧割り当てのまま。元のファイルは pf-qaq の `~/nwall_before_rewire_20261106/`。
+- **S-IN / TRG-OUT のカスケードの順番は変わっていない(ユーザー)。** `start_delay` と `gpio_mode` はそのまま。
+- **確認済み(2026-11-06 17:18):** Reader はそれぞれ想定の `/dev/a3818_*` を保持(source 2 = link 0、1 = link 1、3〜5 = link 2 の node 0〜2)。Configure は全台成功して Reset で Idle に戻した。ch10 の `trap_rise_time_ns` は 5000 → 5008 に丸まる(刻み 16)。`ch_trg_latency` の拒否と `eventaggr` 1023 → 511 と V1725S の CFD レジスタ読み出し失敗(-6)は変更前のログにもある。
+
+**未確認:**
+- **Ring と side3 のボードの対応は番号どおり(Ring N = side3 mod N)に置いただけで、データから決める手がかりもない。** ch0、ch1 の無信号はコンバータの問題らしく(§5.6)、見分けに使えない。ピークの約 1/5(side3 mod3)も、コンバータが原因なら同じ。違うのは `dc_offset`(10 / 20 / 20)、しきい値(20 / 50 / 20)、`input_rise_time_ns`(64 / 96 / 96)だけなので、出発点として Tune Up で Ring ごとに合わせる。
+- **同じコンバータを使うと、どれかの Ring で ch0、ch1 が死ぬ。** 最初のデータで確認し、死んでいれば実験前に交換する。
+- **sector の ch9、ch10 の個別設定が両方のボードに要るか。** ch9 の特徴も dE と E で同じなので、コンバータ側かもしれない。最初のデータで、ボードごとに ch9 の分解能を隣の ch と比べ、悪いボードからは外す。
+- **`start_delay` はパルサーでの測定以降、Si では未確認。** リングのボードが変わったので、Si どうしの時刻は Cf で詰める予定のとおりに確認する。
+
+### 5.8 Ring のノイズで Recorder が追いつかず、再起動でデータを失った(2026-11-06、ラン 45、46)
+**ラン 45(`test`)と 46(`Co60`)は Ring のノイズで合計約 6.5 MHz。** M3 0.47 MHz、M4 3.2 MHz、M5 2.85 MHz、M0 3 万 Hz。M1 は 0、M2 は計 844 イベント(sector はほぼ鳴っていない)。
+
+| 時刻(+02:00) | 起きたこと |
+|---|---|
+| 19:27〜19:38 | ラン 45(687 s)。受信 45.2 億。Recorder はラン中 180 万 ev/s しか書けず、キューは Stop 時に 76 GB |
+| 19:39〜19:44 | ラン 46(303 s)。受信約 20 億。書き込みはまだラン 45 の続きで、キューはピーク 104 GB |
+| 19:44:35 | メモリ枯渇(搭載 251 GB)。OOM killer が `nwall_sink`(RSS 103 GB)を kill。Operator は sink を監視していないので警告なし |
+| 19:44〜19:49 | Stop 後は 330 万 ev/s(約 4.4 GB/min)で排出。残り 85 GB で、完了まであと約 19 分だった |
+| 19:49:04〜20 | DAQ 再起動。SIGTERM のあと `start_daq.sh` が 5 秒待って `kill -9`。キューの 85 GB が消えた |
+
+**結果:**
+- ラン 45: `.delila` は 28.6 億 / 45.2 億(63 %)、62 ファイル。最後の `run0045_0061` はフッターなし。ROOT は未確定の `run_inprogress_1793986014.root`(4.2 GB、読めるかは未確認)。
+- ラン 46: **`.delila` も ROOT も 0。** eLog と MongoDB の「51,913 万イベント、11.9 GB」は、カウンタがリセットされたあとのラン 45 の書き込みを数えたもので、ラン 46 のデータではない。同様にラン 45 の記録(12 億)も Stop 時点の書き込み数で、受信数ではない。
+
+**書き込み速度(ファイルを閉じた時刻とイベント数から、入力は約 650 万/s):**
+
+| 区間 | 入力 | `nwall_sink` | Recorder(`.delila`) |
+|---|---|---|---|
+| ラン 45 | あり | 動作中 | 175 万 ev/s、40 MB/s |
+| ラン 45 と 46 の間 | なし | 動作中 | 317 万 ev/s、73 MB/s |
+| ラン 46 | あり | 動作中 | 175 万 ev/s、40 MB/s |
+| Stop 後 | なし | 停止 | 323 万 ev/s、74 MB/s |
+
+`nwall_sink`(ROOT)は約 106 万 hits/s(10 秒あたりの中央値 1,061 万)。以前の測定 248 万/s(2 ファイル、`root_sink`)より低く、原因は未調査。ROOT と `.delila` は別プロセス、別キュー。sink の有無で Recorder の速度はほぼ変わらない(317 → 323 万)ので、ROOT が `.delila` を遅くしたのではない。Samsung の NVMe で 74 MB/s なのでディスクの限界でもなさそう。入力があると Recorder が約半分に落ちる原因は未調査。
+
+**確認済みの動き:**
+- Stop 後に書き続けるのは設計どおり(`WriterCommand` は順番に処理され、キューは unbounded)。ラン 46 の `DrainAndStart` もキューの後ろに並ぶので、ファイルは混ざらない。
+- **タイマーは原因ではない。** 満了時に `operator.stop()` を呼ぶだけで Stop ボタンと同じ経路、次のランも始めない(`control-panel.component.ts`)。
+- `[operator.backlog_autostop]` と `backlog_hard_limit_mb` は N_Wall の設定で未使用(TODO 68、既定で無効)。
+
+**再現は 2026-11-07 以降(ユーザー):** 6 MHz は異常な状況なので、今回の速度だけで本番の判断はしない。再現時の目安: 入力 6.5 MHz でキューは 2 つ合わせて約 13 GB/分増え、約 17 分でメモリが尽きる。5 分のランなら、Stop 後に `.delila` は約 8 分、ROOT は約 25 分書き続ける。見るもの: レートを段階的に変えたときの速度、Recorder のスレッドごとの CPU。
+
+**未決定(ユーザーに提案中):** ① backlog autostop の有効化(`nwall_sink` は対象外で、OOM はキュー 104 GB のときなので上限は 60 GB 程度。既定の drain タイムアウト 60 秒は短い) ② キューが残っている間の `stop_daq.sh` / `start_daq.sh` の扱い(`kill -9` で無言で失う) ③ キューが残っている間の Start と、ラン記録のイベント数。
+
