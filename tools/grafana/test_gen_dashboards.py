@@ -132,6 +132,40 @@ class ChannelsTest(unittest.TestCase):
         self.assertEqual(len(groups["M1"]), 29)  # 32 - LS01 - LS31 - unused ch31
         self.assertNotIn("M1/Ch31", [c.name for c in groups["M1"]])
 
+    def test_group_dash_means_not_monitored(self):
+        boards = boards_fixture()
+        entries = g.parse_map("0 15 pulser0 -\n1 0 LS01 LS\n", boards)
+        chans = g.build_channels(boards, entries)
+        groups = g.group_channels(chans, entries)
+        self.assertNotIn("-", groups)
+        self.assertNotIn("pulser0", [c.name for cs in groups.values() for c in cs])
+        by_key = {(c.board.module, c.channel): c for c in chans}
+        self.assertFalse(by_key[0, 15].enabled)
+        self.assertTrue(by_key[1, 0].enabled)
+        # Not listed as silent; grey in the grid unless it counts.
+        self.assertNotIn("pulser0", g.silent_sql(chans, "N_Wall"))
+        self.assertIn("('0', '15', false)", g.grid_sql(boards, chans, "N_Wall"))
+
+    def test_panel_widths(self):
+        def groups(**sizes):
+            return {name: [None] * n for name, n in sizes.items()}
+
+        # Three neighbours numbered the same way share a row, in number order.
+        self.assertEqual(
+            g.panel_widths(groups(a=8, dE_Ring3=15, dE_Ring2=15, dE_Ring1=15)),
+            [("a", 12), ("dE_Ring1", 8), ("dE_Ring2", 8), ("dE_Ring3", 8)],
+        )
+        # Half width up to 16 channels, full width above; two boards stay as they were.
+        self.assertEqual(g.panel_widths(groups(a=16, b=17, M0=16, M1=32)),
+                         [("a", 12), ("b", 24), ("M0", 12), ("M1", 24)])
+        # Not three, too many channels, or not neighbours: no shared row.
+        self.assertEqual(g.panel_widths(groups(R1=8, R2=8)), [("R1", 12), ("R2", 12)])
+        self.assertEqual(g.panel_widths(groups(R1=8, R2=8, R3=17)), [("R1", 12), ("R2", 12), ("R3", 24)])
+        self.assertEqual(g.panel_widths(groups(R1=8, R2=8, x=8, R3=8)),
+                         [("R1", 12), ("R2", 12), ("x", 12), ("R3", 12)])
+        self.assertEqual(g.panel_widths(groups(M0=8, M1=8, M2=8, M3=8)),
+                         [("M0", 12), ("M1", 12), ("M2", 12), ("M3", 12)])
+
     def test_slug(self):
         self.assertEqual(g.slug("X730_ThGEM_Test"), "x730-thgem-test")
         self.assertEqual(g.slug("N_Wall"), "n-wall")
@@ -287,6 +321,23 @@ class DashboardTest(AssertBounded, unittest.TestCase):
         self.toml.write_text("[operator]\n")
         with self.assertRaisesRegex(g.GenError, "experiment_name is missing"):
             g.load_config(self.toml)
+
+    def test_rings_share_the_bottom_row_and_the_pulser_has_no_panel(self):
+        self.map.write_text(
+            "0 0 S00 sector\n"
+            "0 1 R30 dE_Ring3\n0 15 pulser0 -\n0 2 R15 dE_Ring2\n0 3 R00 dE_Ring1\n"
+            "1 0 LS01 LS\n"
+        )
+        rc, _, err = self.run_main("--map", str(self.map))
+        self.assertEqual(rc, 0, err)
+        panels = json.loads((self.dash_dir / "rates_n-wall.json").read_text())["panels"]
+        by_title = {p["title"]: p["gridPos"] for p in panels}
+        self.assertFalse([t for t in by_title if t.startswith("-") or "pulser" in t])
+        rings = [by_title[f"dE_Ring{i} (1 ch)"] for i in (1, 2, 3)]
+        self.assertEqual([(r["x"], r["w"]) for r in rings], [(0, 8), (8, 8), (16, 8)])
+        self.assertEqual(len({r["y"] for r in rings}), 1)
+        # "sector" was alone at x=0, w=12: the rings start a new row instead of x=12.
+        self.assertGreater(rings[0]["y"], by_title["sector (1 ch)"]["y"])
 
     def test_generated_dashboard(self):
         rc, out, err = self.run_main("--map", str(self.map))

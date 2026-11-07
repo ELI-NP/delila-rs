@@ -17,6 +17,7 @@ Python 3.11+ standard library only. See tools/grafana/README.md.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import re
@@ -38,6 +39,11 @@ DEFAULT_DS_UID = "P951FEA4DE68E13C5"
 
 # name/group end up inside SQL string literals: no quotes, no spaces.
 NAME_RE = re.compile(r"^[A-Za-z0-9_.+\-/]+$")
+# Group of a channel nobody needs to watch (a pulser input): no panel, never
+# listed as silent, grey in the grid unless it counts.
+NOT_MONITORED = "-"
+# Groups numbered the same way: dE_Ring1, dE_Ring2, dE_Ring3.
+NUMBERED_RE = re.compile(r"(.*?)([0-9]+)")
 INT_RE = re.compile(r"^[0-9]+$")
 
 # Every scan of a measurement is bounded in time: InfluxDB 3 Core refuses
@@ -103,7 +109,7 @@ class Channel:
 
     @property
     def enabled(self) -> bool:
-        return self.channel not in self.board.disabled
+        return self.group != NOT_MONITORED and self.channel not in self.board.disabled
 
 
 # --------------------------------------------------------------------------
@@ -293,13 +299,34 @@ def build_channels(boards: list[Board], entries: list[Entry]) -> list[Channel]:
 
 def group_channels(channels: list[Channel], entries: list[Entry]) -> dict[str, list[Channel]]:
     """Groups in map order (first appearance), then the per-board defaults.
-    A channel that is neither in the map nor enabled is unused: no panel."""
+    A channel that is neither in the map nor enabled is unused: no panel.
+    Nor does a channel in the NOT_MONITORED group get one."""
     listed = {(e.module, e.channel) for e in entries}
-    groups: dict[str, list[Channel]] = {e.group: [] for e in entries}
+    groups: dict[str, list[Channel]] = {e.group: [] for e in entries if e.group != NOT_MONITORED}
     for c in channels:
-        if c.enabled or (c.board.module, c.channel) in listed:
+        if c.group != NOT_MONITORED and (c.enabled or (c.board.module, c.channel) in listed):
             groups.setdefault(c.group, []).append(c)
     return {g: cs for g, cs in groups.items() if cs}
+
+
+def panel_widths(groups: dict[str, list[Channel]]) -> list[tuple[str, int]]:
+    """Display order and width (of 24) of the group panels. Up to 16 channels:
+    half width, two side by side. More: full width. Exactly three neighbours
+    numbered the same way share one row, in number order."""
+
+    def stem(name: str) -> str:
+        m = NUMBERED_RE.fullmatch(name)
+        return m[1] if m else name
+
+    out: list[tuple[str, int]] = []
+    for _, run in itertools.groupby(groups, key=stem):
+        names = list(run)
+        numbered = [NUMBERED_RE.fullmatch(n) for n in names]
+        if len(names) == 3 and all(numbered) and all(len(groups[n]) <= 16 for n in names):
+            out += [(m[0], 8) for m in sorted(numbered, key=lambda m: int(m[2]))]
+        else:
+            out += [(n, 24 if len(groups[n]) > 16 else 12) for n in names]
+    return out
 
 
 def slug(text: str) -> str:
@@ -539,8 +566,8 @@ def grid_panel(pid: int, pos: dict, boards: list[Board], channels: list[Channel]
         "type": "table",
         "title": f"Rate per channel (Hz, mean of the last {GRID_WINDOW} of the time range)",
         "description": "Red = 0 Hz during a run. '-' = no counts and no run going at the end of the time "
-                       "range (Tune Up does not count as a run). Grey 'off' = disabled in the digitizer JSON "
-                       "and no counts. "
+                       "range (Tune Up does not count as a run). Grey 'off' = disabled in the digitizer JSON, "
+                       "or group '-' in the channel map, and no counts. "
                        "Blue shades per decade (10, 100, 1k, 10k Hz), purple >= 100 kHz. "
                        "Columns are channel numbers; names are in the panels below.",
         "gridPos": pos,
@@ -627,13 +654,12 @@ def rates_dashboard(experiment: str, boards: list[Board], channels: list[Channel
                    "gridPos": {"h": 1, "w": 24, "x": 0, "y": y}, "panels": []})
     y += 1
 
-    # Up to 16 channels: half width, two side by side. More: full width,
-    # taller above 32 so the legend table stays readable.
+    # Taller above 32 channels so the legend table stays readable.
     x = row_h = 0
-    for name, chs in groups.items():
-        w = 24 if len(chs) > 16 else 12
+    for name, w in panel_widths(groups):
+        chs = groups[name]
         h = 12 if len(chs) > 32 else 9
-        if x + w > 24:
+        if x + w > 24 or x % w:  # x % w: three in a row must not start beside a half-width panel
             x, y, row_h = 0, y + row_h, 0
         panels.append(timeseries_panel(
             next_id(), f"{name} ({len(chs)} ch)", {"h": h, "w": w, "x": x, "y": y},

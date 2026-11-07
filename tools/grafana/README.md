@@ -58,7 +58,12 @@ not provisioned.
   `run_event` at the end of the time range is a start; Tune Up does not count.
 - Event rate per module (`system_rate.event_rate`), plus a list of the enabled
   channels with no counts in the last minute of a run.
-- One time-series panel per group.
+- One time-series panel per group: half width up to 16 channels, full width
+  above. Exactly three neighbouring groups numbered the same way (`dE_Ring1`,
+  `dE_Ring2`, `dE_Ring3`) share one row, in number order, whatever their order in
+  the map.
+- Group `-` in the map = nobody needs to watch this channel (the pulser inputs):
+  no panel, never listed as silent, grey "off" in the grid unless it counts.
 - Run start/stop markers from `run_event` (filtered to this experiment, without
   Tune Up, which runs as run 0).
 
