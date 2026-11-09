@@ -21,6 +21,9 @@ pub enum AutoStopCause {
     DiskLow,
     /// A file write failed (TODO 69).
     WriteFailure,
+    /// A digitizer stopped taking data: its PLL is not locked, its status
+    /// cannot be read, or its Reader is in Error (TODO 85).
+    DigitizerFault,
 }
 
 /// How far the automatic stop has got.

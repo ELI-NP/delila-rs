@@ -17,11 +17,11 @@ use tracing::{error, info, warn};
 
 use super::state::{next_reconnect_cooldown, state_rank, RECONNECT_INITIAL};
 use super::{
-    caen, check_firmware_match, decoder, devtree, get_enabled_channels_from_config,
+    caen, check_firmware_match, decoder, devtree, get_enabled_channels_from_config, pll,
     poll_dig2_counters, send_arm_command, send_start_command, try_connect_raw, Dig2PollState,
     ReadLoopOutput, ReadLoopRequest, ReaderConfig, ReaderError, ReaderMetrics,
 };
-use crate::common::ComponentState;
+use crate::common::{ComponentState, PllStatus};
 use crate::config::digitizer::{DigitizerConfig, DIG1_COUPLE_LOCAL_BUFFER_SAMPLES};
 
 /// Warn (once per successful apply) when the DIG1 couple memory arbiter is
@@ -88,6 +88,13 @@ pub(crate) fn run(
     let mut last_dig2_poll = Instant::now();
     let mut last_dig2_warn = Instant::now();
     const DIG2_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+    // Clock (PLL) health (TODO 85). `pll_supported` turns false once a
+    // connected board shows it has no status parameter, so a disconnected
+    // board of that kind reports nothing rather than "unreadable".
+    let mut pll_watch = pll::PllWatch::default();
+    let mut pll_supported = true;
+    let mut last_pll_poll: Option<Instant> = None;
 
     loop {
         // Check shutdown flag
@@ -558,6 +565,26 @@ pub(crate) fn run(
                 }
             }
             last_dig2_poll = Instant::now();
+        }
+
+        // Clock (PLL) health, connected or not (TODO 85).
+        if last_pll_poll.is_none_or(|t| t.elapsed() >= pll::POLL_INTERVAL) {
+            let status = match connection.as_ref() {
+                Some(conn) => {
+                    let s = pll::read(conn, config.firmware);
+                    pll_supported = s.is_some();
+                    s
+                }
+                None if pll_supported => Some(PllStatus::Unreadable),
+                None => None,
+            };
+            metrics
+                .pll_status
+                .store(PllStatus::to_u8(status), Ordering::Relaxed);
+            if let Some(changed) = pll_watch.changed(status) {
+                pll::log_change(changed, connection.is_some());
+            }
+            last_pll_poll = Some(Instant::now());
         }
     }
 

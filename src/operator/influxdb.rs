@@ -110,6 +110,10 @@ pub async fn run_writer(config: InfluxDbConfig, state: Arc<AppState>) {
                 "system_rate,module={} total_events={}u,event_rate={},bytes={}u",
                 source_id, metrics.events_processed, metrics.event_rate, metrics.bytes_transferred,
             ));
+            // Clock (PLL) health (TODO 85), boards that report one.
+            if let Some(pll) = metrics.pll {
+                lines.push(pll_line(source_id, pll));
+            }
 
             // Per-channel counts and rates. The rate state is updated for every
             // channel; a line is written only for channels that have counted.
@@ -279,6 +283,18 @@ fn run_event_line(experiment: &str, event: RunEvent) -> String {
         run,
         escape_string_field(kind)
     )
+}
+
+/// `pll,module={m} locked={1|0|-1}i` — 1 locked, 0 not locked, -1 the status
+/// could not be read (TODO 85). Grafana maps the three values to colours.
+fn pll_line(module: u32, status: crate::common::PllStatus) -> String {
+    use crate::common::PllStatus;
+    let locked = match status {
+        PllStatus::Locked => 1,
+        PllStatus::Unlocked => 0,
+        PllStatus::Unreadable => -1,
+    };
+    format!("pll,module={} locked={}i", module, locked)
 }
 
 /// `channel_rate,module={m},channel={c} count={n}u[,rate={hz}]`
@@ -489,6 +505,17 @@ mod tests {
         assert_eq!(
             run_event_line("", RunEvent::Start(1)),
             r#"run_event run=1u,event="start""#
+        );
+    }
+
+    #[test]
+    fn pll_lines() {
+        use crate::common::PllStatus;
+        assert_eq!(pll_line(3, PllStatus::Locked), "pll,module=3 locked=1i");
+        assert_eq!(pll_line(3, PllStatus::Unlocked), "pll,module=3 locked=0i");
+        assert_eq!(
+            pll_line(5, PllStatus::Unreadable),
+            "pll,module=5 locked=-1i"
         );
     }
 

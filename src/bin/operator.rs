@@ -421,6 +421,16 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Digitizer guard (TODO 85) — always on: a source whose PLL stays not
+    // locked / unreadable, or whose Reader stays in Error, during a run →
+    // drain-first stop.
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            delila_rs::operator::digitizer_guard::run_watcher(state).await;
+        });
+    }
+
     // No-event watcher (TODO 78 a): a Running source without new events
     // (e.g. an S-IN slave that never got its start signal) is shown in the UI.
     if app_state.config.no_event_warn_secs > 0 {

@@ -56,6 +56,10 @@ not provisioned.
   a run is red, no counts with no run going is "-", a disabled channel with no
   counts is grey "off", blue gets darker per decade. "A run is going" = the last
   `run_event` at the end of the time range is a start; Tune Up does not count.
+- Digitizer clock (PLL), one thin row per board (`pll.locked`: 1 locked green,
+  0 not locked red, -1 no answer dark red; TODO 85). A board without its PLL
+  lock takes no valid data, and the Operator stops a run when that lasts 10 s.
+  Boards whose firmware has no PLL status (AMax) have no row.
 - Event rate per module (`system_rate.event_rate`), plus a list of the enabled
   channels with no counts in the last minute of a run.
 - One time-series panel per group: half width up to 16 channels, full width

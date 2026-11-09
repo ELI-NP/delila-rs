@@ -10,6 +10,7 @@ pub mod caen;
 pub mod caen_legacy;
 pub mod decoder;
 mod parallel_decode;
+mod pll;
 mod read_loop_dig1;
 mod read_loop_dig2;
 mod state;
@@ -500,7 +501,7 @@ use crate::common::{
     ComponentState, EventData as CommonEventData, Message, Waveform as CommonWaveform,
 };
 use futures::SinkExt;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -1106,6 +1107,9 @@ pub struct ReaderMetrics {
     /// messages so the Recorder's stale-EOS filter matches instead of
     /// discarding every real EOS (TODO 58 C1 — run_number was hardcoded 0).
     pub current_run: AtomicU32,
+    /// Clock (PLL) health, [`crate::common::PllStatus::to_u8`] encoding,
+    /// written by the read loop every [`pll::POLL_INTERVAL`] (TODO 85).
+    pub pll_status: AtomicU8,
 }
 
 impl Default for ReaderMetrics {
@@ -1121,6 +1125,7 @@ impl Default for ReaderMetrics {
             per_channel_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             filtered_events: AtomicU64::new(0),
             current_run: AtomicU32::new(0),
+            pll_status: AtomicU8::new(0),
         }
     }
 }
@@ -1250,6 +1255,7 @@ impl CommandHandlerExt for ReaderCommandExt {
             unwritten_events: 0,
             disk_free_bytes: None,
             disk_level: 0,
+            pll: crate::common::PllStatus::from_u8(self.metrics.pll_status.load(Ordering::Relaxed)),
             event_rate: self.rate_tracker.get_rate(),
             data_rate: 0.0,
             trigger_loss_count: trigger_loss,

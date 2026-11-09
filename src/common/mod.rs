@@ -131,6 +131,55 @@ pub struct ComponentMetrics {
     /// `disk_space::disk_level`.
     #[serde(default)]
     pub disk_level: u8,
+    /// Clock (PLL) health of the digitizer (TODO 85). Readers only; `None`
+    /// when the firmware offers no PLL status. The Operator stops the run
+    /// when a source stays `Unlocked` or `Unreadable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pll: Option<PllStatus>,
+}
+
+/// Clock (PLL) health of a digitizer (TODO 85). A digitizer whose PLL is not
+/// locked does not take valid data (user, 2026-11-09): pf-qaq lost three
+/// boards for 5 h on 2026-11-08 to a loose clock cable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PllStatus {
+    /// The PLL is locked to its reference clock.
+    Locked,
+    /// The digitizer reports its PLL not locked (or, DIG1, an unlock since
+    /// the last read: the flag is sticky).
+    Unlocked,
+    /// The status could not be read: the digitizer is not connected or does
+    /// not answer — what a board whose clock disappeared usually does.
+    Unreadable,
+}
+
+impl PllStatus {
+    /// Encoding for an atomic: 0 = no status, 1 = Locked, 2 = Unlocked,
+    /// 3 = Unreadable.
+    pub fn to_u8(status: Option<PllStatus>) -> u8 {
+        match status {
+            None => 0,
+            Some(PllStatus::Locked) => 1,
+            Some(PllStatus::Unlocked) => 2,
+            Some(PllStatus::Unreadable) => 3,
+        }
+    }
+
+    /// Inverse of [`PllStatus::to_u8`]; unknown codes read as no status.
+    pub fn from_u8(code: u8) -> Option<PllStatus> {
+        match code {
+            1 => Some(PllStatus::Locked),
+            2 => Some(PllStatus::Unlocked),
+            3 => Some(PllStatus::Unreadable),
+            _ => None,
+        }
+    }
+
+    /// Whether the digitizer can take valid data.
+    pub fn is_ok(self) -> bool {
+        self == PllStatus::Locked
+    }
 }
 
 /// Flag bit definitions for event status
@@ -757,6 +806,43 @@ impl MessageHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pll_status_survives_the_atomic_encoding() {
+        for s in [
+            None,
+            Some(PllStatus::Locked),
+            Some(PllStatus::Unlocked),
+            Some(PllStatus::Unreadable),
+        ] {
+            assert_eq!(PllStatus::from_u8(PllStatus::to_u8(s)), s);
+        }
+        assert_eq!(PllStatus::from_u8(200), None);
+        assert!(PllStatus::Locked.is_ok());
+        assert!(!PllStatus::Unlocked.is_ok());
+        assert!(!PllStatus::Unreadable.is_ok());
+    }
+
+    #[test]
+    fn pll_status_is_snake_case_and_optional_in_metrics_json() {
+        let m = ComponentMetrics {
+            pll: Some(PllStatus::Unreadable),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&m).expect("json");
+        assert!(json.contains("\"pll\":\"unreadable\""), "{json}");
+
+        // Components without a PLL omit the field, and older JSON without
+        // it still parses (Operator and Reader may differ by one build).
+        let none = serde_json::to_string(&ComponentMetrics::default()).expect("json");
+        assert!(!none.contains("pll"), "{none}");
+        let old: ComponentMetrics = serde_json::from_str(
+            r#"{"events_processed":1,"bytes_transferred":0,"queue_size":0,
+                "queue_max":0,"event_rate":0.0,"data_rate":0.0}"#,
+        )
+        .expect("old metrics json");
+        assert_eq!(old.pll, None);
+    }
 
     #[test]
     fn event_data_roundtrip() {

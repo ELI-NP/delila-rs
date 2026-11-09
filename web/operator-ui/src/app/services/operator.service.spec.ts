@@ -208,6 +208,27 @@ describe('OperatorService', () => {
       expect(service.stalledSources()).toEqual([{ name: 'Reader-0', seconds: 3 }]);
     });
 
+    it('should count sources whose PLL is not locked (TODO 85)', () => {
+      const src = (name: string, pll?: 'locked' | 'unlocked' | 'unreadable'): ComponentStatus => ({
+        ...mockComponentStatus,
+        name,
+        metrics: { ...mockComponentStatus.metrics!, pll },
+      });
+
+      service.status.set({ ...mockSystemStatus, components: [src('A', 'locked'), src('B')] });
+      expect(service.sourceSummary().pllKnown).toBe(1);
+      expect(service.sourceSummary().pllBad).toBe(0);
+      expect(service.sourceSummary().hasError).toBeFalse();
+
+      service.status.set({
+        ...mockSystemStatus,
+        components: [src('A', 'locked'), src('B', 'unlocked'), src('C', 'unreadable')],
+      });
+      expect(service.sourceSummary().pllKnown).toBe(3);
+      expect(service.sourceSummary().pllBad).toBe(2);
+      expect(service.sourceSummary().hasError).toBeTrue();
+    });
+
     it('should expose the automatic stop notice from the status (TODO 84)', () => {
       service.status.set(mockSystemStatus);
       expect(service.autoStop()).toBeNull();

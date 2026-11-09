@@ -13,7 +13,7 @@ import gen_dashboards as g
 REPO = Path(__file__).resolve().parents[2]
 DASH_DIR = REPO / "docker/grafana/provisioning/dashboards/json"
 
-MEASUREMENTS = r"(?:system_rate|channel_rate|backlog|disk|run_event)"
+MEASUREMENTS = r"(?:system_rate|channel_rate|backlog|disk|run_event|pll)"
 SCAN = re.compile(rf"\b(?:FROM|JOIN)\s+{MEASUREMENTS}\b")
 # A scan directly followed by a time bound on the dashboard's time range
 # (InfluxDB 3 Core refuses queries over > 432 parquet files).
@@ -201,6 +201,15 @@ class SqlTest(AssertBounded, unittest.TestCase):
         self.assertIn("WHEN module = '2' AND channel = '1' THEN 'X'", sql)
         self.assertIn("WHEN '2' THEN 'M5 B'", g.module_rate_sql([b]))
 
+    def test_pll_sql_names_the_boards_and_keeps_the_worst_value(self):
+        sql = g.pll_sql(self.boards)
+        self.assertBounded(sql)
+        self.assertIn("FROM pll", sql)
+        # MIN over a bin: one unlocked (0) or unreadable (-1) sample shows.
+        self.assertIn("MIN(locked)", sql)
+        self.assertIn("WHEN '0' THEN 'M0 PHA1-Si0'", sql)
+        self.assertIn("module IN ('0', '1')", sql)
+
     def test_grid_sql(self):
         sql = g.grid_sql(self.boards, self.chans, "N_Wall")
         self.assertBounded(sql)
@@ -356,6 +365,13 @@ class DashboardTest(AssertBounded, unittest.TestCase):
         self.assertEqual(panels[0]["fieldConfig"]["defaults"]["custom"]["cellOptions"]["type"], "color-background")
         self.assertEqual(panels[0]["fieldConfig"]["defaults"]["thresholds"]["steps"][0]["color"], "red")
         self.assertIn(("timeseries", "Event rate per module (Hz)"), types)
+        pll = next(p for p in panels if p["type"] == "state-timeline")
+        self.assertEqual(pll["title"], "Digitizer clock (PLL)")
+        mapping = pll["fieldConfig"]["defaults"]["mappings"][0]["options"]
+        self.assertEqual(mapping["1"]["text"], "locked")
+        self.assertEqual(mapping["0"]["text"], "NOT LOCKED")
+        self.assertEqual(mapping["-1"]["text"], "no answer")
+        self.assertEqual(mapping["0"]["color"], "red")
         self.assertTrue(any(t == "table" and title.startswith("Silent channels") for t, title in types))
         group_titles = [title for t, title in types[3:] if t == "timeseries"]
         self.assertEqual(group_titles, ["dE_inner (1 ch)", "LS (2 ch)", "M0 (15 ch)", "M1 (28 ch)"])

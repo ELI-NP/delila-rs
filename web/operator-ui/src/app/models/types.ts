@@ -39,7 +39,12 @@ export interface ComponentMetrics {
   queue_bytes_peak?: number;
   /** 0 = ok, 1 = soft watermark exceeded, 2 = hard (drain-first stop) */
   backlog_level?: number;
+  /** Digitizer clock (PLL) health, Readers only; absent when the firmware has none (TODO 85) */
+  pll?: PllStatus;
 }
+
+/** Digitizer clock (PLL) health (TODO 85). */
+export type PllStatus = 'locked' | 'unlocked' | 'unreadable';
 
 // Status of a single component
 export interface ComponentStatus {
@@ -113,7 +118,7 @@ export interface SystemStatus {
 
 /** A run the Operator stopped on its own (backlog autostop / run guard, TODO 84) */
 export interface AutoStopNotice {
-  cause: 'rate_too_high' | 'disk_low' | 'write_failure';
+  cause: 'rate_too_high' | 'disk_low' | 'write_failure' | 'digitizer_fault';
   /** stopping = sources stopped, queued data still being written */
   phase: 'stopping' | 'stopped' | 'incomplete';
   run_number?: number;

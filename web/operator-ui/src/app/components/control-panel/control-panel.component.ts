@@ -185,6 +185,13 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
                     their thresholds or disable them before starting again.
                   </span>
                 }
+                @if (a.cause === 'digitizer_fault' && a.phase !== 'stopping') {
+                  <span class="stall-hint">
+                    Check the clock cable (CLK-IN daisy chain) and the PLL LOCK LED of the boards
+                    named above. A board that stopped answering usually needs a crate power cycle,
+                    then a DAQ restart, before the next run.
+                  </span>
+                }
               </div>
               @if (a.phase !== 'stopping') {
                 <button
@@ -592,6 +599,8 @@ export class ControlPanelComponent {
         return `${run} stopped automatically: disk nearly full`;
       case 'write_failure':
         return `${run} stopped: writing to disk failed`;
+      case 'digitizer_fault':
+        return `${run} stopped automatically: a digitizer stopped working`;
     }
   }
 

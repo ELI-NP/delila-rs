@@ -63,6 +63,25 @@ describe('ControlPanelComponent: automatic stop banner (TODO 84)', () => {
     expect(banner(el)).toBeNull();
   });
 
+  it('names a digitizer that stopped working and says what to check (TODO 85)', () => {
+    const b = banner(
+      render({
+        ...base,
+        auto_stop: {
+          ...notice,
+          cause: 'digitizer_fault',
+          phase: 'stopped',
+          reason: 'PHA1-V1725-dE-Ring3: clock lost (PLL not locked) for 10 s',
+        },
+      }).nativeElement,
+    );
+    const text = b!.textContent ?? '';
+    expect(text).toContain('Run 45 stopped automatically: a digitizer stopped working');
+    expect(text).toContain('PHA1-V1725-dE-Ring3: clock lost (PLL not locked) for 10 s');
+    expect(text).toContain('All queued data was written; the files are complete.');
+    expect(text).toContain('clock cable');
+  });
+
   it('names a write failure', () => {
     const b = banner(
       render({ ...base, auto_stop: { ...notice, cause: 'write_failure', phase: 'stopped' } })

@@ -805,6 +805,7 @@ impl CommandHandlerExt for RecorderCommandExt {
             unwritten_events: stats.unwritten_events,
             disk_free_bytes,
             disk_level,
+            pll: None,
         })
     }
 }

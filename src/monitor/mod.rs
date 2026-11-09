@@ -1157,6 +1157,7 @@ impl CommandHandlerExt for MonitorCommandExt {
             unwritten_events: 0,
             disk_free_bytes: None,
             disk_level: 0,
+            pll: None,
             event_rate: 0.0, // Will be calculated in Phase 2
             data_rate: 0.0,
             trigger_loss_count: 0,

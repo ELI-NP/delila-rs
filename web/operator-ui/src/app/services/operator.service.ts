@@ -68,11 +68,16 @@ export class OperatorService {
   );
   readonly sourceSummary = computed(() => {
     const sources = this.sourceComponents();
+    // Clock (PLL) health (TODO 85): boards that report one, and those not locked.
+    const pll = sources.map((c) => c.metrics?.pll).filter((p) => p !== undefined);
+    const pllBad = pll.filter((p) => p !== 'locked').length;
     return {
       total: sources.length,
       online: sources.filter((c) => c.online).length,
-      hasError: sources.some((c) => c.state === 'Error' || !c.online),
+      hasError: sources.some((c) => c.state === 'Error' || !c.online) || pllBad > 0,
       totalRate: sources.reduce((sum, c) => sum + (c.metrics?.event_rate ?? 0), 0),
+      pllKnown: pll.length,
+      pllBad,
     };
   });
 

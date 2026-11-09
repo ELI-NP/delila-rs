@@ -7,6 +7,7 @@ pub mod auto_stop;
 pub mod backlog_watch;
 mod client;
 pub mod command_ext;
+pub mod digitizer_guard;
 mod digitizer_repository;
 pub mod elog;
 mod event_builder_repository;

@@ -399,6 +399,21 @@ def module_rate_sql(boards: list[Board]) -> str:
     )
 
 
+def pll_sql(boards: list[Board]) -> str:
+    """Digitizer clock (PLL) per board (TODO 85): 1 locked, 0 not locked, -1 no
+    answer. MIN over a bin, so one bad sample is not averaged away."""
+    tags = ", ".join(lit(b.tag) for b in boards)
+    return (
+        "SELECT $__dateBin(time) AS time, MIN(locked) AS locked,\n"
+        f"  {board_case(boards)} AS board\n"
+        "FROM pll\n"
+        f"WHERE {RANGE}\n"
+        f"  AND module IN ({tags})\n"
+        "GROUP BY 1, module\n"
+        "ORDER BY 1"
+    )
+
+
 def run_state(experiment: str) -> str:
     """A one-row table: `running` = a run was going at the end of the dashboard's
     time range, that is, the last run start/stop by then is a start. Tune Up (run 0)
@@ -601,6 +616,39 @@ def grid_panel(pid: int, pos: dict, boards: list[Board], channels: list[Channel]
     }
 
 
+def pll_panel(pid: int, pos: dict, boards: list[Board], uid: str) -> dict:
+    return {
+        "id": pid,
+        "type": "state-timeline",
+        "title": "Digitizer clock (PLL)",
+        "description": "Per board: green = PLL locked, red = NOT LOCKED or the board does not answer. "
+                       "A board without its PLL lock takes no valid data; the Operator stops a run when "
+                       "this lasts 10 s (TODO 85). Check the CLK-IN daisy-chain cable first. Boards whose "
+                       "firmware reports no PLL status have no row.",
+        "interval": MIN_INTERVAL,
+        "gridPos": pos,
+        "datasource": ds_ref(uid),
+        "fieldConfig": {
+            "defaults": {
+                "displayName": "${__field.labels.board}",
+                "color": {"mode": "thresholds"},
+                "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": None},
+                                                             {"color": "green", "value": 1}]},
+                "mappings": [{"type": "value", "options": {
+                    "1": {"text": "locked", "color": "green", "index": 0},
+                    "0": {"text": "NOT LOCKED", "color": "red", "index": 1},
+                    "-1": {"text": "no answer", "color": "dark-red", "index": 2},
+                }}],
+                "custom": {"fillOpacity": 80, "lineWidth": 0},
+            },
+            "overrides": [],
+        },
+        "options": {"showValue": "never", "mergeValues": True, "rowHeight": 0.8,
+                    "legend": {"showLegend": False}, "tooltip": {"mode": "single"}},
+        "targets": [target(pll_sql(boards), "time_series", uid)],
+    }
+
+
 def silent_panel(pid: int, pos: dict, channels: list[Channel], uid: str, experiment: str) -> dict:
     return {
         "id": pid,
@@ -644,6 +692,10 @@ def rates_dashboard(experiment: str, boards: list[Board], channels: list[Channel
     grid_h = max(5, -(-(120 + 34 * len(boards)) // 38))
     panels.append(grid_panel(next_id(), {"h": grid_h, "w": 24, "x": 0, "y": 0}, boards, channels, uid, experiment))
     y = grid_h
+    # One thin row per board (TODO 85).
+    pll_h = max(3, -(-(40 + 22 * len(boards)) // 38))
+    panels.append(pll_panel(next_id(), {"h": pll_h, "w": 24, "x": 0, "y": y}, boards, uid))
+    y += pll_h
     panels.append(timeseries_panel(
         next_id(), "Event rate per module (Hz)", {"h": 9, "w": 16, "x": 0, "y": y},
         [target(module_rate_sql(boards), "time_series", uid)], uid, "Hz", "${__field.labels.board}",

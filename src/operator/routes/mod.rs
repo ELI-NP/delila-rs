@@ -362,6 +362,7 @@ impl AppState {
         SystemState,
         ComponentState,
         ComponentMetrics,
+        crate::common::PllStatus,
         ConfigureRequest,
         StartRequest,
         ApiResponse,

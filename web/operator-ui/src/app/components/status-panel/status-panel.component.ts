@@ -5,7 +5,7 @@ import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { OperatorService } from '../../services/operator.service';
-import { ComponentState } from '../../models/types';
+import { ComponentState, PllStatus } from '../../models/types';
 
 @Component({
   selector: 'app-status-panel',
@@ -30,6 +30,20 @@ import { ComponentState } from '../../models/types';
                 · {{ formatRate(operator.sourceSummary().totalRate) }}
               }
             </span>
+            @if (operator.sourceSummary().pllKnown > 0) {
+              <span
+                class="pll-summary"
+                data-testid="pll-summary"
+                [class.pll-bad]="operator.sourceSummary().pllBad > 0"
+                matTooltip="Digitizer clock (PLL). A board without its PLL lock takes no valid data; the Operator stops a run when this lasts 10 s."
+              >
+                @if (operator.sourceSummary().pllBad > 0) {
+                  PLL {{ operator.sourceSummary().pllBad }} not locked
+                } @else {
+                  PLL OK
+                }
+              </span>
+            }
           </div>
           @if (readersExpanded()) {
             <mat-list dense>
@@ -41,6 +55,9 @@ import { ComponentState } from '../../models/types';
                   <span matListItemTitle>{{ component.name }}</span>
                   <span matListItemLine>
                     {{ component.state }}
+                    @if (component.metrics?.pll; as pll) {
+                      <span class="pll-chip" data-testid="pll-chip" [class.pll-bad]="pll !== 'locked'">{{ pllLabel(pll) }}</span>
+                    }
                     @if (component.metrics && component.metrics.events_processed > 0) {
                       <span class="metrics-inline">
                         · {{ formatEvents(component.metrics.events_processed) }}
@@ -159,6 +176,21 @@ import { ComponentState } from '../../models/types';
       color: #ff9800;
       font-weight: 500;
     }
+    .pll-summary,
+    .pll-chip {
+      margin-left: 8px;
+      padding: 0 6px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #2e7d32;
+      background: rgba(76, 175, 80, 0.12);
+    }
+    .pll-summary.pll-bad,
+    .pll-chip.pll-bad {
+      color: #fff;
+      background: #f44336;
+    }
   `,
 })
 export class StatusPanelComponent {
@@ -173,6 +205,17 @@ export class StatusPanelComponent {
         untracked(() => this.readersExpanded.set(true));
       }
     });
+  }
+
+  pllLabel(pll: PllStatus): string {
+    switch (pll) {
+      case 'locked':
+        return 'PLL';
+      case 'unlocked':
+        return 'PLL NOT LOCKED';
+      case 'unreadable':
+        return 'PLL ?';
+    }
   }
 
   getStateColor(state: ComponentState, online: boolean): string {
