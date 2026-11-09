@@ -7,7 +7,7 @@
 //
 // Board layout (config/channel_map_N_Wall.txt):
 //   module 0 VX2730: ch0 beam (1/100 of the RF), ch1-7 LaBr3, ch8-31 LS
-//   module 1 dE sector ch0-15, module 2 E sector ch0-15,
+//   module 1 E sector ch0-15, module 2 dE sector ch0-15,
 //   modules 3, 4, 5 dE Ring3, Ring2, Ring1 ch0-14 (ch15 pulser)
 //
 // What is in it (rates per second of data time):
@@ -70,8 +70,8 @@ void make_test_run(const char* out = "nwall_test.root", double seconds = 2.0,
     const double E = rng.Uniform(1000, 20000);
     const double band = rng.Rndm() < 0.7 ? 1.0 : 3.5;  // "protons" and "alphas"
     const double dE = band * 2.0e6 / (E + 2000.0) + rng.Gaus(0, 60);
-    hits.push_back({2, static_cast<UChar_t>(sec), clamp16(E), 0, tsi + rng.Gaus(0, 3)});
-    hits.push_back({1, static_cast<UChar_t>(sec), clamp16(dE), 0, tsi + rng.Gaus(0, 3)});
+    hits.push_back({1, static_cast<UChar_t>(sec), clamp16(E), 0, tsi + rng.Gaus(0, 3)});
+    hits.push_back({2, static_cast<UChar_t>(sec), clamp16(dE), 0, tsi + rng.Gaus(0, 3)});
     hits.push_back({static_cast<UChar_t>(5 - ring / 15), static_cast<UChar_t>(ring % 15),
                     clamp16(dE * rng.Uniform(0.9, 1.1)), 0, tsi + rng.Gaus(0, 3)});
     const double u = rng.Rndm();

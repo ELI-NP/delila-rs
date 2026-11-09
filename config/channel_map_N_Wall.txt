@@ -23,10 +23,12 @@
 # - '#' starts a comment; blank lines are ignored.
 #
 # Boards and signals: user's cabling of 2026-11-06, serial numbers by caen-toolbox.
-# Module numbers stay with the serial number: 0 VX2730, 1 dE sector (SN 184),
-# 2 E sector (SN 170), 3 dE Ring3 (SN 147), 4 dE Ring2 (SN 208), 5 dE Ring1
-# (SN 27647). Runs 5-44 (pulser only, no Si) had modules 2-4 = rings in/mid/out
-# and module 5 = E sector. Which of Ring1/2/3 is inner, middle or outer is not
+# Module numbers stay with the serial number: 0 VX2730, 1 E sector (SN 184),
+# 2 dE sector (SN 170), 3 dE Ring3 (SN 147), 4 dE Ring2 (SN 208), 5 dE Ring1
+# (SN 27647). Runs 45-57 were taken with modules 1 and 2 the other way round
+# (1 dE, 2 E; corrected by the user 2026-11-07): their events trees trigger on
+# the dE sector. Runs 5-44 (pulser only, no Si) had modules 2-4 = rings
+# in/mid/out and module 5 = E sector. Which of Ring1/2/3 is inner, middle or outer is not
 # known (user, 2026-11-06): the analysis decides, so the running index says
 # nothing about radius across boards. VX2730: beam 0, LaBr3 1-7, LS 8-31 (user;
 # may change). The ring / sector order inside a board is assumed to follow the
@@ -68,39 +70,39 @@
 0   29  LS22      LS         LS     -       -
 0   30  LS23      LS         LS     -       -
 0   31  LS24      LS         LS     -       -
-1   0   dE_S00    dE_sector  dE     sector  0
-1   1   dE_S01    dE_sector  dE     sector  1
-1   2   dE_S02    dE_sector  dE     sector  2
-1   3   dE_S03    dE_sector  dE     sector  3
-1   4   dE_S04    dE_sector  dE     sector  4
-1   5   dE_S05    dE_sector  dE     sector  5
-1   6   dE_S06    dE_sector  dE     sector  6
-1   7   dE_S07    dE_sector  dE     sector  7
-1   8   dE_S08    dE_sector  dE     sector  8
-1   9   dE_S09    dE_sector  dE     sector  9
-1   10  dE_S10    dE_sector  dE     sector  10
-1   11  dE_S11    dE_sector  dE     sector  11
-1   12  dE_S12    dE_sector  dE     sector  12
-1   13  dE_S13    dE_sector  dE     sector  13
-1   14  dE_S14    dE_sector  dE     sector  14
-1   15  dE_S15    dE_sector  dE     sector  15
+1   0   E_S00     E_sector   E      sector  0
+1   1   E_S01     E_sector   E      sector  1
+1   2   E_S02     E_sector   E      sector  2
+1   3   E_S03     E_sector   E      sector  3
+1   4   E_S04     E_sector   E      sector  4
+1   5   E_S05     E_sector   E      sector  5
+1   6   E_S06     E_sector   E      sector  6
+1   7   E_S07     E_sector   E      sector  7
+1   8   E_S08     E_sector   E      sector  8
+1   9   E_S09     E_sector   E      sector  9
+1   10  E_S10     E_sector   E      sector  10
+1   11  E_S11     E_sector   E      sector  11
+1   12  E_S12     E_sector   E      sector  12
+1   13  E_S13     E_sector   E      sector  13
+1   14  E_S14     E_sector   E      sector  14
+1   15  E_S15     E_sector   E      sector  15
 
-2   0   E_S00     E_sector   E      sector  0
-2   1   E_S01     E_sector   E      sector  1
-2   2   E_S02     E_sector   E      sector  2
-2   3   E_S03     E_sector   E      sector  3
-2   4   E_S04     E_sector   E      sector  4
-2   5   E_S05     E_sector   E      sector  5
-2   6   E_S06     E_sector   E      sector  6
-2   7   E_S07     E_sector   E      sector  7
-2   8   E_S08     E_sector   E      sector  8
-2   9   E_S09     E_sector   E      sector  9
-2   10  E_S10     E_sector   E      sector  10
-2   11  E_S11     E_sector   E      sector  11
-2   12  E_S12     E_sector   E      sector  12
-2   13  E_S13     E_sector   E      sector  13
-2   14  E_S14     E_sector   E      sector  14
-2   15  E_S15     E_sector   E      sector  15
+2   0   dE_S00    dE_sector  dE     sector  0
+2   1   dE_S01    dE_sector  dE     sector  1
+2   2   dE_S02    dE_sector  dE     sector  2
+2   3   dE_S03    dE_sector  dE     sector  3
+2   4   dE_S04    dE_sector  dE     sector  4
+2   5   dE_S05    dE_sector  dE     sector  5
+2   6   dE_S06    dE_sector  dE     sector  6
+2   7   dE_S07    dE_sector  dE     sector  7
+2   8   dE_S08    dE_sector  dE     sector  8
+2   9   dE_S09    dE_sector  dE     sector  9
+2   10  dE_S10    dE_sector  dE     sector  10
+2   11  dE_S11    dE_sector  dE     sector  11
+2   12  dE_S12    dE_sector  dE     sector  12
+2   13  dE_S13    dE_sector  dE     sector  13
+2   14  dE_S14    dE_sector  dE     sector  14
+2   15  dE_S15    dE_sector  dE     sector  15
 
 3   0   dE_R30    dE_Ring3   dE     ring    30
 3   1   dE_R31    dE_Ring3   dE     ring    31

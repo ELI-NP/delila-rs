@@ -2,8 +2,8 @@
 #
 # TODO 73 §3.1, TODO 79 §5.5-5.6. Six boards:
 #   module 0 : VX2730 DPP-PSD (master)   beam/100 ch0, LaBr3 ch1-7, LS ch8-31
-#   module 1 : V1725  DPP-PHA  SN 184    dE sector 0-15
-#   module 2 : V1725  DPP-PHA  SN 170    E sector 0-15
+#   module 1 : V1725  DPP-PHA  SN 184    E sector 0-15
+#   module 2 : V1725  DPP-PHA  SN 170    dE sector 0-15
 #   module 3 : V1725  DPP-PHA  SN 147    dE Ring3 (ch0-14), ch15 = pulser
 #   module 4 : V1725  DPP-PHA  SN 208    dE Ring2 (ch0-14), ch15 = pulser
 #   module 5 : V1725S DPP-PHA  SN 27647  dE Ring1 (ch0-14), ch15 = pulser
@@ -14,7 +14,8 @@
 # Runs 1-4 of N_Wall (2026-10/11, the VX2730 alone, from config_thgem_pfqaq.toml)
 # have the VX2730 as module 1; from run 5 on it is module 0.
 # Runs 5-44 (pulser only, no Si) were taken with modules 2-4 = rings in/mid/out and
-# module 5 = E sector; these roles apply from run 45 on.
+# module 5 = E sector; these roles apply from run 45 on, except that runs 45-57 had
+# modules 1 and 2 named the other way round (1 dE, 2 E; corrected by the user 2026-11-07).
 #
 # --- VX2730 ---------------------------------------------------------------
 # Direct 1 GbE on eno1 (172.18.4.50/22) <-> board 172.18.4.57. Its JSON is the
@@ -24,8 +25,8 @@
 #
 # --- V1725 x5 on the A3818 (4 optical links) ------------------------------
 # Cabling (user, 2026-11-06; serials by caen-toolbox the same day, ROC 04.25, DPP-PHA on all):
-#   link 0 node 0 = module 2   V1725  PID 170    AMC 139.10  b5614   E sector
-#   link 1 node 0 = module 1   V1725  PID 184    AMC 139.10  b5614   dE sector
+#   link 0 node 0 = module 2   V1725  PID 170    AMC 139.10  b5614   dE sector
+#   link 1 node 0 = module 1   V1725  PID 184    AMC 139.10  b5614   E sector
 #   link 2 node 0 = module 3   V1725  PID 147    AMC 139.10  b5614   dE Ring3
 #   link 2 node 1 = module 4   V1725  PID 208    AMC 139.10  b5614   dE Ring2
 #   link 2 node 2 = module 5   V1725S PID 27647  AMC 139.137 b7110   dE Ring1
@@ -123,7 +124,7 @@ pipeline_order = 1
 # would be dropped in the Reader otherwise.
 [[network.sources]]
 id = 1
-name = "PHA1-V1725-dE-Sector"
+name = "PHA1-V1725-E-Sector"
 type = "pha1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
 config_file = "config/digitizers/nwall_v1725_pha_1.json"
@@ -132,7 +133,7 @@ time_step_ns = 4.0
 
 [[network.sources]]
 id = 2
-name = "PHA1-V1725-E-Sector"
+name = "PHA1-V1725-dE-Sector"
 type = "pha1"
 digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
 config_file = "config/digitizers/nwall_v1725_pha_2.json"

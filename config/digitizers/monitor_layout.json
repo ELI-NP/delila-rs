@@ -40,7 +40,7 @@
           "channelId": 0,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -52,7 +52,7 @@
           "channelId": 1,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -64,7 +64,7 @@
           "channelId": 2,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -76,7 +76,7 @@
           "channelId": 3,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -88,7 +88,7 @@
           "channelId": 4,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -100,7 +100,7 @@
           "channelId": 5,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -112,7 +112,7 @@
           "channelId": 6,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -124,7 +124,7 @@
           "channelId": 7,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -136,7 +136,7 @@
           "channelId": 8,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -148,7 +148,7 @@
           "channelId": 9,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -160,7 +160,7 @@
           "channelId": 10,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -172,7 +172,7 @@
           "channelId": 11,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -184,7 +184,7 @@
           "channelId": 12,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -196,7 +196,7 @@
           "channelId": 13,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -208,7 +208,7 @@
           "channelId": 14,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -220,7 +220,7 @@
           "channelId": 15,
           "xRange": {
             "min": 0,
-            "max": 2295.809523809524
+            "max": 15606.224404610026
           },
           "yRange": "auto",
           "isLocked": true,
@@ -248,7 +248,7 @@
           "channelId": 16,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -260,7 +260,7 @@
           "channelId": 17,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -272,7 +272,7 @@
           "channelId": 18,
           "xRange": {
             "min": 0,
-            "max": 2705.3864541832672
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -284,7 +284,7 @@
           "channelId": 19,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -296,7 +296,7 @@
           "channelId": 20,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -308,7 +308,7 @@
           "channelId": 21,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -320,7 +320,7 @@
           "channelId": 22,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -332,7 +332,7 @@
           "channelId": 23,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -344,7 +344,7 @@
           "channelId": 24,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -356,7 +356,7 @@
           "channelId": 25,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -368,7 +368,7 @@
           "channelId": 26,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -380,7 +380,7 @@
           "channelId": 27,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -392,7 +392,7 @@
           "channelId": 28,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -404,7 +404,7 @@
           "channelId": 29,
           "xRange": {
             "min": 0,
-            "max": 12220.791131352673
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -416,7 +416,7 @@
           "channelId": 30,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -428,7 +428,7 @@
           "channelId": 31,
           "xRange": {
             "min": 0,
-            "max": 5611.592058003098
+            "max": 1632.69104801069
           },
           "yRange": "auto",
           "isLocked": true,
@@ -436,317 +436,7 @@
           "logScale": true
         }
       ],
-      "lastModifiedCellIndex": 2
-    },
-    {
-      "id": "eac37aab-465c-4e17-ba62-534e9ad72d1c",
-      "name": "dE Sector (mod1)",
-      "gridRows": 4,
-      "gridCols": 4,
-      "xAxisLabel": "Channel",
-      "histogramType": "energy",
-      "lastModifiedCellIndex": 0,
-      "cells": [
-        {
-          "sourceId": 1,
-          "channelId": 0,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 1,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 2,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 3,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 4,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 5,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 6,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 7,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 8,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 9,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 10,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 11,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 12,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 13,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 14,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 1,
-          "channelId": 15,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        }
-      ]
-    },
-    {
-      "id": "646d125e-16fd-466f-8358-00c0eff045df",
-      "name": "E Sector (mod2)",
-      "gridRows": 4,
-      "gridCols": 4,
-      "xAxisLabel": "Channel",
-      "histogramType": "energy",
-      "lastModifiedCellIndex": 0,
-      "cells": [
-        {
-          "sourceId": 2,
-          "channelId": 0,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 1,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 2,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 3,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 4,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 5,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 6,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 7,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 8,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 9,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 10,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 11,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 12,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 13,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 14,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        },
-        {
-          "sourceId": 2,
-          "channelId": 15,
-          "xRange": "auto",
-          "yRange": "auto",
-          "isLocked": false,
-          "isEmpty": false,
-          "logScale": true
-        }
-      ]
+      "lastModifiedCellIndex": 1
     },
     {
       "id": "ee75e1c0-4185-4283-98bb-243ede5f0e14",
@@ -755,156 +445,201 @@
       "gridCols": 4,
       "xAxisLabel": "Channel",
       "histogramType": "energy",
-      "lastModifiedCellIndex": 2,
       "cells": [
         {
           "sourceId": 3,
           "channelId": 0,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 1,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 2,
           "xRange": {
             "min": 0,
-            "max": 776.1666666666666
+            "max": 6233.6979508358045
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 3,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 4,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 5,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 6,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 7,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 8,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 9,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 10,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 11,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 12,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 13,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 14,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 3,
           "channelId": 15,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 6233.6979508358045
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         }
-      ]
+      ],
+      "lastModifiedCellIndex": 2
     },
     {
       "id": "8dd1b3fd-bfbf-4944-9715-ff4b821d6260",
@@ -913,153 +648,201 @@
       "gridCols": 4,
       "xAxisLabel": "Channel",
       "histogramType": "energy",
-      "lastModifiedCellIndex": 0,
       "cells": [
         {
           "sourceId": 4,
           "channelId": 0,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 1,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 2,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 3,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 4,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 5,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 6,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 7,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 8,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 9,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 10,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 11,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 12,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 13,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 14,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 4,
           "channelId": 15,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7070.989473684211
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         }
-      ]
+      ],
+      "lastModifiedCellIndex": 0
     },
     {
       "id": "d3e94e3d-3c84-4990-85cb-7f21cda2664d",
@@ -1068,153 +851,206 @@
       "gridCols": 4,
       "xAxisLabel": "Channel",
       "histogramType": "energy",
-      "lastModifiedCellIndex": 0,
       "cells": [
         {
           "sourceId": 5,
           "channelId": 0,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 1,
-          "xRange": "auto",
+          "xRange": {
+            "min": 617.5524193548387,
+            "max": 1926.1754032258063
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 2,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 3,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 4,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 5,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 6,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 7,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 8,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 9,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 10,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 11,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 12,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 13,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 14,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 5,
           "channelId": 15,
-          "xRange": "auto",
+          "xRange": {
+            "min": 0,
+            "max": 7293.196413005951
+          },
           "yRange": "auto",
-          "isLocked": false,
+          "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         }
-      ]
+      ],
+      "xView": {
+        "min": 0,
+        "max": 65536,
+        "bins": 65536
+      },
+      "lastModifiedCellIndex": 1
     },
     {
       "id": "a3bbfa30-db7c-42c0-be95-e9abb9f19d7d",
@@ -1323,6 +1159,396 @@
           "isEmpty": false
         }
       ]
+    },
+    {
+      "id": "478813a5-4273-42ea-9dfa-934170ae457f",
+      "name": "PHA1-V1725-dE-Sector (dE sector 0-15)",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "cells": [
+        {
+          "sourceId": 2,
+          "channelId": 0,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 1,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 2,
+          "xRange": {
+            "min": 1174.2699317604618,
+            "max": 1499.0320196323485
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 3,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 4,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 5,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 6,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 7,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 8,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 9,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 10,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 11,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 12,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 13,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 14,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        },
+        {
+          "sourceId": 2,
+          "channelId": 15,
+          "xRange": {
+            "min": 525.7923387096774,
+            "max": 2211.024193548387
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false,
+          "logScale": false
+        }
+      ],
+      "lastModifiedCellIndex": 2
+    },
+    {
+      "id": "9dffc8e2-33d7-4fec-b085-37ded9e62721",
+      "name": "PHA1-V1725-E-Sector (E sector 0-15)",
+      "gridRows": 4,
+      "gridCols": 4,
+      "xAxisLabel": "Channel",
+      "histogramType": "energy",
+      "cells": [
+        {
+          "sourceId": 1,
+          "channelId": 0,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 1,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 2,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 3,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 4,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 5,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 6,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 7,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 8,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 9,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 10,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 11,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 12,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 13,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 14,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        },
+        {
+          "sourceId": 1,
+          "channelId": 15,
+          "xRange": {
+            "min": 678.483870967742,
+            "max": 2600.8548387096776
+          },
+          "yRange": "auto",
+          "isLocked": true,
+          "isEmpty": false
+        }
+      ],
+      "lastModifiedCellIndex": 0
     }
   ],
   "activeTabId": "a3bbfa30-db7c-42c0-be95-e9abb9f19d7d"

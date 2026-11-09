@@ -276,8 +276,10 @@ side3 の設定は run 4〜7 で同じ(スナップショットで確認)。ユ�
 
 | link | node | SN | ID | 信号 | 設定の出どころ | 今までの役割 |
 |---|---|---|---|---|---|---|
-| 0 | 0 | 170 | 2 | E-Sector | side3 mod0 | dE ring in |
-| 1 | 0 | 184 | 1 | dE-Sector | side3 mod0 | 同じ(設定も URL も不変) |
+| 0 | 0 | 170 | 2 | dE-Sector(11-07 訂正) | side3 mod0 | dE ring in |
+| 1 | 0 | 184 | 1 | E-Sector(11-07 訂正) | side3 mod0 | 同じ(設定も URL も不変) |
+
+**訂正(2026-11-07、ユーザー): mod1 = E-Sector、mod2 = dE-Sector。** 11-06 の連絡では逆に書いていた。ラン 45〜57 は逆の割り当てで録ったので、`events` ツリーは dE sector を trigger にしており、`hasDE` は E のヒットを数えている。`delila`(hits)ツリーと `.delila` は生データなので影響なし。2 枚の sector ボードの設定は SN と `start_delay` 以外同じなので、変えたのは名前だけ: `channel_map_N_Wall.txt`、`event_def_nwall.json`(E = mod1、dE = mod2)、`config_nwall_pfqaq.toml`(コメントとソース名)、`nwall_v1725_pha_{1,2}.json` の `name`、`make_test_run.C`、pf-qaq の `monitor_layout.json`(sector の 2 タブの名前と順番)、Grafana `Rates — N_Wall` 再生成(13:30 EET 確認)。マップとイベント定義は nwall_sink がラン開始ごとに読むので次のランから効く。TOML のソース名は Operator の再起動まで旧名のまま。元のファイルは pf-qaq の `~/nwall_before_sector_swap_20261107/`。
 | 2 | 0 | 147 | 3 | dE-Ring3 | side3 mod3(仮) | dE ring mid |
 | 2 | 1 | 208 | 4 | dE-Ring2 | side3 mod2(仮) | dE ring out |
 | 2 | 2 | 27647(V1725S) | 5 | dE-Ring1 | side3 mod1(仮) | E sector |
