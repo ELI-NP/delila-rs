@@ -107,6 +107,15 @@
 - **ラン 45 の 62 GB と `run_inprogress_1793986014.root` は残す**(「ゴミも立派なデータ」、ディスクは余っている)。
 - **Monitor の停止は Fable に修正を依頼**(実機は触らせない、配備と実機確認はメインのセッション)。
 
+### 8.4 Monitor の修正(ac86dcc、2026-11-07 14:09 EET pf-qaq 配備)
+- **原因**(Fable、再現と tokio 1.49 のソースで確認): tmq の `next()` はデータが溜まっている間 ZMQ_EVENTS から即 Ready を返し、受信タスクが一度も譲らない。ヒストグラムタスクの起床はそのワーカーの LIFO スロット(他のワーカーが盗めない)に入る。そのワーカーが I/O とタイマーのドライバを持っていたので、HTTP とコマンドも止まった。
+- **修正**: 受信は専用 OS スレッド(ブロッキングの zmq::Socket、RCVHWM=0、RCVTIMEO 100 ms、ヘッダだけ見る)。デコードはヒストグラムタスク側(1 バッチごとに yield)。追いつかないときは生フレームをデコード前に捨て、`dropped_batches` に数えて 5 秒ごとに warn。`channel_capacity` の既定は 1000 → 64(表示の遅れを 1 秒未満に)。CLAUDE.md の例外の記述も bounded(64) に直した(ユーザー「おまかせ」)。
+- **Mac での数字**(Fable、入力 1320 万イベント/秒): 修正前は最初の 4 秒処理 0、HTTP 最大 4.2 秒、メモリ 8 秒で 15 GB。修正後は毎秒 560 万で一定、HTTP 12 ms、1.3 GB のまま。master で fmt・clippy・815 テスト通過。
+- **配備**: ラン 58 停止後、Recorder のキュー 0・nwall_sink のラン 58 クローズを確認してから再起動。起動ログ "Monitor receive thread started"。この再起動で TOML のセクター名の訂正(mod1 = E、mod2 = dE)も Operator に入った。
+- **戻し方**: `~/delila-rs-local/switch_daq_bins.sh old`(404cc57 の 13 本、`bin_404cc57_before_monitor_fix/`)→ ランの合間に再起動。`new` で修正版(`bin_ac86dcc_monitor_fix/`)に戻る。リビルドすると修正版に戻るので、恒久的に戻すなら `git revert --no-commit ac86dcc`。
+- **pf-qaq の高レートでの確認はまだ**(2.8 / 5 MHz で processed が進む、捨てた数が数えられる、RSS が平ら、HTTP が応答する)。
+- **ラン 58(14:07、Ring 各 220 万/秒、合計 650 万/秒、約 1 分でユーザーが手で停止)**: Recorder は 140 万/秒、停止後に書き切った(dropped なし、.delila 4 ファイル)。nwall_sink の `late` はラン 57 終了時 751 → 2,091,045(ほぼ全部ラン 58。1 秒より遅れたヒットを ROOT から落とす、§7 の可視化の件。うち約 8.4 万はラン 58 の finalize の後に来た)。ROOT は 1.84 億ヒットで約 1 % 欠け、.delila は完全。旧 Monitor はこのランで止まっていた(event_rate 0)。
+
 ## 7. 測定の後で決めること(今はコードを変えない)
 
 - Recorder の全バッチのデコードをやめる、Sorter を差分マージにする、`safe_horizon_ms` を短くする、Monitor の受信で SUB パイプが増える件(HWM = 0 で、表示専用なのにメモリを 35 GB 使った)。
