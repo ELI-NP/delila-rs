@@ -1,4 +1,5 @@
-//! Clock (PLL) health of a digitizer (TODO 85), polled by the RAW read loop.
+//! Clock (PLL) health of a digitizer (TODO 85), polled by the RAW read loop
+//! in every state ([`PllPoller`]).
 //!
 //! A digitizer whose PLL is not locked does not take valid data. On pf-qaq
 //! (2026-11-08) a loose cable in the V1725 clock daisy chain took mod2-5 down
@@ -97,6 +98,62 @@ impl PllWatch {
     }
 }
 
+/// The read loop's PLL poll: every [`POLL_INTERVAL`], in every state (Idle,
+/// Configured, Armed, Running), connected or not. Before 2026-11-10 it ran
+/// only during a run, so a board on a dead clock chain showed nothing in the
+/// UI until Start (pf-qaq, the DAQ restart of 2026-11-10).
+#[derive(Debug)]
+pub struct PllPoller {
+    watch: PllWatch,
+    /// False once a connected board showed it has no status parameter, so a
+    /// disconnected board of that kind reports nothing rather than "unreadable".
+    supported: bool,
+    last: Option<std::time::Instant>,
+}
+
+impl Default for PllPoller {
+    fn default() -> Self {
+        Self {
+            watch: PllWatch::default(),
+            supported: true,
+            last: None,
+        }
+    }
+}
+
+impl PllPoller {
+    /// When a poll is due: read the status (`read` is called only when
+    /// `connected`), log a change, and return the status for the metrics.
+    /// `None` when no poll was due.
+    pub fn poll(
+        &mut self,
+        now: std::time::Instant,
+        connected: bool,
+        read: impl FnOnce() -> Option<PllStatus>,
+    ) -> Option<Option<PllStatus>> {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < POLL_INTERVAL)
+        {
+            return None;
+        }
+        self.last = Some(now);
+        let status = if connected {
+            let s = read();
+            self.supported = s.is_some();
+            s
+        } else if self.supported {
+            Some(PllStatus::Unreadable)
+        } else {
+            None
+        };
+        if let Some(changed) = self.watch.changed(status) {
+            log_change(changed, connected);
+        }
+        Some(status)
+    }
+}
+
 /// Read the PLL status of a connected digitizer. `None` when its firmware
 /// has no status parameter (not in the DevTree, or a firmware family this
 /// module does not know). Without a parameter cache the read is attempted.
@@ -157,6 +214,7 @@ pub fn log_change(status: Option<PllStatus>, connected: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     fn ok(v: &str) -> Result<String, CaenError> {
         Ok(v.to_string())
@@ -225,6 +283,57 @@ mod tests {
     fn dig2_error_or_garbage_is_unreadable() {
         assert_eq!(dig2_status(&err(), || false), PllStatus::Unreadable);
         assert_eq!(dig2_status(&ok("n/a"), || false), PllStatus::Unreadable);
+    }
+
+    #[test]
+    fn poller_reads_at_once_then_once_per_interval() {
+        let mut p = PllPoller::default();
+        let t0 = Instant::now();
+        assert_eq!(
+            p.poll(t0, true, || Some(PllStatus::Locked)),
+            Some(Some(PllStatus::Locked))
+        );
+        assert_eq!(
+            p.poll(t0 + POLL_INTERVAL / 2, true, || panic!(
+                "read before the interval"
+            )),
+            None
+        );
+        assert_eq!(
+            p.poll(t0 + POLL_INTERVAL, true, || Some(PllStatus::Unlocked)),
+            Some(Some(PllStatus::Unlocked))
+        );
+    }
+
+    #[test]
+    fn poller_reports_a_disconnected_board_as_unreadable_without_reading() {
+        let mut p = PllPoller::default();
+        assert_eq!(
+            p.poll(Instant::now(), false, || panic!(
+                "nothing to read without a connection"
+            )),
+            Some(Some(PllStatus::Unreadable))
+        );
+    }
+
+    #[test]
+    fn poller_firmware_without_a_status_stays_silent_when_disconnected() {
+        let mut p = PllPoller::default();
+        let t0 = Instant::now();
+        assert_eq!(p.poll(t0, true, || None), Some(None));
+        assert_eq!(
+            p.poll(t0 + POLL_INTERVAL, false, || panic!("not connected")),
+            Some(None)
+        );
+        // Reconnected to a board that has a status: a later loss shows again.
+        assert_eq!(
+            p.poll(t0 + 2 * POLL_INTERVAL, true, || Some(PllStatus::Locked)),
+            Some(Some(PllStatus::Locked))
+        );
+        assert_eq!(
+            p.poll(t0 + 3 * POLL_INTERVAL, false, || panic!("not connected")),
+            Some(Some(PllStatus::Unreadable))
+        );
     }
 
     #[test]

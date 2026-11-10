@@ -90,12 +90,8 @@ pub(crate) fn run(
     let mut last_dig2_warn = Instant::now();
     const DIG2_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-    // Clock (PLL) health (TODO 85). `pll_supported` turns false once a
-    // connected board shows it has no status parameter, so a disconnected
-    // board of that kind reports nothing rather than "unreadable".
-    let mut pll_watch = pll::PllWatch::default();
-    let mut pll_supported = true;
-    let mut last_pll_poll: Option<Instant> = None;
+    // Clock (PLL) health (TODO 85), polled in every state below.
+    let mut pll_poller = pll::PllPoller::default();
 
     // The EOS of a run this board could not finish (connection lost mid-run).
     let mut owed_eos = OwedEos::default();
@@ -441,6 +437,18 @@ pub(crate) fn run(
             }
         }
 
+        // Clock (PLL) health in every state, connected or not (TODO 85): the
+        // UI shows it before a run, not only once Start found a dead board.
+        if let Some(status) = pll_poller.poll(Instant::now(), connection.is_some(), || {
+            connection
+                .as_ref()
+                .and_then(|conn| pll::read(conn, config.firmware))
+        }) {
+            metrics
+                .pll_status
+                .store(PllStatus::to_u8(status), Ordering::Relaxed);
+        }
+
         // --- Data reading (Running only) ---
         if target_state != ComponentState::Running {
             std::thread::sleep(Duration::from_millis(10));
@@ -566,26 +574,6 @@ pub(crate) fn run(
                 }
             }
             last_dig2_poll = Instant::now();
-        }
-
-        // Clock (PLL) health, connected or not (TODO 85).
-        if last_pll_poll.is_none_or(|t| t.elapsed() >= pll::POLL_INTERVAL) {
-            let status = match connection.as_ref() {
-                Some(conn) => {
-                    let s = pll::read(conn, config.firmware);
-                    pll_supported = s.is_some();
-                    s
-                }
-                None if pll_supported => Some(PllStatus::Unreadable),
-                None => None,
-            };
-            metrics
-                .pll_status
-                .store(PllStatus::to_u8(status), Ordering::Relaxed);
-            if let Some(changed) = pll_watch.changed(status) {
-                pll::log_change(changed, connection.is_some());
-            }
-            last_pll_poll = Some(Instant::now());
         }
     }
 

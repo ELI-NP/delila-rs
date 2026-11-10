@@ -1,6 +1,6 @@
 # TODO 85 — デジタイザの PLL lock の表示と、壊れたボードでランを止める
 
-**Status: 🚧 実装済み・テスト通過・未配備 (2026-11-09)。** 残 = pf-qaq への配備(ランの合間、ユーザー判断)と実機確認(§5)。
+**Status: 🚧 pf-qaq に配備 (2026-11-10、c044f82)。Configured でも PLL を読む修正は未配備。** 残 = その配備と実機確認(§5)、mod2・3・5 がつながらない件(§5.1、ハード側の確認待ち)。
 
 ## 1. 発端
 
@@ -24,7 +24,7 @@
 ## 3. 作ったもの
 
 **Reader(`src/reader/pll.rs`、`read_loop_dig1.rs`):**
-- RAW の read loop(PSD1/PHA1/PSD2/PHA2)が **2 秒おき**に PLL を読む。接続中はいつでも読み、ラン中に限らない。値は `ComponentMetrics.pll` = `locked` / `unlocked` / `unreadable`(読めない)/ なし(その FW に PLL の情報がない)。
+- RAW の read loop(PSD1/PHA1/PSD2/PHA2)が **2 秒おき**に PLL を読む。**Idle・Configured・Armed・Running のどれでも読む**(`PllPoller`)。初版も設計はそのつもりだったが、読み取りがループの「ラン中だけ」の分かれ目より後ろにあり、実際はラン中しか読んでいなかった。2026-11-10 の pf-qaq の再起動で mod2・3・5 がつながらないのに UI に何も出ず判明、ユーザーの要望で修正(テスト +3)。値は `ComponentMetrics.pll` = `locked` / `unlocked` / `unreadable`(読めない)/ なし(その FW に PLL の情報がない)。
 - 接続していないときは `unreadable`。DevTree に該当パラメータがない機種は、つながった時点でわかるので「なし」にする。
 - 状態が変わった瞬間に 1 回ログを出す: locked は info、それ以外は warn(silent failure を作らない)。
 - 読み出しは read loop のスレッド内の ReadData の合間にやる(DIG2 のトリガーカウンタの読み出しと同じ形)。ハンドルを別スレッドから触らない。
@@ -72,6 +72,16 @@
 3. UI: Readers の見出しに「PLL OK」、行に「PLL」。
 4. Grafana: `tools/grafana/gen_dashboards.py` でダッシュボードを作り直し、PLL の行が緑。
 5. (任意、ユーザー判断)テストランでクロックケーブルを抜き、10〜15 秒で止まり赤い枠が出るか。抜いたボードの PLL が FALSE になるか unreadable になるかを記録。さらに: 30 秒たって Error になったボードが Operator で Error と出るか、停止の約 2 秒後にその Reader のログに "Sending the end-of-run marker (EOS)" が出て、nwall_sink の ROOT が `runNNNN_0000_N_Wall.root` に名前付けされるか。
+
+### 5.1 配備 (2026-11-10、ユーザー「1, 2 をしましょう」)
+
+- pf-qaq の手元の設定をそのまま c044f82 として repo に入れ(先に Operator と Monitor のメモリ上の設定がファイルと同じことを確認)、pf-qaq を ac86dcc → c044f82 に。手元の変更は `git stash` と `~/pfqaq_local_mods_20261110.patch`、12 ファイルとも内容は前と同じ。
+- ビルド 45 秒・警告 0。14:34 EET、ラン 79 の後(Configured、Recorder と Merger のキュー 0、nwall_sink idle)に DAQ を再起動(`logs/20261110_143430`)。止めるときの強制終了なし。戻し方 = `~/delila-rs-local/switch_daq_bins.sh new`(それまで動いていた ac86dcc の組)+ 再起動。
+- ラン 80 の Configure → Mixed: **mod2・3・5 が接続のたびに CAEN -6**(30 秒おきに再試行)。mod4 は 3 分後に自分でつながった。mod1 と VX2730 は正常。2026-11-08 のクロックケーブルと同じ形(数珠つなぎの mod1 より後ろ、光リンクをまたぐ)。5 台とも 07:49 にラン 79 を正常に止めていて、Configured の間は古い Reader がハードを触らないので、その後の故障は再起動まで見えない。ユーザーに PLL LOCK の LED と CLK ケーブルの確認を依頼。
+- PLL が UI にもログにも一切出なかった → 上の §3 の修正(Configured でも読む)。
+- その後: ユーザーが CLK ケーブルの緩みを直す(~15:00)→ mod2 は同じプロセスのまま 14:59 につながり設定も入った。mod3 はケーブル修正後も、クレートのリセット(前面はすべて緑)後も、同じプロセスの再試行はすべて -6。mod4 は 14:37 につながったがリセット -6・型番が空(DPP-NONE、SN 0)で設定を拒否したまま Configured 表示。
+- 15:06 に DAQ を再起動(`logs/20261110_150630`)→ **6 台とも 1 回目でつながり、Configure(ラン 80)も全台正常**(リセット・設定・ADC 較正、-6 は 0。残る警告は既知の `ch_trg_latency` と mod5 = V1725S の CFD レジスタ)。
+- 読み: 同じプロセスでのつなぎ直しでは抜けない状態が残っていた(ユーザーの見立ても「ソフト側」)。クレートのリセットが要ったかどうかは切り分けられていない。CAEN ライブラリのログ(`CAENDPPLayer.log`、mod4 分を `~/CAENDPPLayer_20261110_1437_mod4.log` に保存)では、FELib の open の中で板のリセットと PLL の確認があり、「PLL lock loss occurred」で open が失敗して -6 になる。**このログは全 Reader が同じ cwd の同じファイルに書くため、1 台分しか残らない。** 未調査: 失敗した open が CAEN ライブラリ内に何を残すか、Reader が自分で抜け出す方法(プロセスごと作り直す等)。
 
 ## 6. 後回し
 
