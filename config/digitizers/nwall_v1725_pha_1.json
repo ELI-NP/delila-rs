@@ -22,13 +22,13 @@
     "coinc_trgout": 1024
   },
   "channel_defaults": {
-    "enabled": "True",
+    "enabled": "False",
     "polarity": "POLARITY_POSITIVE",
     "dc_offset": 20.0,
     "baseline_avg": "BLINE_NSMEAN_256",
     "pre_trigger_ns": 4000,
     "coarse_gain": "COARSE_GAIN_X1",
-    "trigger_threshold": 150,
+    "trigger_threshold": 50,
     "cfd_interpolation_point": 0,
     "trigger_holdoff_ns": 496,
     "fast_discr_smoothing": "RCCR2_SMTH_128",

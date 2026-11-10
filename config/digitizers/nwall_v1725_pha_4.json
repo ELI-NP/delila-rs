@@ -27,7 +27,7 @@
     "dc_offset": 20.0,
     "baseline_avg": "BLINE_NSMEAN_256",
     "pre_trigger_ns": 4000,
-    "coarse_gain": "COARSE_GAIN_X4",
+    "coarse_gain": "COARSE_GAIN_X1",
     "trigger_threshold": 50,
     "cfd_interpolation_point": 0,
     "trigger_holdoff_ns": 496,
@@ -50,9 +50,7 @@
   },
   "channel_overrides": {
     "15": {
-      "polarity": "POLARITY_POSITIVE",
-      "coarse_gain": "COARSE_GAIN_X1",
-      "trigger_threshold": 100
+      "enabled": "True"
     }
   }
 }

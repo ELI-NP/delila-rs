@@ -17,13 +17,13 @@
     "io_level": "NIM",
     "extra": {
       "rundelay": 0,
-      "syncoutmode": "Disabled",
       "trgoutmode": "Run",
-      "boardvetowidth": 0,
       "clocksource": "Internal",
-      "enclockoutfp": "True",
       "boardvetosource": "Disabled",
-      "boardvetopolarity": "ActiveHigh"
+      "syncoutmode": "Disabled",
+      "boardvetopolarity": "ActiveHigh",
+      "boardvetowidth": 0,
+      "enclockoutfp": "True"
     }
   },
   "channel_defaults": {
@@ -64,12 +64,33 @@
     "digital_probe_3": "CFDFilterArmed"
   },
   "channel_overrides": {
-    "31": {
-      "trigger_threshold": 50
+    "24": {
+      "trigger_threshold": 35
+    },
+    "23": {
+      "trigger_threshold": 28
+    },
+    "25": {
+      "trigger_threshold": 130
+    },
+    "21": {
+      "trigger_threshold": 35
+    },
+    "10": {
+      "trigger_threshold": 30
+    },
+    "22": {
+      "trigger_threshold": 40
+    },
+    "16": {
+      "trigger_threshold": 30
     },
     "30": {
       "trigger_threshold": 30,
       "gate_short_ns": 50
+    },
+    "18": {
+      "trigger_threshold": 16
     },
     "0": {
       "polarity": "Positive",
@@ -77,8 +98,50 @@
       "cfd_delay_ns": 4,
       "energy_coarse_gain": "x4"
     },
-    "25": {
-      "trigger_threshold": 150
+    "14": {
+      "trigger_threshold": 35
+    },
+    "20": {
+      "trigger_threshold": 25
+    },
+    "19": {
+      "trigger_threshold": 25
+    },
+    "13": {
+      "trigger_threshold": 40
+    },
+    "8": {
+      "trigger_threshold": 28
+    },
+    "9": {
+      "trigger_threshold": 42
+    },
+    "28": {
+      "trigger_threshold": 35
+    },
+    "15": {
+      "trigger_threshold": 30
+    },
+    "31": {
+      "trigger_threshold": 30
+    },
+    "17": {
+      "trigger_threshold": 17
+    },
+    "12": {
+      "trigger_threshold": 42
+    },
+    "27": {
+      "trigger_threshold": 25
+    },
+    "29": {
+      "trigger_threshold": 40
+    },
+    "11": {
+      "trigger_threshold": 25
+    },
+    "26": {
+      "trigger_threshold": 25
     }
   }
 }

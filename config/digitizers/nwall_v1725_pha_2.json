@@ -22,7 +22,7 @@
     "coinc_trgout": 1024
   },
   "channel_defaults": {
-    "enabled": "True",
+    "enabled": "False",
     "polarity": "POLARITY_POSITIVE",
     "dc_offset": 20.0,
     "baseline_avg": "BLINE_NSMEAN_256",

@@ -3,7 +3,7 @@
     "name": "",
     "gridRows": 2,
     "gridCols": 2,
-    "xAxisLabel": "Channel",
+    "xAxisLabel": "keV",
     "histogramType": "energy",
     "xAxis": "energy",
     "yAxis": "psd",
@@ -39,201 +39,201 @@
           "sourceId": 0,
           "channelId": 0,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 1,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 2,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 7510.076827434816,
+            "max": 13553.198420239938
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 3,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 4,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 5,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 6,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 7,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 8,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 9,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 10,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 11,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 12,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 13,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 14,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         },
         {
           "sourceId": 0,
           "channelId": 15,
           "xRange": {
-            "min": 0,
-            "max": 15606.224404610026
+            "min": 3889.196529308525,
+            "max": 16772.160032643013
           },
           "yRange": "auto",
           "isLocked": true,
           "isEmpty": false,
-          "logScale": true
+          "logScale": false
         }
       ],
-      "lastModifiedCellIndex": 1,
       "xView": {
         "min": 0,
         "max": 65536,
-        "bins": 65536
-      }
+        "bins": 1024
+      },
+      "lastModifiedCellIndex": 2
     },
     {
       "id": "dcf6301d-beb4-4fb4-8bd7-f3defbb3aeef",
@@ -842,7 +842,12 @@
           "logScale": false
         }
       ],
-      "lastModifiedCellIndex": 0
+      "lastModifiedCellIndex": 0,
+      "xView": {
+        "min": 0,
+        "max": 65536,
+        "bins": 65536
+      }
     },
     {
       "id": "d3e94e3d-3c84-4990-85cb-7f21cda2664d",
@@ -1551,5 +1556,5 @@
       "lastModifiedCellIndex": 0
     }
   ],
-  "activeTabId": "a3bbfa30-db7c-42c0-be95-e9abb9f19d7d"
+  "activeTabId": "9dffc8e2-33d7-4fec-b085-37ded9e62721"
 }
