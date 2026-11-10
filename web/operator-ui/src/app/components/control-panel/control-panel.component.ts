@@ -186,9 +186,9 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
                 }
                 @if (a.cause === 'digitizer_fault' && a.phase !== 'stopping') {
                   <span class="stall-hint">
-                    Check the clock cable (CLK-IN daisy chain) and the PLL LOCK LED of the boards
-                    named above. A board that stopped answering usually needs a crate power cycle,
-                    then a DAQ restart, before the next run.
+                    Clock lost: check the clock cable (CLK-IN daisy chain) and the PLL LOCK LED of
+                    the boards named above. Digitizer error or no answer: restart the DAQ between
+                    runs, which usually brings the board back; if not, power-cycle its crate.
                   </span>
                 }
               </div>

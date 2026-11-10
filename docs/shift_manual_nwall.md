@@ -2,7 +2,7 @@
 
 For the shift crew. Everything is done in a web browser: you start and stop runs
 and keep the logbook. Experts change settings and fix problems. Everything else is
-in the full manual (`docs/operations_manual_en.md`).
+in the full manual (coming soon).
 
 ## Pages
 
@@ -92,7 +92,7 @@ Do not try to fix it. Write what you see and the time in the logbook
 | You see | Do |
 |---|---|
 | Red box "Run N stopped automatically …" | Do not start a new run. Copy the text of the box into the logbook. Call the expert. |
-| "PLL … not locked" or "PLL ?" | Do not start. Call the expert (clock cable or crate: experts only). |
+| Readers header "… not OK", or a reader shows "PLL NOT LOCKED", "PLL ?" or an error name such as `jesd_unlock` | Do not start. Call the expert (clock cable, crate or a DAQ restart: experts decide). |
 | "Start failed" box | Logbook, then press Start once more. If it fails again, call the expert. |
 | "No events" box during the run | Logbook. If it lasts more than 5 min, call the expert. |
 | HV trip, or a current jumps | Logbook, call the expert. For the Si HV, see below. |

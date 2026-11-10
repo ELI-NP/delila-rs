@@ -41,6 +41,9 @@ export interface ComponentMetrics {
   backlog_level?: number;
   /** Digitizer clock (PLL) health, Readers only; absent when the firmware has none (TODO 85) */
   pll?: PllStatus;
+  /** What makes `pll` bad when the digitizer names it: DIG2 error bits such as
+   *  "jesd_unlock" (TODO 85 §5.3). Absent for DIG1 and when all is well. */
+  pll_detail?: string;
 }
 
 /** Digitizer clock (PLL) health (TODO 85). */

@@ -80,6 +80,7 @@ describe('ControlPanelComponent: automatic stop banner (TODO 84)', () => {
     expect(text).toContain('PHA1-V1725-dE-Ring3: clock lost (PLL not locked) for 10 s');
     expect(text).toContain('All queued data was written; the files are complete.');
     expect(text).toContain('clock cable');
+    expect(text).toContain('restart the DAQ between runs');
   });
 
   it('names a write failure', () => {

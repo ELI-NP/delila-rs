@@ -806,6 +806,7 @@ impl CommandHandlerExt for RecorderCommandExt {
             disk_free_bytes,
             disk_level,
             pll: None,
+            pll_detail: None,
         })
     }
 }

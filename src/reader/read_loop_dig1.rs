@@ -439,14 +439,18 @@ pub(crate) fn run(
 
         // Clock (PLL) health in every state, connected or not (TODO 85): the
         // UI shows it before a run, not only once Start found a dead board.
-        if let Some(status) = pll_poller.poll(Instant::now(), connection.is_some(), || {
+        if let Some(reading) = pll_poller.poll(Instant::now(), connection.is_some(), || {
             connection
                 .as_ref()
                 .and_then(|conn| pll::read(conn, config.firmware))
         }) {
+            metrics.pll_status.store(
+                PllStatus::to_u8(reading.map(|r| r.status)),
+                Ordering::Relaxed,
+            );
             metrics
-                .pll_status
-                .store(PllStatus::to_u8(status), Ordering::Relaxed);
+                .pll_fault_bits
+                .store(reading.map_or(0, |r| r.fault_bits), Ordering::Relaxed);
         }
 
         // --- Data reading (Running only) ---

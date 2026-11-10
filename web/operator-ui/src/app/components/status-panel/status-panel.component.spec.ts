@@ -61,12 +61,25 @@ describe('StatusPanelComponent: digitizer clock (PLL) status (TODO 85)', () => {
     const el = render(
       status([reader('E-Sector', 'locked'), reader('Ring3', 'unlocked'), reader('Ring1', 'unreadable')]),
     );
-    expect(header(el)!.textContent).toContain('PLL 2 not locked');
+    expect(header(el)!.textContent).toContain('2 digitizers not OK');
     expect(header(el)!.classList).toContain('pll-bad');
     expect(chips(el)).toEqual([
       { text: 'PLL', bad: false },
       { text: 'PLL NOT LOCKED', bad: true },
       { text: 'PLL ?', bad: true },
+    ]);
+  });
+
+  // TODO 85 §5.3: the VX2730 (clock master) showed "PLL NOT LOCKED" on
+  // 2026-11-10 for what was a board error.
+  it('names a DIG2 board error instead of calling it a lost clock', () => {
+    const vx = reader('VX2730', 'unlocked');
+    vx.metrics = { ...vx.metrics!, pll_detail: 'jesd_unlock' };
+    const el = render(status([vx, reader('E-Sector', 'locked')]));
+    expect(header(el)!.textContent).toContain('1 digitizer not OK');
+    expect(chips(el)).toEqual([
+      { text: 'jesd_unlock', bad: true },
+      { text: 'PLL', bad: false },
     ]);
   });
 

@@ -287,6 +287,7 @@ impl CommandHandlerExt for EmulatorCommandExt {
             disk_free_bytes: None,
             disk_level: 0,
             pll: None,
+            pll_detail: None,
             event_rate: self.rate_tracker.get_rate(),
             data_rate: 0.0,
             trigger_loss_count: 0,

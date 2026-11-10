@@ -1111,6 +1111,9 @@ pub struct ReaderMetrics {
     /// Clock (PLL) health, [`crate::common::PllStatus::to_u8`] encoding,
     /// written by the read loop every [`pll::POLL_INTERVAL`] (TODO 85).
     pub pll_status: AtomicU8,
+    /// DIG2 `ErrorFlags` bits behind a bad `pll_status` (0 = none), named in
+    /// the metrics as `pll_detail` (TODO 85 §5.3).
+    pub pll_fault_bits: AtomicU32,
 }
 
 impl Default for ReaderMetrics {
@@ -1127,6 +1130,7 @@ impl Default for ReaderMetrics {
             filtered_events: AtomicU64::new(0),
             current_run: AtomicU32::new(0),
             pll_status: AtomicU8::new(0),
+            pll_fault_bits: AtomicU32::new(0),
         }
     }
 }
@@ -1257,6 +1261,10 @@ impl CommandHandlerExt for ReaderCommandExt {
             disk_free_bytes: None,
             disk_level: 0,
             pll: crate::common::PllStatus::from_u8(self.metrics.pll_status.load(Ordering::Relaxed)),
+            pll_detail: match self.metrics.pll_fault_bits.load(Ordering::Relaxed) {
+                0 => None,
+                bits => Some(pll::flag_names(bits)),
+            },
             event_rate: self.rate_tracker.get_rate(),
             data_rate: 0.0,
             trigger_loss_count: trigger_loss,

@@ -319,6 +319,7 @@ impl CommandHandlerExt for MergerCommandExt {
             disk_free_bytes: None,
             disk_level: 0,
             pll: None,
+            pll_detail: None,
         })
     }
 }

@@ -6,7 +6,9 @@
 //! nothing on screen said so. The user's decision (2026-11-09): stop the run.
 //!
 //! A source counts as failed when, during a run, it reports
-//! - PLL `Unlocked` — the board takes no valid data without its clock lock,
+//! - PLL `Unlocked` — the board takes no valid data without its clock lock
+//!   (DIG1), or a DIG2 board error such as `jesd_unlock` (named in
+//!   `pll_detail`, TODO 85 §5.3),
 //! - PLL `Unreadable` — the board does not answer (a board that lost its
 //!   clock usually does this rather than report FALSE), or
 //! - state `Error` — e.g. read errors for 30 s (`read_loop_dig1`).
@@ -48,11 +50,15 @@ pub enum Fault {
 }
 
 impl Fault {
-    fn describe(self) -> &'static str {
-        match self {
-            Fault::ClockUnlocked => "clock lost (PLL not locked)",
-            Fault::ClockUnreadable => "digitizer not answering (PLL status unreadable)",
-            Fault::ReaderError => "Reader in Error",
+    /// `detail`: the DIG2 error bits behind `ClockUnlocked`, e.g. "jesd_unlock".
+    fn describe(self, detail: Option<&str>) -> String {
+        match (self, detail) {
+            (Fault::ClockUnlocked, Some(d)) => format!("digitizer error ({d})"),
+            (Fault::ClockUnlocked, None) => "clock lost (PLL not locked)".to_string(),
+            (Fault::ClockUnreadable, _) => {
+                "digitizer not answering (PLL status unreadable)".to_string()
+            }
+            (Fault::ReaderError, _) => "Reader in Error".to_string(),
         }
     }
 }
@@ -78,6 +84,8 @@ pub struct ConfirmedFault {
     pub name: String,
     pub fault: Fault,
     pub seconds: u64,
+    /// What the digitizer named (DIG2 error bits), from the latest poll.
+    pub detail: Option<String>,
 }
 
 /// Remembers, per source, since when it has been failing (whatever the kind:
@@ -98,14 +106,17 @@ impl FaultTracker {
     /// Feed one status poll; returns the sources failing for `confirm` or
     /// longer. A source without a fault (or not in the poll) is forgotten.
     pub fn update(&mut self, statuses: &[ComponentStatus], now: Instant) -> Vec<ConfirmedFault> {
-        let faults: Vec<(&str, Fault)> = statuses
+        let faults: Vec<(&str, Fault, Option<String>)> = statuses
             .iter()
-            .filter_map(|s| Some((s.name.as_str(), fault_of(s)?)))
+            .filter_map(|s| {
+                let detail = s.metrics.as_ref().and_then(|m| m.pll_detail.clone());
+                Some((s.name.as_str(), fault_of(s)?, detail))
+            })
             .collect();
         self.since
-            .retain(|name, _| faults.iter().any(|(n, _)| n == name));
+            .retain(|name, _| faults.iter().any(|(n, _, _)| n == name));
         let mut confirmed = Vec::new();
-        for (name, fault) in faults {
+        for (name, fault, detail) in faults {
             let since = *self.since.entry(name.to_string()).or_insert(now);
             let lasted = now.duration_since(since);
             if lasted >= self.confirm {
@@ -113,6 +124,7 @@ impl FaultTracker {
                     name: name.to_string(),
                     fault,
                     seconds: lasted.as_secs(),
+                    detail,
                 });
             }
         }
@@ -128,7 +140,14 @@ impl FaultTracker {
 pub fn describe(faults: &[ConfirmedFault]) -> String {
     faults
         .iter()
-        .map(|f| format!("{}: {} for {} s", f.name, f.fault.describe(), f.seconds))
+        .map(|f| {
+            format!(
+                "{}: {} for {} s",
+                f.name,
+                f.fault.describe(f.detail.as_deref()),
+                f.seconds
+            )
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -280,12 +299,37 @@ mod tests {
                 name: "Ring3".into(),
                 fault: Fault::ClockUnreadable,
                 seconds: 10,
+                detail: None,
             }]
         );
         assert_eq!(
             describe(&c),
             "Ring3: digitizer not answering (PLL status unreadable) for 10 s"
         );
+    }
+
+    /// TODO 85 §5.3: the VX2730 (clock master) was stopped as "clock lost"
+    /// on 2026-11-10 for what was a board error; the reason names the bits.
+    #[test]
+    fn a_dig2_board_error_is_named_not_called_a_clock_loss() {
+        let mut t = FaultTracker::new(Duration::from_secs(10));
+        let t0 = Instant::now();
+        let mut vx = source("VX2730", RUN, Some(PllStatus::Unlocked));
+        if let Some(ref mut m) = vx.metrics {
+            m.pll_detail = Some("jesd_unlock".into());
+        }
+        assert!(t.update(std::slice::from_ref(&vx), t0).is_empty());
+        let c = t.update(std::slice::from_ref(&vx), t0 + Duration::from_secs(10));
+        assert_eq!(
+            describe(&c),
+            "VX2730: digitizer error (jesd_unlock) for 10 s"
+        );
+        // DIG1 has no bits to name: still the clock.
+        let v1725 = source("Ring3", RUN, Some(PllStatus::Unlocked));
+        let mut t = FaultTracker::new(Duration::from_secs(10));
+        assert!(t.update(std::slice::from_ref(&v1725), t0).is_empty());
+        let c = t.update(std::slice::from_ref(&v1725), t0 + Duration::from_secs(10));
+        assert_eq!(describe(&c), "Ring3: clock lost (PLL not locked) for 10 s");
     }
 
     #[test]

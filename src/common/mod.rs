@@ -136,6 +136,11 @@ pub struct ComponentMetrics {
     /// when a source stays `Unlocked` or `Unreadable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pll: Option<PllStatus>,
+    /// What makes `pll` bad, when the digitizer says (TODO 85 §5.3): the names
+    /// of the DIG2 `ErrorFlags` bits that count, e.g. "jesd_unlock". `None`
+    /// for DIG1 (one PLL flag only) and whenever nothing is wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pll_detail: Option<String>,
 }
 
 /// Clock (PLL) health of a digitizer (TODO 85). A digitizer whose PLL is not
@@ -842,6 +847,16 @@ mod tests {
         )
         .expect("old metrics json");
         assert_eq!(old.pll, None);
+        assert_eq!(old.pll_detail, None);
+
+        // TODO 85 §5.3: the DIG2 error bits behind a bad status travel by name.
+        let m = ComponentMetrics {
+            pll: Some(PllStatus::Unlocked),
+            pll_detail: Some("jesd_unlock".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&m).expect("json");
+        assert!(json.contains("\"pll_detail\":\"jesd_unlock\""), "{json}");
     }
 
     #[test]

@@ -35,10 +35,11 @@ import { ComponentState, PllStatus } from '../../models/types';
                 class="pll-summary"
                 data-testid="pll-summary"
                 [class.pll-bad]="operator.sourceSummary().pllBad > 0"
-                matTooltip="Digitizer clock (PLL). A board without its PLL lock takes no valid data; the Operator stops a run when this lasts 10 s."
+                matTooltip="Digitizer clock (PLL) and board errors. A board without its PLL lock or with a board error takes no valid data; the Operator stops a run when this lasts 10 s."
               >
                 @if (operator.sourceSummary().pllBad > 0) {
-                  PLL {{ operator.sourceSummary().pllBad }} not locked
+                  {{ operator.sourceSummary().pllBad }}
+                  {{ operator.sourceSummary().pllBad === 1 ? 'digitizer' : 'digitizers' }} not OK
                 } @else {
                   PLL OK
                 }
@@ -56,7 +57,7 @@ import { ComponentState, PllStatus } from '../../models/types';
                   <span matListItemLine>
                     {{ component.state }}
                     @if (component.metrics?.pll; as pll) {
-                      <span class="pll-chip" data-testid="pll-chip" [class.pll-bad]="pll !== 'locked'">{{ pllLabel(pll) }}</span>
+                      <span class="pll-chip" data-testid="pll-chip" [class.pll-bad]="pll !== 'locked'">{{ pllLabel(pll, component.metrics?.pll_detail) }}</span>
                     }
                     @if (component.metrics && component.metrics.events_processed > 0) {
                       <span class="metrics-inline">
@@ -207,12 +208,14 @@ export class StatusPanelComponent {
     });
   }
 
-  pllLabel(pll: PllStatus): string {
+  /** `detail`: the DIG2 error bits behind a bad status (TODO 85 §5.3). A DIG2
+   *  board error is not a clock loss, so it is shown by name, as in the logs. */
+  pllLabel(pll: PllStatus, detail?: string): string {
     switch (pll) {
       case 'locked':
         return 'PLL';
       case 'unlocked':
-        return 'PLL NOT LOCKED';
+        return detail ?? 'PLL NOT LOCKED';
       case 'unreadable':
         return 'PLL ?';
     }
