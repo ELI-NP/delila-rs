@@ -1,6 +1,6 @@
 # TODO 86 — ランのタイマーを Operator に持たせる
 
-**Status: 🚧 実装・pf-qaq に配備 (2026-11-10、cc5b974)。** 残 = 本物のランでタイマーを使ったときの確認(ヘッダ、時間切れの停止とダイアログ、eLog の `[stop: timer …]`)。
+**Status: ✅ 実装・pf-qaq に配備・実機で確認 (2026-11-10、cc5b974)。** ユーザーが `DAQ_Test` のラン 1 で試した(§8)。表示はときどき 1 秒引っかかるが OK(ユーザー)。残 = eLog の `[stop: timer …]`(DAQ_Test は eLog なしで未確認)。
 
 どのページ・どの PC から見ても同じ残り時間が出て、ブラウザがなくても時間が来たら止まるようにする。
 
@@ -136,3 +136,10 @@
   - 配信中の `main.js` が新しいビルドと同じ(md5 一致、ヘッダのタイマーのコード入り)。
   - `PUT /api/run/timer` はランがないので 409(設計どおり)。
 - ランは始めていない(状態は Idle、次はラン 80。Start が Configure もする)。
+
+## 8. 実機での確認 (2026-11-10、ユーザー、`config/config_daq_test_pfqaq.toml`)
+
+- 16:43 に DAQ_Test の設定で起動した(実験名 DAQ_Test、保存先 `/data/DAQ_Test`、eLog と InfluxDB なし)。
+- ラン 1: 14:44:39 UTC に「Run timer: 1 min, stops the run」で開始。60.8 秒後の 14:45:40 に Operator が止めた(「Run timer: the time is up — stopping the run like the Stop button」)。ラン記録は Completed、60 秒。ファイルは `run0001_0000_DAQ_Test.delila` / `.root`。
+- ユーザー: 「問い合わせのタイミングで 1 秒ごとの表示がちょっとアレなときもありますが OK」。原因は、表示の 1 秒ごとの更新と 1 秒ごとの状態の問い合わせが独立していること。直すなら表示の更新を 0.25 秒ごとにする(今はしない)。
+- 16:52 にユーザーが N_Wall の設定(`config.toml`)で DAQ を起動し直した。`/data/DAQ_Test` は残っている(テストのデータ、消してよい)。
