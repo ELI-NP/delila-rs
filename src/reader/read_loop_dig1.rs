@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
+use super::eos::{self, OwedEos};
 use super::state::{next_reconnect_cooldown, state_rank, RECONNECT_INITIAL};
 use super::{
     caen, check_firmware_match, decoder, devtree, get_enabled_channels_from_config, pll,
@@ -95,6 +96,9 @@ pub(crate) fn run(
     let mut pll_watch = pll::PllWatch::default();
     let mut pll_supported = true;
     let mut last_pll_poll: Option<Instant> = None;
+
+    // The EOS of a run this board could not finish (connection lost mid-run).
+    let mut owed_eos = OwedEos::default();
 
     loop {
         // Check shutdown flag
@@ -253,6 +257,7 @@ pub(crate) fn run(
                 conn.hw_running = true;
                 conn.hw_cmd_retry_after = None;
                 *hw_state.lock().unwrap() = ComponentState::Running;
+                owed_eos.run_started(metrics.current_run.load(Ordering::Relaxed));
                 // Reset DIG2 poll state for new run
                 dig2_poll.reset();
                 // Signal decode_loop to reset decoder state (RolloverTracker etc.)
@@ -307,28 +312,8 @@ pub(crate) fn run(
                 }
 
                 // Send Stop signal with retry to guarantee EOS delivery
-                let stop_deadline = Instant::now() + Duration::from_secs(3);
-                let mut stop_signal = ReadLoopOutput::Stop;
-                loop {
-                    match tx.try_send(stop_signal) {
-                        Ok(()) => {
-                            info!("Stop signal sent to decode pipeline");
-                            break;
-                        }
-                        Err(mpsc::error::TrySendError::Full(returned)) => {
-                            if Instant::now() > stop_deadline {
-                                error!("Failed to send Stop signal: channel full for 3s");
-                                break;
-                            }
-                            stop_signal = returned;
-                            std::thread::sleep(Duration::from_millis(10));
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            warn!("Decode channel closed, Stop signal not needed");
-                            break;
-                        }
-                    }
-                }
+                eos::send_stop_signal(&tx);
+                owed_eos.stop_sent();
 
                 let _ = conn.handle.send_command(devtree::cmd::CLEAR_DATA);
                 conn.hw_armed = false;
@@ -350,6 +335,17 @@ pub(crate) fn run(
                 *hw_state.lock().unwrap() = ComponentState::Idle;
             }
         }
+
+        // A run whose connection was lost mid-run still owes its EOS: sent
+        // once the Operator has stopped the run (eos.rs).
+        eos::act_on(
+            owed_eos.poll(
+                target_state,
+                metrics.current_run.load(Ordering::Relaxed),
+                Instant::now(),
+            ),
+            &tx,
+        );
 
         // --- Handle requests from command handler (Detect / ApplyConfig) ---
         if let Ok(req) = request_rx.try_recv() {
@@ -537,9 +533,14 @@ pub(crate) fn run(
                             error!(
                                 timeout_secs = READ_ERROR_TIMEOUT.as_secs(),
                                 error = %e, code = e.code,
-                                "Read errors persisting, transitioning to Error"
+                                "Read errors persisting, transitioning to Error \
+                                 (this board's end-of-run marker is sent when the run is stopped)"
                             );
                             let _ = state_tx.send(ComponentState::Error);
+                            // GetStatus reports hw_state: without this the
+                            // Operator kept showing the dead board as Running
+                            // (pf-qaq run 70).
+                            *hw_state.lock().unwrap() = ComponentState::Error;
                             connection = None;
                             read_error_since = None;
                         } else {

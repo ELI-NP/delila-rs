@@ -9,6 +9,7 @@ pub mod caen;
 #[cfg(feature = "x743")]
 pub mod caen_legacy;
 pub mod decoder;
+mod eos;
 mod parallel_decode;
 mod pll;
 mod read_loop_dig1;

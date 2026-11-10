@@ -41,18 +41,29 @@
 - 各ボードの行に「PLL」(緑)/「PLL NOT LOCKED」/「PLL ?」(赤)。
 - 自動停止の赤い枠: 「Run N stopped automatically: a digitizer stopped working」、止まった後に「クロックケーブル(CLK-IN の数珠つなぎ)と PLL LOCK LED を見る。答えなくなったボードはたいていクレートの電源入れ直しと DAQ の再起動が必要」。
 
+**Reader の終わりの合図(EOS)と Error 表示(`src/reader/eos.rs`、2026-11-09 追加、ユーザー了承):**
+- 発端: run 70 の nwall_sink の ROOT が `run_inprogress_1794128280.root` のまま残った(手で `run0070_0000_N_Wall.root` に改名、中身は無傷)。nwall_sink は「そのランでデータを送ったソース全部の EOS」で閉じるが、mod2・3・5 が EOS を出さなかった。
+- 真因: EOS は read loop の「取得を止める」処理(接続があって取得中のときだけ通る)から出る。30 秒読めないと read loop は接続を捨てて Error にするので、その後の Stop では止めるものがなく EOS が出ない。**Stop 自体は受理されていた**(Error は watch に入るだけで、コマンド側の状態は Running のまま)。
+- 修正: read loop が「EOS をまだ出していないラン」を接続とは別に覚える(`OwedEos`)。Operator が止めたら(目標が Configured / Idle)**2 秒後**に Stop 信号 → EOS。
+  - ラン中は出さない: Recorder はそのランの最初の EOS でファイルを閉じるので、ラン中の EOS はほかのボードのデータを落とす。
+  - 2 秒待つのは、生きているボードの吐き出し(最大 1 秒)より後にするため。この EOS が Recorder のファイルを早く閉じる最初の EOS にならない。
+  - 次のランの Arm が来たら待たずにすぐ出す。次のランが始まってしまったら出さずに error ログ(EOS は Reader の現在のラン番号で出るので、新しいランのファイルを閉じてしまう)。
+- ついでに見つけた不具合: Error になっても GetStatus が報告する `hw_state` は Running のままで、**run 70 の間 Operator は死んだボードを Running と見ていた**(event_stall の「Running なのにイベントなし」だけが出ていた)。Error に変わるときに `hw_state` も Error にした。これで digitizer_guard の「Reader Error」も実際に効く(以前は PLL が読めないことでしか止まらなかった)。
+- DIG1 RAW(`read_loop_dig1.rs`)と AMax(`read_loop_dig2.rs`)の両方。Stop 信号の送り直しの処理は 2 か所の同じコードを `eos::send_stop_signal` にまとめた。テスト +9。
+
 **InfluxDB / Grafana:**
 - `pll,module=N locked=1i|0i|-1i`(1 locked、0 外れ、-1 読めない)。
 - Rates のダッシュボードの格子の下に「Digitizer clock (PLL)」(state timeline、ボードごとに 1 行、区間内の最悪値)。
 
-**テスト:** Rust +16(common 2、pll 7、guard 6、influx 1)、全体 831 通過、clippy 警告 0。UI +5(120 通過)、本番ビルド OK。Grafana +1、既存 1 を拡張(38 通過)。
+**テスト:** Rust +16(common 2、pll 7、guard 6、influx 1)、全体 831 通過、clippy 警告 0。EOS 修正で +9、全体 840 通過(2026-11-09)。UI +5(120 通過)、本番ビルド OK。Grafana +1、既存 1 を拡張(38 通過)。
 
 ## 4. 未確認・注意
 
 - **VME 版 V1725 で `/par/plllocked` が読めるか**は、配備のときに実機で見る(DT5730 の DevTree にはある。ユーザーの見立てでは 1725 と 1730 は同じ)。DevTree にない場合は「なし」になり、UI に出ない(ログに "No PLL status available" が info で出る)。
 - **V1725 の取得中に `/par/plllocked` を読んで問題がないか**(ReadData の合間に 2 秒に 1 回)。
 - **クロックを抜いたとき**に FALSE が返るのか、ボードが答えなくなる(unreadable)のかは不明。どちらでも止まる作りにしてある。
-- 壊れた Reader はランの終わりの合図(EOS)を出さないので、自動停止の後も **nwall_sink の ROOT が `run_inprogress_*.root` のまま名前付けされない**可能性がある(ラン 65 と同じ)。.delila は Recorder が Stop で閉じる。nwall_sink 側の課題として別に扱う。
+- ~~壊れた Reader が EOS を出さず nwall_sink の ROOT が名前付けされない~~ → §3 の EOS 修正で対処(実機未確認)。Reader のプロセスごと死んだ場合はまだ救えない(nwall_sink 側で Operator の Stop を見て閉じる案 B は見送り)。
+- `hw_state = Error` の後、接続が戻らないまま Reset(目標 Idle)すると Error 表示が残る。復帰はクレートの電源入れ直しと DAQ の再起動(今までどおり)。
 
 ## 5. 配備と実機確認(ランの合間)
 
@@ -60,7 +71,7 @@
 2. Reader のログ: V1725 × 5 と VX2730 で "PLL locked"。
 3. UI: Readers の見出しに「PLL OK」、行に「PLL」。
 4. Grafana: `tools/grafana/gen_dashboards.py` でダッシュボードを作り直し、PLL の行が緑。
-5. (任意、ユーザー判断)テストランでクロックケーブルを抜き、10〜15 秒で止まり赤い枠が出るか。抜いたボードの PLL が FALSE になるか unreadable になるかを記録。
+5. (任意、ユーザー判断)テストランでクロックケーブルを抜き、10〜15 秒で止まり赤い枠が出るか。抜いたボードの PLL が FALSE になるか unreadable になるかを記録。さらに: 30 秒たって Error になったボードが Operator で Error と出るか、停止の約 2 秒後にその Reader のログに "Sending the end-of-run marker (EOS)" が出て、nwall_sink の ROOT が `runNNNN_0000_N_Wall.root` に名前付けされるか。
 
 ## 6. 後回し
 
