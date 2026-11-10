@@ -14,6 +14,44 @@
 # Si coefficients, 2026-11-10: param_E_sector.txt, param_dE_sector.txt and
 # param_dE_rings.txt (module channel p0 p1, MeV = p0 + p1 * ADC), converted here to
 # keV: kev_per_adc = 1000 * p1, offset_kev = 1000 * p0 (exact decimal shift).
+#
+# VX2730 (module 0) coefficients, 2026-11-10: the N_Wall calibration sheet (Google
+# Sheets), full cell values. LaBr3 ch1-7: offset + slope, keV. NWall LS ch8-31:
+# E = a x^2 + b x + c with a = c = 0, so slope = b, offset 0 (keV); Wall A A01-A12 =
+# ch31-ch20, Wall B B01-B12 = ch19-ch8 (user). A quadratic term is refused.
+
+# module 0 = VX2730: LaBr3 ch1-7, NWall LS ch8-31 (the name after # is the detector)
+0	1	0.748515224300919	7.0806677865753	# LaBr1
+0	2	0.953420354223945	5.90811543226739	# LaBr2
+0	3	0.901998480857714	9.1099027292112	# LaBr3
+0	4	1.01725705866287	8.02418897239573	# LaBr4
+0	5	1.06029333415989	4.82129967543575	# LaBr5
+0	6	0.680909287570963	7.76142822573985	# LaBr6
+0	7	0.662078205224039	10.0333727886164	# LaBr7
+0	8	1.448	0	# B12
+0	9	0.406	0	# B11
+0	10	0.927	0	# B10
+0	11	1.96	0	# B09
+0	12	0.618	0	# B08
+0	13	0.402	0	# B07
+0	14	0.788	0	# B06
+0	15	0.778	0	# B05
+0	16	0.772	0	# B04
+0	17	0.707	0	# B03
+0	18	3.818	0	# B02
+0	19	0.718	0	# B01
+0	20	1.615	0	# A12
+0	21	0.678	0	# A11
+0	22	0.356	0	# A10
+0	23	2.471	0	# A09
+0	24	0.592	0	# A08
+0	25	0.348	0	# A07
+0	26	1.909	0	# A06
+0	27	1.4	0	# A05
+0	28	0.646	0	# A04
+0	29	0.133	0	# A03
+0	30	1.67	0	# A02
+0	31	2	0	# A01
 
 # module 1 = E sectors (param_E_sector.txt)
 1	0	3.99907	126.528
