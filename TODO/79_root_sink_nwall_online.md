@@ -205,3 +205,5 @@ tools/root_sink/
 - `/rf/gamma_since_beam_ch/gamma_since_beam_m<M>_ch<C>`: LaBr3 のチャンネルごと。タイトルに対応表の名前(LaBr1 など)、ランの始めに対応表を読み直したらタイトルも直す。全部足すと gamma_since_beam。
 - 名前はセクター番号とボード/チャンネルで決める(ヒストグラムはランをまたいで溜まり、対応表は毎ラン読み直すので、名前の意味が変わらないように)。`nwall_map.hpp` の `pid_pair_name` / `channel_hist_name`、単体テスト 79/79。
 - E2E(Mac、合成データ): pid 3,939 = 出てきた 17 組の合計 3,939(セクター番号が同じ 16 組で 3,938)、gamma_since_beam 19,993 = 7 チャンネルの合計、display_drops 0。警告なしでビルド。
+
+**配備(2026-11-10 08:04、ユーザー承認、ラン 79 と 80 の間、Operator は Configured):** 11-09 のパルシング確認と合わせて 085e7dc。pf-qaq のリポジトリ(ac86dcc + 設定の手直し、TODO 85 の配備で整理する)には触らず、`git archive 085e7dc` の `tools/root_sink/{common,nwall}` と `tools/delila2root`(ヘッダーが要る)を `/tmp/nwall_build_085e7dc` に展開してビルド。pf-qaq の上で単体テスト 79/79、警告なし、合成データの結果は Mac と同じ。`nwall_sink` だけを SIGTERM で止め(受信 7,379,136,944 hit = 書き込み済み、新しい run_inprogress なし)、`~/.local/bin` を入れ替えて同じ引数で起動、ログは同じファイル `logs/20261108_191423/nwall_sink.log` に追記。古いバイナリは `~/.local/bin/nwall_sink.before_pid_pair`。表示のヒストグラムは 0 に戻った。組ごと・チャンネルごとのヒストグラムは最初に入ったときに現れる(pid_pair は E と dE のヒット、LaBr はビームが要る)。**注意: pf-qaq で動いている nwall_sink はリポジトリ(ac86dcc)より新しい。**
