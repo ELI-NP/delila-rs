@@ -61,7 +61,7 @@
 
 - **VME 版 V1725 で `/par/plllocked` が読めるか**は、配備のときに実機で見る(DT5730 の DevTree にはある。ユーザーの見立てでは 1725 と 1730 は同じ)。DevTree にない場合は「なし」になり、UI に出ない(ログに "No PLL status available" が info で出る)。
 - **V1725 の取得中に `/par/plllocked` を読んで問題がないか**(ReadData の合間に 2 秒に 1 回)。
-- **クロックを抜いたとき**に FALSE が返るのか、ボードが答えなくなる(unreadable)のかは不明。どちらでも止まる作りにしてある。
+- ~~**クロックを抜いたとき**に FALSE が返るのか、ボードが答えなくなる(unreadable)のかは不明~~ → **FALSE(`unlocked`)、板は答え続ける**(2026-11-10 pf-qaq、§5.1)。どちらでも止まる作りは変えない(2026-11-08 のように答えなくなる場合もあるため)。
 - ~~壊れた Reader が EOS を出さず nwall_sink の ROOT が名前付けされない~~ → §3 の EOS 修正で対処(実機未確認)。Reader のプロセスごと死んだ場合はまだ救えない(nwall_sink 側で Operator の Stop を見て閉じる案 B は見送り)。
 - `hw_state = Error` の後、接続が戻らないまま Reset(目標 Idle)すると Error 表示が残る。復帰はクレートの電源入れ直しと DAQ の再起動(今までどおり)。
 
@@ -83,6 +83,7 @@
 - 15:06 に DAQ を再起動(`logs/20261110_150630`)→ **6 台とも 1 回目でつながり、Configure(ラン 80)も全台正常**(リセット・設定・ADC 較正、-6 は 0。残る警告は既知の `ch_trg_latency` と mod5 = V1725S の CFD レジスタ)。
 - 読み: 同じプロセスでのつなぎ直しでは抜けない状態が残っていた(ユーザーの見立ても「ソフト側」)。クレートのリセットが要ったかどうかは切り分けられていない。CAEN ライブラリのログ(`CAENDPPLayer.log`、mod4 分を `~/CAENDPPLayer_20261110_1437_mod4.log` に保存)では、FELib の open の中で板のリセットと PLL の確認があり、「PLL lock loss occurred」で open が失敗して -6 になる。**このログは全 Reader が同じ cwd の同じファイルに書くため、1 台分しか残らない。** 未調査: 失敗した open が CAEN ライブラリ内に何を残すか、Reader が自分で抜け出す方法(プロセスごと作り直す等)。
 - 15:09 に cc02ea2(Configured でも PLL を読む)を配備(ビルド 44 秒・警告 0、`logs/20261110_150925`)。6 台とも 1 回目でつながり、**Idle の時点で全台 `PLL locked`**。Configure(ラン 80)の後も 6 台とも `pll = locked`、ログの PLL の変化は起動時の 1 回だけ(Configure のリセットの後に sticky な「外れ」は出なかった)。-6 は mod5 の CFD レジスタ(既知)のみ。
+- **クロックを抜く試験(ユーザー、ランの外、15:11)**: 15:11:28 に Reset(Idle)、15:11:43 にクロックケーブルを外す → **mod2〜5 の 4 台が同時に `unlocked`(FALSE)**。板は答え続けた(`unreadable` にはならない、§4 の疑問の答え)。挿し直すと 15:12:09 までに全台 `locked` に戻った(mod2 は挿す途中で外れ・戻りを 2 回)。Reader のログの warn、Operator の `pll`、Grafana の「Digitizer clock (PLL)」の行(値 0)すべてに出た。ラン中の自動停止(§5 の 5 の残り)は未試験。
 
 ## 6. 後回し
 
