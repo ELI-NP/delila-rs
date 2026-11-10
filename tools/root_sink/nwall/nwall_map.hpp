@@ -30,8 +30,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nwall {
@@ -221,6 +223,29 @@ inline std::string channel_hist_name(const char* stem, unsigned module, unsigned
   char buf[128];
   std::snprintf(buf, sizeof buf, "%s_m%u_ch%02u", stem, module, channel);
   return buf;
+}
+
+// Every (E sector, dE sector) number pair of the map, sorted, each once: the
+// display makes one pid per pair up front, so all are listed before any data.
+inline std::vector<std::pair<int, int>> sector_pairs(const ChannelMap& m) {
+  std::set<int> e, de;
+  for (const auto& kv : m.roles) {
+    if (kv.second.kind != Kind::Sector) continue;
+    if (kv.second.det == Det::E) e.insert(kv.second.index);
+    if (kv.second.det == Det::DE) de.insert(kv.second.index);
+  }
+  std::vector<std::pair<int, int>> out;
+  for (int i : e)
+    for (int j : de) out.emplace_back(i, j);
+  return out;
+}
+
+// The map keys (module << 8 | channel) of one detector type, sorted.
+inline std::vector<uint16_t> keys_of(const ChannelMap& m, Det d) {
+  std::vector<uint16_t> out;
+  for (const auto& kv : m.roles)
+    if (kv.second.det == d) out.push_back(kv.first);
+  return out;  // std::map iterates in key order
 }
 
 }  // namespace nwall

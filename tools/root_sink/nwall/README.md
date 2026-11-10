@@ -70,11 +70,11 @@ never drop). Histograms accumulate across runs until `/Reset`.
 | | `energy_m<M>` | energy × channel, one per board |
 | `/rf` | `tof_rf_m<M>` | t − (bunch at or before t) − rf_t0, per channel (0 … T): the beam itself at 0, the gamma flash at L/c |
 | `/rf` | `gamma_since_beam` | pulsing check: (t − beam pulse at or before t) % 1000 ns for the LaBr3 channels, raw times. 1000 ns = 5 T, so a pulsed beam gives peaks every T (0, 200, 400, 600, 800); counts between the peaks = beam outside the bunches |
-| `/rf/gamma_since_beam_ch` | `gamma_since_beam_m<M>_ch<C>` | the same, one per LaBr3 channel (title = its name in the map); they add up to `gamma_since_beam` |
+| `/rf/gamma_since_beam_ch` | `gamma_since_beam_m<M>_ch<C>` | the same, one per LaBr3 channel of the map (made, empty, when the map is read; title = its name in the map); they add up to `gamma_since_beam` |
 | `/rf` | `since_beam` | the same per channel of the beam's board (LaBr3 and LS), without the beam channel |
 | `/ls` | `ls_psd` | (E_long − E_short) / E_long vs E_long of the LS channels (n/γ) |
 | `/events` | `pid` | dE vs E — the largest dE-sector and E-sector hit of each event |
-| `/events/pid_pair` | `pid_E<e>_dE<d>` | `pid` per sector pair (E sector e, dE sector d, the same largest hits), so it can be read before the keV calibration; made when the pair first occurs (2.1 MB each, 540 MB for all 16 × 16); they add up to `pid` |
+| `/events/pid_pair` | `pid_E<e>_dE<d>` | `pid` per sector pair (E sector e, dE sector d, the same largest hits), so it can be read before the keV calibration; every E-sector × dE-sector pair of the map is made, empty, when the map is read (start-up and every run start): 2.1 MB each, 540 MB for 16 × 16; they add up to `pid` |
 | `/hits` | `energy_keV_m<M>` | with `--energy-calib`: energy in keV × channel, per board; channels without coefficients are not in it |
 | `/events` | `pid_keV` | with `--energy-calib`: dE vs E in keV, the largest hit of each **in keV**, among sectors with coefficients |
 | | `sector_dE_vs_E` | dE sector × E sector, every pair in an event (the diagonal = the sector order) |

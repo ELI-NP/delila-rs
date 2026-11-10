@@ -289,8 +289,37 @@ static void test_display_names() {
   CHECK(channel_hist_name("gamma_since_beam", 5, 31) == "gamma_since_beam_m5_ch31");
 }
 
+// What the display makes up front from the map (user, 2026-11-10: the per-pair
+// and per-channel histograms must be listed before any data comes in).
+static void test_map_display_lists() {
+  const char* text =
+      "0  0  beam    timing  beam   -      -\n"
+      "0  2  LaBr2   LaBr    LaBr   -      -\n"
+      "0  1  LaBr1   LaBr    LaBr   -      -\n"
+      "0  8  LS01    LS      LS     -      -\n"
+      "1  1  E_S01   E_sec   E      sector 1\n"
+      "1  0  E_S00   E_sec   E      sector 0\n"
+      "2  2  dE_S02  dE_sec  dE     sector 2\n"
+      "2  0  dE_S00  dE_sec  dE     sector 0\n"
+      "2  1  dE_S01  dE_sec  dE     sector 1\n"
+      "3  0  dE_R30  dE_ring dE     ring   30\n"   // rings are not in pid
+      "4  0  E_S00b  E_sec   E      sector 0\n";  // a second channel, same sector
+  MapParseResult r = parse_channel_map(text);
+  CHECK(r.errors.empty());
+  const std::vector<std::pair<int, int>> pairs = sector_pairs(r.map);
+  CHECK(pairs.size() == 6);  // 2 E sectors x 3 dE sectors, sector 0 once
+  CHECK(pairs.front() == std::make_pair(0, 0));
+  CHECK(pairs[1] == std::make_pair(0, 1));
+  CHECK(pairs.back() == std::make_pair(1, 2));
+  const std::vector<uint16_t> labr = keys_of(r.map, Det::LaBr);
+  CHECK(labr.size() == 2 && labr[0] == map_key(0, 1) && labr[1] == map_key(0, 2));
+  CHECK(keys_of(r.map, Det::Pulser).empty());
+  CHECK(sector_pairs(parse_channel_map("0 8 LS01 LS LS - -\n").map).empty());
+}
+
 int main() {
   test_display_names();
+  test_map_display_lists();
   test_map_valid();
   test_map_no_beam();
   test_map_errors_all_reported();

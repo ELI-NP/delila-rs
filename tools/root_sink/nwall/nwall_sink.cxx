@@ -30,7 +30,8 @@
 //                since_beam: the same for the beam board, channel on y
 //       /ls      ls_psd: (E - Es)/E vs E of the LS channels
 //       /events  pid (dE vs E), and per sector pair pid_pair/pid_E<e>_dE<d>
-//                (created when the pair first occurs; they add up to pid),
+//                (every pair of the map, made when the map is read; they add
+//                up to pid),
 //                sector_dE_vs_E, dE_ring_vs_sector,
 //                ls_dt_si (t_LS - t_trigger), si_phase (Si trigger vs bunch),
 //                ls_tof_si (t_LS - the bunch the Si picked - rf_t0)
@@ -1312,6 +1313,10 @@ class Display {
     names_ = m.names;
     // Kept across runs by board / channel: the title follows the new map.
     for (auto& kv : gamma_since_ch_) kv.second->SetTitle(gamma_since_title(kv.first).c_str());
+    // Every sector pair and LaBr3 channel of the map is listed up front, empty
+    // until data comes (user, 2026-11-10); ones from an earlier map stay.
+    for (const auto& p : nwall::sector_pairs(m)) pid_pair(p.first, p.second);
+    for (uint16_t key : nwall::keys_of(m, nwall::Det::LaBr)) gamma_since_ch(key);
     beam_key_ = m.beam_key;
     have_map_ = true;
     // Which sectors are E and dE sets the pid_keV axes.
@@ -1576,9 +1581,9 @@ class Display {
   }
 
   // Per sector pair and per LaBr channel (user, 2026-11-10): before the keV
-  // calibration the sums mix gains. Created when first filled, so only pairs
-  // that occur take memory (512 x 512 doubles = 2.1 MB each, 540 MB for all
-  // 16 x 16).
+  // calibration the sums mix gains. set_map makes all of them from the map
+  // (512 x 512 doubles = 2.1 MB per pair, 540 MB for 16 x 16); a hit outside
+  // the map's pairs still gets its histogram here.
   TH2D* pid_pair(int e_sector, int de_sector) {
     const std::pair<int, int> k(e_sector, de_sector);
     auto it = pid_pair_.find(k);
