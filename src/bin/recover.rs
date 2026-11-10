@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use delila_rs::recorder::{
-    delila_stem, is_delila_file, ChecksumCalculator, DataFileReader, FileFooter, FileFormatError,
-    FileValidationResult,
+    batch_time_range, delila_stem, is_delila_file, ChecksumCalculator, DataFileReader, FileFooter,
+    FileFormatError, FileValidationResult,
 };
 
 #[derive(Parser)]
@@ -170,10 +170,21 @@ fn show_info(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             println!("  Total Events:   {}", footer.total_events);
             println!("  Data Bytes:     {}", footer.data_bytes);
             println!("  Checksum:       {:016x}", footer.data_checksum);
-            println!(
-                "  Time Range:     {:.3} - {:.3} ns",
-                footer.first_event_time_ns, footer.last_event_time_ns
-            );
+            if footer.has_time_range() {
+                println!(
+                    "  Time Range:     {:.3} - {:.3} ns",
+                    footer.first_event_time_ns, footer.last_event_time_ns
+                );
+            } else {
+                // Not stored by the Recorder since 2026-11-10: read the data.
+                match DataFileReader::open(path)?.scan_time_range() {
+                    Some((first, last)) => println!(
+                        "  Time Range:     {:.3} - {:.3} ns (read from the data)",
+                        first, last
+                    ),
+                    None => println!("  Time Range:     none (no events)"),
+                }
+            }
 
             let end_time = footer.file_end_time_ns / 1_000_000_000;
             println!("  End Time:       {} (unix timestamp)", end_time);
@@ -242,9 +253,9 @@ fn recover_file(
     for batch_result in data_reader.data_blocks() {
         match batch_result {
             Ok(batch) => {
-                // Update timestamp range
-                if let (Some(first), Some(last)) = (batch.events.first(), batch.events.last()) {
-                    footer.update_timestamp_range(first.timestamp_ns, last.timestamp_ns);
+                // Update timestamp range (events are not time-ordered in a batch)
+                if let Some((first, last)) = batch_time_range(&batch) {
+                    footer.update_timestamp_range(first, last);
                 }
 
                 // Serialize batch

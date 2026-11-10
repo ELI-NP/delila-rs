@@ -118,6 +118,13 @@
 
 ## 7. 測定の後で決めること(今はコードを変えない)
 
-- Recorder の全バッチのデコードをやめる、Sorter を差分マージにする、`safe_horizon_ms` を短くする、Monitor の受信で SUB パイプが増える件(HWM = 0 で、表示専用なのにメモリを 35 GB 使った)。
+- ~~Recorder の全バッチのデコードをやめる~~ → **2026-11-10 実施(ユーザー「やめちゃいましょう。データがあればいい」)、下の §7.1**。Sorter を差分マージにする、`safe_horizon_ms` を短くする、Monitor の受信で SUB パイプが増える件(HWM = 0 で、表示専用なのにメモリを 35 GB 使った)。
 - TODO 73 §5.8 の未決定(自動停止、再起動でキューを消さない、キュー中の Start とイベント数の記録)。
 - rollover トラッカーのビット幅(仕様書のページ、`caen_simple_test`、`SwFineTs` の経路の確認が先)。
+
+### 7.1 Recorder の全バッチのデコードをやめた (2026-11-10)
+
+- 用途を確かめたら 1 つだけだった: `.delila` のフッタに「最初と最後のイベントの時刻」を書くため(`src/recorder/mod.rs`、書き込みスレッドで毎バッチ全デコード)。ファイルへはデコードせずにそのまま書き、イベント数もデータの先頭の数バイトから取っている。フッタの時刻を使っていたのは `recover info` の表示だけで、`delila2root` はフッタのイベント数を照合に使うだけ。
+- 変更: Recorder はデコードしない(フッタの時刻は「記録なし」のまま)。`FileFooter::has_time_range()`、`DataFileReader::scan_time_range()`(データを読んで最小と最大)、`batch_time_range()`(バッチ内は時刻順でないので最初と最後ではなく最小と最大)を足した。`recover info` はフッタに時刻がなければデータから出す(「read from the data」と表示)。`recover recover` もバッチの最初と最後でなく最小と最大で組み立てる。
+- テスト +3(format 2、Recorder 1)、全 873 件通過、clippy 警告 0。Mac で新しい Recorder のファイル(エミュレータ 5 秒、8700 イベント)に `recover info` → フッタ完全、時刻はデータから表示。
+- **上限がどれだけ上がったかは未測定。** pf-qaq の DAQ_Test(nwall_sink なし)で 3〜5 MHz を流せば、書き込みのスレッドの CPU と待ち行列で確かめられる。

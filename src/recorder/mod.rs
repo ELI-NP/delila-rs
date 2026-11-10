@@ -21,9 +21,9 @@
 mod format;
 
 pub use format::{
-    delila_stem, is_delila_file, ChecksumCalculator, DataBlockIterator, DataFileReader,
-    DelilaSource, FileFooter, FileFormatError, FileHeader, FileValidationResult, FOOTER_SIZE,
-    FORMAT_VERSION, MAX_ZST_DECOMPRESSED_BYTES,
+    batch_time_range, delila_stem, is_delila_file, ChecksumCalculator, DataBlockIterator,
+    DataFileReader, DelilaSource, FileFooter, FileFormatError, FileHeader, FileValidationResult,
+    FOOTER_SIZE, FORMAT_VERSION, MAX_ZST_DECOMPRESSED_BYTES,
 };
 
 use std::fs::{self, File};
@@ -41,7 +41,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::common::{
     handle_command, run_command_task, sub_no_hwm, CommandHandlerExt, ComponentSharedState,
-    ComponentState, EventDataBatch, Message, MessageHeader, RunConfig,
+    ComponentState, Message, MessageHeader, RunConfig,
 };
 
 /// Recorder configuration
@@ -605,22 +605,10 @@ impl FileWriter {
             self.current_file_size += bytes_written;
             self.footer.total_events += event_count;
 
-            // Extract timestamp range from batch for footer (writer thread, cheap vs I/O)
-            if let Ok(batch) = EventDataBatch::from_msgpack(data) {
-                if !batch.events.is_empty() {
-                    let mut min_ts = f64::MAX;
-                    let mut max_ts = f64::MIN;
-                    for ev in &batch.events {
-                        if ev.timestamp_ns < min_ts {
-                            min_ts = ev.timestamp_ns;
-                        }
-                        if ev.timestamp_ns > max_ts {
-                            max_ts = ev.timestamp_ns;
-                        }
-                    }
-                    self.footer.update_timestamp_range(min_ts, max_ts);
-                }
-            }
+            // No decoding here (2026-11-10, user): the footer's event time
+            // range used to be filled by decoding every batch, the prime
+            // suspect for the writer's ~2.7 MHz ceiling (TODO 84 §7). Only
+            // `recover info` showed it, and it reads it from the data now.
 
             self.stats
                 .written_bytes
@@ -1386,6 +1374,7 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::EventDataBatch;
 
     #[test]
     fn test_default_config() {
@@ -1451,6 +1440,25 @@ mod tests {
     fn validate(path: &std::path::Path) -> FileValidationResult {
         let f = File::open(path).unwrap();
         DataFileReader::new(f).unwrap().validate()
+    }
+
+    /// 2026-11-10 (user): the writer stores the raw bytes and no longer
+    /// decodes them to fill the footer's time range; the range comes from the
+    /// data when wanted, and the event count is still exact.
+    #[test]
+    fn writer_does_not_store_a_time_range_the_data_holds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut writer, _stats) = started_writer(dir.path());
+        writer.write_raw_batch(&batch_bytes(0, 10), 10).unwrap();
+        writer.write_raw_batch(&batch_bytes(2, 5), 5).unwrap();
+        let path = writer.current_path.clone().unwrap();
+        writer.close_file().unwrap();
+
+        let mut r = DataFileReader::new(File::open(&path).unwrap()).unwrap();
+        let footer = r.read_footer().unwrap();
+        assert_eq!(footer.total_events, 15);
+        assert!(!footer.has_time_range());
+        assert_eq!(r.scan_time_range(), Some((0.0, 2004.0)));
     }
 
     /// TODO 69: a write that fails mid-block (full disk) must leave a file

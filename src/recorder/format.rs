@@ -226,6 +226,14 @@ impl FileFooter {
     }
 
     /// Update timestamp range with new event timestamps
+    /// Whether the footer holds an event time range. The Recorder stopped
+    /// storing it on 2026-11-10: decoding every batch for it was the prime
+    /// suspect for the writer's ~2.7 MHz ceiling (TODO 84 §7), and the data
+    /// holds it anyway ([`DataFileReader::scan_time_range`], `recover info`).
+    pub fn has_time_range(&self) -> bool {
+        self.first_event_time_ns <= self.last_event_time_ns
+    }
+
     pub fn update_timestamp_range(&mut self, first: f64, last: f64) {
         if first < self.first_event_time_ns {
             self.first_event_time_ns = first;
@@ -773,6 +781,22 @@ impl<R: std::io::Read + std::io::Seek> DataFileReader<R> {
         Ok(computed == footer.data_checksum)
     }
 
+    /// The earliest and latest event time of the data blocks, read from the
+    /// data (`None` without events). Stops at the first unreadable block.
+    pub fn scan_time_range(&mut self) -> Option<(f64, f64)> {
+        let mut range: Option<(f64, f64)> = None;
+        for batch in self.data_blocks() {
+            let Ok(batch) = batch else { break };
+            if let Some((lo, hi)) = batch_time_range(&batch) {
+                range = Some(match range {
+                    Some((a, b)) => (a.min(lo), b.max(hi)),
+                    None => (lo, hi),
+                });
+            }
+        }
+        range
+    }
+
     /// Iterator over data blocks (for recovery)
     pub fn data_blocks(&mut self) -> DataBlockIterator<'_, R> {
         let data_end = self.data_end();
@@ -787,6 +811,18 @@ impl<R: std::io::Read + std::io::Seek> DataFileReader<R> {
             done: false,
         }
     }
+}
+
+/// Earliest and latest event time in a batch. Events are not time-ordered
+/// inside a batch (DIG1 channel-pair aggregates), so not first and last.
+pub fn batch_time_range(batch: &crate::common::EventDataBatch) -> Option<(f64, f64)> {
+    batch.events.iter().fold(None, |range, ev| {
+        let t = ev.timestamp_ns;
+        Some(match range {
+            Some((lo, hi)) => (f64::min(lo, t), f64::max(hi, t)),
+            None => (t, t),
+        })
+    })
 }
 
 /// Iterator over data blocks in a file
@@ -1082,6 +1118,38 @@ mod tests {
             footer.write_to(&mut buf).unwrap();
         }
         buf
+    }
+
+    /// TODO 84 §7 (2026-11-10): the Recorder no longer decodes every batch to
+    /// store the time range; it is read from the data when wanted.
+    #[test]
+    fn footer_time_range_is_optional_and_rebuilt_from_the_data() {
+        let mut r =
+            DataFileReader::new(std::io::Cursor::new(file_bytes(&[3, 5, 1], true))).unwrap();
+        let footer = r.read_footer().unwrap();
+        assert!(footer.is_complete());
+        assert!(!footer.has_time_range());
+        assert_eq!(r.scan_time_range(), Some((0.0, 4.0)));
+
+        let mut empty = DataFileReader::new(std::io::Cursor::new(file_bytes(&[], true))).unwrap();
+        assert_eq!(empty.scan_time_range(), None);
+
+        let mut stored = FileFooter::new();
+        stored.update_timestamp_range(1.0, 2.0);
+        assert!(stored.has_time_range());
+    }
+
+    #[test]
+    fn batch_time_range_is_min_and_max_not_first_and_last() {
+        let mut b = crate::common::EventDataBatch::new(0, 0);
+        for t in [5.0, 1.0, 9.0, 3.0] {
+            b.push(crate::common::EventData::new(0, 0, 1, 1, t, 0));
+        }
+        assert_eq!(batch_time_range(&b), Some((1.0, 9.0)));
+        assert_eq!(
+            batch_time_range(&crate::common::EventDataBatch::new(0, 1)),
+            None
+        );
     }
 
     /// TODO 69: a file without a footer (crash, or cut back at its last
