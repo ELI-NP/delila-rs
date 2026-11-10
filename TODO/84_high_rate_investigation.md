@@ -127,4 +127,5 @@
 - 用途を確かめたら 1 つだけだった: `.delila` のフッタに「最初と最後のイベントの時刻」を書くため(`src/recorder/mod.rs`、書き込みスレッドで毎バッチ全デコード)。ファイルへはデコードせずにそのまま書き、イベント数もデータの先頭の数バイトから取っている。フッタの時刻を使っていたのは `recover info` の表示だけで、`delila2root` はフッタのイベント数を照合に使うだけ。
 - 変更: Recorder はデコードしない(フッタの時刻は「記録なし」のまま)。`FileFooter::has_time_range()`、`DataFileReader::scan_time_range()`(データを読んで最小と最大)、`batch_time_range()`(バッチ内は時刻順でないので最初と最後ではなく最小と最大)を足した。`recover info` はフッタに時刻がなければデータから出す(「read from the data」と表示)。`recover recover` もバッチの最初と最後でなく最小と最大で組み立てる。
 - テスト +3(format 2、Recorder 1)、全 873 件通過、clippy 警告 0。Mac で新しい Recorder のファイル(エミュレータ 5 秒、8700 イベント)に `recover info` → フッタ完全、時刻はデータから表示。
+- 配備: 6a33fb3(pf-qaq は 9d4d1cf)。19:12 EET、Idle(次はラン 83)、書き残し 0、メモリ上の設定とファイルが一致することを確かめてから DAQ を再起動(`logs/20261110_191205`、強制終了なし)。6 台とも 1 回目でつながり、全台 PLL OK。
 - **上限がどれだけ上がったかは未測定。** pf-qaq の DAQ_Test(nwall_sink なし)で 3〜5 MHz を流せば、書き込みのスレッドの CPU と待ち行列で確かめられる。
