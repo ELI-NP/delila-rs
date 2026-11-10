@@ -1,10 +1,13 @@
-import { Component, inject, OnInit, computed } from '@angular/core';
+import { Component, inject, OnInit, computed, effect, untracked } from '@angular/core';
 import { RouterModule, RouterLink, RouterLinkActive } from '@angular/router';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatSnackBarModule } from '@angular/material/snack-bar';
+import { MatDialog } from '@angular/material/dialog';
 import { OperatorService } from './services/operator.service';
 import { HistogramService } from './services/histogram.service';
+import { TimerService } from './services/timer.service';
+import { TimerAlarmDialogComponent } from './components/timer/timer-alarm-dialog.component';
 
 @Component({
   selector: 'app-root',
@@ -40,6 +43,16 @@ import { HistogramService } from './services/histogram.service';
       }
       @if (currentRunNumber()) {
         <span class="run-info">Run: {{ currentRunNumber() }}</span>
+      }
+      @if (timer.isRunning()) {
+        <span
+          class="run-timer"
+          data-testid="header-run-timer"
+          [class.over]="timer.remainingMs() < 0"
+          [title]="timer.current()!.auto_stop ? 'Run timer: the Operator stops the run when the time is up' : 'Run timer: alarm only, the run goes on'"
+        >
+          {{ timer.headerText() }}
+        </span>
       }
       <span
         class="status-indicator"
@@ -174,7 +187,22 @@ import { HistogramService } from './services/histogram.service';
       font-size: 14px;
     }
 
-    .status-indicator {
+    .run-timer {
+      margin-right: 16px;
+      padding: 4px 12px;
+      background-color: rgba(255, 255, 255, 0.18);
+      border-radius: 4px;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .run-timer.over {
+      background-color: #f44336;
+      color: white;
+      font-weight: 500;
+    }
+
+        .status-indicator {
       padding: 4px 12px;
       border-radius: 12px;
       font-size: 12px;
@@ -205,6 +233,28 @@ import { HistogramService } from './services/histogram.service';
 export class App implements OnInit {
   readonly operator = inject(OperatorService);
   readonly histogram = inject(HistogramService);
+  readonly timer = inject(TimerService);
+  private readonly dialog = inject(MatDialog);
+
+  constructor() {
+    // The run timer's alarm (TODO 86) opens on whatever page is showing.
+    effect(() => {
+      const notice = this.timer.alarm();
+      if (!notice) return;
+      untracked(() => {
+        if (this.dialog.getDialogById('run-timer-alarm')) return;
+        this.dialog
+          .open(TimerAlarmDialogComponent, {
+            id: 'run-timer-alarm',
+            data: notice,
+            disableClose: true,
+            width: '420px',
+          })
+          .afterClosed()
+          .subscribe(() => this.timer.dismissAlarm());
+      });
+    });
+  }
 
   // Computed: get run number from any component that has one
   readonly currentRunNumber = computed(() => {

@@ -386,3 +386,121 @@ pub(super) async fn export_runs(
 
     Ok(Json(export))
 }
+
+/// The number of the run in progress, if one is Running.
+async fn running_run_number(state: &AppState) -> Option<i32> {
+    state
+        .current_run
+        .read()
+        .await
+        .as_ref()
+        .filter(|r| r.status == RunStatus::Running)
+        .map(|r| r.run_number)
+}
+
+/// Set or change the timer of the run in progress (TODO 86)
+///
+/// `minutes` counts from the start of the run, like the timer given with
+/// Start. The change is written as a run note.
+#[utoipa::path(
+    put,
+    path = "/api/run/timer",
+    tag = "DAQ Control",
+    request_body = crate::operator::run_timer::RunTimerRequest,
+    responses(
+        (status = 200, description = "Timer set", body = ApiResponse),
+        (status = 400, description = "Out of range, or not longer than the run has already run", body = ApiResponse),
+        (status = 409, description = "No run in progress", body = ApiResponse)
+    )
+)]
+pub(super) async fn set_run_timer(
+    State(state): State<Arc<AppState>>,
+    Json(timer): Json<crate::operator::run_timer::RunTimerRequest>,
+) -> (StatusCode, Json<ApiResponse>) {
+    if let Err(msg) = timer.validate() {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse::error(msg)));
+    }
+    // Serialized with Start/Stop and the timer watcher (TODO 58 H14).
+    let _run_guard = state.run_control_lock.lock().await;
+    let text = {
+        let run = running_run_number(&state).await;
+        let mut slot = state.run_clock.write().await;
+        let clock = match (run, slot.as_mut()) {
+            (Some(run), Some(clock)) if clock.run_number == run => clock,
+            _ => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ApiResponse::error(
+                        "No run in progress: give the timer with Start",
+                    )),
+                )
+            }
+        };
+        let elapsed = std::time::Instant::now().saturating_duration_since(clock.started);
+        if u64::from(timer.minutes) * 60 <= elapsed.as_secs() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error(format!(
+                    "Run {} has already run {} min: the timer must be longer",
+                    clock.run_number,
+                    elapsed.as_secs() / 60
+                ))),
+            );
+        }
+        let text = match clock.timer {
+            Some(old) => format!(
+                "Run timer changed: {} -> {}",
+                old.describe(),
+                timer.describe()
+            ),
+            None => format!("Run timer set: {}", timer.describe()),
+        };
+        clock.timer = Some(timer);
+        clock.expired = false;
+        text
+    };
+    tracing::info!("{text}");
+    crate::operator::run_timer::add_note(&state, &text).await;
+    (StatusCode::OK, Json(ApiResponse::success(text)))
+}
+
+/// Cancel the timer of the run in progress (TODO 86)
+#[utoipa::path(
+    delete,
+    path = "/api/run/timer",
+    tag = "DAQ Control",
+    responses(
+        (status = 200, description = "Timer cancelled (or there was none)", body = ApiResponse),
+        (status = 409, description = "No run in progress", body = ApiResponse)
+    )
+)]
+pub(super) async fn cancel_run_timer(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<ApiResponse>) {
+    let _run_guard = state.run_control_lock.lock().await;
+    let old = {
+        let run = running_run_number(&state).await;
+        let mut slot = state.run_clock.write().await;
+        let clock = match (run, slot.as_mut()) {
+            (Some(run), Some(clock)) if clock.run_number == run => clock,
+            _ => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ApiResponse::error("No run in progress")),
+                )
+            }
+        };
+        clock.expired = false;
+        clock.timer.take()
+    };
+    let Some(old) = old else {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse::success("This run has no timer")),
+        );
+    };
+    let text = format!("Run timer cancelled (was {})", old.describe());
+    tracing::info!("{text}");
+    crate::operator::run_timer::add_note(&state, &text).await;
+    (StatusCode::OK, Json(ApiResponse::success(text)))
+}

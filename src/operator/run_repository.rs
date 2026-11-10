@@ -104,6 +104,10 @@ pub struct CurrentRunInfo {
     /// Append-only notes (logbook style)
     #[serde(default)]
     pub notes: Vec<RunNote>,
+    /// The run timer, if the run has one (TODO 86). Filled by `/api/status`
+    /// from the run clock at the time of the reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<crate::operator::run_timer::RunTimerStatus>,
 }
 
 impl CurrentRunInfo {
@@ -120,6 +124,7 @@ impl CurrentRunInfo {
             status: doc.status,
             stats: doc.stats.clone(),
             notes: doc.notes.clone(),
+            timer: None,
         }
     }
 }

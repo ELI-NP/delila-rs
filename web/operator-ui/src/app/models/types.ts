@@ -84,6 +84,36 @@ export interface CurrentRunInfo {
   status: RunStatus;
   stats: RunStats;
   notes: RunNote[];
+  /** The run timer, if this run has one (TODO 86) */
+  timer?: RunTimerStatus;
+}
+
+/** Run timer as the Operator reports it (TODO 86). The Operator owns the
+ *  timer and stops the run; `remaining_ms` was computed when it answered. */
+export interface RunTimerStatus {
+  minutes: number;
+  auto_stop: boolean;
+  /** Negative once over (only without auto-stop) */
+  remaining_ms: number;
+  /** UNIX ms */
+  ends_at_ms: number;
+}
+
+/** A run timer as sent with Start or PUT /api/run/timer (TODO 86) */
+export interface RunTimerRequest {
+  /** Run length from the start of the run, 1 to 1440 */
+  minutes: number;
+  auto_stop: boolean;
+}
+
+/** The time of a timed run was up (TODO 86); every open page alarms once */
+export interface TimerExpiredNotice {
+  run_number: number;
+  minutes: number;
+  /** True: the Operator stopped the run */
+  auto_stop: boolean;
+  /** UNIX ms; identifies the notice */
+  at_ms: number;
 }
 
 // Last run info for pre-filling comment field
@@ -114,6 +144,8 @@ export interface SystemStatus {
   stalled_sources?: StalledSource[];
   /** The last run the Operator stopped on its own, until the next run starts (TODO 84) */
   auto_stop?: AutoStopNotice;
+  /** The time of a timed run was up, until the next run starts (TODO 86) */
+  timer_expired?: TimerExpiredNotice;
 }
 
 /** A run the Operator stopped on its own (backlog autostop / run guard, TODO 84) */

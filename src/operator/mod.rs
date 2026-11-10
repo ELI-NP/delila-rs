@@ -16,6 +16,7 @@ pub mod influxdb;
 pub(crate) mod routes;
 pub mod run_guard;
 mod run_repository;
+pub mod run_timer;
 
 pub use client::ComponentClient;
 pub use command_ext::OperatorCommandExt;
@@ -97,6 +98,10 @@ pub struct SystemStatus {
     /// write failure), kept until the next run starts (TODO 84)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_stop: Option<auto_stop::AutoStopNotice>,
+    /// The time of a timed run was up (TODO 86): every open page alarms once.
+    /// Kept until the next run starts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timer_expired: Option<run_timer::TimerExpiredNotice>,
 }
 
 /// Aggregated system state
@@ -169,6 +174,24 @@ impl From<ConfigureRequest> for RunConfig {
             comment: req.comment,
             exp_name: req.exp_name,
         }
+    }
+}
+
+/// Request body for `/api/run/start`: the Configure fields plus an optional
+/// run timer (TODO 86). Without `timer` it is a plain Configure request, so
+/// scripts that start runs over REST keep working.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RunStartRequest {
+    #[serde(flatten)]
+    pub run: ConfigureRequest,
+    /// Stop the run (or only tell the pages) after this long
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<run_timer::RunTimerRequest>,
+}
+
+impl From<ConfigureRequest> for RunStartRequest {
+    fn from(run: ConfigureRequest) -> Self {
+        Self { run, timer: None }
     }
 }
 
@@ -573,6 +596,7 @@ mod tests {
             monitor_http_port: Some(8081),
             stalled_sources: Vec::new(),
             auto_stop: None,
+            timer_expired: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"system_state\":\"Idle\""));

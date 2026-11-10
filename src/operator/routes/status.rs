@@ -8,8 +8,8 @@ use crate::common::{Command, ComponentState, RunConfig};
 use crate::config::FirmwareType;
 
 use super::super::{
-    ApiResponse, CommandResult, ConfigureRequest, CurrentRunInfo, RunStats, RunStatus,
-    StartRequest, SystemState, SystemStatus,
+    ApiResponse, CommandResult, ConfigureRequest, CurrentRunInfo, RunStartRequest, RunStats,
+    RunStatus, StartRequest, SystemState, SystemStatus,
 };
 use super::AppState;
 
@@ -171,6 +171,13 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
                     average_rate,
                     trigger_loss_count,
                 };
+
+                // Run timer (TODO 86): remaining time computed now, here.
+                if let Some(clock) = *state.run_clock.read().await {
+                    if clock.run_number == info.run_number {
+                        info.timer = clock.status(std::time::Instant::now(), now_ms);
+                    }
+                }
             }
             Some(info)
         } else {
@@ -214,6 +221,7 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         monitor_http_port: state.config.monitor_http_port,
         stalled_sources: state.stalled_sources.read().await.clone(),
         auto_stop: state.auto_stop.read().await.clone(),
+        timer_expired: *state.timer_expired.read().await,
     })
 }
 
@@ -531,6 +539,7 @@ pub(super) async fn start(
                         status: RunStatus::Running,
                         stats: RunStats::default(),
                         notes: Vec::new(),
+                        timer: None,
                     });
                 }
             }
@@ -548,8 +557,11 @@ pub(super) async fn start(
                 status: RunStatus::Running,
                 stats: RunStats::default(),
                 notes: Vec::new(),
+                timer: None,
             });
         }
+        // The run clock (TODO 86): a timer can be set later with PUT /api/run/timer.
+        crate::operator::run_timer::begin_run(&state, run_number as i32, None).await;
 
         // Create digitizer config snapshot for this run
         if let Some(ref digitizer_repo) = state.digitizer_repo {
@@ -604,6 +616,16 @@ pub(super) async fn start(
 pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
     // Serialize run control (TODO 58 H14).
     let _run_guard = state.run_control_lock.lock().await;
+    plain_stop(&state, None).await
+}
+
+/// The Stop button's stop, shared with the run timer (TODO 86): stop every
+/// component, then the run-end bookkeeping with `stop_reason` (None for the
+/// button). Caller must hold `state.run_control_lock`.
+pub(crate) async fn plain_stop(
+    state: &Arc<AppState>,
+    stop_reason: Option<&str>,
+) -> (StatusCode, Json<ApiResponse>) {
     // Guard: reject if Tune Up mode is active (TODO 58 M15 — /api/stop during a
     // tuneup used to strand the tuneup flag, deadlocking later starts on 409).
     if state.tuneup.is_active() {
@@ -617,7 +639,7 @@ pub(super) async fn stop(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
     let results = state.client.stop_all(&state.components).await;
 
     let mut response = ApiResponse::success("Stop command sent").with_results(results);
-    finish_run_bookkeeping(&state, &mut response, None).await;
+    finish_run_bookkeeping(state, &mut response, stop_reason).await;
 
     let status = if response.success {
         StatusCode::OK
@@ -727,8 +749,9 @@ async fn finish_run_bookkeeping(
         }
     }
 
-    // Always clear current run
+    // Always clear current run, and its clock (TODO 86)
     *state.current_run.write().await = None;
+    *state.run_clock.write().await = None;
 }
 
 /// Drain-first stop (TODO 68): stop the sources, let the downstream
@@ -959,10 +982,10 @@ pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Js
     post,
     path = "/api/run/start",
     tag = "DAQ Control",
-    request_body = ConfigureRequest,
+    request_body = RunStartRequest,
     responses(
         (status = 200, description = "Run started successfully", body = ApiResponse),
-        (status = 400, description = "Failed to start run", body = ApiResponse),
+        (status = 400, description = "Failed to start run, or the run timer is out of range", body = ApiResponse),
         (status = 409, description = "System is Running or in Tune Up mode", body = ApiResponse),
         (status = 502, description = "A Reader rejected its digitizer config (before Arm)", body = ApiResponse),
         (status = 504, description = "A phase did not complete — after Reset, all components were reset to Idle", body = ApiResponse),
@@ -971,10 +994,17 @@ pub(super) async fn reset(State(state): State<Arc<AppState>>) -> (StatusCode, Js
 )]
 pub(super) async fn run_start(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<ConfigureRequest>,
+    Json(RunStartRequest {
+        run: request,
+        timer,
+    }): Json<RunStartRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
     // Serialize run control (TODO 58 H14).
     let _run_guard = state.run_control_lock.lock().await;
+    // A bad timer is refused before anything is touched (TODO 86).
+    if let Some(Err(msg)) = timer.map(|t| t.validate()) {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse::error(msg)));
+    }
     // Guard: reject if Tune Up mode is active
     if state.tuneup.is_active() {
         return (
@@ -1211,6 +1241,7 @@ pub(super) async fn run_start(
                             status: RunStatus::Running,
                             stats: RunStats::default(),
                             notes: Vec::new(),
+                            timer: None,
                         });
                     }
                 }
@@ -1224,8 +1255,12 @@ pub(super) async fn run_start(
                     status: RunStatus::Running,
                     stats: RunStats::default(),
                     notes: Vec::new(),
+                    timer: None,
                 });
             }
+
+            // The run clock and timer (TODO 86).
+            crate::operator::run_timer::begin_run(&state, run_number as i32, timer).await;
 
             // Create digitizer config snapshot for this run
             if let Some(ref digitizer_repo) = state.digitizer_repo {
@@ -1424,10 +1459,213 @@ mod tests {
         assert_eq!(n.cause, AutoStopCause::RateTooHigh);
         assert_eq!(n.run_number, Some(45));
 
-        let (status, Json(resp)) = run_start(State(state.clone()), Json(run_request(46))).await;
+        let (status, Json(resp)) =
+            run_start(State(state.clone()), Json(run_request(46).into())).await;
         assert_eq!(status, StatusCode::OK, "{}", resp.message);
         let Json(st) = get_status(State(state.clone())).await;
         assert!(st.auto_stop.is_none(), "cleared by the new run");
+        let _ = shutdown.send(());
+    }
+
+    // ---- Run timer (TODO 86) ----
+
+    use crate::operator::run_timer::{self, RunTimerRequest};
+    use std::time::{Duration, Instant};
+
+    fn timed(run_number: u32, minutes: u32, auto_stop: bool) -> RunStartRequest {
+        RunStartRequest {
+            run: run_request(run_number),
+            timer: Some(RunTimerRequest { minutes, auto_stop }),
+        }
+    }
+
+    fn note_texts(info: &CurrentRunInfo) -> Vec<String> {
+        info.notes.iter().map(|n| n.text.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn run_start_with_a_timer_reports_the_remaining_time_and_notes_it() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+
+        let (status, Json(resp)) = run_start(State(state.clone()), Json(timed(1, 120, true))).await;
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+
+        let Json(st) = get_status(State(state.clone())).await;
+        let info = st.run_info.expect("run in progress");
+        let t = info.timer.expect("timer in run_info");
+        assert_eq!((t.minutes, t.auto_stop), (120, true));
+        assert!(
+            t.remaining_ms > 119 * 60_000 && t.remaining_ms <= 120 * 60_000,
+            "{}",
+            t.remaining_ms
+        );
+        assert!(t.ends_at_ms > chrono::Utc::now().timestamp_millis());
+        assert_eq!(
+            note_texts(&info),
+            vec!["Run timer: 120 min, stops the run".to_string()]
+        );
+        assert!(st.timer_expired.is_none());
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn run_start_refuses_a_timer_out_of_range_before_touching_anything() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+
+        let (status, Json(resp)) = run_start(
+            State(state.clone()),
+            Json(timed(1, run_timer::MAX_MINUTES + 1, true)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{}", resp.message);
+        assert!(resp.message.contains("1 to 1440"), "{}", resp.message);
+        assert_eq!(system_state(&state).await, SystemState::Idle);
+        assert!(state.current_run.read().await.is_none());
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn timer_stops_the_run_like_the_stop_button_when_the_time_is_up() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+        let (status, _) = run_start(State(state.clone()), Json(timed(1, 1, true))).await;
+        assert_eq!(status, StatusCode::OK);
+
+        run_timer::poll_once(&state, Instant::now() + Duration::from_secs(30)).await;
+        assert_eq!(system_state(&state).await, SystemState::Running, "not yet");
+
+        run_timer::poll_once(&state, Instant::now() + Duration::from_secs(61)).await;
+        assert_eq!(system_state(&state).await, SystemState::Configured);
+        assert!(state.current_run.read().await.is_none());
+        assert!(state.run_clock.read().await.is_none());
+        let Json(st) = get_status(State(state.clone())).await;
+        let n = st.timer_expired.expect("every page is told");
+        assert_eq!((n.run_number, n.minutes, n.auto_stop), (1, 1, true));
+        assert!(
+            st.auto_stop.is_none(),
+            "a timed end is not an automatic-stop banner"
+        );
+
+        // The next run clears the notice.
+        let (status, _) = run_start(State(state.clone()), Json(run_request(2).into())).await;
+        assert_eq!(status, StatusCode::OK);
+        let Json(st) = get_status(State(state.clone())).await;
+        assert!(st.timer_expired.is_none());
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn alarm_only_timer_tells_once_and_the_run_goes_on() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+        let (status, _) = run_start(State(state.clone()), Json(timed(1, 1, false))).await;
+        assert_eq!(status, StatusCode::OK);
+
+        run_timer::poll_once(&state, Instant::now() + Duration::from_secs(61)).await;
+        assert_eq!(system_state(&state).await, SystemState::Running);
+        let first = state.timer_expired.read().await.expect("told");
+        assert!(!first.auto_stop);
+
+        run_timer::poll_once(&state, Instant::now() + Duration::from_secs(120)).await;
+        assert_eq!(*state.timer_expired.read().await, Some(first), "only once");
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn the_clock_of_an_older_run_never_stops_a_newer_one() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+        let (status, _) = run_start(State(state.clone()), Json(timed(1, 1, true))).await;
+        assert_eq!(status, StatusCode::OK);
+        let old_clock = state.run_clock.read().await.expect("clock of run 1");
+
+        let (status, _) = stop(State(state.clone())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            state.run_clock.read().await.is_none(),
+            "Stop clears the clock"
+        );
+        let (status, _) = run_start(State(state.clone()), Json(run_request(2).into())).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A stale clock of run 1 (cannot happen through the handlers, which
+        // replace it) is dropped, and run 2 keeps going.
+        *state.run_clock.write().await = Some(old_clock);
+        run_timer::poll_once(&state, Instant::now() + Duration::from_secs(61)).await;
+        assert_eq!(system_state(&state).await, SystemState::Running);
+        assert!(state.run_clock.read().await.is_none());
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn timer_can_be_set_changed_and_cancelled_during_the_run() {
+        use crate::operator::routes::run::{cancel_run_timer, set_run_timer};
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(pipeline(true, &shutdown), dir.path());
+        let t = |minutes, auto_stop| Json(RunTimerRequest { minutes, auto_stop });
+
+        let (status, _) = set_run_timer(State(state.clone()), t(30, true)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "no run yet");
+
+        let (status, _) = run_start(State(state.clone()), Json(run_request(1).into())).await;
+        assert_eq!(status, StatusCode::OK);
+        let Json(st) = get_status(State(state.clone())).await;
+        assert!(st.run_info.unwrap().timer.is_none());
+
+        let (status, Json(resp)) = set_run_timer(State(state.clone()), t(30, true)).await;
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+        let (status, Json(resp)) = set_run_timer(State(state.clone()), t(60, false)).await;
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+        let Json(st) = get_status(State(state.clone())).await;
+        let info = st.run_info.unwrap();
+        assert_eq!(
+            info.timer.map(|t| (t.minutes, t.auto_stop)),
+            Some((60, false))
+        );
+
+        // Shorter than the run has already run: refused.
+        if let Some(ref mut c) = *state.run_clock.write().await {
+            c.started = Instant::now() - Duration::from_secs(10 * 60);
+        }
+        let (status, Json(resp)) = set_run_timer(State(state.clone()), t(5, true)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            resp.message.contains("already run 10 min"),
+            "{}",
+            resp.message
+        );
+        let (status, _) = set_run_timer(State(state.clone()), t(0, true)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = cancel_run_timer(State(state.clone())).await;
+        assert_eq!(status, StatusCode::OK);
+        let Json(st) = get_status(State(state.clone())).await;
+        let info = st.run_info.unwrap();
+        assert!(info.timer.is_none());
+        assert_eq!(
+            note_texts(&info),
+            vec![
+                "Run timer set: 30 min, stops the run".to_string(),
+                "Run timer changed: 30 min, stops the run -> 60 min, alarm only".to_string(),
+                "Run timer cancelled (was 60 min, alarm only)".to_string(),
+            ]
+        );
+        // A cancelled timer never stops the run.
+        run_timer::poll_once(&state, Instant::now() + Duration::from_secs(7200)).await;
+        assert_eq!(system_state(&state).await, SystemState::Running);
+
+        let (status, _) = stop(State(state.clone())).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = cancel_run_timer(State(state.clone())).await;
+        assert_eq!(status, StatusCode::CONFLICT, "no run any more");
         let _ = shutdown.send(());
     }
 
@@ -1437,7 +1675,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = app_state(pipeline(true, &shutdown), dir.path());
 
-        let (status, Json(resp)) = run_start(State(state.clone()), Json(run_request(1))).await;
+        let (status, Json(resp)) =
+            run_start(State(state.clone()), Json(run_request(1).into())).await;
 
         assert_eq!(status, StatusCode::OK, "{}", resp.message);
         assert_eq!(system_state(&state).await, SystemState::Running);
@@ -1454,7 +1693,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = app_state(pipeline(false, &shutdown), dir.path());
 
-        let (status, Json(resp)) = run_start(State(state.clone()), Json(run_request(1))).await;
+        let (status, Json(resp)) =
+            run_start(State(state.clone()), Json(run_request(1).into())).await;
 
         assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{}", resp.message);
         assert!(!resp.success);

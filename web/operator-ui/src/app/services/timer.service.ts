@@ -1,79 +1,122 @@
-import { Injectable, signal, computed } from '@angular/core';
+import { Injectable, signal, computed, effect, inject, untracked } from '@angular/core';
+import { OperatorService } from './operator.service';
+import { TimerExpiredNotice } from '../models/types';
 
+/** Longest run timer the Operator accepts (TODO 86): 24 h. */
+export const MAX_TIMER_MINUTES = 24 * 60;
+
+/** "1:05" / "2:03:04" */
+export function formatSeconds(total: number): string {
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+/**
+ * The run timer as the pages show it (TODO 86).
+ *
+ * The Operator owns the timer: it gets the length with Start (or
+ * PUT /api/run/timer) and stops the run itself, like the Stop button, whether
+ * or not a browser is open. This service only
+ * - counts down between status polls from the Operator's `remaining_ms`
+ *   (so a hidden, throttled tab or a wrong PC clock does not matter: every
+ *   poll puts it right), for the header and the Control Panel, and
+ * - rings the alarm once on every open page when the Operator reports that the
+ *   time is up (`timer_expired`), except for an expiry that was already there
+ *   when the page opened.
+ */
 @Injectable({
   providedIn: 'root',
 })
 export class TimerService {
-  // Timer state
-  readonly durationMinutes = signal(10); // Default 10 minutes
-  readonly autoStop = signal(true); // Default enabled
-  readonly isRunning = signal(false);
-  readonly remainingSeconds = signal(0);
+  private readonly operator = inject(OperatorService);
 
-  // Computed values
-  readonly remainingDisplay = computed(() => {
-    const total = this.remainingSeconds();
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const seconds = total % 60;
+  // Form values for the next Start, or for "Set timer" during a run
+  readonly durationMinutes = signal(120);
+  readonly autoStop = signal(true);
 
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  /** performance.now(), moved once a second so the countdown moves between polls. */
+  readonly now = signal(performance.now());
+
+  /** The current run's timer, as the Operator last reported it. */
+  readonly current = computed(() => this.operator.runInfo()?.timer ?? null);
+  readonly isRunning = computed(() => this.current() !== null);
+
+  /** Milliseconds left, negative once over (alarm-only timers). */
+  readonly remainingMs = computed(() => {
+    const t = this.current();
+    if (!t) return 0;
+    const sinceStatus = Math.max(0, this.now() - this.operator.statusReceivedAt());
+    return t.remaining_ms - sinceStatus;
+  });
+
+  /** "1:23:45 left" / "+3:12 over" / "" without a timer. */
+  readonly headerText = computed(() => {
+    if (!this.current()) return '';
+    const ms = this.remainingMs();
+    return ms >= 0
+      ? `${formatSeconds(Math.ceil(ms / 1000))} left`
+      : `+${formatSeconds(Math.floor(-ms / 1000))} over`;
   });
 
   readonly progress = computed(() => {
-    const total = this.durationMinutes() * 60;
-    const remaining = this.remainingSeconds();
-    if (total === 0) return 0;
-    return ((total - remaining) / total) * 100;
+    const t = this.current();
+    if (!t) return 0;
+    const total = t.minutes * 60_000;
+    return Math.min(100, Math.max(0, ((total - this.remainingMs()) / total) * 100));
   });
 
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  /** The expiry to alarm for, until dismissed. */
+  readonly alarm = signal<TimerExpiredNotice | null>(null);
+  private baselineTaken = false;
+  private lastSeenAt: number | null = null;
+
   private audioContext: AudioContext | null = null;
   private alarmIntervalId: ReturnType<typeof setInterval> | null = null;
 
-  // Callbacks
-  onTimerComplete: (() => void) | null = null;
-
-  startTimer(): void {
-    if (this.isRunning()) return;
-
-    // Pre-create AudioContext during user gesture (click) so Safari allows playback later
-    this.ensureAudioContext();
-
-    this.remainingSeconds.set(this.durationMinutes() * 60);
-    this.isRunning.set(true);
-
-    this.intervalId = setInterval(() => {
-      const current = this.remainingSeconds();
-      if (current <= 0) {
-        this.stopTimer();
-        if (this.onTimerComplete) {
-          this.onTimerComplete();
-        }
-      } else {
-        this.remainingSeconds.set(current - 1);
-      }
-    }, 1000);
+  constructor() {
+    setInterval(() => this.now.set(performance.now()), 1000);
+    effect(() => {
+      const status = this.operator.status();
+      if (!status) return;
+      const notice = status.timer_expired ?? null;
+      untracked(() => this.observe(notice));
+    });
+    // Browsers play sound only after the page had a user gesture: prepare the
+    // audio on the first click so the alarm can sound later on this page.
+    document.addEventListener('pointerdown', () => this.ensureAudioContext(), {
+      once: true,
+      capture: true,
+    });
   }
 
-  stopTimer(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+  /** Feed the expiry notice of one status. The first status of the page only
+   *  records what was already there. */
+  observe(notice: TimerExpiredNotice | null): void {
+    const at = notice?.at_ms ?? null;
+    if (!this.baselineTaken) {
+      this.baselineTaken = true;
+      this.lastSeenAt = at;
+      return;
     }
-    this.isRunning.set(false);
+    if (notice && at !== this.lastSeenAt) {
+      this.lastSeenAt = at;
+      this.alarm.set(notice);
+    }
   }
 
-  resetTimer(): void {
-    this.stopTimer();
-    this.remainingSeconds.set(0);
+  dismissAlarm(): void {
+    this.alarm.set(null);
+    this.stopAlarm();
   }
 
   // Start continuous alarm sound
   startAlarm(): void {
+    if (this.alarmIntervalId) return;
     this.playBeep();
     // Continue playing every 2 seconds
     this.alarmIntervalId = setInterval(() => {
@@ -87,13 +130,13 @@ export class TimerService {
       clearInterval(this.alarmIntervalId);
       this.alarmIntervalId = null;
     }
-    // Suspend but don't close — reuse for next timer cycle
+    // Suspend but don't close — reuse for the next alarm
     if (this.audioContext && this.audioContext.state === 'running') {
       this.audioContext.suspend();
     }
   }
 
-  /** Create or resume AudioContext. Must be called during a user gesture (click). */
+  /** Create or resume the AudioContext. Works only after a user gesture on the page. */
   private ensureAudioContext(): void {
     if (!this.audioContext || this.audioContext.state === 'closed') {
       this.audioContext = new AudioContext();

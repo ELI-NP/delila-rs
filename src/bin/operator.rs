@@ -431,6 +431,15 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Run timer (TODO 86, always on): stops a timed run like the Stop button
+    // when its time is up, whether or not a browser is open.
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            delila_rs::operator::run_timer::run_watcher(state).await;
+        });
+    }
+
     // No-event watcher (TODO 78 a): a Running source without new events
     // (e.g. an S-IN slave that never got its start signal) is shown in the UI.
     if app_state.config.no_event_warn_secs > 0 {

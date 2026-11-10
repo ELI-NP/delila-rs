@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, discardPeriodicTasks, fakeAsync, tick } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
@@ -6,6 +6,7 @@ import { provideRouter } from '@angular/router';
 import { App } from './app';
 import { OperatorService } from './services/operator.service';
 import { SystemStatus } from './models/types';
+import { MatDialog } from '@angular/material/dialog';
 
 describe('App', () => {
   let component: App;
@@ -124,4 +125,57 @@ describe('App', () => {
     expect(runInfo).toBeTruthy();
     expect(runInfo.textContent).toContain('Run: 42');
   });
+
+  it('shows the run timer on every page, from the Operator (TODO 86)', () => {
+    const timed = (remaining_ms: number, auto_stop: boolean): SystemStatus => ({
+      ...mockSystemStatus,
+      run_info: {
+        run_number: 42,
+        exp_name: 'TestExp',
+        comment: '',
+        start_time: 0,
+        elapsed_secs: 0,
+        status: 'running',
+        stats: { total_events: 0, total_bytes: 0, average_rate: 0 },
+        notes: [],
+        timer: { minutes: 120, auto_stop, remaining_ms, ends_at_ms: 0 },
+      },
+    });
+    const header = () =>
+      fixture.nativeElement.querySelector('[data-testid="header-run-timer"]') as HTMLElement | null;
+
+    fixture.detectChanges();
+    expect(header()).toBeNull();
+
+    operatorService.status.set(timed(5_025_000, true));
+    operatorService.statusReceivedAt.set(component.timer.now());
+    fixture.detectChanges();
+    expect(header()!.textContent).toContain('1:23:45 left');
+    expect(header()!.classList).not.toContain('over');
+
+    operatorService.status.set(timed(-192_000, false));
+    operatorService.statusReceivedAt.set(component.timer.now());
+    fixture.detectChanges();
+    expect(header()!.textContent).toContain('+3:12 over');
+    expect(header()!.classList).toContain('over');
+  });
+
+  it('opens the run-timer alarm on any page and clears it on Dismiss (TODO 86)', fakeAsync(() => {
+    const dialog = TestBed.inject(MatDialog);
+    component.timer.observe(null);
+    component.timer.observe({ run_number: 42, minutes: 120, auto_stop: true, at_ms: 1000 });
+    TestBed.tick();
+    fixture.detectChanges();
+
+    const ref = dialog.getDialogById('run-timer-alarm');
+    expect(ref).toBeTruthy();
+    expect(document.body.textContent).toContain('Run 42: time is up');
+    expect(document.body.textContent).toContain('The Operator stopped the run.');
+
+    ref!.close();
+    tick(500);
+    fixture.detectChanges();
+    expect(component.timer.alarm()).toBeNull();
+    discardPeriodicTasks();
+  }));
 });

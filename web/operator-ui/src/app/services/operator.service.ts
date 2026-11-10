@@ -8,6 +8,7 @@ import {
   getButtonStates,
   ButtonStates,
   CurrentRunInfo,
+  RunTimerRequest,
   RunNote,
   LastRunInfo,
   StalledSource,
@@ -23,6 +24,8 @@ export class OperatorService {
 
   // Signals for reactive state
   readonly status = signal<SystemStatus | null>(null);
+  /** performance.now() when `status` last arrived: the run timer counts down from it (TODO 86). */
+  readonly statusReceivedAt = signal(0);
   readonly error = signal<string | null>(null);
   readonly isPolling = signal(false);
 
@@ -108,6 +111,7 @@ export class OperatorService {
           this.getStatus().pipe(
             tap((status) => {
               this.status.set(status);
+              this.statusReceivedAt.set(performance.now());
               this.error.set(null);
             }),
             catchError(() => {
@@ -124,6 +128,7 @@ export class OperatorService {
     this.getStatus().subscribe({
       next: (status) => {
         this.status.set(status);
+        this.statusReceivedAt.set(performance.now());
         this.error.set(null);
       },
       error: () => {
@@ -146,13 +151,25 @@ export class OperatorService {
     return this.http.post<ApiResponse>(`${this.baseUrl}/configure`, request);
   }
 
-  // Full auto-cycle: backend does Reset → Configure → Arm → Start
-  start(runNumber: number, comment = ''): Observable<ApiResponse> {
+  // Full auto-cycle: backend does Reset → Configure → Arm → Start.
+  // `timer`: the Operator stops (or only reports) the run after that long (TODO 86).
+  start(runNumber: number, comment = '', timer?: RunTimerRequest): Observable<ApiResponse> {
     return this.http.post<ApiResponse>(`${this.baseUrl}/run/start`, {
       run_number: runNumber,
       comment,
       exp_name: this.experimentName(),
+      ...(timer ? { timer } : {}),
     });
+  }
+
+  /** Set or change the timer of the run in progress (TODO 86) */
+  setTimer(timer: RunTimerRequest): Observable<ApiResponse> {
+    return this.http.put<ApiResponse>(`${this.baseUrl}/run/timer`, timer);
+  }
+
+  /** Cancel the timer of the run in progress (TODO 86) */
+  cancelTimer(): Observable<ApiResponse> {
+    return this.http.delete<ApiResponse>(`${this.baseUrl}/run/timer`);
   }
 
   stop(): Observable<ApiResponse> {

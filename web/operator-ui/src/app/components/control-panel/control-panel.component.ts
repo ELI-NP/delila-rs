@@ -15,10 +15,9 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { OperatorService } from '../../services/operator.service';
-import { AutoStopNotice } from '../../models/types';
+import { AutoStopNotice, RunTimerRequest } from '../../models/types';
 import { DigitizerService } from '../../services/digitizer.service';
-import { TimerService } from '../../services/timer.service';
-import { TimerAlarmDialogComponent } from '../timer/timer-alarm-dialog.component';
+import { MAX_TIMER_MINUTES, TimerService } from '../../services/timer.service';
 import { WaveformWarningDialogComponent } from './waveform-warning-dialog.component';
 
 @Component({
@@ -243,25 +242,40 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           </div>
         }
 
-        <!-- Timer controls (folded in from the old standalone Timer panel — CT-6).
-             When not running: inline "Run with timer" form sits above Start/Stop.
-             When running: countdown + progress bar replaces the form. -->
-        @if (timer.isRunning()) {
-          <div class="timer-display">
-            <div class="timer-remaining">{{ timer.remainingDisplay() }}</div>
+        <!-- Run timer (TODO 86): the Operator owns it and stops the run, so it
+             survives reloads, hidden tabs and closed browsers. Before Start: the
+             form sent with Start. During a timed run: countdown from the
+             Operator's value, +30 min, Cancel. During a run without one: Set. -->
+        @if (timer.current(); as t) {
+          <div class="timer-display" data-testid="run-timer">
+            <div class="timer-remaining" [class.over]="timer.remainingMs() < 0">
+              {{ timer.headerText() }}
+            </div>
             <mat-progress-bar mode="determinate" [value]="timer.progress()"></mat-progress-bar>
+            <div class="timer-actions">
+              <span class="timer-mode">
+                {{ t.minutes }} min · {{ t.auto_stop ? 'stops the run' : 'alarm only' }}
+              </span>
+              <button mat-stroked-button data-testid="timer-extend" (click)="onExtendTimer(30)">
+                +30 min
+              </button>
+              <button mat-button data-testid="timer-cancel" (click)="onCancelTimer()">
+                Cancel timer
+              </button>
+            </div>
           </div>
         } @else {
           <div class="timer-row">
-            <mat-checkbox
-              [ngModel]="useTimer()"
-              (ngModelChange)="useTimer.set($event)"
-              [disabled]="isRunning()"
-              matTooltip="When checked, Start also begins a countdown and (optionally) auto-stops the run when it expires."
-            >
-              Run with timer
-            </mat-checkbox>
-            @if (useTimer()) {
+            @if (!isRunning()) {
+              <mat-checkbox
+                [ngModel]="useTimer()"
+                (ngModelChange)="useTimer.set($event)"
+                matTooltip="When checked, the Operator stops the run (or only alarms) after this long, even with no browser open."
+              >
+                Run with timer
+              </mat-checkbox>
+            }
+            @if (useTimer() || isRunning()) {
               <mat-form-field appearance="outline" class="duration-field">
                 <mat-label>Duration (min)</mat-label>
                 <input
@@ -270,17 +284,20 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
                   [ngModel]="timer.durationMinutes()"
                   (ngModelChange)="timer.durationMinutes.set($event)"
                   min="1"
-                  max="180"
-                  [disabled]="isRunning()"
+                  [max]="maxTimerMinutes"
                 />
               </mat-form-field>
               <mat-checkbox
                 [ngModel]="timer.autoStop()"
                 (ngModelChange)="timer.autoStop.set($event)"
-                [disabled]="isRunning()"
               >
                 Auto-stop on expire
               </mat-checkbox>
+              @if (isRunning()) {
+                <button mat-stroked-button data-testid="timer-set" (click)="onSetTimer()">
+                  Set timer
+                </button>
+              }
             }
           </div>
         }
@@ -499,6 +516,21 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
       font-variant-numeric: tabular-nums;
       margin-bottom: 8px;
     }
+    .timer-remaining.over {
+      color: #f44336;
+    }
+    .timer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .timer-mode {
+      font-size: 13px;
+      opacity: 0.75;
+    }
     /* Pulse the whole card while the timer-expired alarm dialog is open. */
     mat-card.flashing {
       animation: card-flash 0.5s infinite;
@@ -583,8 +615,10 @@ export class ControlPanelComponent {
 
   /** When checked, doStart() also kicks the countdown after operator.start succeeds. */
   readonly useTimer = signal(false);
-  /** Pulses the card background red while the timer-expired alarm dialog is open. */
-  readonly alarmFlashing = signal(false);
+  /** Pulses the card background red while the run-timer alarm is on (TODO 86). */
+  readonly alarmFlashing = computed(() => this.timer.alarm() !== null);
+  /** Longest run timer the Operator accepts. */
+  readonly maxTimerMinutes = MAX_TIMER_MINUTES;
   /** Reason of the last failed Start, until the next successful Start / Reset or dismiss. */
   readonly lastStartFailure = signal<string | null>(null);
   /** started_ms of the automatic-stop notice the user closed (TODO 84). */
@@ -663,26 +697,6 @@ export class ControlPanelComponent {
   constructor() {
     // Ensure digitizer configs are loaded for waveform warning check
     this.digitizerService.loadDigitizers();
-
-    // Timer-expired callback: open the alarm dialog (with disableClose so the
-    // operator must dismiss), and if autoStop is set, stop the run too. Logic
-    // formerly lived in TimerComponent; folded here when the standalone Timer
-    // panel was removed (CT-6).
-    this.timer.onTimerComplete = () => {
-      this.alarmFlashing.set(true);
-      const dialogRef = this.dialog.open(TimerAlarmDialogComponent, {
-        disableClose: true,
-        width: '400px',
-      });
-      dialogRef.afterClosed().subscribe(() => {
-        this.alarmFlashing.set(false);
-        this.timer.stopAlarm();
-      });
-      if (this.timer.autoStop()) {
-        // Best-effort stop; if it fails the user still has a manual Stop button.
-        this.operator.stop().subscribe();
-      }
-    };
 
     // Sync comment with server state
     effect(() => {
@@ -822,15 +836,15 @@ export class ControlPanelComponent {
   private doStart(): void {
     const runNumber = this.displayRunNumber();
     const comment = this.comment;
-    this.operator.start(runNumber, comment).subscribe({
+    // TODO 86: the Operator runs the timer; it only needs the length.
+    const timer = this.useTimer()
+      ? { minutes: Number(this.timer.durationMinutes()), auto_stop: this.timer.autoStop() }
+      : undefined;
+    this.operator.start(runNumber, comment, timer).subscribe({
       next: (res) => {
         if (res.success) {
           this.lastStartFailure.set(null);
           this.notify.success('Started successfully');
-          // CT-6: Start the countdown alongside the run when the operator opted in.
-          if (this.useTimer() && !this.timer.isRunning()) {
-            this.timer.startTimer();
-          }
           // Clear override after successful start - next stop will show server's next_run_number
           this.clearOverride();
         } else {
@@ -850,11 +864,6 @@ export class ControlPanelComponent {
       next: (res) => {
         if (res.success) {
           this.notify.success('Stopped successfully');
-          // Stop the countdown when the run stops manually — keeps timer state
-          // in sync regardless of whether the run ended via the timer or the button.
-          if (this.timer.isRunning()) {
-            this.timer.stopTimer();
-          }
           // Override should already be cleared, but ensure it's cleared
           this.clearOverride();
         } else {
@@ -862,6 +871,35 @@ export class ControlPanelComponent {
         }
       },
       error: (err: unknown) => this.notify.error(`Stop failed: ${this.extractError(err)}`),
+    });
+  }
+
+  /** Lengthen the run timer by `minutes` (TODO 86). */
+  onExtendTimer(minutes: number): void {
+    const t = this.timer.current();
+    if (!t) return;
+    this.sendTimer({ minutes: t.minutes + minutes, auto_stop: t.auto_stop });
+  }
+
+  /** Give a timer to a run that has none (TODO 86). */
+  onSetTimer(): void {
+    this.sendTimer({
+      minutes: Number(this.timer.durationMinutes()),
+      auto_stop: this.timer.autoStop(),
+    });
+  }
+
+  onCancelTimer(): void {
+    this.operator.cancelTimer().subscribe({
+      next: (res) => this.notify.success(res.message),
+      error: (err: unknown) => this.notify.error(`Timer: ${this.extractError(err)}`),
+    });
+  }
+
+  private sendTimer(timer: RunTimerRequest): void {
+    this.operator.setTimer(timer).subscribe({
+      next: (res) => this.notify.success(res.message),
+      error: (err: unknown) => this.notify.error(`Timer: ${this.extractError(err)}`),
     });
   }
 

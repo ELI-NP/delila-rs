@@ -61,8 +61,8 @@ use event_builder::{
 };
 use monitor_layout::{get_monitor_layout, save_monitor_layout};
 use run::{
-    add_run_note, export_runs, get_next_run_number, get_run, get_run_config_snapshot,
-    get_run_history,
+    add_run_note, cancel_run_timer, export_runs, get_next_run_number, get_run,
+    get_run_config_snapshot, get_run_history, set_run_timer,
 };
 use status::{arm, configure, get_status, reset, run_start, start, stop, stop_drain};
 use tuneup::{tuneup_apply, tuneup_start, tuneup_stop};
@@ -170,6 +170,11 @@ pub struct AppState {
     /// (TODO 84). Set by the backlog watcher and the run guard, cleared when
     /// a run starts.
     pub auto_stop: RwLock<Option<crate::operator::auto_stop::AutoStopNotice>>,
+    /// The current run's clock and timer (TODO 86), set when a run starts,
+    /// read by `run_timer::run_watcher` and `/api/status`.
+    pub run_clock: RwLock<Option<crate::operator::run_timer::RunClock>>,
+    /// The time of a timed run was up (TODO 86), until the next run starts.
+    pub timer_expired: RwLock<Option<crate::operator::run_timer::TimerExpiredNotice>>,
 }
 
 /// Emulator runtime settings (API model)
@@ -340,6 +345,8 @@ impl AppState {
         run::get_run,
         run::get_next_run_number,
         run::add_run_note,
+        run::set_run_timer,
+        run::cancel_run_timer,
         emulator::get_emulator_settings,
         emulator::update_emulator_settings,
         event_builder::list_experiments,
@@ -388,6 +395,10 @@ impl AppState {
         tuneup::TuneUpStartRequest,
         crate::operator::event_stall::StalledSource,
         crate::operator::auto_stop::AutoStopNotice,
+        crate::operator::RunStartRequest,
+        crate::operator::run_timer::RunTimerRequest,
+        crate::operator::run_timer::RunTimerStatus,
+        crate::operator::run_timer::TimerExpiredNotice,
         crate::operator::auto_stop::AutoStopCause,
         crate::operator::auto_stop::AutoStopPhase,
     )),
@@ -521,6 +532,8 @@ impl RouterBuilder {
             run_control_lock: tokio::sync::Mutex::new(()),
             stalled_sources: RwLock::new(Vec::new()),
             auto_stop: RwLock::new(None),
+            run_clock: RwLock::new(None),
+            timer_expired: RwLock::new(None),
         });
 
         let cors = CorsLayer::new()
@@ -539,6 +552,10 @@ impl RouterBuilder {
             .route("/api/reset", post(reset))
             // Two-phase synchronized run control
             .route("/api/run/start", post(run_start))
+            .route(
+                "/api/run/timer",
+                put(set_run_timer).delete(cancel_run_timer),
+            )
             // Tune Up mode
             .route("/api/tuneup/start", post(tuneup_start))
             .route("/api/tuneup/stop", post(tuneup_stop))
