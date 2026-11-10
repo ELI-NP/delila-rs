@@ -1,0 +1,166 @@
+# DELILA DAQ Configuration - DAQ_Test @ pf-qaq: N_Wall's hardware, another experiment
+#
+# For trying DAQ features (first: the run timer, TODO 86) without touching N_Wall
+# data. Identical to config_nwall_pfqaq.toml except:
+#   - experiment_name = "DAQ_Test": its own run numbers and run history
+#   - output_dir = /data/DAQ_Test for .delila and .root (not archived)
+#   - no eLog posts and no InfluxDB (nothing in the N_Wall logbook or dashboards)
+# SHARED with N_Wall: the digitizer JSONs, the Monitor layout, the channel map and
+# the energy table. Settings saved from the UI during a test change N_Wall's too.
+#
+# Use (leave the config.toml symlink on N_Wall):
+#   ./scripts/stop_daq.sh && ./scripts/start_daq.sh config/config_daq_test_pfqaq.toml
+# Back to N_Wall (between runs, Recorder backlog 0):
+#   ./scripts/stop_daq.sh && ./scripts/start_daq.sh
+# Keep the [network] part in step with config_nwall_pfqaq.toml when that changes.
+
+[operator]
+# Runs are numbered per experiment_name: DAQ_Test has its own numbers.
+experiment_name = "DAQ_Test"
+# 9091 as for ThGEM on this host.
+port = 9091
+# Drain-first stops (backlog autostop below, low disk) may take minutes to write
+# the queue: 21 GB took 258 s on this host (TODO 84). The default 60 s is too short.
+drain_stop_timeout_secs = 1800
+
+# Stop the run when the input rate is more than the recording path can write
+# (user, 2026-11-07, TODO 84): when the Recorder queue passes
+# [network.recorder].backlog_hard_limit_mb, the sources are stopped, the queue is
+# written to disk, and the Operator UI shows "stopped automatically: data rate too
+# high". nwall_sink is not watched (its own queue): see TODO 84 §8.
+[operator.backlog_autostop]
+poll_interval_secs = 2
+
+# InfluxDB off: test runs would show up in the N_Wall Grafana dashboards.
+# [operator.influxdb]
+# url = "http://localhost:8086"
+# database = "delila"
+# interval_secs = 2
+
+# eLog off: test runs must not post into the [N_Wall] logbook. The run record
+# (MongoDB, experiment DAQ_Test) still has comment, notes and stop reason.
+# [operator.elog]
+# url = "http://localhost:8082"
+# logbook = "N_Wall"
+
+# MongoDB: start_daq.sh passes the docker/ stack credentials
+# (mongodb://delila:delila_pass@localhost:27017, db delila) by default.
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# --- module 0: VX2730 DPP-PSD, beam / LaBr3 / LS (master) ---
+[[network.sources]]
+id = 0
+name = "PSD2-VX2730-NWall"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/nwall_vx2730_psd2_0.json"
+pipeline_order = 1
+
+# --- modules 1-5: V1725 DPP-PHA (250 MS/s -> 4 ns), Si ---
+# adc_min stays 0 (the default): a sync mark (TODO 79 §5.4) has energy ~0 and
+# would be dropped in the Reader otherwise.
+[[network.sources]]
+id = 1
+name = "PHA1-V1725-E-Sector"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
+config_file = "config/digitizers/nwall_v1725_pha_1.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 2
+name = "PHA1-V1725-dE-Sector"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/nwall_v1725_pha_2.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 3
+name = "PHA1-V1725-dE-Ring3"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=0"
+config_file = "config/digitizers/nwall_v1725_pha_3.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 4
+name = "PHA1-V1725-dE-Ring2"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=1"
+config_file = "config/digitizers/nwall_v1725_pha_4.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+[[network.sources]]
+id = 5
+name = "PHA1-V1725-dE-Ring1"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=2"
+config_file = "config/digitizers/nwall_v1725_pha_5.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# --- Pipeline components ---
+# [network.merger] has no explicit `subscribe`: it is derived from the source list.
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# Not archived (no archive_sync line for it): delete it when done.
+output_dir = "/data/DAQ_Test"
+pipeline_order = 3
+# Hard watermark for [operator.backlog_autostop] (TODO 84): 40 GB of queue. The
+# Recorder writes about 2.7 M ev/s here; a 6.5 MHz noise run reaches 40 GB in about
+# 10 min and takes about 8 min to write out. RAM is 251 GB and nwall_sink grows too.
+backlog_hard_limit_mb = 40000
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+# keV coefficients for the display (TODO 83). The table is empty until someone hands
+# one in: mv it into place and press Reload, no restart needed.
+energy_calib_file = "config/energy_calib_nwall.txt"
+
+# --- nwall_sink: ROOT recorder + live N_Wall monitor (JSROOT :8090) ---
+# TODO 79, tools/root_sink/nwall/README.md. Trees: hits (every channel, aligned
+# time) + events (trigger = E sector, L2 flag dEE = with a dE sector hit).
+[network.root_sink]
+program = "nwall_sink"
+subscribe = "tcp://localhost:5557"
+# Must match [network.recorder].output_dir (.delila and .root side by side).
+output_dir = "/data/DAQ_Test"
+http_port = 8090
+hits_tree = true
+event_def_file = "config/event_def_nwall.json"
+channel_map = "config/channel_map_N_Wall.txt"
+# DIG1 boards deliver up to ~100 ms out of time order (channel-pair aggregates;
+# ThGEM run 52 on this host: 82 ms) - the default 50 ms would drop hits as late.
+safe_horizon_ms = 1000
+# Uncompressed ROOT (user, 2026-11-07): /archive is ZFS with its own compression, and
+# ZSTD-5 costs nwall_sink's writer CPU at high rate (TODO 84). nwall_sink default is 505.
+compression = 0
+autosave_sec = 30
+workers = 3
+# Once measured (TODO 72 time_map.C with the pulser, after the clock cable):
+# time_calib_file = "config/time_settings_nwall.json"
+# The same table as [network.monitor]: adds /hits/energy_keV_m<M> and /events/pid_keV.
+energy_calib_file = "config/energy_calib_nwall.txt"
+# Calibration (README "Calibration"): si_delay_ns = peak of /events/si_phase,
+# rf_t0_ns = shift putting the LS gamma flash at L/c.
+# rf_period_ns = 199.980    # nominal; measured per run from the beam channel
+# si_delay_ns = 0.0
+# rf_t0_ns = 0.0
