@@ -33,7 +33,8 @@ If no address works after a power cut, call the expert: the DAQ PC may have got 
    tick **Run with timer**, set **Duration (min)** (120 for 2 h, at most 1440) and
    keep **Auto-stop on expire** ticked. The DAQ itself then stops the run on time,
    even if every browser is closed. The time left is shown at the top of every
-   page.
+   page (for example "1:23:45 left"; it may skip a second now and then, that is
+   normal).
 5. Press **Start**. Within a minute: System State "Running", every reader shows a
    rate, no "No events" box.
 
@@ -42,7 +43,10 @@ If no address works after a power cut, call the expert: the DAQ PC may have got 
 
 ## 2. About 15 minutes after Start: screenshots
 
-1. Operator UI → **Monitor**: on each tab press **Save Image** (saves a PNG).
+1. Operator UI → **Monitor**: on each tab press **Save Image** (saves a PNG of what
+   is shown). If a spectrum is too spiky to read, first press **×2**, **×4** or
+   **×8** next to "Rebin" (2, 4 or 8 channels per bin). It changes the display only,
+   never the recorded data.
 2. Grafana **Rates — N_Wall**: take a screenshot of the page
    (Ubuntu Shift+PrtSc, Windows Win+Shift+S, macOS Cmd+Shift+4).
 3. Logbook → **New**: Author = your name, Type = Routine, Category = DAQ,
@@ -94,7 +98,8 @@ Do not try to fix it. Write what you see and the time in the logbook
 | HV trip, or a current jumps | Logbook, call the expert. For the Si HV, see below. |
 | A page does not load | Reload it. If the Operator UI stays dead for 5 min, call the expert. |
 
-**Si HV emergency OFF, if possible:** N1408 page → your name and the passphrase →
+**Si HV emergency OFF, if possible:** N1408 page → your name and the passphrase (on
+the shift sheet) →
 **Take control** → **ALL OFF**. The button works only when the N1408 panel is set to
 REMOTE. If the page cannot do it (the N1408 is in LOCAL), call the expert at once.
 
@@ -110,6 +115,10 @@ REMOTE. If the page cannot do it (the N1408 is in LOCAL), call the expert at onc
    ./scripts/stop_daq.sh
    ./scripts/start_daq.sh
    ```
+
+   Type `start_daq.sh` without anything after it: that starts N_Wall. Never give
+   it another config file (for example `config_daq_test_pfqaq.toml` is for tests:
+   it writes elsewhere and posts nothing to the logbook).
 
 4. Wait 1 minute and reload the Operator UI: Readers "6/6 Online", **PLL OK**.
    If a board still shows "PLL ?" after 2 minutes, do steps 3 and 4 once more.
