@@ -106,6 +106,7 @@
   3. **`clocksource` が読めずに `clkin_miss` だけが立っているときは `unreadable`(応答なし)にする。** 止まるのは同じで、理由の表示だけが正しくなる。本物のエラーのビットが一緒に立っていれば、そちらを出す。
   4. **数えるビットを増やした(ユーザー了承)。** power_fail、board_init_fault、si5341/si5395/LMK04832 の unlock、jesd_unlock、DDR の較正失敗 3 つ、fpga_config_fail、adc_shutdown。`clkin_miss` は外部クロックのときだけ。数えずにログだけ: bic_error(意味が資料にない)と温度の警告 4 つ(続いて起きる adc_shutdown のほうを数える)。
 - テスト: Rust +5(pll +4、guard +1、metrics の JSON の確認を拡張)、ライブラリ 862 件通過、clippy(テスト込み)警告 0。UI +1(148 件通過)、`dist/` ビルド済み。シフトマニュアル §5 の表の文言を新しい表示に合わせた。
+- 配備: f989f80。pf-qaq で 18:30 にビルド(警告 0)、ユーザーが 18:34 に DAQ を起動(`logs/20261110_183430`)。VX2730 は「Digitizer OK (errorflags 0: PLLs locked, no board error)」、V1725 × 5 は「PLL locked」、全台 `locked`・`pll_detail` なし、ユーザーも「オールグリーン」を確認。
 
 ## 6. 後回し
 

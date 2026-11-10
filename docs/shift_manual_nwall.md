@@ -102,6 +102,7 @@ Do not try to fix it. Write what you see and the time in the logbook
 the shift sheet) →
 **Take control** → **ALL OFF**. The button works only when the N1408 panel is set to
 REMOTE. If the page cannot do it (the N1408 is in LOCAL), call the expert at once.
+The N1408 page runs on its own: it works even when the DAQ is stopped.
 
 ## 6. DAQ restart (only when the expert asks for it)
 
