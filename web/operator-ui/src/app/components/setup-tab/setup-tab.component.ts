@@ -25,6 +25,8 @@ import {
   defaultYAxisSource,
 } from '../../models/histogram.types';
 import { tabShowsKev } from '../../utils/energy-calib';
+import { withRebin } from '../../utils/rebin';
+import { RebinPickerComponent } from '../rebin-picker/rebin-picker.component';
 
 @Component({
   selector: 'app-setup-tab',
@@ -39,6 +41,7 @@ import { tabShowsKev } from '../../utils/energy-calib';
     MatDividerModule,
     MatExpansionModule,
     FormsModule,
+    RebinPickerComponent,
   ],
   template: `
     <div class="setup-container">
@@ -193,9 +196,8 @@ import { tabShowsKev } from '../../utils/energy-calib';
         </button>
       </div>
 
-      <!-- Binning controls (per-tab range + bin count). The chart components
-           rebin client-side; the View tab gets a live slider on top of these
-           initial values. -->
+      <!-- Range and rebin (x1/x2/x4/x8, TODO 87) per tab. The chart components
+           rebin client-side; the View tab has the same rebin buttons. -->
       <div class="binning-rows">
         <div class="binning-row">
           <span class="binning-section">{{ is2d() ? 'X (' + axisLabel(xAxisFor1dOr2d()) + ')' : 'Range' }}{{ rangeUnit(xAxisFor1dOr2d()) }}:</span>
@@ -207,10 +209,11 @@ import { tabShowsKev } from '../../utils/energy-calib';
             <mat-label>Max</mat-label>
             <input matInput type="number" [value]="xMax() ?? ''" (change)="onXMaxChange($any($event.target).value)" />
           </mat-form-field>
-          <mat-form-field appearance="outline" class="binning-input">
-            <mat-label>Bins</mat-label>
-            <input matInput type="number" [value]="xBins()" (change)="onXBinsChange($any($event.target).value)" />
-          </mat-form-field>
+          <app-rebin-picker
+            label="Rebin:"
+            [value]="config.xView?.rebin ?? 1"
+            (valueChange)="onXRebin($event)"
+          />
           @if (!is2d()) {
             <button mat-button (click)="onResetBinning()" title="Reset to axis defaults">
               <mat-icon>restart_alt</mat-icon> Defaults
@@ -229,10 +232,11 @@ import { tabShowsKev } from '../../utils/energy-calib';
               <mat-label>Max</mat-label>
               <input matInput type="number" [value]="yMax() ?? ''" (change)="onYMaxChange($any($event.target).value)" />
             </mat-form-field>
-            <mat-form-field appearance="outline" class="binning-input">
-              <mat-label>Bins</mat-label>
-              <input matInput type="number" [value]="yBins()" (change)="onYBinsChange($any($event.target).value)" />
-            </mat-form-field>
+            <app-rebin-picker
+              label="Rebin:"
+              [value]="config.yView?.rebin ?? 1"
+              (valueChange)="onYRebin($event)"
+            />
             <button mat-button (click)="onResetBinning()" title="Reset to axis defaults">
               <mat-icon>restart_alt</mat-icon> Defaults
             </button>
@@ -492,13 +496,14 @@ export class SetupTabComponent {
   }
 
   onXAxisLabelChange(value: XAxisLabel): void {
-    // A range typed in one unit means nothing in the other; the bin count still does.
+    // A range typed in one unit means nothing in the other; the rebin factor
+    // (and an old layout's bin count) still does.
     const patch: Partial<SetupConfig> = { xAxisLabel: value };
     if (this.xAxisFor1dOr2d() === 'energy' && this.config.xView) {
-      patch.xView = { bins: this.config.xView.bins };
+      patch.xView = { bins: this.config.xView.bins, rebin: this.config.xView.rebin };
     }
     if (this.is2d() && this.yAxisOrDefault() === 'energy' && this.config.yView) {
-      patch.yView = { bins: this.config.yView.bins };
+      patch.yView = { bins: this.config.yView.bins, rebin: this.config.yView.rebin };
     }
     this.emitConfigChange(patch);
   }
@@ -557,19 +562,19 @@ export class SetupTabComponent {
   private resolveView(view: AxisView | undefined, axis: AxisSource): AxisView {
     const def = DEFAULT_AXIS_VIEW[axis];
     const inKev = this.axisInKev(axis);
+    // No bin count here (TODO 87): showing the default 1024 and saving it with a
+    // range edit turned tabs into x64 without anyone choosing it.
     return {
+      ...view,
       min: view?.min ?? (inKev ? undefined : def.min),
       max: view?.max ?? (inKev ? undefined : def.max),
-      bins: view?.bins ?? def.bins,
     };
   }
 
   xMin(): number | undefined { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).min; }
   xMax(): number | undefined { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).max; }
-  xBins(): number { return this.resolveView(this.config.xView, this.xAxisFor1dOr2d()).bins!; }
   yMin(): number | undefined { return this.resolveView(this.config.yView, this.yAxisOrDefault()).min; }
   yMax(): number | undefined { return this.resolveView(this.config.yView, this.yAxisOrDefault()).max; }
-  yBins(): number { return this.resolveView(this.config.yView, this.yAxisOrDefault()).bins!; }
 
   private patchXView(patch: Partial<AxisView>): void {
     const next = { ...this.resolveView(this.config.xView, this.xAxisFor1dOr2d()), ...patch };
@@ -586,10 +591,10 @@ export class SetupTabComponent {
 
   onXMinChange(raw: string | number): void { this.patchXView({ min: this.rangeValue(raw) }); }
   onXMaxChange(raw: string | number): void { this.patchXView({ max: this.rangeValue(raw) }); }
-  onXBinsChange(raw: string | number): void { this.patchXView({ bins: Math.max(1, Math.floor(Number(raw))) }); }
+  onXRebin(factor: number): void { this.emitConfigChange({ xView: withRebin(this.config.xView, factor) }); }
   onYMinChange(raw: string | number): void { this.patchYView({ min: this.rangeValue(raw) }); }
   onYMaxChange(raw: string | number): void { this.patchYView({ max: this.rangeValue(raw) }); }
-  onYBinsChange(raw: string | number): void { this.patchYView({ bins: Math.max(1, Math.floor(Number(raw))) }); }
+  onYRebin(factor: number): void { this.emitConfigChange({ yView: withRebin(this.config.yView, factor) }); }
 
   /** Drop the explicit overrides so the inputs fall back to the per-axis
    *  defaults — useful after a long zoom session or when switching axes. */

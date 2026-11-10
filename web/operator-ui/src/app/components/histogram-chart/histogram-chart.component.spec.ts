@@ -73,3 +73,32 @@ describe('HistogramChartComponent units (TODO 83)', () => {
     expect(text).toContain('Center: 500.00 ± 0.50\n');
   });
 });
+
+describe('HistogramChartComponent rebin (TODO 87)', () => {
+  const binWidth = (chart: HistogramChartComponent) =>
+    (chart as unknown as { binWidth: number }).binWidth;
+
+  function show(view: HistogramChartComponent['xView']): HistogramChartComponent {
+    const chart = new HistogramChartComponent();
+    chart.histogram = hist();
+    chart.xView = view;
+    chart.ngOnChanges({ histogram: new SimpleChange(null, chart.histogram, true) });
+    return chart;
+  }
+
+  it('puts `factor` native bins into each shown bin', () => {
+    expect(binWidth(show({ rebin: 4 }))).toBe(4);
+    expect(binWidth(show({ rebin: 1 }))).toBe(1);
+  });
+
+  it('counts the factor from the shown range, so a narrowed range is not a comb', () => {
+    // 1000 native bins of 1; range 0-100 at x2 = 50 bins of 2.
+    expect(binWidth(show({ min: 0, max: 100, rebin: 2 }))).toBe(2);
+    // An old layout with more bins than the range holds: x1, not 1/10-wide empty bins.
+    expect(binWidth(show({ min: 0, max: 100, bins: 1000 }))).toBe(1);
+  });
+
+  it('reads a layout saved before TODO 87 as the nearest choice (at most x8)', () => {
+    expect(binWidth(show({ min: 0, max: 1000, bins: 1000 / 64 }))).toBe(8);
+  });
+});

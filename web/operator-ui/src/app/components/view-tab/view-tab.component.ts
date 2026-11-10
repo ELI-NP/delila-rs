@@ -16,6 +16,14 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { HistogramChartComponent, RangeChangeEvent } from '../histogram-chart/histogram-chart.component';
 import { HeatmapChartComponent } from '../heatmap-chart/heatmap-chart.component';
+import { RebinPickerComponent } from '../rebin-picker/rebin-picker.component';
+import {
+  REBIN_FACTORS,
+  allowedRebinFactors,
+  nativeBinsInView,
+  rebinFactorOf,
+  withRebin,
+} from '../../utils/rebin';
 import { HistogramService } from '../../services/histogram.service';
 import { DigitizerService } from '../../services/digitizer.service';
 import {
@@ -42,7 +50,13 @@ import {
 @Component({
   selector: 'app-view-tab',
   standalone: true,
-  imports: [HistogramChartComponent, HeatmapChartComponent, MatButtonModule, MatIconModule],
+  imports: [
+    HistogramChartComponent,
+    HeatmapChartComponent,
+    RebinPickerComponent,
+    MatButtonModule,
+    MatIconModule,
+  ],
   template: `
     <div class="view-container">
       <!-- Toolbar -->
@@ -84,40 +98,24 @@ import {
           <mat-icon>save_alt</mat-icon>
           {{ isSaving() ? 'Saving...' : 'Save Image' }}
         </button>
-        <!-- Live rebin sliders (1D shows X only, 2D shows X+Y). The slider
-             value is a *rebin factor*: 1 = server's native resolution,
-             N = combine N native bins into one displayed bin. The chart
-             rebins client-side so the picture updates within one frame. -->
+        <!-- Rebin x1/x2/x4/x8 (TODO 87): native bins per shown bin, relative to
+             the shown range. The charts rebin client-side. -->
         <div class="binning-controls">
-          <label class="binning-control">
-            <span class="binning-label">{{ is2dHistType(histType()) ? 'X' : '' }} rebin:</span>
-            <input
-              type="range"
-              [min]="1"
-              [max]="maxXRebinFactor()"
-              [step]="1"
-              [value]="xRebinFactor()"
-              (input)="onXRebinSlider($any($event.target).value)"
-            />
-            <span class="binning-value" [title]="xView().bins + ' bins displayed'">
-              {{ xRebinFactor() }}
-            </span>
-          </label>
+          <app-rebin-picker
+            [label]="is2dHistType(histType()) ? 'X rebin:' : 'Rebin:'"
+            [value]="xRebinFactor()"
+            [allowed]="xAllowedRebin()"
+            [nativeBins]="xNativeBins()"
+            (valueChange)="onXRebin($event)"
+          />
           @if (is2dHistType(histType())) {
-            <label class="binning-control">
-              <span class="binning-label">Y rebin:</span>
-              <input
-                type="range"
-                [min]="1"
-                [max]="maxYRebinFactor()"
-                [step]="1"
-                [value]="yRebinFactor()"
-                (input)="onYRebinSlider($any($event.target).value)"
-              />
-              <span class="binning-value" [title]="yView().bins + ' bins displayed'">
-                {{ yRebinFactor() }}
-              </span>
-            </label>
+            <app-rebin-picker
+              label="Y rebin:"
+              [value]="yRebinFactor()"
+              [allowed]="yAllowedRebin()"
+              [nativeBins]="yNativeBins()"
+              (valueChange)="onYRebin($event)"
+            />
           }
         </div>
         @if (showsKev()) {
@@ -226,30 +224,6 @@ import {
       padding: 0 8px;
       border-left: 1px solid #ddd;
       border-right: 1px solid #ddd;
-    }
-
-    .binning-control {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: #444;
-      cursor: pointer;
-    }
-
-    .binning-control input[type='range'] {
-      width: 100px;
-    }
-
-    .binning-label {
-      white-space: nowrap;
-    }
-
-    .binning-value {
-      min-width: 32px;
-      font-variant-numeric: tabular-nums;
-      font-weight: 500;
-      color: #1976d2;
     }
 
     .view-grid {
@@ -470,11 +444,10 @@ export class ViewTabComponent implements OnInit, OnDestroy {
     this.resolveView(
       this.tab.xView,
       this.histType() === '2d' ? this.xAxis() : this.energy1dAxis(),
-      this.serverXBins(),
     ),
   );
   readonly yView = computed<AxisView>(() =>
-    this.resolveView(this.tab.yView, this.yAxis(), this.serverYBins()),
+    this.resolveView(this.tab.yView, this.yAxis()),
   );
 
   /**
@@ -491,83 +464,52 @@ export class ViewTabComponent implements OnInit, OnDestroy {
     return 'energy';
   }
 
-  private resolveView(view: AxisView | undefined, axis: AxisSource, nativeBins: number): AxisView {
+  private resolveView(view: AxisView | undefined, axis: AxisSource): AxisView {
     // The defaults are in ADC. In keV the energy axis has none: see cellXViews.
     const def = this.showsKev() && axis === 'energy' ? undefined : DEFAULT_AXIS_VIEW[axis];
     return {
       min: view?.min ?? def?.min,
       max: view?.max ?? def?.max,
-      // Default = server's native bin count → rebin factor 1 (no rebin).
-      bins: view?.bins ?? nativeBins,
+      // TODO 87: the rebin factor (unset = x1); `bins` only from old layouts.
+      bins: view?.bins,
+      rebin: view?.rebin,
     };
   }
 
-  /** Minimum *displayed* bin count after rebinning — below this the chart
-   *  loses too much shape (single peak collapses to one bar). The slider's
-   *  upper bound is `serverBins / MIN_DISPLAY_BINS`. */
-  readonly MIN_DISPLAY_BINS = 16;
-
-  /** Server's native X bin count for the current view. Read from the latest
-   *  histogram payload when available — the server is the source of truth.
-   *  Falls back to the axis' DEFAULT_AXIS_VIEW.bins (used as a 2D-context
-   *  default) until the first payload arrives. */
-  readonly serverXBins = computed<number>(() => {
+  /** Native bins of the shown X range, from the first cell with data (TODO 87). */
+  readonly xNativeBins = computed<number | null>(() => {
+    const views = this.cellXViews();
     if (this.is2dHistType(this.histType())) {
-      const h = this.histograms2d().find((x) => x !== null);
-      if (h) return h.x_config.num_bins;
-    } else {
-      const h = this.histograms().find((x) => x !== null);
-      if (h) return h.config.num_bins;
+      const hs = this.displayHistograms2d();
+      const i = hs.findIndex((h) => h !== null);
+      return i < 0 ? null : nativeBinsInView(hs[i]!.x_config, views[i]);
     }
-    const axis = this.is2dHistType(this.histType()) ? this.xAxis() : this.energy1dAxis();
-    return DEFAULT_AXIS_VIEW[axis].bins;
+    const hs = this.displayHistograms();
+    const i = hs.findIndex((h) => h !== null);
+    return i < 0 ? null : nativeBinsInView(hs[i]!.config, views[i]);
+  });
+  readonly yNativeBins = computed<number | null>(() => {
+    if (!this.is2dHistType(this.histType())) return null;
+    const views = this.cellYViews();
+    const hs = this.displayHistograms2d();
+    const i = hs.findIndex((h) => h !== null);
+    return i < 0 ? null : nativeBinsInView(hs[i]!.y_config, views[i]);
   });
 
-  readonly serverYBins = computed<number>(() => {
-    if (!this.is2dHistType(this.histType())) return 1;
-    const h = this.histograms2d().find((x) => x !== null);
-    if (h) return h.y_config.num_bins;
-    return DEFAULT_AXIS_VIEW[this.yAxis()].bins;
-  });
+  /** Factors the shown range splits evenly (all four until data arrives). */
+  readonly xAllowedRebin = computed(() => allowedOrAll(this.xNativeBins()));
+  readonly yAllowedRebin = computed(() => allowedOrAll(this.yNativeBins()));
 
-  /** Slider upper bound — the largest rebin factor we let the user pick
-   *  before the displayed bin count would drop below `MIN_DISPLAY_BINS`. */
-  readonly maxXRebinFactor = computed<number>(() =>
-    Math.max(1, Math.floor(this.serverXBins() / this.MIN_DISPLAY_BINS)),
-  );
-  readonly maxYRebinFactor = computed<number>(() =>
-    Math.max(1, Math.floor(this.serverYBins() / this.MIN_DISPLAY_BINS)),
-  );
+  /** The factor in use: the tab's `rebin`, or its pre-TODO 87 `bins`. */
+  readonly xRebinFactor = computed(() => factorOrSaved(this.tab.xView, this.xNativeBins()));
+  readonly yRebinFactor = computed(() => factorOrSaved(this.tab.yView, this.yNativeBins()));
 
-  /** Current rebin factor derived from `xView.bins` (= displayed bins).
-   *  factor 1 = native (no rebin), factor N = combine N native bins. */
-  readonly xRebinFactor = computed<number>(() => {
-    const sb = this.serverXBins();
-    const db = Math.max(1, this.xView().bins ?? sb);
-    return Math.max(1, Math.round(sb / db));
-  });
-  readonly yRebinFactor = computed<number>(() => {
-    const sb = this.serverYBins();
-    const db = Math.max(1, this.yView().bins ?? sb);
-    return Math.max(1, Math.round(sb / db));
-  });
-
-  onXRebinSlider(raw: string | number): void {
-    const factor = Math.max(1, Math.floor(Number(raw)));
-    const bins = Math.max(this.MIN_DISPLAY_BINS, Math.floor(this.serverXBins() / factor));
-    this.tabChange.emit({
-      ...this.tab,
-      xView: { ...(this.tab.xView ?? {}), ...this.xView(), bins },
-    });
+  onXRebin(factor: number): void {
+    this.tabChange.emit({ ...this.tab, xView: withRebin(this.tab.xView, factor) });
   }
 
-  onYRebinSlider(raw: string | number): void {
-    const factor = Math.max(1, Math.floor(Number(raw)));
-    const bins = Math.max(this.MIN_DISPLAY_BINS, Math.floor(this.serverYBins() / factor));
-    this.tabChange.emit({
-      ...this.tab,
-      yView: { ...(this.tab.yView ?? {}), ...this.yView(), bins },
-    });
+  onYRebin(factor: number): void {
+    this.tabChange.emit({ ...this.tab, yView: withRebin(this.tab.yView, factor) });
   }
 
   /** Heatmap-rendered histogram type (single 2D variant under the new model). */
@@ -833,4 +775,14 @@ export class ViewTabComponent implements OnInit, OnDestroy {
       img.src = src;
     });
   }
+}
+
+/** Factors a range of `n` native bins splits evenly; all four while unknown. */
+function allowedOrAll(n: number | null): readonly number[] {
+  return n === null ? REBIN_FACTORS : allowedRebinFactors(n);
+}
+
+/** The factor a saved view means (its `rebin`, or old `bins`, TODO 87). */
+function factorOrSaved(view: AxisView | undefined, n: number | null): number {
+  return n === null ? (view?.rebin ?? 1) : rebinFactorOf(view, n);
 }

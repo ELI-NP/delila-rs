@@ -264,8 +264,10 @@ describe('energy calibration (TODO 83)', () => {
     const cfg = { num_bins: 1000, min_value: -10, max_value: 490 };
 
     it('defaults to the whole of that cell', () => {
-      expect(kevCellView(undefined, cfg, true)).toEqual({ min: -10, max: 490, bins: 1000 });
+      // No bin count of its own (TODO 87): the chart applies the rebin factor.
+      expect(kevCellView(undefined, cfg, true)).toEqual({ min: -10, max: 490 });
       expect(kevCellView({ bins: 100 }, cfg, true)).toEqual({ min: -10, max: 490, bins: 100 });
+      expect(kevCellView({ rebin: 4 }, cfg, true)).toEqual({ min: -10, max: 490, rebin: 4 });
     });
 
     it('a chosen range is in keV', () => {

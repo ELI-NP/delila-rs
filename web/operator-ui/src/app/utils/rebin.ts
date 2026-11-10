@@ -20,6 +20,50 @@ export interface AxisRange {
   bins: number;
 }
 
+/**
+ * Rebin choices of the Monitor (TODO 87): 1, 2, 4 or 8 native bins per shown
+ * bin. Before, a slider offered every factor up to 4096 in 100 px (about 40 per
+ * pixel), factors that do not divide the bin count drew a comb, and the factor
+ * ignored a narrowed range.
+ */
+export const REBIN_FACTORS: readonly number[] = [1, 2, 4, 8];
+
+type AxisConfig = { num_bins: number; min_value: number; max_value: number };
+type RebinView = { min?: number; max?: number; bins?: number; rebin?: number };
+
+/** Native bins of `cfg` inside `[min, max]` (ADC or keV alike: a calibrated
+ *  axis keeps its bin count). */
+export function nativeBinsIn(cfg: AxisConfig, min: number, max: number): number {
+  const width = (cfg.max_value - cfg.min_value) / cfg.num_bins;
+  if (!(width > 0) || !(max > min)) return 1;
+  return Math.max(1, Math.round((max - min) / width));
+}
+
+/** The offered factors that split `n` native bins evenly. */
+export function allowedRebinFactors(n: number): number[] {
+  return REBIN_FACTORS.filter((f) => f <= n && n % f === 0);
+}
+
+/**
+ * The factor a view means for a range of `n` native bins: its `rebin`, or, for
+ * a layout saved before TODO 87, the factor its `bins` gave. Either way the
+ * largest offered factor not above it that splits `n` evenly (at least 1).
+ */
+export function rebinFactorOf(view: RebinView | null | undefined, n: number): number {
+  const wanted = view?.rebin ?? (view?.bins ? n / view.bins : 1);
+  const fits = allowedRebinFactors(n).filter((f) => f <= wanted + 1e-9);
+  return fits.length > 0 ? fits[fits.length - 1] : 1;
+}
+
+/** The window a chart rebins to: the view's range (default: the whole
+ *  histogram) in `native / factor` bins. */
+export function resolveRebinView(view: RebinView | null | undefined, cfg: AxisConfig): AxisRange {
+  const min = view?.min ?? cfg.min_value;
+  const max = view?.max ?? cfg.max_value;
+  const n = nativeBinsIn(cfg, min, max);
+  return { min, max, bins: n / rebinFactorOf(view, n) };
+}
+
 export interface Histogram1DLike {
   bins: number[];
   config: { num_bins: number; min_value: number; max_value: number };
@@ -149,4 +193,15 @@ export function rebin2d(
     total_counts: outTotal,
     overflow: outOver,
   };
+}
+
+/** Native bins of the range a view shows on `cfg` (default: all of it). */
+export function nativeBinsInView(cfg: AxisConfig, view: RebinView | null | undefined): number {
+  return nativeBinsIn(cfg, view?.min ?? cfg.min_value, view?.max ?? cfg.max_value);
+}
+
+/** The view with a rebin factor; a bin count saved before TODO 87 goes. */
+export function withRebin<V extends RebinView>(view: V | undefined, rebin: number): V {
+  const { bins: _legacy, ...rest } = (view ?? {}) as V;
+  return { ...rest, rebin } as V;
 }

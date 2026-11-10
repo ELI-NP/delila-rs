@@ -143,11 +143,14 @@ export function kevCellView(
   config: { num_bins: number; min_value: number; max_value: number },
   calibrated: boolean,
 ): AxisView {
-  return {
+  const out: AxisView = {
     min: calibrated ? (view?.min ?? config.min_value) : config.min_value,
     max: calibrated ? (view?.max ?? config.max_value) : config.max_value,
-    bins: view?.bins ?? config.num_bins,
   };
+  // The rebin factor (TODO 87) or an old layout's bin count, as chosen.
+  if (view?.bins !== undefined) out.bins = view.bins;
+  if (view?.rebin !== undefined) out.rebin = view.rebin;
+  return out;
 }
 
 /** One line for the Monitor page. */

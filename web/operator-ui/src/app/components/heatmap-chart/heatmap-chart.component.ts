@@ -8,7 +8,7 @@ import {
 import { NgxEchartsDirective } from 'ngx-echarts';
 import type { ECharts, EChartsCoreOption } from 'echarts/core';
 import { AxisView, Histogram2D } from '../../models/histogram.types';
-import { rebin2d } from '../../utils/rebin';
+import { rebin2d, resolveRebinView } from '../../utils/rebin';
 import { formatAxisValue } from '../../utils/energy-calib';
 
 @Component({
@@ -152,20 +152,18 @@ export class HeatmapChartComponent implements OnChanges {
       this.mergeOptions.set({ series: [{ data: [] }] });
       return;
     }
-    // Apply client-side rebin if the user has an explicit view; otherwise
-    // render the native server payload as-is.
+    // TODO 87: each axis shows its view's range in native / factor bins
+    // (factor 1, 2, 4, 8); without a view the native payload as-is.
     const xv = this.xView;
     const yv = this.yView;
-    const useRebin =
-      xv?.bins != null && xv?.min != null && xv?.max != null &&
-      yv?.bins != null && yv?.min != null && yv?.max != null;
-    const hist: Histogram2D = useRebin
-      ? (rebin2d(
-          raw,
-          { min: xv!.min!, max: xv!.max!, bins: xv!.bins! },
-          { min: yv!.min!, max: yv!.max!, bins: yv!.bins! },
-        ) as Histogram2D)
-      : raw;
+    const hist: Histogram2D =
+      xv || yv
+        ? (rebin2d(
+            raw,
+            resolveRebinView(xv, raw.x_config),
+            resolveRebinView(yv, raw.y_config),
+          ) as Histogram2D)
+        : raw;
 
     const xBins = hist.x_config.num_bins;
     const yBins = hist.y_config.num_bins;

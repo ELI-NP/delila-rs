@@ -260,8 +260,12 @@ export interface AxisView {
   min?: number;
   /** Upper edge of the visible range. */
   max?: number;
-  /** Number of bins to show after client-side rebinning. */
+  /** Layouts saved before TODO 87: number of bins to show. Read as the
+   *  nearest rebin factor (`rebinFactorOf`); not written any more. */
   bins?: number;
+  /** Native bins per shown bin: 1, 2, 4 or 8 (TODO 87), relative to the shown
+   *  range. Unset = 1. */
+  rebin?: number;
 }
 
 // Setup tab configuration (template for creating views)

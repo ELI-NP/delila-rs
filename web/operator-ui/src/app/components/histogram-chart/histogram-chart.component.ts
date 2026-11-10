@@ -13,7 +13,7 @@ import type { EChartsCoreOption } from 'echarts/core';
 import type { ECharts } from 'echarts/core';
 import { AxisView, Histogram1D, ViewCellFitResult } from '../../models/histogram.types';
 import { fitTextLines, formatAxisValue, unitOfAxisName } from '../../utils/energy-calib';
-import { rebin1d } from '../../utils/rebin';
+import { rebin1d, resolveRebinView } from '../../utils/rebin';
 import { evaluatePiecewiseBg, BG_RANGE } from '../../services/fitting.service';
 import { siCountFormatter } from '../echarts-base/echarts-base.utils';
 
@@ -104,8 +104,9 @@ export class HistogramChartComponent implements OnChanges {
     const raw = this.histogram;
     if (!raw) return null;
     const v = this.xView;
-    if (v?.bins == null || v?.min == null || v?.max == null) return raw;
-    return rebin1d(raw, { min: v.min, max: v.max, bins: v.bins }) as Histogram1D;
+    if (!v) return raw;
+    // TODO 87: the view's range in native / factor bins (factor 1, 2, 4, 8).
+    return rebin1d(raw, resolveRebinView(v, raw.config)) as Histogram1D;
   }
 
   onChartInit(chart: ECharts): void {
