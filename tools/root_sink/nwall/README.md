@@ -69,8 +69,12 @@ never drop). Histograms accumulate across runs until `/Reset`.
 | `/hits` | `hitmap` | module × channel |
 | | `energy_m<M>` | energy × channel, one per board |
 | `/rf` | `tof_rf_m<M>` | t − (bunch at or before t) − rf_t0, per channel (0 … T): the beam itself at 0, the gamma flash at L/c |
+| `/rf` | `gamma_since_beam` | pulsing check: (t − beam pulse at or before t) % 1000 ns for the LaBr3 channels, raw times. 1000 ns = 5 T, so a pulsed beam gives peaks every T (0, 200, 400, 600, 800); counts between the peaks = beam outside the bunches |
+| `/rf/gamma_since_beam_ch` | `gamma_since_beam_m<M>_ch<C>` | the same, one per LaBr3 channel (title = its name in the map); they add up to `gamma_since_beam` |
+| `/rf` | `since_beam` | the same per channel of the beam's board (LaBr3 and LS), without the beam channel |
 | `/ls` | `ls_psd` | (E_long − E_short) / E_long vs E_long of the LS channels (n/γ) |
 | `/events` | `pid` | dE vs E — the largest dE-sector and E-sector hit of each event |
+| `/events/pid_pair` | `pid_E<e>_dE<d>` | `pid` per sector pair (E sector e, dE sector d, the same largest hits), so it can be read before the keV calibration; made when the pair first occurs (2.1 MB each, 540 MB for all 16 × 16); they add up to `pid` |
 | `/hits` | `energy_keV_m<M>` | with `--energy-calib`: energy in keV × channel, per board; channels without coefficients are not in it |
 | `/events` | `pid_keV` | with `--energy-calib`: dE vs E in keV, the largest hit of each **in keV**, among sectors with coefficients |
 | | `sector_dE_vs_E` | dE sector × E sector, every pair in an event (the diagonal = the sector order) |
@@ -138,6 +142,17 @@ E2E (2026-10-30, macOS, ROOT 6.40): 273,824 hits / 3,939 events written;
 LaBr3 at 3 ns, gamma flash at 5.0 ns (L/c for 1.5 m); every hit got an RF TOF;
 `sector_dE_vs_E` 99.95 % diagonal; runs repeated with the same clock gave
 identical results (the bunch clock restarts per run).
+
+The `% 1000` histograms drift by (1000 − 5 T) per 5 bunches over the 100
+bunches between 1/100 beam pulses: 2 ns at T = 199.98 ns. A peak sitting at the
+beam phase is therefore split between 0 and 1000. E2E (2026-11-09, same data,
+T = 199.95 ns, 5 ns drift): `gamma_since_beam` peaks at 0.5 / 201.5 / 401.5 /
+599.5 / 800.5 / 999.5 ns, all 19,993 LaBr3 hits within ±6 ns of a peak.
+
+E2E of the per-pair / per-channel histograms (2026-11-10, same data): `pid`
+3,939 = the sum of the 17 `pid_pair` histograms that appeared (16 diagonal pairs
+hold 3,938); `gamma_since_beam` 19,993 = the sum of the 7 LaBr3 channels, whose
+titles carry the map names LaBr1 … LaBr7; `display_drops` 0.
 
 E2E of `BeamTime` (2026-11-05, same data): `check_beam_time.C` OK on 3,939 of
 3,939 events, `rfPeriodNs` = 199.9500 ns in both trees, 10.1 % of the events with

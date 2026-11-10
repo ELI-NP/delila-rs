@@ -102,6 +102,17 @@ class BunchClock {
     return nearest_beam(t, b) ? b : kNoBeamTime;
   }
 
+  // The beam hit at or before t, as recorded (no T in it), within max_gap_ns:
+  // for (t − beam pulse) % 1000, the pulsing check.
+  bool beam_at_or_before(double t, double& b) const {
+    auto it = std::upper_bound(beams_.begin(), beams_.end(), t);
+    if (it == beams_.begin()) return false;
+    const double before = *(it - 1);
+    if (t - before > cfg_.max_gap_ns) return false;
+    b = before;
+    return true;
+  }
+
   // The bunch at or before t (the one a particle seen at t came from, if it
   // took less than one period): b + floor((t − b) / T)·T.
   bool bunch_at_or_before(double t, double& tb) const {

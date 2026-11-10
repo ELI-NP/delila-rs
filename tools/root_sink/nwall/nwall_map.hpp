@@ -28,6 +28,7 @@
 #define NWALL_MAP_HPP
 
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <sstream>
 #include <string>
@@ -204,6 +205,22 @@ inline MapParseResult parse_channel_map(const std::string& text,
     r.map.roles[key] = role;
   }
   return r;
+}
+
+// Names of nwall_sink's per-pair and per-channel display histograms. They go
+// by sector number and by board / channel, not by the map's channel names: the
+// histograms are kept across runs while the map is re-read at every run start,
+// so a name must keep meaning the same thing.
+inline std::string pid_pair_name(int e_sector, int de_sector) {
+  char buf[48];
+  std::snprintf(buf, sizeof buf, "pid_E%02d_dE%02d", e_sector, de_sector);
+  return buf;
+}
+
+inline std::string channel_hist_name(const char* stem, unsigned module, unsigned channel) {
+  char buf[128];
+  std::snprintf(buf, sizeof buf, "%s_m%u_ch%02u", stem, module, channel);
+  return buf;
 }
 
 }  // namespace nwall

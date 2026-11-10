@@ -24,9 +24,14 @@
 //     channel map (--channel-map, nwall_map.hpp); bunch times from the
 //     downscaled beam channel (bunch_clock.hpp):
 //       /hits    hitmap (module x channel), energy_m<M> (energy x channel)
-//       /rf      tof_rf_m<M>: t - (bunch at or before t) - rf_t0, per channel
+//       /rf      tof_rf_m<M>: t - (bunch at or before t) - rf_t0, per channel;
+//                gamma_since_beam: LaBr3 (t - beam pulse at or before t) % 1000,
+//                and per channel gamma_since_beam_ch/gamma_since_beam_m<M>_ch<C>;
+//                since_beam: the same for the beam board, channel on y
 //       /ls      ls_psd: (E - Es)/E vs E of the LS channels
-//       /events  pid (dE vs E), sector_dE_vs_E, dE_ring_vs_sector,
+//       /events  pid (dE vs E), and per sector pair pid_pair/pid_E<e>_dE<d>
+//                (created when the pair first occurs; they add up to pid),
+//                sector_dE_vs_E, dE_ring_vs_sector,
 //                ls_dt_si (t_LS - t_trigger), si_phase (Si trigger vs bunch),
 //                ls_tof_si (t_LS - the bunch the Si picked - rf_t0)
 //     With --energy-calib (energy_calib.hpp, display only: the trees keep ADC):
@@ -1254,6 +1259,9 @@ struct DisplayMsg {
   std::shared_ptr<const nwall::ChannelMap> map;  // RunOpen: this run's map (null = none)
 };
 
+// (t - beam pulse) % kSinceBeamModNs, the pulsing check: 1000 ns = 5 RF periods.
+constexpr double kSinceBeamModNs = 1000.0;
+
 class Display {
  public:
   Display(THttpServer* server, const Options& opt) : server_(server), opt_(opt) {
@@ -1281,6 +1289,17 @@ class Display {
     ls_tof_si_ = add2("/events", "ls_tof_si",
                       "t(LS) - bunch picked by the Si - rf_t0;TOF [ns];channel", 550, -100, 1000,
                       32, 0, 32);
+    // Pulsing check (user, 2026-11-09): with T = 199.98 ns, 1000 ns is 5 T, so
+    // every bunch after a beam pulse lands on 0/200/400/600/800 (drift 0.1 ns
+    // per 5 bunches, 2 ns at the next 1/100 pulse). Raw times, no rf_t0.
+    gamma_since_beam_ = add1("/rf", "gamma_since_beam",
+                             "LaBr3: (t - beam pulse at or before it) % 1000 ns;"
+                             "t - t_{beam} mod 1000 [ns];hits",
+                             1000, 0, kSinceBeamModNs);
+    since_beam_ = add2("/rf", "since_beam",
+                       "beam board: (t - beam pulse at or before it) % 1000 ns;"
+                       "t - t_{beam} mod 1000 [ns];channel",
+                       1000, 0, kSinceBeamModNs, 32, 0, 32);
     reload_calib("start-up");
     std::printf("nwall_sink: energy calibration: %s\n",
                 ecal::calib_status_text(calib_, calib_on()).c_str());
@@ -1290,6 +1309,9 @@ class Display {
   void set_map(const nwall::ChannelMap& m) {
     std::fill(roles_.begin(), roles_.end(), nwall::Role());
     for (const auto& kv : m.roles) roles_[kv.first] = kv.second;
+    names_ = m.names;
+    // Kept across runs by board / channel: the title follows the new map.
+    for (auto& kv : gamma_since_ch_) kv.second->SetTitle(gamma_since_title(kv.first).c_str());
     beam_key_ = m.beam_key;
     have_map_ = true;
     // Which sectors are E and dE sets the pid_keV axes.
@@ -1370,7 +1392,8 @@ class Display {
                           calib_unmapped_, kev))
           energy_kev(h.module)->Fill(h.channel, kev);
       }
-      const nwall::Role& r = roles_[nwall::map_key(h.module, h.channel)];
+      const int key = nwall::map_key(h.module, h.channel);
+      const nwall::Role& r = roles_[key];
       if (r.det == nwall::Det::LS && h.energy > 0)
         ls_psd_->Fill(h.energy, (static_cast<double>(h.energy) - h.energy_short) / h.energy);
       if (beam) {
@@ -1381,6 +1404,17 @@ class Display {
                      "board %d: t - bunch at or before it - rf_t0;TOF mod T [ns];channel", 400, 0,
                      opt_.rf_period_ns, 32, 0, 32)
               ->Fill(u - tb, h.channel);
+        const bool on_beam_board = h.module == (beam_key_ >> 8) && key != beam_key_;
+        const bool labr = r.det == nwall::Det::LaBr;
+        double b;
+        if ((on_beam_board || labr) && clock_.beam_at_or_before(h.timestamp_ns, b)) {
+          const double since = std::fmod(h.timestamp_ns - b, kSinceBeamModNs);
+          if (on_beam_board) since_beam_->Fill(since, h.channel);
+          if (labr) {
+            gamma_since_beam_->Fill(since);
+            gamma_since_ch(key)->Fill(since);
+          }
+        }
       }
     }
     if (have_map_)
@@ -1483,7 +1517,13 @@ class Display {
         return a.energy < b.energy;
       });
     };
-    if (!e_sec.empty() && !de_sec.empty()) pid_->Fill(largest(e_sec)->energy, largest(de_sec)->energy);
+    if (!e_sec.empty() && !de_sec.empty()) {
+      const auto e = largest(e_sec);
+      const auto de = largest(de_sec);
+      pid_->Fill(e->energy, de->energy);
+      // The same pair as pid: the pid_pair histograms add up to pid.
+      pid_pair(e->index, de->index)->Fill(e->energy, de->energy);
+    }
     for (const SiHit& e : e_sec)
       for (const SiHit& de : de_sec) sector_->Fill(e.index, de.index);
     for (const SiHit& s : de_sec)
@@ -1535,10 +1575,46 @@ class Display {
     return h;
   }
 
+  // Per sector pair and per LaBr channel (user, 2026-11-10): before the keV
+  // calibration the sums mix gains. Created when first filled, so only pairs
+  // that occur take memory (512 x 512 doubles = 2.1 MB each, 540 MB for all
+  // 16 x 16).
+  TH2D* pid_pair(int e_sector, int de_sector) {
+    const std::pair<int, int> k(e_sector, de_sector);
+    auto it = pid_pair_.find(k);
+    if (it != pid_pair_.end()) return it->second;
+    TH2D* h = add2("/events/pid_pair", nwall::pid_pair_name(e_sector, de_sector).c_str(),
+                   Form("dE vs E, E sector %d x dE sector %d (largest sector hit of each);"
+                        "E [ADC];dE [ADC]",
+                        e_sector, de_sector),
+                   512, 0, 32768, 512, 0, 32768);
+    pid_pair_[k] = h;
+    return h;
+  }
+
+  TH1D* gamma_since_ch(uint16_t key) {
+    auto it = gamma_since_ch_.find(key);
+    if (it != gamma_since_ch_.end()) return it->second;
+    TH1D* h = add1("/rf/gamma_since_beam_ch",
+                   nwall::channel_hist_name("gamma_since_beam", key >> 8, key & 0xff).c_str(),
+                   gamma_since_title(key).c_str(), 1000, 0, kSinceBeamModNs);
+    gamma_since_ch_[key] = h;
+    return h;
+  }
+
+  std::string gamma_since_title(uint16_t key) const {
+    auto it = names_.find(key);
+    const std::string name = it == names_.end() ? std::string("not in the map") : it->second;
+    return Form("%s (board %d ch %d): (t - beam pulse at or before it) %% 1000 ns;"
+                "t - t_{beam} mod 1000 [ns];hits",
+                name.c_str(), key >> 8, key & 0xff);
+  }
+
   THttpServer* server_;
   const Options& opt_;
   nwall::BunchClock clock_;
   std::vector<nwall::Role> roles_;  // by map_key; Det::None = no role
+  std::map<uint16_t, std::string> names_;  // the map's channel names (titles only)
   int beam_key_ = -1;
   bool have_map_ = false;
   std::vector<TH1*> all_;
@@ -1550,6 +1626,10 @@ class Display {
   TH2D* ls_dt_si_ = nullptr;
   TH1D* si_phase_ = nullptr;
   TH2D* ls_tof_si_ = nullptr;
+  TH1D* gamma_since_beam_ = nullptr;
+  TH2D* since_beam_ = nullptr;
+  std::map<std::pair<int, int>, TH2D*> pid_pair_;  // (E sector, dE sector)
+  std::map<uint16_t, TH1D*> gamma_since_ch_;       // LaBr3 channels, by map_key
   std::map<int, TH2D*> energy_, tof_rf_;
   // Energy calibration (--energy-calib): the table and everything filled from it.
   ecal::ActiveCalib calib_;

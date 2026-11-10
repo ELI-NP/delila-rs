@@ -261,7 +261,36 @@ static void test_clock_beam_time() {
   CHECK(c.beam_time(1050.0) == kNoBeamTime);
 }
 
+// (t_gamma - beam pulse) % 1000 (user, 2026-11-09): the beam hit at or before
+// t, as recorded, so the difference is never negative.
+static void test_clock_beam_at_or_before() {
+  BunchClock c(clock_cfg(200.0));
+  double b = 0;
+  CHECK(!c.beam_at_or_before(1000.0, b));  // no beam hit yet
+  c.add_beam(1000.25);
+  c.add_beam(21003.75);
+  CHECK(!c.beam_at_or_before(500.0, b));   // before the first hit
+  CHECK(c.beam_at_or_before(1000.25, b) && b == 1000.25);  // at it
+  CHECK(c.beam_at_or_before(20000.0, b) && b == 1000.25);  // the later hit is nearer, not before
+  CHECK(c.beam_at_or_before(30000.0, b) && b == 21003.75);
+  // Beam off: farther than max_gap_ns (1 ms here) after the last hit.
+  CHECK(!c.beam_at_or_before(21003.75 + 1.5e6, b));
+}
+
+// Per-pair pid and per-channel histograms (user, 2026-11-10): named by sector
+// number and by board / channel, so a map re-read at run start keeps them.
+static void test_display_names() {
+  CHECK(pid_pair_name(3, 4) == "pid_E03_dE04");
+  CHECK(pid_pair_name(0, 15) == "pid_E00_dE15");
+  // Zero padding keeps (1, 12) and (11, 2) apart at a glance and sorts them.
+  CHECK(pid_pair_name(1, 12) == "pid_E01_dE12");
+  CHECK(pid_pair_name(11, 2) == "pid_E11_dE02");
+  CHECK(channel_hist_name("gamma_since_beam", 0, 1) == "gamma_since_beam_m0_ch01");
+  CHECK(channel_hist_name("gamma_since_beam", 5, 31) == "gamma_since_beam_m5_ch31");
+}
+
 int main() {
+  test_display_names();
   test_map_valid();
   test_map_no_beam();
   test_map_errors_all_reported();
@@ -275,6 +304,7 @@ int main() {
   test_clock_forget_before();
   test_clock_overlapping_chunks();
   test_clock_beam_time();
+  test_clock_beam_at_or_before();
 
   std::printf("\ntest_nwall: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
