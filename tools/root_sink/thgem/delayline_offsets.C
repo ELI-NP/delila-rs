@@ -10,6 +10,15 @@
 //   root -l -b -q 'delayline_offsets.C("run0056_*.root","1,2,3,5,4","6,7,8,9,10","ts.json","run 56")'
 //   root -l -b -q 'delayline_offsets.C+(...)'           (compiled, faster on big runs)
 //   root -l -b -q -e '.L delayline_offsets.C' -e 'delayline_centres_built("run0057_0000_X_built.root")'
+//   root -l -b -q -e '.L delayline_offsets.C+' -e \
+//        'delayline_offsets_map("run0012_*.root","../../../config/channel_map_11B_208Pb.txt","ts.json","run 12")'
+//
+// delayline_offsets_map (TODO 88): every ThGEM of a thgem_sink channel map
+// (thgem_map.hpp; any number, any module), each with all five electrodes. The
+// same method per ThGEM; the first ThGEM's trigger is the root, the other
+// triggers and every other channel seen get 0 under it. Board-to-board offsets
+// are NOT in this table: they are set in hardware with the pulser (start_delay,
+// TODO 72), so only arm differences move here.
 //   (the `built` tree now comes from thgem_events.C — the in-sink one was retired in TODO 71)
 //
 // Channel lists use root_sink's --xy1-ch/--xy2-ch order T,XL,XR,YU,YD; an empty
@@ -46,6 +55,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -55,6 +65,8 @@
 #include "TList.h"
 #include "TNamed.h"
 #include "TTree.h"
+
+#include "thgem_map.hpp"
 
 namespace dlo {
 
@@ -114,13 +126,16 @@ struct PlaneResult {
   Q x, y, dxl, dxr, dyu, dyd;
 };
 
-inline PlaneResult measure(const Plane& p, const std::vector<double> (&t)[256], double win) {
+// One plane from its five sorted time columns.
+inline PlaneResult measure_v(const std::vector<double>& trig, const std::vector<double>& xl,
+                             const std::vector<double>& xr, const std::vector<double>& yu,
+                             const std::vector<double>& yd, double win) {
   PlaneResult r;
   std::vector<double> X, Y, XL, XR, YU, YD;
-  for (double tr : t[p.t]) {
+  for (double tr : trig) {
     double a, b, c, d;
-    if (!nearest(t[p.xl], tr, win, a) || !nearest(t[p.xr], tr, win, b) ||
-        !nearest(t[p.yu], tr, win, c) || !nearest(t[p.yd], tr, win, d))
+    if (!nearest(xl, tr, win, a) || !nearest(xr, tr, win, b) || !nearest(yu, tr, win, c) ||
+        !nearest(yd, tr, win, d))
       continue;
     X.push_back(b - a);
     Y.push_back(c - d);
@@ -133,6 +148,10 @@ inline PlaneResult measure(const Plane& p, const std::vector<double> (&t)[256], 
   r.cy = r.y.mid;
   r.ok = r.full >= 100;
   return r;
+}
+
+inline PlaneResult measure(const Plane& p, const std::vector<double> (&t)[256], double win) {
+  return measure_v(t[p.t], t[p.xl], t[p.xr], t[p.yu], t[p.yd], win);
 }
 
 inline void print_q(const char* name, const Q& q) {
@@ -308,4 +327,161 @@ void delayline_centres_built(const char* file, const char* tree = "built") {
                 p, X.size(), qx.mid, qy.mid, qx.lo, qx.hi, qy.lo, qy.hi);
   }
   f->Close();
+}
+
+// Every ThGEM of a thgem_sink channel map (TODO 88). Times are kept per
+// (module, channel); see the header for the method and the table's shape.
+void delayline_offsets_map(const char* pattern, const char* map_file, const char* out_json = "",
+                           const char* label = "", double win = 1000.0) {
+  FILE* mf = std::fopen(map_file, "r");
+  if (!mf) {
+    std::printf("delayline_offsets_map: cannot read %s\n", map_file);
+    return;
+  }
+  std::string text;
+  char line[4096];
+  while (std::fgets(line, sizeof line, mf)) text += line;
+  std::fclose(mf);
+  thgem::MapParseResult pr = thgem::parse_channel_map(text, map_file);
+  for (const auto& e : pr.errors) std::printf("delayline_offsets_map: map ERROR %s\n", e.c_str());
+  if (!pr.errors.empty()) return;
+  for (const auto& w : pr.warnings) std::printf("delayline_offsets_map: map warning: %s\n", w.c_str());
+  std::vector<thgem::Thgem> planes;
+  for (const auto& kv : pr.map.thgems)
+    if (kv.second.complete()) planes.push_back(kv.second);
+  if (planes.empty()) {
+    std::printf("delayline_offsets_map: no ThGEM with all five electrodes in %s\n", map_file);
+    return;
+  }
+
+  TChain ch("delila");
+  int nfiles = ch.Add(pattern);
+  if (nfiles == 0 || ch.GetEntries() == 0) {
+    std::printf("delayline_offsets_map: no 'delila' entries in %s\n", pattern);
+    return;
+  }
+  bool aligned_input = false;
+  {
+    TFile* f0 = ch.GetFile();
+    TTree* t0 = f0 ? dynamic_cast<TTree*>(f0->Get("delila")) : nullptr;
+    TNamed* ts = t0 ? dynamic_cast<TNamed*>(t0->GetUserInfo()->FindObject("timeSettings")) : nullptr;
+    if (ts && std::string(ts->GetTitle()).find("\"applied\":true") != std::string::npos)
+      aligned_input = true;
+  }
+  UChar_t mod = 0, chn = 0;
+  Double_t ts = 0;
+  ch.SetBranchStatus("*", false);
+  ch.SetBranchStatus("module", true);
+  ch.SetBranchStatus("channel", true);
+  ch.SetBranchStatus("timestamp_ns", true);
+  ch.SetBranchAddress("module", &mod);
+  ch.SetBranchAddress("channel", &chn);
+  ch.SetBranchAddress("timestamp_ns", &ts);
+  std::set<uint16_t> want;
+  for (const auto& p : planes)
+    for (int k = 0; k < thgem::kElectrodes; ++k) want.insert(static_cast<uint16_t>(p.key[k]));
+  std::map<uint16_t, std::vector<double>> t;
+  std::set<uint16_t> seen;
+  const Long64_t n = ch.GetEntries();
+  for (Long64_t i = 0; i < n; ++i) {
+    ch.GetEntry(i);
+    const uint16_t k = thgem::map_key(mod, chn);
+    seen.insert(k);
+    if (want.count(k)) t[k].push_back(ts);
+  }
+  for (auto& kv : t) std::sort(kv.second.begin(), kv.second.end());
+  auto col = [&](int key) -> const std::vector<double>& {
+    static const std::vector<double> empty;
+    auto it = t.find(static_cast<uint16_t>(key));
+    return it == t.end() ? empty : it->second;
+  };
+  auto mc = [](int key) { return "m" + std::to_string(key >> 8) + "ch" + std::to_string(key & 0xff); };
+
+  std::printf("delayline_offsets_map: %s  (%d file(s), %lld hits, %zu ThGEM(s), window ±%.0f ns)%s\n",
+              label[0] ? label : pattern, nfiles, n, planes.size(), win,
+              aligned_input ? "\n  NOTE: input is ALIGNED (thgem_sink --time-calib) — the "
+                              "offsets below are RESIDUALS"
+                            : "");
+  std::vector<dlo::PlaneResult> res;
+  for (const auto& p : planes) {
+    using thgem::Kind;
+    const int* k = p.key;
+    dlo::PlaneResult r = dlo::measure_v(col(k[0]), col(k[1]), col(k[2]), col(k[3]), col(k[4]), win);
+    std::printf("  ThGEM %d (T %s, XL %s, XR %s, YU %s, YD %s): %zu 4-fold events%s\n", p.number,
+                mc(k[0]).c_str(), mc(k[1]).c_str(), mc(k[2]).c_str(), mc(k[3]).c_str(),
+                mc(k[4]).c_str(), r.full,
+                r.ok ? "" : "  -- TOO FEW (<100), offsets 0");
+    dlo::print_q("x = XR - XL", r.x);
+    dlo::print_q("y = YU - YD", r.y);
+    dlo::print_q("XL - trig", r.dxl);
+    dlo::print_q("XR - trig", r.dxr);
+    dlo::print_q("YU - trig", r.dyu);
+    dlo::print_q("YD - trig", r.dyd);
+    if (r.ok)
+      std::printf("    centre (cx, cy) = (%+.3f, %+.3f) ns -> XL %+.3f  XR %+.3f  YU %+.3f  YD %+.3f\n",
+                  r.cx, r.cy, -r.cx / 2, +r.cx / 2, +r.cy / 2, -r.cy / 2);
+    res.push_back(r);
+  }
+
+  struct E { int key, ref; double off; };
+  std::vector<E> es;
+  std::set<int> done;
+  auto add = [&](int key, int ref, double off) {
+    if (key < 0 || done.count(key)) return;
+    es.push_back({key, ref, off});
+    done.insert(key);
+  };
+  const int root = planes[0].key[0];
+  add(root, -1, 0.0);
+  for (const auto& p : planes) add(p.key[0], root, 0.0);
+  for (std::size_t i = 0; i < planes.size(); ++i) {
+    const int* k = planes[i].key;
+    const double cx = res[i].ok ? res[i].cx : 0.0, cy = res[i].ok ? res[i].cy : 0.0;
+    add(k[1], k[0], -cx / 2);
+    add(k[2], k[0], +cx / 2);
+    add(k[3], k[0], +cy / 2);
+    add(k[4], k[0], -cy / 2);
+  }
+  for (uint16_t k : seen) add(k, root, 0.0);
+
+  char buf[512];
+  std::string js = "{\n  \"$schema\": \"../schemas/timeSettings.schema.json\",\n  \"_comment\": [\n";
+  std::snprintf(buf, sizeof buf,
+                "    \"delayline_offsets_map on %s with %s: centres each ThGEM's delay-line XY image "
+                "(mid of 1/99 %% edges) by splitting its raw centre over the two arms of each axis; "
+                "triggers and other channels 0 (board offsets are set in hardware, TODO 72).\",\n",
+                label[0] ? label : pattern, map_file);
+  js += buf;
+  js += std::string("    \"raw centres") + (aligned_input ? " (RESIDUAL: input already aligned)" : "") + ":";
+  for (std::size_t i = 0; i < planes.size(); ++i) {
+    std::snprintf(buf, sizeof buf, "%s ThGEM%d (%+.3f, %+.3f) ns from %zu events", i ? ";" : "",
+                  planes[i].number, res[i].cx, res[i].cy, res[i].full);
+    js += buf;
+  }
+  js += ".\",\n    \"aligned_ts = raw_ts - offset_ns (positive = channel arrives late).\"\n  ],\n";
+  js += "  \"version\": \"1.0\",\n  \"entries\": [\n";
+  for (std::size_t i = 0; i < es.size(); ++i) {
+    if (es[i].ref < 0)
+      std::snprintf(buf, sizeof buf, "    {\"module\": %d, \"channel\": %d, \"ref\": null, \"offset_ns\": %.4f}",
+                    es[i].key >> 8, es[i].key & 0xff, es[i].off);
+    else
+      std::snprintf(buf, sizeof buf,
+                    "    {\"module\": %d, \"channel\": %d, \"ref\": [%d, %d], \"offset_ns\": %.4f}",
+                    es[i].key >> 8, es[i].key & 0xff, es[i].ref >> 8, es[i].ref & 0xff,
+                    es[i].off + 0.0);  // +0.0: no "-0.0000"
+    js += buf;
+    js += (i + 1 < es.size()) ? ",\n" : "\n";
+  }
+  js += "  ]\n}\n";
+  std::printf("\n%s", js.c_str());
+  if (out_json && out_json[0]) {
+    FILE* f = std::fopen(out_json, "w");
+    if (!f) {
+      std::printf("delayline_offsets_map: cannot write %s\n", out_json);
+      return;
+    }
+    std::fputs(js.c_str(), f);
+    std::fclose(f);
+    std::printf("delayline_offsets_map: wrote %s\n", out_json);
+  }
 }

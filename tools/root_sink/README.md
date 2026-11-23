@@ -29,7 +29,7 @@ they share become a library (TODO 79 §5.3). The directories anticipate that:
 |---|---|---|
 | `common/` | experiment-independent pieces — the library candidates (header-only C++17, no ROOT / ZMQ in the headers) and generic tools | `sink_core.hpp` (wire decode, channel specs, run state; still holds the standard program's Δt / XY matchers), `eb_core.hpp`, `event_def.hpp`, `time_offsets.hpp`, `time_map.hpp`, their tests (`test_sink_core.cpp`, `test_eb_core.cpp`, `test_time_map.cpp`), `test_publisher.cxx`, `time_map.C`, `compare_hits.C`, `check_events.C` |
 | `standard/` | **`root_sink`** — the program this README describes, used by ThGEM (pf-qaq) and ELIADE (SN01–) | `root_sink.cxx`, `hist_config.hpp`, `histograms.json`, `test_hist_config.cpp` |
-| `thgem/` | ThGEM offline reconstruction | `thgem_reco.hpp`, `thgem_events.C`, `delayline_offsets.C`, `test_thgem_reco.cpp` |
+| `thgem/` | **`thgem_sink`** — the 11B_208Pb sink (TODO 88): nwall_sink's pipeline, the ThGEM display (8 ThGEMs from the map, XY, TOF, pair dt) — see `thgem/README.md`; and the ThGEM offline reconstruction of October | `thgem_sink.cxx`, `thgem_map.hpp`, `thgem_planes.hpp`, `test_thgem_sink.cpp`, `make_test_run_11b.C`; `thgem_reco.hpp`, `thgem_events.C`, `delayline_offsets.C`, `test_thgem_reco.cpp` |
 | `nwall/` | **`nwall_sink`** — the N_Wall sink (TODO 79): the same pipeline, N_Wall's display (channel roles from the map, bunch clock, TOF, dE/E) — see `nwall/README.md` | `nwall_sink.cxx`, `nwall_map.hpp`, `bunch_clock.hpp`, `test_nwall.cpp`, `make_test_run.C` |
 
 Files are referred to by name below; the table says where each one lives.
@@ -52,15 +52,18 @@ Standard (system libzmq, e.g. `apt install libzmq3-dev`), from `standard/`:
 
 ```sh
 cd tools/root_sink/standard
-g++ -O2 -std=c++17 root_sink.cxx $(root-config --cflags --libs) -lRHTTP -lzmq -o root_sink
+g++ -O2 -std=c++17 -fopenmp root_sink.cxx $(root-config --cflags --libs) -lRHTTP -lzmq -o root_sink
 ```
+
+`-fopenmp` (GCC) turns on the Sorter's parallel sort and merge (*Sorter speed*
+below); the program also builds and runs without it.
 
 No-sudo variant used on **gant / side3** (no `-dev` package): drop a matching
 `zmq.h` (libzmq 4.3.x) into `~/.local/include` and link the runtime `.so`
 directly:
 
 ```sh
-g++ -O2 -std=c++17 -I$HOME/.local/include root_sink.cxx \
+g++ -O2 -std=c++17 -fopenmp -I$HOME/.local/include root_sink.cxx \
     $(root-config --cflags --libs) -lRHTTP \
     /lib/x86_64-linux-gnu/libzmq.so.5 -o root_sink
 ```
@@ -105,6 +108,8 @@ root_sink [options]
   --dt-max X          Δt axis maximum, ns          (default 1000)
   --autosave-sec N    TTree AutoSave interval      (default 30)
   --workers N         event-build worker threads   (default 3)
+  --sort-threads N    Sorter threads for its parallel sort and merge
+                      (default 8; only in a -fopenmp build)
   --chunk-span-ms X   sorter chunk span, DATA time (default 100)
   --safe-horizon-ms X sorter disorder absorption   (default 50; must exceed the
                       stream's max arrival disorder — side3 measured ~8 ms)
@@ -335,6 +340,17 @@ context carry becomes `max(--window-ns, lookback)` per run, lookback = `G +
 lookback` when it changes. Times are on the aligned axis (`--time-calib` is
 applied before the Sorter).
 
+**Sorter speed (2026-11-10, TODO 84 §7.2-7.3).** The Sorter keeps its buffer
+sorted: hits that arrived since the last chunk are sorted on their own and
+merged in. Before, it re-sorted the whole buffer for every chunk — with a 1 s
+safe horizon and 100 ms chunks every hit was sorted about 11 times, which capped
+the Sorter at ~2.2 M hits/s on pf-qaq (GCC). In a `-fopenmp` build the sort and
+the merge use libstdc++'s parallel mode on `--sort-threads` threads. Hits are
+ordered by a total order (time, then module, channel, energy, energy_short), so
+the trees do not depend on the algorithm or the thread count. Bench (synthetic,
+3 MHz, Sorter alone, pf-qaq): 2.2 → about 6 (serial merge) / 7-12 (8-16 threads)
+M hits/s; the old and the new nwall_sink write identical hits and events.
+
 The `events` tree (fixed name; one entry per event, dictionary-free leaflists,
 hit arrays in time order):
 
@@ -525,6 +541,12 @@ draws with `colz` by default (`_drawopt`). The default (no `--hists`) objects:
 - **`/WriteStatus`** — a text item: `OK`, or `WRITE FAILED: ...` while the
   current (or last) run's file has lost data (see *Write failures*); present
   with or without `--hists`
+- **`/QueueStatus`** — a text item, e.g. `idle sort=0 work=0 write=0 disp=0`
+  (`writing` while a run file is open; the record-path and display queue
+  depths). The Operator's UI restart (TODO 91) reads it with
+  `curl http://<host>:8090/QueueStatus/item.json` (field `value`) and restarts
+  only on `idle` with sort, work and write at 0. Same item in nwall_sink and
+  thgem_sink
 
 Histograms are **never auto-cleared on a run boundary** — they accumulate physics
 across runs until you hit `/Reset` (a log line marks each boundary). The
