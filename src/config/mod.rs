@@ -265,6 +265,24 @@ pub struct NetworkConfig {
     /// Event Builder configuration
     #[serde(default)]
     pub event_builder: Option<EventBuilderNetworkConfig>,
+
+    /// C++ ROOT sink (root_sink / nwall_sink / thgem_sink). Started by
+    /// start_daq.sh, which reads all of its keys; Rust reads only what the
+    /// Operator's restart guard needs (TODO 91).
+    #[serde(default)]
+    pub root_sink: Option<RootSinkNetworkConfig>,
+}
+
+/// `[network.root_sink]` as far as Rust needs it (TODO 91). Other keys are
+/// start_daq.sh's and are ignored here.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RootSinkNetworkConfig {
+    /// Sink program: root_sink (default), nwall_sink or thgem_sink.
+    #[serde(default)]
+    pub program: Option<String>,
+    /// THttpServer port; the restart guard reads `/QueueStatus` there.
+    #[serde(default)]
+    pub http_port: Option<u16>,
 }
 
 fn default_port_base_data() -> u16 {
@@ -1432,5 +1450,29 @@ publish = "tcp://*:5557"
         let config = Config::from_toml(toml).unwrap();
         assert_eq!(config.network.port_base_data, 7000);
         assert_eq!(config.network.port_base_command, 7100);
+    }
+
+    /// TODO 91: the restart guard needs the sink's HTTP port; the other keys
+    /// belong to start_daq.sh and must still be accepted.
+    #[test]
+    fn root_sink_section_gives_program_and_http_port() {
+        let toml = r#"
+[operator]
+experiment_name = "T"
+
+[network.root_sink]
+program = "thgem_sink"
+subscribe = "tcp://localhost:5557"
+output_dir = "/data/x"
+http_port = 8090
+hits_tree = true
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        let rs = config.network.root_sink.expect("root_sink section");
+        assert_eq!(rs.program.as_deref(), Some("thgem_sink"));
+        assert_eq!(rs.http_port, Some(8090));
+
+        let none = Config::from_toml("[operator]\nexperiment_name = \"T\"\n\n[network]\n").unwrap();
+        assert!(none.network.root_sink.is_none());
     }
 }

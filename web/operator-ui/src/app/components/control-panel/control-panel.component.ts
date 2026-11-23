@@ -15,10 +15,11 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { OperatorService } from '../../services/operator.service';
-import { AutoStopNotice, RunTimerRequest } from '../../models/types';
+import { AutoStopNotice, RestartResult, RunTimerRequest, canRestartDaq } from '../../models/types';
 import { DigitizerService } from '../../services/digitizer.service';
 import { MAX_TIMER_MINUTES, TimerService } from '../../services/timer.service';
 import { WaveformWarningDialogComponent } from './waveform-warning-dialog.component';
+import { RestartCheckItem, RestartDaqDialogComponent } from './restart-daq-dialog.component';
 
 @Component({
   selector: 'app-control-panel',
@@ -74,6 +75,17 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
           >
             <mat-icon>restart_alt</mat-icon>
             <span>Force Reset (recovery)</span>
+          </button>
+          <!-- TODO 91: restart every DAQ process; the Operator refuses unless
+               nothing is running or queued. -->
+          <button
+            mat-menu-item
+            data-testid="restart-daq-item"
+            (click)="onRestartDaq()"
+            [disabled]="!restartAllowed()"
+          >
+            <mat-icon>power_settings_new</mat-icon>
+            <span>Restart DAQ (all components)</span>
           </button>
         </mat-menu>
       </mat-card-header>
@@ -184,6 +196,12 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
                     their thresholds or disable them before starting again.
                   </span>
                 }
+                @if (a.cause === 'data_loss' && a.phase !== 'stopping') {
+                  <span class="stall-hint">
+                    Data went missing on the way to the Recorder (counted in its log). Check the
+                    network link between the DAQ host and the Recorder host before starting again.
+                  </span>
+                }
                 @if (a.cause === 'digitizer_fault' && a.phase !== 'stopping') {
                   <span class="stall-hint">
                     Clock lost: check the clock cable (CLK-IN daisy chain) and the PLL LOCK LED of
@@ -202,6 +220,53 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
                   <mat-icon>close</mat-icon>
                 </button>
               }
+            </div>
+          }
+        }
+
+        <!-- TODO 91: DAQ restart from the UI — in progress, then its result
+             (reported by the Operator that comes back, or by this one when
+             the preflight refused and nothing was stopped). -->
+        @if (restartPending()) {
+          <div class="stall-banner" data-testid="restart-progress-banner">
+            <mat-icon>hourglass_top</mat-icon>
+            <div class="apply-failure-text restart-text">
+              <strong>Restarting the DAQ…</strong>
+              @if (restartTimedOut()) {
+                <span>
+                  The Operator has not come back within 2 minutes. Check on the DAQ host:
+                  logs/restart_daq.log and logs/latest/operator.log.
+                </span>
+              } @else {
+                <span>All components stop and start again. This page reconnects by itself.</span>
+                <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+              }
+            </div>
+          </div>
+        }
+        @if (operator.lastRestart(); as r) {
+          @if (!restartPending() && dismissedRestart() !== r.request_id) {
+            <div
+              class="apply-failure-banner"
+              [class.restart-ok]="r.ok"
+              data-testid="restart-result-banner"
+            >
+              <mat-icon>{{ r.ok ? 'check_circle' : 'report_problem' }}</mat-icon>
+              <div class="apply-failure-text">
+                <strong>{{ restartTitle(r) }}</strong>
+                <span class="apply-failure-detail">{{ r.message }}</span>
+                @if (r.log_tail) {
+                  <pre class="restart-log">{{ r.log_tail }}</pre>
+                }
+              </div>
+              <button
+                mat-icon-button
+                class="banner-close"
+                (click)="dismissedRestart.set(r.request_id)"
+                aria-label="Dismiss"
+              >
+                <mat-icon>close</mat-icon>
+              </button>
             </div>
           }
         }
@@ -464,6 +529,24 @@ import { WaveformWarningDialogComponent } from './waveform-warning-dialog.compon
     .auto-stop-title {
       font-size: 15px;
     }
+    .apply-failure-banner.restart-ok {
+      background: #e8f5e9;
+      border-left-color: #2e7d32;
+      color: #1b3d1f;
+    }
+    .apply-failure-banner.restart-ok mat-icon {
+      color: #2e7d32;
+    }
+    .restart-text {
+      flex: 1;
+    }
+    .restart-log {
+      margin: 6px 0 0;
+      max-height: 160px;
+      overflow: auto;
+      font-size: 11px;
+      white-space: pre-wrap;
+    }
     .stall-banner {
       display: flex;
       align-items: flex-start;
@@ -623,6 +706,18 @@ export class ControlPanelComponent {
   readonly lastStartFailure = signal<string | null>(null);
   /** started_ms of the automatic-stop notice the user closed (TODO 84). */
   readonly dismissedAutoStop = signal<number | null>(null);
+  /** "Restart DAQ" is offered (TODO 91); the Operator checks the queues itself. */
+  readonly restartAllowed = computed(() =>
+    canRestartDaq(this.operator.systemState(), this.operator.runInfo() !== null, this.operator.isTuneUp()),
+  );
+  /** A restart this page sent, until its result arrives (request id from the 202). */
+  readonly restartPending = signal<{ requestId: string | null } | null>(null);
+  /** The restart has not reported back within RESTART_WAIT_MS. */
+  readonly restartTimedOut = signal(false);
+  /** request_id of the restart result the user closed. */
+  readonly dismissedRestart = signal<string | null>(null);
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  static readonly RESTART_WAIT_MS = 120_000;
 
   autoStopTitle(a: AutoStopNotice): string {
     const run = a.run_number != null ? `Run ${a.run_number}` : 'The run';
@@ -635,6 +730,8 @@ export class ControlPanelComponent {
         return `${run} stopped: writing to disk failed`;
       case 'digitizer_fault':
         return `${run} stopped automatically: a digitizer stopped working`;
+      case 'data_loss':
+        return `${run} stopped: data lost before the Recorder`;
     }
   }
 
@@ -646,6 +743,9 @@ export class ControlPanelComponent {
           ? 'Sources are stopped. Writing the queued data to disk — do not stop or restart the DAQ until this finishes.'
           : 'Stopping the run…';
       case 'stopped':
+        if (a.cause === 'data_loss') {
+          return 'The queued data was written, but the files miss the batches counted above.';
+        }
         return drains ? 'All queued data was written; the files are complete.' : 'The run is stopped.';
       case 'incomplete':
         return 'The stop did not finish cleanly:';
@@ -697,6 +797,17 @@ export class ControlPanelComponent {
   constructor() {
     // Ensure digitizer configs are loaded for waveform warning check
     this.digitizerService.loadDigitizers();
+
+    // TODO 91: the restart this page sent is over when its result shows up in
+    // /api/status (from the new Operator, or from this one after a refused
+    // preflight).
+    effect(() => {
+      const pending = this.restartPending();
+      const result = this.operator.lastRestart();
+      if (pending && result && (pending.requestId === null || result.request_id === pending.requestId)) {
+        this.finishRestartWait();
+      }
+    });
 
     // Sync comment with server state
     effect(() => {
@@ -917,6 +1028,79 @@ export class ControlPanelComponent {
       },
       error: (err: unknown) => this.notify.error(`Reset failed: ${this.extractError(err)}`),
     });
+  }
+
+  /** The preconditions as this page sees them; the Operator checks them again. */
+  restartChecks(): RestartCheckItem[] {
+    const comps = this.operator.components();
+    const busy = comps.filter((c) => c.state === 'Running' || c.state === 'Armed').map((c) => c.name);
+    const queue = (name: string): RestartCheckItem => {
+      const c = comps.find((x) => x.name === name);
+      const q = c?.metrics?.queue_bytes;
+      if (!c) return { label: `${name}: not in this DAQ`, ok: true };
+      if (!c.online || q === undefined) return { label: `${name}: queue unknown (does not answer)`, ok: false };
+      return q === 0
+        ? { label: `${name}: queue empty`, ok: true }
+        : { label: `${name}: ${(q / 1e6).toFixed(1)} MB still queued`, ok: false };
+    };
+    return [
+      { label: 'No run in progress', ok: this.operator.runInfo() === null },
+      { label: 'Tune Up mode off', ok: !this.operator.isTuneUp() },
+      {
+        label: busy.length ? `Armed or running: ${busy.join(', ')}` : 'No component armed or running',
+        ok: busy.length === 0,
+      },
+      queue('Merger'),
+      queue('Recorder'),
+      { label: 'ROOT sink idle with empty queues (checked by the Operator)', ok: true },
+    ];
+  }
+
+  onRestartDaq(): void {
+    const ref = this.dialog.open(RestartDaqDialogComponent, {
+      data: { checks: this.restartChecks() },
+      width: '560px',
+    });
+    ref.afterClosed().subscribe((confirmed) => {
+      if (confirmed === true) this.sendRestart();
+    });
+  }
+
+  /** POST /api/daq/restart; on 202 wait for the result in /api/status. */
+  sendRestart(): void {
+    this.operator.restartDaq().subscribe({
+      next: (res) => {
+        if (!res.success) {
+          this.notify.error(`Restart refused: ${res.message}`);
+          return;
+        }
+        const id = /request (\S+?)\)/.exec(res.message)?.[1] ?? null;
+        this.restartTimedOut.set(false);
+        this.restartPending.set({ requestId: id });
+        if (this.restartTimer) clearTimeout(this.restartTimer);
+        this.restartTimer = setTimeout(() => {
+          if (this.restartPending()) this.restartTimedOut.set(true);
+        }, ControlPanelComponent.RESTART_WAIT_MS);
+        this.notify.success('DAQ restart accepted — all components stop and start again');
+      },
+      error: (err: unknown) => this.notify.error(`Restart refused: ${this.extractError(err)}`),
+    });
+  }
+
+  private finishRestartWait(): void {
+    this.restartPending.set(null);
+    this.restartTimedOut.set(false);
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+  }
+
+  restartTitle(r: RestartResult): string {
+    const at = new Date(r.finished_ms).toLocaleTimeString();
+    if (r.ok) return `DAQ restarted (${at})`;
+    if (r.stage === 'preflight') return `DAQ restart not done — nothing was stopped (${at})`;
+    return `DAQ restart failed at "${r.stage}" (${at})`;
   }
 
   onAddNote(): void {

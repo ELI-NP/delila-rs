@@ -149,11 +149,39 @@ export interface SystemStatus {
   auto_stop?: AutoStopNotice;
   /** The time of a timed run was up, until the next run starts (TODO 86) */
   timer_expired?: TimerExpiredNotice;
+  /** The last DAQ restart from the UI while it is recent (TODO 91) */
+  last_restart?: RestartResult;
+}
+
+/** What scripts/restart_daq.sh reported (TODO 91) */
+export interface RestartResult {
+  /** Id the Operator gave the request (returned in the 202 message) */
+  request_id: string;
+  started_ms: number;
+  finished_ms: number;
+  /** Whether the DAQ is back */
+  ok: boolean;
+  /** preflight (nothing was stopped) | stop | start | done */
+  stage: string;
+  message: string;
+  /** Tail of operator.log when the new Operator did not come up */
+  log_tail?: string;
+}
+
+/**
+ * Whether "Restart DAQ" may be offered (TODO 91). The Operator checks the
+ * queues itself and refuses with the reason; this only hides the action when
+ * a run or Tune Up obviously forbids it. Degraded is allowed: an offline
+ * Reader is exactly the case a restart fixes.
+ */
+export function canRestartDaq(state: SystemState, runActive: boolean, tuneup: boolean): boolean {
+  const ok: SystemState[] = ['Idle', 'Configured', 'Error', 'Mixed', 'Degraded'];
+  return ok.includes(state) && !runActive && !tuneup;
 }
 
 /** A run the Operator stopped on its own (backlog autostop / run guard, TODO 84) */
 export interface AutoStopNotice {
-  cause: 'rate_too_high' | 'disk_low' | 'write_failure' | 'digitizer_fault';
+  cause: 'rate_too_high' | 'disk_low' | 'write_failure' | 'digitizer_fault' | 'data_loss';
   /** stopping = sources stopped, queued data still being written */
   phase: 'stopping' | 'stopped' | 'incomplete';
   run_number?: number;

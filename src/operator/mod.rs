@@ -7,6 +7,7 @@ pub mod auto_stop;
 pub mod backlog_watch;
 mod client;
 pub mod command_ext;
+pub mod daq_restart;
 pub mod digitizer_guard;
 mod digitizer_repository;
 pub mod elog;
@@ -102,6 +103,10 @@ pub struct SystemStatus {
     /// Kept until the next run starts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timer_expired: Option<run_timer::TimerExpiredNotice>,
+    /// The last DAQ restart from the UI while it is recent (TODO 91): every
+    /// open page shows its result once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_restart: Option<daq_restart::RestartResult>,
 }
 
 /// Aggregated system state
@@ -304,6 +309,9 @@ pub struct OperatorConfig {
     /// Warn when a Running source delivers no events for this many seconds
     /// (TODO 78 a). 0 = off.
     pub no_event_warn_secs: u64,
+    /// `[network.root_sink].http_port` for the restart guard (TODO 91):
+    /// `None` = no sink configured, `Some(None)` = a sink without HTTP.
+    pub root_sink_http_port: Option<Option<u16>>,
 }
 
 impl Default for OperatorConfig {
@@ -320,6 +328,7 @@ impl Default for OperatorConfig {
             elog: None,
             drain_stop_timeout_secs: 60,
             no_event_warn_secs: 5,
+            root_sink_http_port: None,
         }
     }
 }
@@ -597,6 +606,7 @@ mod tests {
             stalled_sources: Vec::new(),
             auto_stop: None,
             timer_expired: None,
+            last_restart: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"system_state\":\"Idle\""));

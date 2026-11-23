@@ -44,6 +44,9 @@ pub(super) async fn tuneup_start(
     State(state): State<Arc<AppState>>,
     Json(request): Json<TuneUpStartRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    if let Some(refused) = super::daq::refuse_while_restarting(&state) {
+        return refused;
+    }
     let digitizer_id = request.digitizer_id;
 
     // Guard: must not already be in tune up mode

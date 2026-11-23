@@ -13,6 +13,7 @@ import {
   LastRunInfo,
   StalledSource,
   AutoStopNotice,
+  RestartResult,
 } from '../models/types';
 
 @Injectable({
@@ -61,6 +62,8 @@ export class OperatorService {
   readonly stalledSources = computed<StalledSource[]>(() => this.status()?.stalled_sources ?? []);
   /** The last run the Operator stopped on its own, until the next run starts (TODO 84) */
   readonly autoStop = computed<AutoStopNotice | null>(() => this.status()?.auto_stop ?? null);
+  /** The last DAQ restart from the UI while it is recent (TODO 91) */
+  readonly lastRestart = computed<RestartResult | null>(() => this.status()?.last_restart ?? null);
 
   // Grouped components by role
   readonly sourceComponents = computed(() =>
@@ -178,6 +181,12 @@ export class OperatorService {
 
   reset(): Observable<ApiResponse> {
     return this.http.post<ApiResponse>(`${this.baseUrl}/reset`, {});
+  }
+
+  /** Restart every DAQ component, the Operator too (TODO 91). 202 = accepted,
+   *  409 / 429 = refused with the reason in `message`. */
+  restartDaq(): Observable<ApiResponse> {
+    return this.http.post<ApiResponse>(`${this.baseUrl}/daq/restart`, {});
   }
 
   // Get next available run number from MongoDB

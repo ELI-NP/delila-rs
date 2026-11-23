@@ -1,5 +1,6 @@
 //! REST API routes for DAQ control
 
+mod daq;
 mod digitizer;
 mod emulator;
 mod event_builder;
@@ -46,6 +47,7 @@ pub use event_builder::{
 pub use run::{AddNoteRequest, NextRunNumberResponse};
 
 // Import handler functions from sub-modules (used in router and ApiDoc)
+use daq::restart_daq;
 use digitizer::{
     apply_digitizer_config, detect_digitizers, get_digitizer, get_digitizer_by_serial,
     get_digitizer_history, list_digitizers, read_amax_board_registers, restore_digitizer_version,
@@ -175,6 +177,8 @@ pub struct AppState {
     pub run_clock: RwLock<Option<crate::operator::run_timer::RunClock>>,
     /// The time of a timed run was up (TODO 86), until the next run starts.
     pub timer_expired: RwLock<Option<crate::operator::run_timer::TimerExpiredNotice>>,
+    /// DAQ restart from the UI (TODO 91): settings, rate limit, last result.
+    pub restart: crate::operator::daq_restart::RestartState,
 }
 
 /// Emulator runtime settings (API model)
@@ -362,6 +366,7 @@ impl AppState {
         tuneup::tuneup_start,
         tuneup::tuneup_stop,
         tuneup::tuneup_apply,
+        daq::restart_daq,
     ),
     components(schemas(
         SystemStatus,
@@ -401,6 +406,7 @@ impl AppState {
         crate::operator::run_timer::TimerExpiredNotice,
         crate::operator::auto_stop::AutoStopCause,
         crate::operator::auto_stop::AutoStopPhase,
+        crate::operator::daq_restart::RestartResult,
     )),
     tags(
         (name = "DAQ Control", description = "DAQ system control endpoints"),
@@ -438,6 +444,9 @@ pub struct RouterBuilder {
     digitizer_repo: Option<DigitizerConfigRepository>,
     event_builder_repo: Option<EventBuilderRepository>,
     emulator_settings: EmulatorSettings,
+    /// How to restart this DAQ from the UI (TODO 91). `None` (tests, tools):
+    /// the defaults, and no result file is read.
+    restart_settings: Option<crate::operator::daq_restart::RestartSettings>,
 }
 
 impl RouterBuilder {
@@ -451,7 +460,17 @@ impl RouterBuilder {
             digitizer_repo: None,
             event_builder_repo: None,
             emulator_settings: EmulatorSettings::default(),
+            restart_settings: None,
         }
+    }
+
+    /// How the Operator was started, for the UI restart (TODO 91).
+    pub fn restart_settings(
+        mut self,
+        settings: crate::operator::daq_restart::RestartSettings,
+    ) -> Self {
+        self.restart_settings = Some(settings);
+        self
     }
 
     pub fn config(mut self, config: OperatorConfig) -> Self {
@@ -534,6 +553,10 @@ impl RouterBuilder {
             auto_stop: RwLock::new(None),
             run_clock: RwLock::new(None),
             timer_expired: RwLock::new(None),
+            restart: match self.restart_settings {
+                Some(s) => crate::operator::daq_restart::RestartState::new(s),
+                None => crate::operator::daq_restart::RestartState::default(),
+            },
         });
 
         let cors = CorsLayer::new()
@@ -550,6 +573,8 @@ impl RouterBuilder {
             .route("/api/stop", post(stop))
             .route("/api/stop_drain", post(stop_drain))
             .route("/api/reset", post(reset))
+            // Restart the whole DAQ (TODO 91; refused unless nothing is queued)
+            .route("/api/daq/restart", post(restart_daq))
             // Two-phase synchronized run control
             .route("/api/run/start", post(run_start))
             .route(

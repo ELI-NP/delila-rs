@@ -222,6 +222,10 @@ pub(super) async fn get_status(State(state): State<Arc<AppState>>) -> Json<Syste
         stalled_sources: state.stalled_sources.read().await.clone(),
         auto_stop: state.auto_stop.read().await.clone(),
         timer_expired: *state.timer_expired.read().await,
+        last_restart: crate::operator::daq_restart::recent(
+            state.restart.last_result.read().await.clone(),
+            chrono::Utc::now().timestamp_millis(),
+        ),
     })
 }
 
@@ -243,6 +247,9 @@ pub(super) async fn configure(
 ) -> (StatusCode, Json<ApiResponse>) {
     // Serialize run control — all guards below are check-then-act (TODO 58 H14).
     let _run_guard = state.run_control_lock.lock().await;
+    if let Some(refused) = super::daq::refuse_while_restarting(&state) {
+        return refused;
+    }
     // Guard: reject if Tune Up mode is active (TODO 58 M15 — configuring under
     // an active tuneup re-resets the digitizer mid-stream and strands the
     // tuneup flag).
@@ -399,6 +406,9 @@ pub(super) async fn configure(
 pub(super) async fn arm(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ApiResponse>) {
     // Serialize run control (TODO 58 H14).
     let _run_guard = state.run_control_lock.lock().await;
+    if let Some(refused) = super::daq::refuse_while_restarting(&state) {
+        return refused;
+    }
     // Guard: reject if Tune Up mode is active (TODO 58 M15).
     if state.tuneup.is_active() {
         return (
@@ -444,6 +454,9 @@ pub(super) async fn start(
 ) -> (StatusCode, Json<ApiResponse>) {
     // Serialize run control (TODO 58 H14).
     let _run_guard = state.run_control_lock.lock().await;
+    if let Some(refused) = super::daq::refuse_while_restarting(&state) {
+        return refused;
+    }
     // Guard: reject if Tune Up mode is active
     if state.tuneup.is_active() {
         return (
@@ -1017,6 +1030,9 @@ pub(super) async fn run_start(
 ) -> (StatusCode, Json<ApiResponse>) {
     // Serialize run control (TODO 58 H14).
     let _run_guard = state.run_control_lock.lock().await;
+    if let Some(refused) = super::daq::refuse_while_restarting(&state) {
+        return refused;
+    }
     // A bad timer is refused before anything is touched (TODO 86).
     if let Some(Err(msg)) = timer.map(|t| t.validate()) {
         return (StatusCode::BAD_REQUEST, Json(ApiResponse::error(msg)));
@@ -1343,6 +1359,8 @@ mod tests {
     struct Fake {
         target: ComponentState,
         starts: bool,
+        /// Reported as `metrics.queue_bytes` when set (TODO 91 restart guard).
+        queue_bytes: Option<u64>,
     }
 
     fn fake_handle(f: &mut Fake, cmd: Command) -> CommandResponse {
@@ -1354,7 +1372,14 @@ mod tests {
                 } else {
                     f.target
                 };
-                return CommandResponse::success(reported, "status");
+                let resp = CommandResponse::success(reported, "status");
+                return match f.queue_bytes {
+                    Some(q) => resp.with_metrics(crate::common::ComponentMetrics {
+                        queue_bytes: q,
+                        ..Default::default()
+                    }),
+                    None => resp,
+                };
             }
             Command::Reset => Idle,
             Command::Configure(_) if f.target == Idle => Configured,
@@ -1379,6 +1404,14 @@ mod tests {
         specs: &[(&'static str, u32, Option<u32>, bool)],
         shutdown: &broadcast::Sender<()>,
     ) -> Vec<ComponentConfig> {
+        spawn_fakes_with_queue(specs, None, shutdown)
+    }
+
+    fn spawn_fakes_with_queue(
+        specs: &[(&'static str, u32, Option<u32>, bool)],
+        queue_bytes: Option<u64>,
+        shutdown: &broadcast::Sender<()>,
+    ) -> Vec<ComponentConfig> {
         specs
             .iter()
             .map(|&(name, pipeline_order, source_id, starts)| {
@@ -1390,6 +1423,7 @@ mod tests {
                 let fake = Arc::new(Mutex::new(Fake {
                     target: ComponentState::Idle,
                     starts,
+                    queue_bytes,
                 }));
                 let (state_tx, _) = watch::channel(ComponentState::Idle);
                 tokio::spawn(run_command_task(
@@ -1452,6 +1486,170 @@ mod tests {
 
     async fn system_state(state: &AppState) -> SystemState {
         SystemState::from_components(&state.client.get_all_status(&state.components).await)
+    }
+
+    // --- TODO 91: restart the DAQ from the UI -----------------------------------
+
+    /// Recorder + Merger + one source, all reporting `queue_bytes`.
+    fn quiet_pipeline(queue_bytes: u64, shutdown: &broadcast::Sender<()>) -> Vec<ComponentConfig> {
+        spawn_fakes_with_queue(
+            &[
+                ("Recorder", 3, None, true),
+                ("Merger", 2, None, true),
+                ("Source", 1, Some(0), true),
+            ],
+            Some(queue_bytes),
+            shutdown,
+        )
+    }
+
+    /// A stand-in for scripts/restart_daq.sh: writes the result of a failed
+    /// preflight for the request it was given, stops nothing.
+    fn fake_restart_script(dir: &std::path::Path) -> crate::operator::daq_restart::RestartSettings {
+        let script = dir.join("restart.sh");
+        std::fs::write(
+            &script,
+            r#"#!/bin/bash
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --request-id) ID="$2"; shift 2 ;;
+    --result) OUT="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '{"request_id":"%s","started_ms":1,"finished_ms":%s,"ok":false,"stage":"preflight","message":"test script"}' "$ID" "$(($(date +%s) * 1000))" > "$OUT"
+"#,
+        )
+        .expect("script");
+        crate::operator::daq_restart::RestartSettings {
+            script,
+            result_file: dir.join("last_restart.json"),
+            log_file: dir.join("restart.log"),
+            ..Default::default()
+        }
+    }
+
+    fn restart_state(components: Vec<ComponentConfig>, dir: &std::path::Path) -> Arc<AppState> {
+        RouterBuilder::new(components)
+            .config(OperatorConfig {
+                reset_timeout_ms: 1000,
+                configure_timeout_ms: 1000,
+                arm_timeout_ms: 1000,
+                start_timeout_ms: 500,
+                ..OperatorConfig::default()
+            })
+            .config_dir(dir.to_path_buf())
+            .restart_settings(fake_restart_script(dir))
+            .build()
+            .1
+    }
+
+    #[tokio::test]
+    async fn restart_is_refused_during_a_run() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = restart_state(quiet_pipeline(0, &shutdown), dir.path());
+        let (status, Json(resp)) =
+            run_start(State(state.clone()), Json(run_request(7).into())).await;
+        assert_eq!(status, StatusCode::OK, "{}", resp.message);
+
+        let (status, Json(resp)) = super::super::daq::restart_daq(State(state.clone()), None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{}", resp.message);
+        assert!(resp.message.contains("run 7 is active"), "{}", resp.message);
+        assert!(
+            resp.message.contains("Source (Running)"),
+            "{}",
+            resp.message
+        );
+        assert!(
+            !dir.path().join("last_restart.json").exists(),
+            "nothing ran"
+        );
+        let _ = shutdown.send(());
+    }
+
+    /// The absolute rule: a restart never throws away queued data.
+    #[tokio::test]
+    async fn restart_is_refused_while_the_writers_hold_data() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = restart_state(quiet_pipeline(5_000_000, &shutdown), dir.path());
+        let (status, Json(resp)) = super::super::daq::restart_daq(State(state.clone()), None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{}", resp.message);
+        assert!(
+            resp.message.contains("Recorder still has 5.0 MB queued"),
+            "{}",
+            resp.message
+        );
+        assert!(
+            resp.message.contains("Merger still has 5.0 MB queued"),
+            "{}",
+            resp.message
+        );
+        assert!(
+            !dir.path().join("last_restart.json").exists(),
+            "nothing ran"
+        );
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    async fn restart_is_refused_when_the_sink_cannot_be_read() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = fake_restart_script(dir.path());
+        settings.sink_http_port = Some(Some(1)); // nothing listens there
+        let state = RouterBuilder::new(quiet_pipeline(0, &shutdown))
+            .config_dir(dir.path().to_path_buf())
+            .restart_settings(settings)
+            .build()
+            .1;
+        let (status, Json(resp)) = super::super::daq::restart_daq(State(state.clone()), None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{}", resp.message);
+        assert!(resp.message.contains("ROOT sink"), "{}", resp.message);
+        let _ = shutdown.send(());
+    }
+
+    /// Accepted: the script runs; while it is pending nothing may start; a
+    /// script that ends while this Operator runs (failed preflight) reports
+    /// its result in /api/status; a second request within 2 min is refused.
+    #[tokio::test]
+    async fn restart_runs_the_script_and_reports_a_failed_preflight() {
+        let (shutdown, _) = broadcast::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let state = restart_state(quiet_pipeline(0, &shutdown), dir.path());
+        let (status, Json(resp)) = super::super::daq::restart_daq(State(state.clone()), None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{}", resp.message);
+
+        // While pending (or right after it ended), a start is refused or the
+        // flag is already clear — never both a start and a restart.
+        let mut reported = None;
+        for _ in 0..100 {
+            if !state
+                .restart
+                .pending
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                let Json(st) = get_status(State(state.clone())).await;
+                reported = st.last_restart;
+                break;
+            }
+            let (status, _) = configure(State(state.clone()), Json(run_request(8))).await;
+            assert_eq!(
+                status,
+                StatusCode::CONFLICT,
+                "configure refused while restarting"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let r = reported.expect("result of the failed preflight in /api/status");
+        assert!(!r.ok);
+        assert_eq!(r.stage, "preflight");
+        assert_eq!(r.message, "test script");
+
+        let (status, Json(resp)) = super::super::daq::restart_daq(State(state.clone()), None).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{}", resp.message);
+        let _ = shutdown.send(());
     }
 
     /// TODO 84: an automatic stop stays visible in /api/status until the next

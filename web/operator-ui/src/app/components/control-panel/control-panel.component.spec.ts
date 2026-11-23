@@ -4,7 +4,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { provideNoopAnimations } from '@angular/platform-browser/animations';
 import { ControlPanelComponent } from './control-panel.component';
 import { OperatorService } from '../../services/operator.service';
-import { AutoStopNotice, SystemStatus } from '../../models/types';
+import { AutoStopNotice, RestartResult, SystemStatus, canRestartDaq } from '../../models/types';
 
 describe('ControlPanelComponent: automatic stop banner (TODO 84)', () => {
   const base: SystemStatus = {
@@ -81,6 +81,26 @@ describe('ControlPanelComponent: automatic stop banner (TODO 84)', () => {
     expect(text).toContain('All queued data was written; the files are complete.');
     expect(text).toContain('clock cable');
     expect(text).toContain('restart the DAQ between runs');
+  });
+
+  it('says data was lost before the Recorder and that the files are not complete (TODO 89)', () => {
+    const b = banner(
+      render({
+        ...base,
+        auto_stop: {
+          ...notice,
+          cause: 'data_loss',
+          phase: 'stopped',
+          reason: 'batches lost on the way to Recorder (3 batches) — sequence gaps, check the network link',
+        },
+      }).nativeElement,
+    );
+    const text = b!.textContent ?? '';
+    expect(text).toContain('Run 45 stopped: data lost before the Recorder');
+    expect(text).toContain('Recorder (3 batches)');
+    expect(text).toContain('the files miss the batches');
+    expect(text).not.toContain('the files are complete');
+    expect(text).toContain('network link');
   });
 
   it('names a write failure', () => {
@@ -180,5 +200,145 @@ describe('ControlPanelComponent: run timer (TODO 86)', () => {
     const req = http.expectOne('/api/run/timer');
     expect(req.request.method).toBe('PUT');
     expect(req.request.body).toEqual({ minutes: 45, auto_stop: true });
+  });
+});
+
+describe('ControlPanelComponent: restart the DAQ (TODO 91)', () => {
+  const quiet: SystemStatus = {
+    components: [
+      {
+        name: 'Recorder',
+        address: '',
+        state: 'Configured',
+        online: true,
+        role: 'pipeline',
+        metrics: { queue_bytes: 0 } as never,
+      },
+      {
+        name: 'Merger',
+        address: '',
+        state: 'Configured',
+        online: true,
+        role: 'pipeline',
+        metrics: { queue_bytes: 0 } as never,
+      },
+    ],
+    system_state: 'Configured',
+    experiment_name: '11B_204Pb',
+  };
+  const result = (over: Partial<RestartResult> = {}): RestartResult => ({
+    request_id: '1795',
+    started_ms: 1_795_000_000_000,
+    finished_ms: 1_795_000_040_000,
+    ok: true,
+    stage: 'done',
+    message: 'DAQ restarted with config.toml: 8 components online, state Idle',
+    ...over,
+  });
+
+  let http: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ControlPanelComponent],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideNoopAnimations()],
+    }).compileComponents();
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  function render(status: SystemStatus | null) {
+    TestBed.inject(OperatorService).status.set(status);
+    const fixture = TestBed.createComponent(ControlPanelComponent);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  it('is offered between runs only', () => {
+    expect(canRestartDaq('Configured', false, false)).toBeTrue();
+    expect(canRestartDaq('Idle', false, false)).toBeTrue();
+    expect(canRestartDaq('Error', false, false)).toBeTrue();
+    expect(canRestartDaq('Degraded', false, false)).toBeTrue();
+    expect(canRestartDaq('Running', true, false)).toBeFalse();
+    expect(canRestartDaq('Armed', false, false)).toBeFalse();
+    expect(canRestartDaq('Configured', true, false)).toBeFalse();
+    expect(canRestartDaq('Configured', false, true)).toBeFalse();
+    expect(canRestartDaq('Offline', false, false)).toBeFalse();
+    expect(render(quiet).componentInstance.restartAllowed()).toBeTrue();
+  });
+
+  it('lists queued data as a failed precondition', () => {
+    const busy: SystemStatus = {
+      ...quiet,
+      components: [{ ...quiet.components[0], metrics: { queue_bytes: 12_300_000 } as never }, quiet.components[1]],
+    };
+    const checks = render(busy).componentInstance.restartChecks();
+    const bad = checks.filter((c) => !c.ok).map((c) => c.label);
+    expect(bad).toEqual(['Recorder: 12.3 MB still queued']);
+  });
+
+  it('waits for the result of its own request and then shows it', () => {
+    const fixture = render(quiet);
+    const panel = fixture.componentInstance;
+    panel.sendRestart();
+    const req = http.expectOne('/api/daq/restart');
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      success: true,
+      message: 'DAQ restart accepted (request 1795): every component stops and starts again with config.toml.',
+    });
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(panel.restartPending()).toEqual({ requestId: '1795' });
+    expect(el.querySelector('[data-testid="restart-progress-banner"]')?.textContent).toContain(
+      'Restarting the DAQ',
+    );
+
+    // An older result (another request) does not end the wait.
+    TestBed.inject(OperatorService).status.set({ ...quiet, last_restart: result({ request_id: '1000' }) });
+    fixture.detectChanges();
+    expect(panel.restartPending()).not.toBeNull();
+
+    TestBed.inject(OperatorService).status.set({ ...quiet, last_restart: result() });
+    fixture.detectChanges();
+    expect(panel.restartPending()).toBeNull();
+    const banner = el.querySelector('[data-testid="restart-result-banner"]');
+    expect(banner?.textContent).toContain('DAQ restarted');
+    expect(banner?.textContent).toContain('8 components online');
+  });
+
+  it('shows a refusal as an error and does not wait', () => {
+    const fixture = render(quiet);
+    const panel = fixture.componentInstance;
+    panel.sendRestart();
+    http
+      .expectOne('/api/daq/restart')
+      .flush(
+        { success: false, message: 'DAQ restart refused: Recorder still has 5.0 MB queued' },
+        { status: 409, statusText: 'Conflict' },
+      );
+    expect(panel.restartPending()).toBeNull();
+  });
+
+  it('says that nothing was stopped when the preflight refused', () => {
+    const fixture = render({
+      ...quiet,
+      last_restart: result({ ok: false, stage: 'preflight', message: 'Config config.toml does not load' }),
+    });
+    const text = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="restart-result-banner"]')
+      ?.textContent;
+    expect(text).toContain('nothing was stopped');
+    expect(text).toContain('does not load');
+  });
+
+  it('shows the Operator log tail of a failed start', () => {
+    const fixture = render({
+      ...quiet,
+      last_restart: result({ ok: false, stage: 'start', message: 'did not come back', log_tail: 'ERROR bind' }),
+    });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="restart-result-banner"]')?.textContent).toContain(
+      'failed at "start"',
+    );
+    expect(el.querySelector('.restart-log')?.textContent).toContain('ERROR bind');
   });
 });

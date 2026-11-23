@@ -20,6 +20,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use delila_rs::common::OperatorArgs;
 use delila_rs::config::{Config, InfluxDbConfig, MongoConfig};
@@ -46,13 +47,23 @@ struct Args {
     /// MongoDB database name
     #[arg(long, env = "MONGODB_DATABASE", default_value = "delila")]
     mongodb_database: String,
+
+    /// Only check that the config file loads, then exit (0 = usable). Used by
+    /// scripts/restart_daq.sh before it stops anything (TODO 91).
+    #[arg(long)]
+    check_config: bool,
 }
 
-/// Load component configuration, operator config, emulator settings, and config file paths
+/// Load component configuration, operator config, emulator settings, and config file paths.
+///
+/// A missing or invalid file is an error, as in every other component: the Operator
+/// used to fall back to two emulators on the default port, which on 2026-11-16 (pf-qaq,
+/// one stray `[[network.sources]]` line) left a live Operator on the wrong port
+/// controlling components that were not running.
 #[allow(clippy::type_complexity)]
 fn load_config(
     config_file: &str,
-) -> (
+) -> anyhow::Result<(
     Vec<ComponentConfig>,
     OperatorConfig,
     EmulatorSettings,
@@ -60,144 +71,86 @@ fn load_config(
     Option<InfluxDbConfig>,
     Option<MongoConfig>,
     Option<delila_rs::config::BacklogAutostopConfig>,
-) {
-    // Try to load from config file
-    if let Ok(config) = Config::load(config_file) {
-        info!("Loaded configuration from {}", config_file);
-        let components = build_components_from_config(&config);
-        // Resolve web_ui_dir: explicit TOML value, or auto-detect
-        let web_ui_dir = config.operator.web_ui_dir.map(PathBuf::from).or_else(|| {
-            let default_path = PathBuf::from("web/operator-ui/dist/operator-ui/browser");
-            if default_path.exists() {
-                Some(default_path)
-            } else {
-                None
-            }
-        });
-        let monitor_http_port = config.network.monitor.as_ref().map(|m| m.http_port);
-        let defaults = OperatorConfig::default();
-        let operator_config = OperatorConfig {
-            port: config.operator.port,
-            experiment_name: config.operator.experiment_name,
-            web_ui_dir,
-            monitor_http_port,
-            configure_timeout_ms: config
-                .operator
-                .configure_timeout_ms
-                .unwrap_or(defaults.configure_timeout_ms),
-            arm_timeout_ms: config
-                .operator
-                .arm_timeout_ms
-                .unwrap_or(defaults.arm_timeout_ms),
-            start_timeout_ms: config
-                .operator
-                .start_timeout_ms
-                .unwrap_or(defaults.start_timeout_ms),
-            reset_timeout_ms: config
-                .operator
-                .reset_timeout_ms
-                .unwrap_or(defaults.reset_timeout_ms),
-            elog: config.operator.elog,
-            drain_stop_timeout_secs: config.operator.drain_stop_timeout_secs,
-            no_event_warn_secs: config.operator.no_event_warn_secs,
-        };
-        // Load emulator settings from config
-        let emulator_settings = if let Ok(settings) = config.settings.get_settings() {
-            EmulatorSettings::from(&settings)
+)> {
+    let config = Config::load(config_file)
+        .with_context(|| format!("cannot use config file {config_file}"))?;
+    info!("Loaded configuration from {}", config_file);
+    let components = build_components_from_config(&config);
+    // Resolve web_ui_dir: explicit TOML value, or auto-detect
+    let web_ui_dir = config.operator.web_ui_dir.map(PathBuf::from).or_else(|| {
+        let default_path = PathBuf::from("web/operator-ui/dist/operator-ui/browser");
+        if default_path.exists() {
+            Some(default_path)
         } else {
-            EmulatorSettings::default()
-        };
-        // Extract (source_id, config_file) pairs from digitizer sources
-        // TOML source id is the single source of truth for digitizer identification
-        let config_files: Vec<(u32, PathBuf)> = config
-            .network
-            .sources
-            .iter()
-            .filter(|s| s.is_digitizer())
-            .filter_map(|s| s.config_file.as_ref().map(|f| (s.id, PathBuf::from(f))))
-            .collect();
-        let influxdb_config = config.operator.influxdb;
-        let mongodb_config = config.operator.mongodb;
-        let backlog_autostop_config = config.operator.backlog_autostop;
-        return (
-            components,
-            operator_config,
-            emulator_settings,
-            config_files,
-            influxdb_config,
-            mongodb_config,
-            backlog_autostop_config,
-        );
-    }
-
-    warn!(
-        "Config file {} not found or invalid, using default addresses",
-        config_file
-    );
-
-    // Default component configuration
-    // pipeline_order: 1 = upstream (data sources), higher = downstream
-    let components = vec![
-        ComponentConfig {
-            name: "Emulator 0".to_string(),
-            address: "tcp://localhost:5560".to_string(),
-            pipeline_order: 1,
-
-            source_id: Some(0),
-            is_digitizer: false,
-            config_file: None,
-            source_type: None,
-        },
-        ComponentConfig {
-            name: "Emulator 1".to_string(),
-            address: "tcp://localhost:5561".to_string(),
-            pipeline_order: 1,
-
-            source_id: Some(1),
-            is_digitizer: false,
-            config_file: None,
-            source_type: None,
-        },
-        ComponentConfig {
-            name: "Merger".to_string(),
-            address: "tcp://localhost:5570".to_string(),
-            pipeline_order: 2,
-
-            source_id: None,
-            is_digitizer: false,
-            config_file: None,
-            source_type: None,
-        },
-        ComponentConfig {
-            name: "Recorder".to_string(),
-            address: "tcp://localhost:5580".to_string(),
-            pipeline_order: 3,
-
-            source_id: None,
-            is_digitizer: false,
-            config_file: None,
-            source_type: None,
-        },
-        ComponentConfig {
-            name: "Monitor".to_string(),
-            address: "tcp://localhost:5590".to_string(),
-            pipeline_order: 3,
-
-            source_id: None,
-            is_digitizer: false,
-            config_file: None,
-            source_type: None,
-        },
-    ];
-    (
+            None
+        }
+    });
+    let monitor_http_port = config.network.monitor.as_ref().map(|m| m.http_port);
+    let defaults = OperatorConfig::default();
+    let operator_config = OperatorConfig {
+        port: config.operator.port,
+        experiment_name: config.operator.experiment_name,
+        web_ui_dir,
+        monitor_http_port,
+        configure_timeout_ms: config
+            .operator
+            .configure_timeout_ms
+            .unwrap_or(defaults.configure_timeout_ms),
+        arm_timeout_ms: config
+            .operator
+            .arm_timeout_ms
+            .unwrap_or(defaults.arm_timeout_ms),
+        start_timeout_ms: config
+            .operator
+            .start_timeout_ms
+            .unwrap_or(defaults.start_timeout_ms),
+        reset_timeout_ms: config
+            .operator
+            .reset_timeout_ms
+            .unwrap_or(defaults.reset_timeout_ms),
+        elog: config.operator.elog,
+        drain_stop_timeout_secs: config.operator.drain_stop_timeout_secs,
+        no_event_warn_secs: config.operator.no_event_warn_secs,
+        root_sink_http_port: config.network.root_sink.as_ref().map(sink_http_port),
+    };
+    // Load emulator settings from config
+    let emulator_settings = if let Ok(settings) = config.settings.get_settings() {
+        EmulatorSettings::from(&settings)
+    } else {
+        EmulatorSettings::default()
+    };
+    // Extract (source_id, config_file) pairs from digitizer sources
+    // TOML source id is the single source of truth for digitizer identification
+    let config_files: Vec<(u32, PathBuf)> = config
+        .network
+        .sources
+        .iter()
+        .filter(|s| s.is_digitizer())
+        .filter_map(|s| s.config_file.as_ref().map(|f| (s.id, PathBuf::from(f))))
+        .collect();
+    let influxdb_config = config.operator.influxdb;
+    let mongodb_config = config.operator.mongodb;
+    let backlog_autostop_config = config.operator.backlog_autostop;
+    Ok((
         components,
-        OperatorConfig::default(),
-        EmulatorSettings::default(),
-        Vec::new(),
-        None,
-        None,
-        None,
-    )
+        operator_config,
+        emulator_settings,
+        config_files,
+        influxdb_config,
+        mongodb_config,
+        backlog_autostop_config,
+    ))
+}
+
+/// The port the ROOT sink's THttpServer listens on, as start_daq.sh starts it:
+/// the sinks' default 8090 when the key is absent, none when `http_port = 0`
+/// (TODO 91: the restart guard then cannot read the sink's queue and refuses).
+fn sink_http_port(rs: &delila_rs::config::RootSinkNetworkConfig) -> Option<u16> {
+    match rs.http_port {
+        None => Some(8090),
+        Some(0) => None,
+        Some(p) => Some(p),
+    }
 }
 
 /// Build ComponentConfig list from parsed Config
@@ -322,7 +275,17 @@ async fn main() -> anyhow::Result<()> {
         influxdb_config,
         mongodb_toml,
         backlog_autostop_config,
-    ) = load_config(&args.operator.common.config_file);
+    ) = load_config(&args.operator.common.config_file)?;
+    if args.check_config {
+        println!(
+            "config OK: {} ({} component(s), experiment {}, port {})",
+            args.operator.common.config_file,
+            components.len(),
+            operator_config.experiment_name,
+            args.operator.port.unwrap_or(operator_config.port)
+        );
+        return Ok(());
+    }
     // Resolve MongoDB settings: CLI flags win, fall back to TOML `[operator.mongodb]`.
     let resolved_mongo_uri: Option<String> = args
         .mongodb_uri
@@ -394,6 +357,15 @@ async fn main() -> anyhow::Result<()> {
     // Resolve port (CLI --port overrides TOML config)
     let port = args.operator.port.unwrap_or(operator_config.port);
 
+    // How to restart this DAQ from the UI (TODO 91): same config, and
+    // start_daq.sh --no-mongo when this Operator runs without MongoDB.
+    let restart_settings = delila_rs::operator::daq_restart::RestartSettings {
+        config_file: args.operator.common.config_file.clone(),
+        no_mongo: resolved_mongo_uri.is_none(),
+        sink_http_port: operator_config.root_sink_http_port,
+        ..Default::default()
+    };
+
     // Create router with builder
     let (app, app_state) = RouterBuilder::new(components)
         .config(operator_config)
@@ -402,6 +374,7 @@ async fn main() -> anyhow::Result<()> {
         .run_repo(run_repo)
         .digitizer_repo(digitizer_repo)
         .emulator_settings(emulator_settings)
+        .restart_settings(restart_settings)
         .build();
 
     // Start InfluxDB writer background task if configured
@@ -409,6 +382,15 @@ async fn main() -> anyhow::Result<()> {
         let state = app_state.clone();
         tokio::spawn(async move {
             delila_rs::operator::influxdb::run_writer(influxdb_config, state).await;
+        });
+    }
+
+    // TODO 91: the result of the UI restart that started this Operator is
+    // written after it answers; pick it up for a while.
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            delila_rs::operator::daq_restart::watch_result_after_start(state).await;
         });
     }
 
@@ -463,7 +445,104 @@ async fn main() -> anyhow::Result<()> {
     info!("Swagger UI: http://localhost:{}/swagger-ui/", port);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // Client addresses for handlers that log who asked (TODO 91 restart).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// One source and a Merger, enough for a real DAQ.
+    const VALID: &str = r#"
+[operator]
+experiment_name = "Test"
+port = 9091
+
+[[network.sources]]
+id = 0
+name = "PSD2-VX2730"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/x.json"
+pipeline_order = 1
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+"#;
+
+    fn toml_file(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().expect("temp file");
+        f.write_all(content.as_bytes()).expect("write temp file");
+        f
+    }
+
+    #[test]
+    fn load_config_reads_a_valid_file() {
+        let f = toml_file(VALID);
+        let path = f.path().to_string_lossy().to_string();
+        let (components, operator_config, _, config_files, ..) =
+            load_config(&path).expect("valid config");
+        let names: Vec<&str> = components.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["PSD2-VX2730", "Merger"]);
+        assert_eq!(operator_config.port, 9091);
+        assert_eq!(operator_config.experiment_name, "Test");
+        assert_eq!(config_files.len(), 1);
+    }
+
+    /// pf-qaq 2026-11-16: an uncommented `[[network.sources]]` line without its
+    /// body. Every other component refused the file; the Operator used to start
+    /// with two emulators on the default port instead.
+    #[test]
+    fn load_config_refuses_an_invalid_file() {
+        let f = toml_file(&format!("{VALID}\n[[network.sources]]\nname = \"stray\"\n"));
+        let path = f.path().to_string_lossy().to_string();
+        let msg = format!("{:#}", load_config(&path).expect_err("invalid config"));
+        assert!(msg.contains(&path), "message names the file: {msg}");
+        assert!(msg.contains("id"), "message names the missing field: {msg}");
+    }
+
+    /// TODO 91: the restart guard reads the ROOT sink's queue on this port.
+    #[test]
+    fn load_config_passes_the_sink_http_port() {
+        let f = toml_file(VALID);
+        let path = f.path().to_string_lossy().to_string();
+        let (_, no_sink, ..) = load_config(&path).expect("valid config");
+        assert_eq!(no_sink.root_sink_http_port, None);
+
+        let f = toml_file(&format!(
+            "{VALID}\n[network.root_sink]\nprogram = \"thgem_sink\"\nhttp_port = 8090\n"
+        ));
+        let path = f.path().to_string_lossy().to_string();
+        let (_, with_sink, ..) = load_config(&path).expect("valid config");
+        assert_eq!(with_sink.root_sink_http_port, Some(Some(8090)));
+
+        // As start_daq.sh: no key = the sinks' default 8090, 0 = no HTTP.
+        let f = toml_file(&format!(
+            "{VALID}\n[network.root_sink]\nprogram = \"root_sink\"\n"
+        ));
+        let path = f.path().to_string_lossy().to_string();
+        let (_, default_port, ..) = load_config(&path).expect("valid config");
+        assert_eq!(default_port.root_sink_http_port, Some(Some(8090)));
+        let f = toml_file(&format!("{VALID}\n[network.root_sink]\nhttp_port = 0\n"));
+        let path = f.path().to_string_lossy().to_string();
+        let (_, no_http, ..) = load_config(&path).expect("valid config");
+        assert_eq!(no_http.root_sink_http_port, Some(None));
+    }
+
+    #[test]
+    fn load_config_refuses_a_missing_file() {
+        let path = "/nonexistent/delila/config.toml";
+        let msg = format!("{:#}", load_config(path).expect_err("missing config"));
+        assert!(msg.contains(path), "message names the file: {msg}");
+    }
 }
