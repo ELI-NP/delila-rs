@@ -128,4 +128,44 @@
 - 変更: Recorder はデコードしない(フッタの時刻は「記録なし」のまま)。`FileFooter::has_time_range()`、`DataFileReader::scan_time_range()`(データを読んで最小と最大)、`batch_time_range()`(バッチ内は時刻順でないので最初と最後ではなく最小と最大)を足した。`recover info` はフッタに時刻がなければデータから出す(「read from the data」と表示)。`recover recover` もバッチの最初と最後でなく最小と最大で組み立てる。
 - テスト +3(format 2、Recorder 1)、全 873 件通過、clippy 警告 0。Mac で新しい Recorder のファイル(エミュレータ 5 秒、8700 イベント)に `recover info` → フッタ完全、時刻はデータから表示。
 - 配備: 6a33fb3(pf-qaq は 9d4d1cf)。19:12 EET、Idle(次はラン 83)、書き残し 0、メモリ上の設定とファイルが一致することを確かめてから DAQ を再起動(`logs/20261110_191205`、強制終了なし)。6 台とも 1 回目でつながり、全台 PLL OK。
-- **上限がどれだけ上がったかは未測定。** pf-qaq の DAQ_Test(nwall_sink なし)で 3〜5 MHz を流せば、書き込みのスレッドの CPU と待ち行列で確かめられる。
+- **測ろうとしたが測れなかった (2026-11-10 19:15-19:18 EET、ユーザーの依頼):** `HiRate_Test`(設定の写し、nwall_sink・eLog・InfluxDB・MongoDB なし、メモリ上限 170 GB の枠、空きメモリ 60 GB 未満か /data 70 % で止める見張り)で mod4 の ch0-9 を有効にしたが、**チェンバーが真空になっていてリングのノイズが来ず 0.14 MHz だけ**(ユーザー「真空引いてあるのでノイズが来ない」)。Si の HV は OFF のまま一切触っていない(ユーザーの指示)。ユーザーの判断で中止して N_Wall に戻した(19:18、本番の設定ファイルはハッシュで不変を確認、全台 PLL OK)。試験のファイルは削除、スクリプトは pf-qaq の `~/hirate_20261110/` に残した。ついでに確認: 新しい Recorder が実機で書いたファイル(1477 万イベント)はフッタ完全、`recover info` が時刻をデータから表示。
+- **上限がどれだけ上がったかは未測定。** 測るには、ノイズが出る条件(真空でないとき)か、§3 の Step 6(既存の `.delila` をリプレイして流す)が要る。 pf-qaq の DAQ_Test(nwall_sink なし)で 3〜5 MHz を流せば、書き込みのスレッドの CPU と待ち行列で確かめられる。
+
+### 7.2 nwall_sink の Sorter のテストベンチ (2026-11-10、ユーザーの依頼「1, 2 を簡単なテストベンチで」)
+
+- 見つけたこと: `eb_core.hpp` の `sort_and_split` は、100 ms(`chunk_span`)ごとに、手元の全ヒット(遅れを待つ 1 秒 = `safe_horizon_ms` 分を含む)を `std::sort` し直す。各ヒットが約 11 回並べ直される。
+- ベンチ: scratchpad の `sortbench/sort_bench.cpp`(pf-qaq は `/tmp/sortbench/`)。入力は V1725 風(6 ボード × 8 チャンネル組、組ごとに 511 件か 100 ms でまとめて 0〜5 ms 遅れて届く)。本番の設定(chunk 100 ms、safe horizon 1000 ms、lookback 2600 ns)。A = 今の `eb::Sorter` そのもの、B = 差分マージ(新しい分だけ並べて `std::merge`)、C = 全体を並列ソート、D = 差分マージ + 新しい分を並列ソート。**全方式でチャンク(境界・件数・中身・昇順)が A と完全一致。**
+- pf-qaq(GCC 13 libstdc++、`nice 19`、DAQ は Idle)、3 MHz × 10 s(3000 万ヒット):
+
+| 方式 | 1 秒あたり | 3 MHz の何倍の速さ |
+|---|---|---|
+| A 今の作り | 2.1〜2.2 M | 0.7(追いつかない) |
+| B 差分マージ | 5.6〜6.2 M | 1.9〜2.1 |
+| C 並列で全体を並べ直す | 6.7 M(GNU 16 スレッド)/ 8.0 M(TBB) | 2.2 / 2.7 |
+| D 差分マージ + 並列ソート | **11.8 M(GNU 16 スレッド)** / 7.4 M(TBB) | **3.9** / 2.5 |
+
+  6 MHz × 5 s(GNU 16 スレッド): A 2.35 M、B 6.6 M、C 6.1 M、D 8.8 M(6 MHz の 1.5 倍)。
+- **今の Sorter は単体で約 2.2 MHz が上限** → §8 の nwall_sink の頭打ち(約 1.9 MHz、`q[sort]` が増加)と合う。
+- Mac(Apple の libc++)では A が 16 M/s と速く、差が小さい(B 19 M/s)。libc++ の `std::sort` が「ほぼ並んだ列」に強いため。本番(GCC)では効かない。
+- TBB は既定のスレッド数(56)だと D の小さい配列で損をする。GNU の並列モードでスレッド数を絞るほうがよかった。
+- D に残る 1 本のスレッドの部分: 1 秒分の残りとの `std::merge`、チャンクを出すたびの 1 秒分のコピー(`retained`)、チャンクが手元の全部(1.1 秒分)を持って下流(イベントの組み立てのスレッド、書き込み)へ行くこと。次の候補: 並列マージ(`__gnu_parallel::merge`)、チャンクを core ± lookback に絞る。下流が 1.1 秒分を全部なめているなら、Sorter の次はそこが詰まる。
+- 注意: 入力は合成、Sorter 単体の速さ(nwall_sink 全体ではない)。
+
+### 7.3 Sorter の高速化を実装 (2026-11-10、ユーザー「スピードアップを実装してください」)
+
+- `tools/root_sink/common/eb_core.hpp`(nwall_sink と標準の root_sink で共通):
+  - Sorter は手元の列を並んだまま保つ。前回のチャンク以後に届いた分(`pending_`)だけを並べて、マージする(`absorb_pending`)。
+  - `split_sorted`(並べ直さない分割)を足し、`sort_and_split` はそれを呼ぶ形にした。
+  - `-fopenmp`(GCC の libstdc++)でビルドしたときは、並べるのもマージも並列版(`__gnu_parallel::sort` / `merge`)。clang などでは 1 本のスレッドで同じ結果になる。
+  - 並べる順は全順序(時刻 → モジュール → チャンネル → energy → energy_short)。並べ方やスレッド数で出力が変わらない。
+  - libstdc++ 13 の並列 `merge` は const の入力を受け付けないので、`merge_hits` の引数は非 const(中身は変えない)。
+- `--sort-threads N`(既定 8)を nwall_sink と root_sink に追加(`eb::set_sort_threads`)。TOML は `sort_threads`(`start_daq.sh` が渡す)。起動時のログに「Sorter: incremental merge, parallel sort/merge on N threads」か「serial」が出る。
+- ビルド: README の手順に `-fopenmp` を足した(nwall、標準、gant/side3 の版)。`scripts/setup_eliade_node_user.sh` の root_sink にも足した。
+- テスト: `test_eb_core.cpp` +3 で全 288 件。
+  - 前の作り(毎回全部並べ直す)を参照にして、乱数の入力でチャンクの境界と中身が 1 件ずつ一致すること。
+  - 同じ時刻のヒットの順が、入力の並びによらず一定であること。
+  - `buffered()` がマージ前の分も数えること。
+  - Mac(1 本のスレッド)でも、pf-qaq の OpenMP ビルドでも通過。OpenMP ビルドではテストのときだけ並列の下限を 2 件に下げ、小さい配列でも並列の経路を通している。
+- 通しの確認(合成データ 27 万 3824 ヒット、前の nwall_sink と新しい nwall_sink に同じデータ):
+  - Mac(並列なし)、pf-qaq(OpenMP、8 スレッド、今動いている nwall_sink と比較)のどちらでも `compare_hits` が IDENTICAL(新しいほうは時刻順)、`check_events` が IDENTICAL、イベント数は 3939 で同じ。
+- 未: pf-qaq への配備、本番のレートでの効果の確認(真空中はノイズが出ないので、確かめるならリプレイ)。

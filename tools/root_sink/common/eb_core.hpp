@@ -42,8 +42,37 @@
 #include "event_def.hpp"  // rootsink::EventDef (generic grouping layer)
 #include "sink_core.hpp"  // rootsink::ScalarHit
 
+// Parallel sort and merge for the Sorter (TODO 84 §7.2): libstdc++'s parallel
+// mode, used when the program is built with -fopenmp. Without it (clang on the
+// Mac, or no -fopenmp) the same code runs serially; the result is identical
+// because hits are ordered by a total order (detail::hit_less).
+#if defined(_OPENMP) && defined(__GLIBCXX__)
+#include <omp.h>
+#include <parallel/algorithm>
+#define ROOTSINK_PARALLEL_SORT 1
+#endif
+
 namespace rootsink {
 namespace eb {
+
+// Threads for the Sorter's parallel sort and merge (OpenMP builds only;
+// otherwise a no-op). The sinks call it at start-up with --sort-threads.
+inline void set_sort_threads(int n) {
+#ifdef ROOTSINK_PARALLEL_SORT
+  if (n > 0) omp_set_num_threads(n);
+#else
+  (void)n;
+#endif
+}
+
+// Whether this build sorts in parallel (for the start-up log).
+inline bool parallel_sort_enabled() {
+#ifdef ROOTSINK_PARALLEL_SORT
+  return true;
+#else
+  return false;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // 1. Channel<T> — the one inter-thread queue (mutex + condvar + deque)
@@ -212,6 +241,39 @@ inline bool ts_less(const ScalarHit& a, const ScalarHit& b) {
   // never produces NaN), so total_cmp-style NaN ordering is not needed here.
   return a.timestamp_ns < b.timestamp_ns;
 }
+
+// The order hits are sorted in: time, then module, channel, energy,
+// energy_short. A total order (2026-11-10): serial sort, parallel sort and
+// merge all give the same sequence, also for equal timestamps, so the hits
+// tree and the built events do not depend on the algorithm or the threads.
+inline bool hit_less(const ScalarHit& a, const ScalarHit& b) {
+  if (a.timestamp_ns != b.timestamp_ns) return a.timestamp_ns < b.timestamp_ns;
+  if (a.module != b.module) return a.module < b.module;
+  if (a.channel != b.channel) return a.channel < b.channel;
+  if (a.energy != b.energy) return a.energy < b.energy;
+  return a.energy_short < b.energy_short;
+}
+
+inline void sort_hits(std::vector<ScalarHit>& v) {
+#ifdef ROOTSINK_PARALLEL_SORT
+  __gnu_parallel::sort(v.begin(), v.end(), hit_less);
+#else
+  std::sort(v.begin(), v.end(), hit_less);
+#endif
+}
+
+// out = merge of the sorted a and b (out's capacity is reused). a and b are
+// not modified; they are non-const only because libstdc++'s parallel merge
+// (GCC 13) does not accept const iterators.
+inline void merge_hits(std::vector<ScalarHit>& a, std::vector<ScalarHit>& b,
+                       std::vector<ScalarHit>& out) {
+  out.resize(a.size() + b.size());
+#ifdef ROOTSINK_PARALLEL_SORT
+  __gnu_parallel::merge(a.begin(), a.end(), b.begin(), b.end(), out.begin(), hit_less);
+#else
+  std::merge(a.begin(), a.end(), b.begin(), b.end(), out.begin(), hit_less);
+#endif
+}
 }  // namespace detail
 
 // Sort `buffer` and split off a chunk whose core ends safe_horizon_ns before
@@ -222,11 +284,22 @@ inline bool ts_less(const ScalarHit& a, const ScalarHit& b) {
 // keeps those hits from emitting twice (H10). On failure (empty buffer, or
 // core_end would not clear the earliest hit) returns false with `buffer`
 // sorted but otherwise untouched.
+inline bool split_sorted(std::vector<ScalarHit>& buffer, double safe_horizon_ns,
+                         double lookback_ns, double core_start, SortedChunk& chunk);
+
 inline bool sort_and_split(std::vector<ScalarHit>& buffer, double safe_horizon_ns,
                            double lookback_ns, double core_start,
                            SortedChunk& chunk) {
   if (buffer.empty()) return false;
-  std::sort(buffer.begin(), buffer.end(), detail::ts_less);
+  detail::sort_hits(buffer);
+  return split_sorted(buffer, safe_horizon_ns, lookback_ns, core_start, chunk);
+}
+
+// sort_and_split on a buffer that is already sorted (detail::hit_less): the
+// Sorter keeps its buffer sorted and merges new hits in (TODO 84 §7.2).
+inline bool split_sorted(std::vector<ScalarHit>& buffer, double safe_horizon_ns,
+                         double lookback_ns, double core_start, SortedChunk& chunk) {
+  if (buffer.empty()) return false;
   double earliest = buffer.front().timestamp_ns;
   double latest = buffer.back().timestamp_ns;
   double core_end = latest - safe_horizon_ns;
@@ -257,7 +330,7 @@ inline bool sort_and_split(std::vector<ScalarHit>& buffer, double safe_horizon_n
 inline bool sort_and_flush(std::vector<ScalarHit>& buffer, double core_start,
                            SortedChunk& chunk) {
   if (buffer.empty()) return false;
-  std::sort(buffer.begin(), buffer.end(), detail::ts_less);
+  detail::sort_hits(buffer);
   chunk.hits = std::move(buffer);
   buffer.clear();
   chunk.core_start = core_start;
@@ -303,6 +376,12 @@ class Sorter {
   explicit Sorter(Config cfg) : cfg_(cfg) {}
 
   // Append a decoded batch (any internal order) and emit at most one chunk.
+  //
+  // 2026-11-10 (TODO 84 §7.2): new hits wait in pending_; at an emit they are
+  // sorted on their own and merged into buffer_, which stays sorted. Before,
+  // the whole buffer (the safe-horizon tail included: 1 s of data on N_Wall)
+  // was re-sorted for every 100 ms chunk, about 11 sorts per hit, which capped
+  // the Sorter at ~2.2 M hits/s on pf-qaq. The chunks are the same.
   template <class ChunkF>
   void push_batch(std::vector<ScalarHit>&& hits, ChunkF on_chunk) {
     for (const ScalarHit& h : hits) {
@@ -313,13 +392,13 @@ class Sorter {
       // safe-horizon contract — counted so the caller can say so.
       if (h.timestamp_ns < prev_core_end_) ++late_;
     }
-    if (buffer_.empty()) {
-      buffer_ = std::move(hits);
+    if (pending_.empty()) {
+      pending_ = std::move(hits);
     } else {
-      buffer_.insert(buffer_.end(), std::make_move_iterator(hits.begin()),
-                     std::make_move_iterator(hits.end()));
+      pending_.insert(pending_.end(), std::make_move_iterator(hits.begin()),
+                      std::make_move_iterator(hits.end()));
     }
-    if (buffer_.empty()) return;
+    if (buffer_.empty() && pending_.empty()) return;
 
     double candidate = max_ts_ - cfg_.safe_horizon_ns;
     // Floor: where the previous core ended, or (first chunk) the earliest hit
@@ -328,9 +407,10 @@ class Sorter {
     double floor = std::isinf(prev_core_end_) ? min_ts_ : prev_core_end_;
     if (candidate - floor < cfg_.chunk_span_ns) return;
 
+    absorb_pending();
     SortedChunk chunk;
-    if (sort_and_split(buffer_, cfg_.safe_horizon_ns, cfg_.lookback_ns,
-                       prev_core_end_, chunk)) {
+    if (split_sorted(buffer_, cfg_.safe_horizon_ns, cfg_.lookback_ns,
+                     prev_core_end_, chunk)) {
       prev_core_end_ = chunk.core_end;
       on_chunk(std::move(chunk));
     }
@@ -339,10 +419,14 @@ class Sorter {
   // Emit everything left as a final chunk (RunClose / Shutdown).
   template <class ChunkF>
   void flush(ChunkF on_chunk) {
+    absorb_pending();
+    if (buffer_.empty()) return;
     SortedChunk chunk;
-    if (sort_and_flush(buffer_, prev_core_end_, chunk)) {
-      on_chunk(std::move(chunk));
-    }
+    chunk.hits = std::move(buffer_);
+    buffer_.clear();
+    chunk.core_start = prev_core_end_;
+    chunk.core_end = std::numeric_limits<double>::infinity();
+    on_chunk(std::move(chunk));
   }
 
   // Call at RunOpen. CRITICAL: prev_core_end_ MUST return to -infinity — the
@@ -351,6 +435,7 @@ class Sorter {
   // nothing (no built events AND an empty hits tree) for the entire run.
   void reset() {
     buffer_.clear();
+    pending_.clear();
     max_ts_ = -std::numeric_limits<double>::infinity();
     min_ts_ = std::numeric_limits<double>::infinity();
     prev_core_end_ = -std::numeric_limits<double>::infinity();
@@ -363,7 +448,7 @@ class Sorter {
   void set_lookback_ns(double ns) { cfg_.lookback_ns = ns; }
   double lookback_ns() const { return cfg_.lookback_ns; }
 
-  std::size_t buffered() const { return buffer_.size(); }
+  std::size_t buffered() const { return buffer_.size() + pending_.size(); }
 
   // Hits of this run that arrived behind an already-emitted core_end (disorder
   // beyond safe_horizon_ns) and are therefore missing from the hits tree and
@@ -371,8 +456,24 @@ class Sorter {
   uint64_t late_hits() const { return late_; }
 
  private:
+  // Sort the hits that arrived since the last emit and merge them into the
+  // sorted buffer.
+  void absorb_pending() {
+    if (pending_.empty()) return;
+    detail::sort_hits(pending_);
+    if (buffer_.empty()) {
+      buffer_.swap(pending_);
+    } else {
+      detail::merge_hits(buffer_, pending_, merged_);
+      buffer_.swap(merged_);
+    }
+    pending_.clear();
+  }
+
   Config cfg_;
-  std::vector<ScalarHit> buffer_;
+  std::vector<ScalarHit> buffer_;   // sorted (detail::hit_less)
+  std::vector<ScalarHit> pending_;  // arrived since the last emit, any order
+  std::vector<ScalarHit> merged_;   // merge target, capacity kept
   double max_ts_ = -std::numeric_limits<double>::infinity();
   double min_ts_ = std::numeric_limits<double>::infinity();
   double prev_core_end_ = -std::numeric_limits<double>::infinity();

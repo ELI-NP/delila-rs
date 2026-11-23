@@ -11,12 +11,17 @@ exactly as described in `../README.md`. What differs is the display.
 
 ```sh
 cd tools/root_sink/nwall
-g++ -O2 -std=c++17 nwall_sink.cxx $(root-config --cflags --libs) -lRHTTP -lzmq -o nwall_sink
+g++ -O2 -std=c++17 -fopenmp nwall_sink.cxx $(root-config --cflags --libs) -lRHTTP -lzmq -o nwall_sink
 install -m 755 nwall_sink ~/.local/bin/nwall_sink     # where start_daq.sh looks first
 ```
 
 Unit tests (no ROOT): `g++ -std=c++17 -O0 -g test_nwall.cpp -o /tmp/tnw && /tmp/tnw`
 (channel map parser, bunch clock).
+
+`-fopenmp` (GCC) makes the Sorter sort and merge in parallel (`--sort-threads N`,
+default 8, TOML `sort_threads`); the start-up log says which. Without it (clang on
+the Mac) the Sorter runs serially with the same output. See `../README.md`
+*Sorter speed*.
 
 ## Run (start_daq.sh)
 
@@ -38,6 +43,7 @@ compression = 0            # ROOT compression; 0 = none, default 505 = ZSTD 5 (T
 # rf_period_ns = 199.980   # nominal; measured per run from the beam channel
 # rf_t0_ns = 0.0           # see "Calibration" below
 # si_delay_ns = 0.0
+# gamma_min_adc = 4000     # energy cut of the per-LaBr3 gamma_since_beam histograms
 # energy_calib_file = "config/energy_calib_nwall.txt"   # keV histograms, see ../README.md
 ```
 
@@ -69,12 +75,12 @@ never drop). Histograms accumulate across runs until `/Reset`.
 | `/hits` | `hitmap` | module × channel |
 | | `energy_m<M>` | energy × channel, one per board |
 | `/rf` | `tof_rf_m<M>` | t − (bunch at or before t) − rf_t0, per channel (0 … T): the beam itself at 0, the gamma flash at L/c |
-| `/rf` | `gamma_since_beam` | pulsing check: (t − beam pulse at or before t) % 1000 ns for the LaBr3 channels, raw times. 1000 ns = 5 T, so a pulsed beam gives peaks every T (0, 200, 400, 600, 800); counts between the peaks = beam outside the bunches |
-| `/rf/gamma_since_beam_ch` | `gamma_since_beam_m<M>_ch<C>` | the same, one per LaBr3 channel of the map (made, empty, when the map is read; title = its name in the map); they add up to `gamma_since_beam` |
+| `/rf` | `gamma_since_beam` | pulsing check: (t − beam pulse at or before t) % 800 ns for the LaBr3 channels, raw times. 800 ns = 4 T, so a pulsed beam gives peaks every T (0, 200, 400, 600); counts between the peaks = beam outside the bunches. 800 since 2026-11-13 (user): the pulsing's up and down phases have different timing, and 1000 ns = 5 T (odd) swapped them at every wrap and mixed them |
+| `/rf/gamma_since_beam_ch` | `gamma_since_beam_m<M>_ch<C>` | the same, one per LaBr3 channel of the map (made, empty, when the map is read; title = its name in the map), only hits with energy ≥ `--gamma-min-adc` (default 4000 ADC, user 2026-11-10). `gamma_since_beam` keeps every hit, so the channels add up to it only with `--gamma-min-adc 0` |
 | `/rf` | `since_beam` | the same per channel of the beam's board (LaBr3 and LS), without the beam channel |
 | `/ls` | `ls_psd` | (E_long − E_short) / E_long vs E_long of the LS channels (n/γ) |
-| `/events` | `pid` | dE vs E — the largest dE-sector and E-sector hit of each event |
-| `/events/pid_pair` | `pid_E<e>_dE<d>` | `pid` per sector pair (E sector e, dE sector d, the same largest hits), so it can be read before the keV calibration; every E-sector × dE-sector pair of the map is made, empty, when the map is read (start-up and every run start): 2.1 MB each, 540 MB for 16 × 16; they add up to `pid` |
+| `/events` | `pid` | dE vs E — the largest dE-sector and E-sector hit of each event. 0–12288 ADC in 8 ADC bins, integer counts (TH2I) (user 2026-11-13; was 0–32768 in 64 ADC bins) |
+| `/events/pid_pair` | `pid_E<e>_dE<d>` | `pid` per sector pair (E sector e, dE sector d, the same largest hits), so it can be read before the keV calibration; every E-sector × dE-sector pair of the map is made, empty, when the map is read (start-up and every run start): same binning as `pid`, 9.4 MB each, 2.4 GB for 16 × 16; they add up to `pid` |
 | `/hits` | `energy_keV_m<M>` | with `--energy-calib`: energy in keV × channel, per board; channels without coefficients are not in it |
 | `/events` | `pid_keV` | with `--energy-calib`: dE vs E in keV, the largest hit of each **in keV**, among sectors with coefficients |
 | | `sector_dE_vs_E` | dE sector × E sector, every pair in an event (the diagonal = the sector order) |
@@ -143,9 +149,9 @@ LaBr3 at 3 ns, gamma flash at 5.0 ns (L/c for 1.5 m); every hit got an RF TOF;
 `sector_dE_vs_E` 99.95 % diagonal; runs repeated with the same clock gave
 identical results (the bunch clock restarts per run).
 
-The `% 1000` histograms drift by (1000 − 5 T) per 5 bunches over the 100
+The `% 800` histograms drift by (800 − 4 T) per 4 bunches over the 100
 bunches between 1/100 beam pulses: 2 ns at T = 199.98 ns. A peak sitting at the
-beam phase is therefore split between 0 and 1000. E2E (2026-11-09, same data,
+beam phase is therefore split between 0 and 800. E2E at `% 1000` (2026-11-09, same data,
 T = 199.95 ns, 5 ns drift): `gamma_since_beam` peaks at 0.5 / 201.5 / 401.5 /
 599.5 / 800.5 / 999.5 ns, all 19,993 LaBr3 hits within ±6 ns of a peak.
 

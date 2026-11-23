@@ -181,6 +181,7 @@ root_sink は `start_daq.sh` / `stop_daq.sh` の管理対象になった
 | `--dt-bins/--dt-min/--dt-max` | 2000 / −1000 / +1000 | ビルトイン Δt ヒストの軸(`--hists` 使用時は無視) |
 | `--autosave-sec N` | 30 | TTree AutoSave 間隔(書きかけファイルも ROOT で開ける) |
 | `--workers N` | 3 | イベントビルドのワーカースレッド数。**出力は N に依存せず決定的**(seq 順序復元) |
+| `--sort-threads N` | 8 | Sorter の並列ソートと並列マージのスレッド数。`-fopenmp` でビルドしたときだけ効く(なければ 1 本で同じ出力)。TOML は `sort_threads` |
 | `--chunk-span-ms X` | 100 | Sorter のチャンク幅(**データ内時刻**基準。レートに依らず一定幅) |
 | `--safe-horizon-ms X` | 50 | Sorter の到着乱れ吸収幅。**ストリームの最大乱れより大きいこと**(side3 実測 ~8 ms) |
 | `--time-calib FILE` | (なし) | (module, channel) ごとの時刻オフセット(`timeSettings.json`、旧 time-calib 形式も可)。**全ての出力・モニタが補正後の時刻**(raw − offset_ns)。ラン開始ごとに読み直してラン中は固定。後述「時刻オフセット」 |

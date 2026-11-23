@@ -25,8 +25,9 @@
 //     downscaled beam channel (bunch_clock.hpp):
 //       /hits    hitmap (module x channel), energy_m<M> (energy x channel)
 //       /rf      tof_rf_m<M>: t - (bunch at or before t) - rf_t0, per channel;
-//                gamma_since_beam: LaBr3 (t - beam pulse at or before t) % 1000,
-//                and per channel gamma_since_beam_ch/gamma_since_beam_m<M>_ch<C>;
+//                gamma_since_beam: LaBr3 (t - beam pulse at or before t) % 800,
+//                and per channel gamma_since_beam_ch/gamma_since_beam_m<M>_ch<C>
+//                (only E >= --gamma-min-adc, default 4000 ADC);
 //                since_beam: the same for the beam board, channel on y
 //       /ls      ls_psd: (E - Es)/E vs E of the LS channels
 //       /events  pid (dE vs E), and per sector pair pid_pair/pid_E<e>_dE<d>
@@ -132,6 +133,7 @@ struct Options {
   int http_port = 8090;
   int autosave_sec = 30;
   int workers = 3;
+  int sort_threads = 8;  // Sorter's parallel sort/merge (OpenMP builds, TODO 84 §7.2)
   double chunk_span_ms = 100.0;
   double safe_horizon_ms = 1000.0;  // DIG1 aggregates arrive up to ~100 ms late (pf-qaq run 52)
   int compression = kDelilaCompression;  // --compression: ROOT setting, 0 = none
@@ -143,6 +145,10 @@ struct Options {
   double rf_period_ns = 199.980;  // nominal RF period (the bunch clock measures it per run)
   double rf_t0_ns = 0.0;          // constant shift of every RF TOF (beam signal vs target)
   double si_delay_ns = 0.0;       // Si trigger time minus its bunch time (from si_phase)
+  // Per-LaBr3 gamma_since_beam histograms take only hits with energy >= this
+  // (ADC; user, 2026-11-10: 800, then 4000). The summed gamma_since_beam keeps
+  // every hit.
+  double gamma_min_adc = 4000.0;
 };
 
 static const char* const kEventsTreeName = "events";
@@ -177,8 +183,12 @@ static void print_usage(const char* argv0) {
       "                      gamma flash sits at L/c\n"
       "  --si-delay-ns X     Si trigger time minus its bunch time (default 0): the\n"
       "                      peak of /events/si_phase; picks the bunch of an event\n"
-      "  --autosave-sec N    TTree AutoSave interval (default 30)\n"
+      "  --gamma-min-adc X   energy cut of the per-LaBr3 gamma_since_beam histograms\n"
+      "                      (default 4000 ADC; the summed one keeps every hit)\n"
+      "  --autosave-sec N   TTree AutoSave interval (default 30)\n"
       "  --workers N         event-build worker threads (default 3)\n"
+      "  --sort-threads N    Sorter threads for its parallel sort and merge (default 8;\n"
+      "                      only in a -fopenmp build, else the Sorter runs serially)\n"
       "  --chunk-span-ms X   sorter chunk span in data time (default 100)\n"
       "  --safe-horizon-ms X sorter disorder absorption (default 1000)\n"
       "  --compression N     ROOT compression, algorithm*100 + level (default 505 =\n"
@@ -248,6 +258,9 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
     } else if (a == "--workers") {
       if (!(v = need(i)) || !number(a.c_str(), v, x)) return false;
       opt.workers = std::max(1, static_cast<int>(x));
+    } else if (a == "--sort-threads") {
+      if (!(v = need(i)) || !number(a.c_str(), v, x)) return false;
+      opt.sort_threads = std::max(1, static_cast<int>(x));
     } else if (a == "--chunk-span-ms") {
       if (!(v = need(i)) || !number(a.c_str(), v, opt.chunk_span_ms)) return false;
     } else if (a == "--safe-horizon-ms") {
@@ -282,6 +295,8 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
       if (!(v = need(i)) || !number(a.c_str(), v, opt.rf_t0_ns)) return false;
     } else if (a == "--si-delay-ns") {
       if (!(v = need(i)) || !number(a.c_str(), v, opt.si_delay_ns)) return false;
+    } else if (a == "--gamma-min-adc") {
+      if (!(v = need(i)) || !number(a.c_str(), v, opt.gamma_min_adc)) return false;
     } else {
       std::fprintf(stderr, "nwall_sink: unknown argument '%s' (try --help)\n", a.c_str());
       return false;
@@ -1260,8 +1275,17 @@ struct DisplayMsg {
   std::shared_ptr<const nwall::ChannelMap> map;  // RunOpen: this run's map (null = none)
 };
 
-// (t - beam pulse) % kSinceBeamModNs, the pulsing check: 1000 ns = 5 RF periods.
-constexpr double kSinceBeamModNs = 1000.0;
+// (t - beam pulse) % kSinceBeamModNs, the pulsing check: 800 ns = 4 RF periods.
+// The pulsing has different timing on its up and down phases (user, 2026-11-13).
+// 1000 ns (5 periods) swapped the two at every wrap and mixed them; 800 ns (4
+// periods, an even number) keeps each phase on its own peaks.
+constexpr double kSinceBeamModNs = 800.0;
+constexpr int kSinceBeamBins = 800;  // 1 ns bins
+// dE vs E (pid, pid_pair): 0-12288 ADC in 8 ADC bins (user, 2026-11-13; was
+// 0-32768 in 64 ADC bins). Run 122: E max 8623, dE max 10538. Integer counts
+// (TH2I, 4 B a bin): 9.4 MB a histogram, 2.4 GB for the 256 sector pairs.
+constexpr double kPidMaxAdc = 12288.0;
+constexpr int kPidBins = 1536;
 
 class Display {
  public:
@@ -1275,8 +1299,8 @@ class Display {
     ls_psd_ = add2("/ls", "ls_psd",
                    "LS pulse shape;E_{long} [ADC];(E_{long} - E_{short}) / E_{long}", 512, 0,
                    65536, 240, -0.2, 1.0);
-    pid_ = add2("/events", "pid", "dE vs E (largest sector hit of each);E [ADC];dE [ADC]", 512, 0,
-                32768, 512, 0, 32768);
+    pid_ = add2i("/events", "pid", "dE vs E (largest sector hit of each);E [ADC];dE [ADC]",
+                 kPidBins, 0, kPidMaxAdc, kPidBins, 0, kPidMaxAdc);
     sector_ = add2("/events", "sector_dE_vs_E", "sector pairs in an event;E sector;dE sector", 16,
                    0, 16, 16, 0, 16);
     ring_sector_ = add2("/events", "dE_ring_vs_sector",
@@ -1290,17 +1314,19 @@ class Display {
     ls_tof_si_ = add2("/events", "ls_tof_si",
                       "t(LS) - bunch picked by the Si - rf_t0;TOF [ns];channel", 550, -100, 1000,
                       32, 0, 32);
-    // Pulsing check (user, 2026-11-09): with T = 199.98 ns, 1000 ns is 5 T, so
-    // every bunch after a beam pulse lands on 0/200/400/600/800 (drift 0.1 ns
-    // per 5 bunches, 2 ns at the next 1/100 pulse). Raw times, no rf_t0.
+    // Pulsing check (user, 2026-11-09, 800 ns since 11-13): with T = 199.98 ns,
+    // 800 ns is 4 T, so every bunch after a beam pulse lands on 0/200/400/600
+    // (drift 0.08 ns per 4 bunches). Raw times, no rf_t0.
     gamma_since_beam_ = add1("/rf", "gamma_since_beam",
-                             "LaBr3: (t - beam pulse at or before it) % 1000 ns;"
-                             "t - t_{beam} mod 1000 [ns];hits",
-                             1000, 0, kSinceBeamModNs);
+                             Form("LaBr3: (t - beam pulse at or before it) %% %.0f ns;"
+                                  "t - t_{beam} mod %.0f [ns];hits",
+                                  kSinceBeamModNs, kSinceBeamModNs),
+                             kSinceBeamBins, 0, kSinceBeamModNs);
     since_beam_ = add2("/rf", "since_beam",
-                       "beam board: (t - beam pulse at or before it) % 1000 ns;"
-                       "t - t_{beam} mod 1000 [ns];channel",
-                       1000, 0, kSinceBeamModNs, 32, 0, 32);
+                       Form("beam board: (t - beam pulse at or before it) %% %.0f ns;"
+                            "t - t_{beam} mod %.0f [ns];channel",
+                            kSinceBeamModNs, kSinceBeamModNs),
+                       kSinceBeamBins, 0, kSinceBeamModNs, 32, 0, 32);
     reload_calib("start-up");
     std::printf("nwall_sink: energy calibration: %s\n",
                 ecal::calib_status_text(calib_, calib_on()).c_str());
@@ -1417,7 +1443,7 @@ class Display {
           if (on_beam_board) since_beam_->Fill(since, h.channel);
           if (labr) {
             gamma_since_beam_->Fill(since);
-            gamma_since_ch(key)->Fill(since);
+            if (h.energy >= opt_.gamma_min_adc) gamma_since_ch(key)->Fill(since);
           }
         }
       }
@@ -1563,6 +1589,12 @@ class Display {
     reg(folder, h, true);
     return h;
   }
+  TH2I* add2i(const char* folder, const char* name, const char* title, int nx, double x0,
+              double x1, int ny, double y0, double y1) {
+    TH2I* h = new TH2I(name, title, nx, x0, x1, ny, y0, y1);
+    reg(folder, h, true);
+    return h;
+  }
   void reg(const char* folder, TH1* h, bool colz) {
     all_.push_back(h);
     if (!server_) return;
@@ -1582,17 +1614,17 @@ class Display {
 
   // Per sector pair and per LaBr channel (user, 2026-11-10): before the keV
   // calibration the sums mix gains. set_map makes all of them from the map
-  // (512 x 512 doubles = 2.1 MB per pair, 540 MB for 16 x 16); a hit outside
+  // (kPidBins^2 ints = 9.4 MB per pair, 2.4 GB for 16 x 16); a hit outside
   // the map's pairs still gets its histogram here.
-  TH2D* pid_pair(int e_sector, int de_sector) {
+  TH2I* pid_pair(int e_sector, int de_sector) {
     const std::pair<int, int> k(e_sector, de_sector);
     auto it = pid_pair_.find(k);
     if (it != pid_pair_.end()) return it->second;
-    TH2D* h = add2("/events/pid_pair", nwall::pid_pair_name(e_sector, de_sector).c_str(),
-                   Form("dE vs E, E sector %d x dE sector %d (largest sector hit of each);"
-                        "E [ADC];dE [ADC]",
-                        e_sector, de_sector),
-                   512, 0, 32768, 512, 0, 32768);
+    TH2I* h = add2i("/events/pid_pair", nwall::pid_pair_name(e_sector, de_sector).c_str(),
+                    Form("dE vs E, E sector %d x dE sector %d (largest sector hit of each);"
+                         "E [ADC];dE [ADC]",
+                         e_sector, de_sector),
+                    kPidBins, 0, kPidMaxAdc, kPidBins, 0, kPidMaxAdc);
     pid_pair_[k] = h;
     return h;
   }
@@ -1602,7 +1634,7 @@ class Display {
     if (it != gamma_since_ch_.end()) return it->second;
     TH1D* h = add1("/rf/gamma_since_beam_ch",
                    nwall::channel_hist_name("gamma_since_beam", key >> 8, key & 0xff).c_str(),
-                   gamma_since_title(key).c_str(), 1000, 0, kSinceBeamModNs);
+                   gamma_since_title(key).c_str(), kSinceBeamBins, 0, kSinceBeamModNs);
     gamma_since_ch_[key] = h;
     return h;
   }
@@ -1610,9 +1642,10 @@ class Display {
   std::string gamma_since_title(uint16_t key) const {
     auto it = names_.find(key);
     const std::string name = it == names_.end() ? std::string("not in the map") : it->second;
-    return Form("%s (board %d ch %d): (t - beam pulse at or before it) %% 1000 ns;"
-                "t - t_{beam} mod 1000 [ns];hits",
-                name.c_str(), key >> 8, key & 0xff);
+    return Form("%s (board %d ch %d), E #geq %g ADC: (t - beam pulse at or before it) %% %.0f ns;"
+                "t - t_{beam} mod %.0f [ns];hits",
+                name.c_str(), key >> 8, key & 0xff, opt_.gamma_min_adc, kSinceBeamModNs,
+                kSinceBeamModNs);
   }
 
   THttpServer* server_;
@@ -1625,7 +1658,7 @@ class Display {
   std::vector<TH1*> all_;
   TH2D* hitmap_ = nullptr;
   TH2D* ls_psd_ = nullptr;
-  TH2D* pid_ = nullptr;
+  TH2I* pid_ = nullptr;
   TH2D* sector_ = nullptr;
   TH2D* ring_sector_ = nullptr;
   TH2D* ls_dt_si_ = nullptr;
@@ -1633,7 +1666,7 @@ class Display {
   TH2D* ls_tof_si_ = nullptr;
   TH1D* gamma_since_beam_ = nullptr;
   TH2D* since_beam_ = nullptr;
-  std::map<std::pair<int, int>, TH2D*> pid_pair_;  // (E sector, dE sector)
+  std::map<std::pair<int, int>, TH2I*> pid_pair_;  // (E sector, dE sector)
   std::map<uint16_t, TH1D*> gamma_since_ch_;       // LaBr3 channels, by map_key
   std::map<int, TH2D*> energy_, tof_rf_;
   // Energy calibration (--energy-calib): the table and everything filled from it.
@@ -1746,8 +1779,8 @@ int main(int argc, char** argv) {
                  http_enabled ? "; only the per-board histograms (hitmap, energy) are filled" : "");
   }
   std::printf("nwall_sink: RF period %.4f ns (nominal; measured per run), rf_t0 %.3f ns, "
-              "si_delay %.3f ns\n",
-              opt.rf_period_ns, opt.rf_t0_ns, opt.si_delay_ns);
+              "si_delay %.3f ns, per-LaBr3 gamma_since_beam E >= %g ADC\n",
+              opt.rf_period_ns, opt.rf_t0_ns, opt.si_delay_ns, opt.gamma_min_adc);
 
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
@@ -1784,6 +1817,12 @@ int main(int argc, char** argv) {
     server->CreateItem("/WriteStatus", "run file write status (TODO 69)");
     server->SetItemField("/WriteStatus", "_kind", "Text");
     server->SetItemField("/WriteStatus", "value", "OK");
+    // Run-file state and record-path queue depths for the Operator's restart
+    // guard (TODO 91): the DAQ is restarted from the UI only while this reads
+    // "idle" with sort, work and write all 0. Updated with /WriteStatus below.
+    server->CreateItem("/QueueStatus", "run file state and queue depths (TODO 91)");
+    server->SetItemField("/QueueStatus", "_kind", "Text");
+    server->SetItemField("/QueueStatus", "value", "starting");
     if (!opt.energy_calib.empty()) {
       server->RegisterCommand(
           "/ReloadCalib", Form("((void(*)())%p)();", reinterpret_cast<void*>(&request_reload_calib)),
@@ -2369,9 +2408,15 @@ int main(int argc, char** argv) {
     }
   };
 
+  eb::set_sort_threads(opt.sort_threads);
   std::printf("nwall_sink: pipeline receiver -> sorter(span=%.0fms horizon=%.0fms) -> %d "
               "worker(s) -> writer -> display\n",
               opt.chunk_span_ms, opt.safe_horizon_ms, n_workers);
+  if (eb::parallel_sort_enabled())
+    std::printf("nwall_sink: Sorter: incremental merge, parallel sort/merge on %d threads\n",
+                opt.sort_threads);
+  else
+    std::printf("nwall_sink: Sorter: incremental merge, serial (build without -fopenmp)\n");
   std::printf("nwall_sink: ROOT compression %d%s\n", opt.compression,
               opt.compression == 0 ? " (uncompressed)" : "");
   std::printf("nwall_sink: running. Ctrl-C or SIGTERM to stop.\n");
@@ -2387,6 +2432,7 @@ int main(int argc, char** argv) {
     return s;
   };
   std::string shown_write_status = "OK";
+  std::string shown_queue_status;
   std::string shown_calib_text = display ? display->calib_text() : "";
 
   while (!display_done) {
@@ -2405,6 +2451,14 @@ int main(int argc, char** argv) {
       if (ws != shown_write_status) {
         server->SetItemField("/WriteStatus", "value", ws.c_str());
         shown_write_status = ws;
+      }
+      char qs[128];
+      std::snprintf(qs, sizeof qs, "%s sort=%zu work=%zu write=%zu disp=%zu",
+                    counters.writing ? "writing" : "idle", to_sorter.size(), work_q.size(),
+                    writer_q.size(), display_q.size());
+      if (shown_queue_status != qs) {
+        server->SetItemField("/QueueStatus", "value", qs);
+        shown_queue_status = qs;
       }
       if (display) {
         std::string cs = display->calib_text();

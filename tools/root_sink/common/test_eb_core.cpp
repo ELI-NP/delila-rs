@@ -642,6 +642,133 @@ static void test_sorter_offset_spread_beyond_horizon_counts_late() {
 }
 
 // ---------------------------------------------------------------------------
+// Sorter speed-up (TODO 84 §7.2, 2026-11-10): incremental merge (+ parallel
+// sort and merge when built with -fopenmp under libstdc++). The chunks must be
+// exactly those of the old Sorter, which re-sorted its whole buffer per chunk.
+// ---------------------------------------------------------------------------
+
+static ScalarHit mch_hit(int mod, int ch, double t, uint16_t e = 0) {
+  ScalarHit h = hit(ch, t, e);
+  h.module = static_cast<uint8_t>(mod);
+  return h;
+}
+
+// The old Sorter (full sort per chunk via sort_and_split), as the reference.
+class FullResortSorter {
+ public:
+  explicit FullResortSorter(Sorter::Config cfg) : cfg_(cfg) {}
+  template <class ChunkF>
+  void push_batch(std::vector<ScalarHit>&& hits, ChunkF on_chunk) {
+    for (const ScalarHit& h : hits) {
+      max_ts_ = std::max(max_ts_, h.timestamp_ns);
+      min_ts_ = std::min(min_ts_, h.timestamp_ns);
+    }
+    buffer_.insert(buffer_.end(), hits.begin(), hits.end());
+    if (buffer_.empty()) return;
+    double candidate = max_ts_ - cfg_.safe_horizon_ns;
+    double floor = std::isinf(prev_) ? min_ts_ : prev_;
+    if (candidate - floor < cfg_.chunk_span_ns) return;
+    SortedChunk c;
+    if (sort_and_split(buffer_, cfg_.safe_horizon_ns, cfg_.lookback_ns, prev_, c)) {
+      prev_ = c.core_end;
+      on_chunk(std::move(c));
+    }
+  }
+  template <class ChunkF>
+  void flush(ChunkF on_chunk) {
+    SortedChunk c;
+    if (sort_and_flush(buffer_, prev_, c)) on_chunk(std::move(c));
+  }
+
+ private:
+  Sorter::Config cfg_;
+  std::vector<ScalarHit> buffer_;
+  double max_ts_ = -kInf, min_ts_ = kInf, prev_ = -kInf;
+};
+
+static bool same_hits(const std::vector<ScalarHit>& a, const std::vector<ScalarHit>& b) {
+  if (a.size() != b.size()) return false;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    if (a[i].timestamp_ns != b[i].timestamp_ns || a[i].module != b[i].module ||
+        a[i].channel != b[i].channel || a[i].energy != b[i].energy)
+      return false;
+  return true;
+}
+
+static void test_sorter_merge_gives_the_full_resort_chunks() {
+  // Channel-pair aggregates delivered out of time order (up to 3 us, inside
+  // the 5 us horizon), with many exact time ties across boards.
+  for (uint64_t seed : {1u, 2u, 3u}) {
+    std::mt19937_64 rng(seed);
+    std::vector<std::vector<ScalarHit>> batches;
+    for (int b = 0; b < 800; ++b) {
+      std::vector<ScalarHit> batch;
+      double base = b * 250.0 + std::uniform_real_distribution<double>(0, 3000)(rng);
+      int n = 1 + static_cast<int>(rng() % 40);
+      for (int i = 0; i < n; ++i) {
+        double t = std::floor(base + i * 7.0);  // integers: ties across batches
+        batch.push_back(mch_hit(static_cast<int>(rng() % 6), static_cast<int>(rng() % 16), t,
+                             static_cast<uint16_t>(rng() % 4)));
+      }
+      batches.push_back(std::move(batch));
+    }
+    Sorter fast(small_cfg());
+    FullResortSorter ref(small_cfg());
+    std::vector<SortedChunk> a, r;
+    for (const auto& b : batches) {
+      fast.push_batch(std::vector<ScalarHit>(b), [&](SortedChunk&& c) { a.push_back(std::move(c)); });
+      ref.push_batch(std::vector<ScalarHit>(b), [&](SortedChunk&& c) { r.push_back(std::move(c)); });
+    }
+    fast.flush([&](SortedChunk&& c) { a.push_back(std::move(c)); });
+    ref.flush([&](SortedChunk&& c) { r.push_back(std::move(c)); });
+    CHECK(a.size() == r.size());
+    CHECK(a.size() > 10);
+    bool all_same = a.size() == r.size();
+    for (std::size_t i = 0; all_same && i < a.size(); ++i) {
+      all_same = same_hits(a[i].hits, r[i].hits) &&
+                 (a[i].core_start == r[i].core_start ||
+                  (std::isinf(a[i].core_start) && std::isinf(r[i].core_start))) &&
+                 (a[i].core_end == r[i].core_end ||
+                  (std::isinf(a[i].core_end) && std::isinf(r[i].core_end)));
+    }
+    CHECK(all_same);
+  }
+}
+
+static void test_hit_order_is_total_so_every_sort_agrees() {
+  // Equal timestamps are ordered by module, channel, energy: whatever order
+  // the hits arrive in, and whichever sort runs, the sequence is the same.
+  std::vector<ScalarHit> hits = {mch_hit(2, 3, 100.0, 5), mch_hit(1, 9, 100.0, 1), mch_hit(1, 2, 100.0, 7),
+                                 mch_hit(1, 2, 100.0, 3), mch_hit(0, 0, 99.0),     mch_hit(5, 0, 101.0)};
+  std::vector<ScalarHit> first;
+  std::mt19937_64 rng(7);
+  for (int k = 0; k < 20; ++k) {
+    std::shuffle(hits.begin(), hits.end(), rng);
+    std::vector<ScalarHit> v = hits;
+    SortedChunk c;
+    CHECK(sort_and_flush(v, -kInf, c));
+    if (k == 0) first = c.hits;
+    CHECK(same_hits(c.hits, first));
+  }
+  CHECK(first[1].module == 1 && first[1].channel == 2 && first[1].energy == 3);
+  CHECK(first[2].module == 1 && first[2].channel == 2 && first[2].energy == 7);
+  CHECK(first[3].module == 1 && first[3].channel == 9);
+  CHECK(first[4].module == 2);
+}
+
+static void test_sorter_buffered_includes_hits_not_yet_merged() {
+  Sorter s(small_cfg());
+  std::vector<ScalarHit> b1 = {hit(0, 0.0), hit(0, 20000.0)};
+  int chunks = 0;
+  s.push_batch(std::move(b1), [&](SortedChunk&&) { ++chunks; });
+  CHECK(chunks == 1);
+  std::vector<ScalarHit> b2 = {hit(0, 20001.0), hit(0, 20002.0)};  // no new chunk yet
+  s.push_batch(std::move(b2), [&](SortedChunk&&) { ++chunks; });
+  CHECK(chunks == 1);
+  CHECK(s.buffered() >= 3);  // the retained tail plus the two new hits
+}
+
+// ---------------------------------------------------------------------------
 // Generic event layer (TODO 71 Phase A): TriggerGrouper + build_generic_events
 // ---------------------------------------------------------------------------
 
@@ -1711,6 +1838,20 @@ static void test_generic_pool_determinism() {
 }
 
 int main() {
+#ifdef ROOTSINK_PARALLEL_SORT
+  // OpenMP build: make libstdc++'s parallel sort and merge run on the tiny
+  // arrays of these tests too (by default they fall back to the serial
+  // algorithm below about 1000 elements), so the parallel path is what is
+  // checked against the serial reference.
+  {
+    __gnu_parallel::_Settings ps = __gnu_parallel::_Settings::get();
+    ps.sort_minimal_n = 2;
+    ps.merge_minimal_n = 2;
+    ps.multiway_merge_minimal_n = 2;
+    __gnu_parallel::_Settings::set(ps);
+    std::printf("test_eb_core: parallel sort/merge forced on (OpenMP build)\n");
+  }
+#endif
   test_channel_fifo();
   test_channel_blocking_pop();
   test_channel_close_drains_then_false();
@@ -1740,6 +1881,9 @@ int main() {
   test_sorter_counts_hits_behind_core();
   test_sorter_orders_on_aligned_time();
   test_sorter_offset_spread_beyond_horizon_counts_late();
+  test_sorter_merge_gives_the_full_resort_chunks();
+  test_hit_order_is_total_so_every_sort_agrees();
+  test_sorter_buffered_includes_hits_not_yet_merged();
   test_generic_disabled();
   test_generic_single_event();
   test_generic_group_does_not_extend();

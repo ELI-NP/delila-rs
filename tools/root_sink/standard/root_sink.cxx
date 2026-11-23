@@ -170,6 +170,7 @@ struct Options {
   int autosave_sec = 30;
   // Pipeline (TODO 66 §5): worker pool size and the Sorter's data-time knobs.
   int workers = 3;
+  int sort_threads = 8;  // Sorter's parallel sort/merge (OpenMP builds, TODO 84 §7.2)
   double chunk_span_ms = 100.0;    // emit a chunk per this much DATA time
   double safe_horizon_ms = 50.0;   // arrival-disorder absorption (>= max disorder)
   // --time-calib FILE: per-(module,channel) time offsets (timeSettings.json),
@@ -226,6 +227,8 @@ static void print_usage(const char* argv0) {
       "  --dt-max X          Δt axis max ns (default 1000)\n"
       "  --autosave-sec N    TTree AutoSave interval (default 30)\n"
       "  --workers N         event-build worker threads (default 3)\n"
+      "  --sort-threads N    Sorter threads for its parallel sort and merge (default 8;\n"
+      "                      only in a -fopenmp build, else the Sorter runs serially)\n"
       "  --chunk-span-ms X   sorter chunk span in data time (default 100)\n"
       "  --safe-horizon-ms X sorter disorder absorption (default 50; must\n"
       "                      exceed the stream's max arrival disorder)\n"
@@ -342,6 +345,10 @@ static bool parse_args(int argc, char** argv, Options& opt, bool& help) {
       if (!(v = need(i))) return false;
       opt.workers = std::atoi(v);
       if (opt.workers < 1) opt.workers = 1;
+    } else if (a == "--sort-threads") {
+      if (!(v = need(i))) return false;
+      opt.sort_threads = std::atoi(v);
+      if (opt.sort_threads < 1) opt.sort_threads = 1;
     } else if (a == "--chunk-span-ms") {
       if (!(v = need(i))) return false;
       opt.chunk_span_ms = std::atof(v);
@@ -1789,6 +1796,12 @@ int main(int argc, char** argv) {
     server->CreateItem("/WriteStatus", "run file write status (TODO 69)");
     server->SetItemField("/WriteStatus", "_kind", "Text");
     server->SetItemField("/WriteStatus", "value", "OK");
+    // Run-file state and record-path queue depths for the Operator's restart
+    // guard (TODO 91): the DAQ is restarted from the UI only while this reads
+    // "idle" with sort, work and write all 0. Updated with /WriteStatus below.
+    server->CreateItem("/QueueStatus", "run file state and queue depths (TODO 91)");
+    server->SetItemField("/QueueStatus", "_kind", "Text");
+    server->SetItemField("/QueueStatus", "value", "starting");
     server->CreateItem("/EnergyCalib", "keV coefficients in force (TODO 83, display only)");
     server->SetItemField("/EnergyCalib", "_kind", "Text");
     server->SetItemField("/EnergyCalib", "value", ecal::calib_status_text(calib, calib_on).c_str());
@@ -2520,8 +2533,14 @@ int main(int argc, char** argv) {
     }
   };
 
+  eb::set_sort_threads(opt.sort_threads);
   std::printf("root_sink: pipeline receiver -> sorter(span=%.0fms horizon=%.0fms) -> %d worker(s) -> writer\n",
               opt.chunk_span_ms, opt.safe_horizon_ms, n_workers);
+  if (eb::parallel_sort_enabled())
+    std::printf("root_sink: Sorter: incremental merge, parallel sort/merge on %d threads\n",
+                opt.sort_threads);
+  else
+    std::printf("root_sink: Sorter: incremental merge, serial (build without -fopenmp)\n");
   std::printf("root_sink: running. Ctrl-C or SIGTERM to stop.\n");
   std::fflush(stdout);
 
@@ -2545,6 +2564,7 @@ int main(int argc, char** argv) {
     return s;
   };
   std::string shown_write_status = "OK";
+  std::string shown_queue_status;
   std::string shown_calib_text = ecal::calib_status_text(calib, calib_on);
 
   while (!display_done) {
@@ -2568,6 +2588,14 @@ int main(int argc, char** argv) {
       if (ws != shown_write_status) {
         server->SetItemField("/WriteStatus", "value", ws.c_str());
         shown_write_status = ws;
+      }
+      char qs[128];
+      std::snprintf(qs, sizeof qs, "%s sort=%zu work=%zu write=%zu disp=%zu",
+                    counters.writing ? "writing" : "idle", to_sorter.size(), work_q.size(),
+                    writer_q.size(), display_q.size());
+      if (shown_queue_status != qs) {
+        server->SetItemField("/QueueStatus", "value", qs);
+        shown_queue_status = qs;
       }
       std::string cs = ecal::calib_status_text(calib, calib_on);
       if (cs != shown_calib_text) {
