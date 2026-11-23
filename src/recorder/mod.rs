@@ -26,6 +26,7 @@ pub use format::{
     FOOTER_SIZE, FORMAT_VERSION, MAX_ZST_DECOMPRESSED_BYTES,
 };
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -39,6 +40,7 @@ use tmq::{subscribe, Context};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+use crate::common::sequence::{SeqEvent, SourceStats};
 use crate::common::{
     handle_command, run_command_task, sub_no_hwm, CommandHandlerExt, ComponentSharedState,
     ComponentState, Message, MessageHeader, RunConfig,
@@ -121,6 +123,9 @@ struct AtomicStats {
     /// run, and this is the loss in between — counted, never silent.
     unwritten_batches: AtomicU64,
     unwritten_events: AtomicU64,
+    /// Batches missing from the sources' sequence numbers this run (TODO 89):
+    /// lost between a source and here. The run guard stops the run on it.
+    lost_batches: AtomicU64,
     /// Backlog gauge for the receiver→writer channel (TODO 68). Lifetime
     /// counters — deliberately NOT touched by `reset()`: channel contents can
     /// straddle run boundaries, and clearing while items sit in the channel
@@ -140,6 +145,7 @@ impl AtomicStats {
             write_failed: AtomicBool::new(false),
             unwritten_batches: AtomicU64::new(0),
             unwritten_events: AtomicU64::new(0),
+            lost_batches: AtomicU64::new(0),
             queue: crate::common::queue_accounting::QueueAccounting::new(),
         }
     }
@@ -153,6 +159,7 @@ impl AtomicStats {
         self.dropped_batches.store(0, Ordering::Relaxed);
         self.unwritten_batches.store(0, Ordering::Relaxed);
         self.unwritten_events.store(0, Ordering::Relaxed);
+        self.lost_batches.store(0, Ordering::Relaxed);
         // `queue` intentionally NOT reset — see the field doc. Per-run peak:
         self.queue.reset_peak();
     }
@@ -167,6 +174,7 @@ impl AtomicStats {
             dropped_batches: self.dropped_batches.load(Ordering::Relaxed),
             unwritten_batches: self.unwritten_batches.load(Ordering::Relaxed),
             unwritten_events: self.unwritten_events.load(Ordering::Relaxed),
+            lost_batches: self.lost_batches.load(Ordering::Relaxed),
         }
     }
 }
@@ -183,6 +191,8 @@ pub struct RecorderStats {
     /// Not written after a write failure (TODO 69).
     pub unwritten_batches: u64,
     pub unwritten_events: u64,
+    /// Missing from the sources' sequence numbers this run (TODO 89).
+    pub lost_batches: u64,
 }
 
 /// Rate tracker for 1-second interval rate calculation
@@ -739,6 +749,11 @@ impl CommandHandlerExt for RecorderCommandExt {
         } else {
             String::new()
         };
+        let lost = if stats.lost_batches > 0 {
+            format!(", LOST {} batches (sequence gaps)", stats.lost_batches)
+        } else {
+            String::new()
+        };
         let disk = match self.disk() {
             (Some(free), level) if level > 0 => {
                 format!(", DISK LOW: {} MB free", free / 1_000_000)
@@ -746,12 +761,13 @@ impl CommandHandlerExt for RecorderCommandExt {
             _ => String::new(),
         };
         Some(format!(
-            "Received: {} events, Written: {} events, Files: {}, Dropped: {}{}{}",
+            "Received: {} events, Written: {} events, Files: {}, Dropped: {}{}{}{}",
             stats.total_events,
             stats.written_events,
             stats.files_written,
             stats.dropped_batches,
             failed,
+            lost,
             disk
         ))
     }
@@ -791,6 +807,7 @@ impl CommandHandlerExt for RecorderCommandExt {
             ),
             write_failed: self.stats.write_failed.load(Ordering::Relaxed),
             unwritten_events: stats.unwritten_events,
+            lost_batches: stats.lost_batches,
             disk_free_bytes,
             disk_level,
             pll: None,
@@ -1024,6 +1041,7 @@ impl Recorder {
                             files = stats.files_written,
                             dropped = stats.dropped_batches,
                             unwritten_events = stats.unwritten_events,
+                            lost_batches = stats.lost_batches,
                             queue_bytes = self.stats.queue.depth_bytes(),
                             "Recording progress"
                         );
@@ -1099,6 +1117,39 @@ impl Recorder {
         }
     }
 
+    /// Sequence check on one received batch (TODO 89). The sources number
+    /// their batches from 0 at Start and the Merger forwards them unchanged,
+    /// so a gap means batches were lost between a source and here — on a
+    /// remote Recorder, typically a dropped link (ZMQ PUB discards what an
+    /// absent subscriber misses). Counted and logged as an error; the
+    /// Operator's run guard stops the run. The batches that did arrive are
+    /// still written.
+    fn check_sequence(
+        seq: &mut HashMap<u32, SourceStats>,
+        stats: &AtomicStats,
+        source_id: u32,
+        sequence_number: u64,
+    ) {
+        match seq.entry(source_id).or_default().update(sequence_number) {
+            SeqEvent::Ok => {}
+            SeqEvent::Gap(missing) => {
+                let total = stats.lost_batches.fetch_add(missing, Ordering::Relaxed) + missing;
+                error!(
+                    source = source_id,
+                    seq = sequence_number,
+                    missing_batches = missing,
+                    lost_batches_this_run = total,
+                    "Sequence gap at the Recorder — batches lost upstream (the run guard stops the run)"
+                );
+            }
+            SeqEvent::Restart => warn!(
+                source = source_id,
+                seq = sequence_number,
+                "Sequence jumped backwards at the Recorder — source restart"
+            ),
+        }
+    }
+
     /// Receiver task: ZMQ SUB → Writer channel (non-blocking, zero-copy)
     ///
     /// IMPORTANT: Always drains ZMQ socket to prevent internal buffer growth.
@@ -1114,6 +1165,8 @@ impl Recorder {
         stats: Arc<AtomicStats>,
         mut state_rx: watch::Receiver<ComponentState>,
     ) {
+        // Per-source sequence check (TODO 89), owned by this task alone.
+        let mut seq: HashMap<u32, SourceStats> = HashMap::new();
         loop {
             let is_running = *state_rx.borrow() == ComponentState::Running;
 
@@ -1128,6 +1181,10 @@ impl Recorder {
                 _ = state_rx.changed() => {
                     let current = *state_rx.borrow();
                     debug!(state = %current, "Receiver state changed");
+                    // Sources restart their numbering at every Start.
+                    if current == ComponentState::Running {
+                        seq.clear();
+                    }
                     continue;
                 }
 
@@ -1157,7 +1214,8 @@ impl Recorder {
                             if let Some(data) = multipart.into_iter().next() {
                                 // Use lightweight header parsing for message type detection
                                 match MessageHeader::parse(&data) {
-                                    Some(MessageHeader::Data { .. }) => {
+                                    Some(MessageHeader::Data { source_id, sequence_number }) => {
+                                        Self::check_sequence(&mut seq, &stats, source_id, sequence_number);
                                         // Extract raw EventDataBatch bytes (skip Message wrapper)
                                         if data.len() <= Self::DATA_WRAPPER_SIZE {
                                             continue;
@@ -1534,5 +1592,93 @@ mod tests {
         assert!(v.is_valid, "errors: {:?}", v.errors);
         assert_eq!(v.recoverable_events, 35);
         assert_eq!(stats.snapshot().unwritten_events, 0);
+    }
+
+    /// TODO 89: batches missing from a source's sequence are counted as
+    /// lost, per source; a source restart (far backwards) is not a loss.
+    #[test]
+    fn sequence_gaps_count_lost_batches_per_source() {
+        let stats = AtomicStats::new();
+        let mut seq = HashMap::new();
+        for s in [0, 1, 4] {
+            Recorder::check_sequence(&mut seq, &stats, 0, s); // 2 and 3 lost
+        }
+        for s in [0, 1, 2] {
+            Recorder::check_sequence(&mut seq, &stats, 1, s); // complete
+        }
+        assert_eq!(stats.snapshot().lost_batches, 2);
+
+        Recorder::check_sequence(&mut seq, &stats, 0, 500); // 495 lost
+        Recorder::check_sequence(&mut seq, &stats, 0, 0); // restart, no loss
+        Recorder::check_sequence(&mut seq, &stats, 0, 1);
+        assert_eq!(stats.snapshot().lost_batches, 497);
+
+        // A new run starts from zero again.
+        stats.reset();
+        assert_eq!(stats.snapshot().lost_batches, 0);
+    }
+
+    /// TODO 89: the real receiver path. A batch missing from the Merger's
+    /// stream (here: never published, as when a network link drops) is
+    /// counted; the batches that did arrive still go to the writer.
+    #[tokio::test]
+    async fn receiver_counts_a_batch_missing_from_the_stream() {
+        use futures::SinkExt;
+
+        let ctx = Context::new();
+        let addr = "inproc://recorder-seq-test";
+        let mut publisher = tmq::publish(&ctx).bind(addr).unwrap();
+        let socket = subscribe(&ctx)
+            .connect(addr)
+            .unwrap()
+            .subscribe(b"")
+            .unwrap();
+
+        let stats = Arc::new(AtomicStats::new());
+        let (state_tx, state_rx) = watch::channel(ComponentState::Configured);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let (writer_tx, writer_rx) = std::sync::mpsc::channel();
+        let task = tokio::spawn(Recorder::receiver_task(
+            socket,
+            writer_tx,
+            shutdown_rx,
+            Arc::clone(&stats),
+            state_rx,
+        ));
+
+        let frame = |seq: u64| {
+            let msg = Message::Data(EventDataBatch::new(3, seq))
+                .to_msgpack()
+                .unwrap();
+            vec![zmq::Message::from(msg)]
+        };
+        // PUB/SUB joins asynchronously: publish until the (not yet Running)
+        // receiver sees something, then start the run.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stats.dropped_batches.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < deadline, "subscriber never joined");
+            publisher.send(frame(999)).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        state_tx.send(ComponentState::Running).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        for seq in [0, 1, 3, 4] {
+            publisher.send(frame(seq)).await.unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stats.received_batches.load(Ordering::Relaxed) < 4 {
+            assert!(Instant::now() < deadline, "batches did not arrive");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _ = shutdown_tx.send(());
+        task.await.unwrap();
+
+        assert_eq!(stats.snapshot().lost_batches, 1);
+        let written = writer_rx
+            .try_iter()
+            .filter(|c| matches!(c, WriterCommand::WriteRawBatch { .. }))
+            .count();
+        assert_eq!(written, 4);
     }
 }

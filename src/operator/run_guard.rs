@@ -6,6 +6,11 @@
 //!   more this run. **Immediate stop**, sources first: draining into a disk
 //!   that just failed saves nothing, and every second of running is lost
 //!   data. The run is recorded as Error.
+//! - A component reports `lost_batches > 0` — batches are missing from the
+//!   sources' sequence numbers at the Recorder (TODO 89), e.g. the network
+//!   link to a Recorder on another host dropped. **Drain-first stop**: what
+//!   did arrive is good and is written out. The run is recorded as Error
+//!   (`finish_run_bookkeeping` checks `lost_batches` on every stop path).
 //! - A component reports `disk_level == 2` — free space below its hard
 //!   watermark while the disk still takes writes. **Drain-first stop**
 //!   (TODO 68 machinery): the backlog is written and the file closed with its
@@ -36,6 +41,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub enum GuardAction {
     /// A write failed: stop now (sources first), record the run as Error.
     ImmediateStop(String),
+    /// Batches lost before the Recorder (TODO 89): drain-first stop, the run
+    /// is recorded as Error.
+    DataLossStop(String),
     /// Free space below the hard watermark: drain-first stop.
     DrainStop(String),
 }
@@ -48,8 +56,31 @@ fn gb(bytes: Option<u64>) -> String {
     }
 }
 
+/// Batches the Recorder(s) found missing this run (TODO 89), over every
+/// component that reports metrics. Used for the run record after a stop.
+pub fn lost_batches(statuses: &[ComponentStatus]) -> u64 {
+    statuses
+        .iter()
+        .filter_map(|s| s.metrics.as_ref())
+        .map(|m| m.lost_batches)
+        .sum()
+}
+
+/// The stop reason for the run record (TODO 89): a run that lost batches
+/// says how many, whoever stopped it.
+pub fn run_end_reason(reason: Option<&str>, lost: u64) -> Option<String> {
+    let loss =
+        (lost > 0).then(|| format!("{lost} batches lost before the Recorder (sequence gaps)"));
+    match (reason, loss) {
+        (Some(r), Some(l)) => Some(format!("{r}; {l}")),
+        (Some(r), None) => Some(r.to_string()),
+        (None, l) => l,
+    }
+}
+
 /// Decide from the statuses of online components. A write failure outranks
-/// low disk: the data is already being lost.
+/// lost batches, which outrank low disk: the first two are data already
+/// lost, and a failed write loses every batch from then on.
 pub fn decide(statuses: &[ComponentStatus]) -> Option<GuardAction> {
     let online = || {
         statuses
@@ -70,6 +101,16 @@ pub fn decide(statuses: &[ComponentStatus]) -> Option<GuardAction> {
         return Some(GuardAction::ImmediateStop(format!(
             "write failure on {}",
             failed.join(", ")
+        )));
+    }
+    let lost: Vec<String> = online()
+        .filter(|(_, m)| m.lost_batches > 0)
+        .map(|(s, m)| format!("{} ({} batches)", s.name, m.lost_batches))
+        .collect();
+    if !lost.is_empty() {
+        return Some(GuardAction::DataLossStop(format!(
+            "batches lost on the way to {} — sequence gaps, check the network link",
+            lost.join(", ")
         )));
     }
     let low: Vec<String> = online()
@@ -125,7 +166,7 @@ pub fn latched_write_failure(statuses: &[ComponentStatus]) -> Option<String> {
 pub async fn run_watcher(state: Arc<AppState>) {
     info!(
         poll_interval_secs = POLL_INTERVAL.as_secs(),
-        "Run guard started (write failure → immediate stop, disk below hard watermark → drain-first stop)"
+        "Run guard started (write failure → immediate stop, lost batches or disk below hard watermark → drain-first stop)"
     );
 
     loop {
@@ -144,6 +185,9 @@ pub async fn run_watcher(state: Arc<AppState>) {
         match &action {
             GuardAction::ImmediateStop(reason) => {
                 error!(reason = %reason, "Run guard: write failure — stopping the run now")
+            }
+            GuardAction::DataLossStop(reason) => {
+                error!(reason = %reason, "Run guard: batches lost before the Recorder — drain-first stop")
             }
             GuardAction::DrainStop(reason) => {
                 error!(reason = %reason, "Run guard: disk nearly full — drain-first stop")
@@ -167,6 +211,7 @@ pub async fn run_watcher(state: Arc<AppState>) {
             .map(|r| r.run_number);
         let (cause, reason) = match &action {
             GuardAction::ImmediateStop(r) => (AutoStopCause::WriteFailure, r),
+            GuardAction::DataLossStop(r) => (AutoStopCause::DataLoss, r),
             GuardAction::DrainStop(r) => (AutoStopCause::DiskLow, r),
         };
         auto_stop::begin(&state.auto_stop, run_number, cause, reason).await;
@@ -174,7 +219,7 @@ pub async fn run_watcher(state: Arc<AppState>) {
             GuardAction::ImmediateStop(reason) => {
                 crate::operator::routes::status::failure_stop(&state, &reason).await
             }
-            GuardAction::DrainStop(reason) => {
+            GuardAction::DataLossStop(reason) | GuardAction::DrainStop(reason) => {
                 let timeout_ms = state.config.drain_stop_timeout_secs * 1000;
                 crate::operator::routes::status::drain_first_stop(&state, &reason, timeout_ms).await
             }
@@ -305,6 +350,63 @@ mod tests {
         assert!(start_refusal(&s)
             .unwrap()
             .contains("Recorder (1.5 GB free)"));
+    }
+
+    fn lost(n: u64) -> ComponentMetrics {
+        ComponentMetrics {
+            lost_batches: n,
+            ..Default::default()
+        }
+    }
+
+    /// TODO 89 (user, 2026-11-18: "止めてエラーを出しましょう"): batches
+    /// missing at the Recorder stop the run, drain-first.
+    #[test]
+    fn lost_batches_drain_the_run_and_count_in_the_reason() {
+        let s = vec![
+            status("Reader", true, Some(ComponentMetrics::default())),
+            status("Recorder", true, Some(lost(3))),
+        ];
+        match decide(&s) {
+            Some(GuardAction::DataLossStop(r)) => {
+                assert!(r.contains("Recorder (3 batches)"), "{r}")
+            }
+            other => panic!("expected DataLossStop, got {other:?}"),
+        }
+        assert_eq!(lost_batches(&s), 3);
+    }
+
+    #[test]
+    fn write_failure_outranks_lost_batches_which_outrank_low_disk() {
+        let mut both = lost(3);
+        both.write_failed = true;
+        let s = vec![status("Recorder", true, Some(both))];
+        assert!(matches!(decide(&s), Some(GuardAction::ImmediateStop(_))));
+
+        let mut low = lost(3);
+        low.disk_level = 2;
+        let s = vec![status("Recorder", true, Some(low))];
+        assert!(matches!(decide(&s), Some(GuardAction::DataLossStop(_))));
+    }
+
+    #[test]
+    fn the_run_record_names_the_loss_whoever_stopped_the_run() {
+        assert_eq!(run_end_reason(None, 0), None);
+        assert_eq!(run_end_reason(Some("drain"), 0).as_deref(), Some("drain"));
+        assert_eq!(
+            run_end_reason(None, 5).as_deref(),
+            Some("5 batches lost before the Recorder (sequence gaps)")
+        );
+        assert_eq!(
+            run_end_reason(Some("x"), 5).as_deref(),
+            Some("x; 5 batches lost before the Recorder (sequence gaps)")
+        );
+    }
+
+    #[test]
+    fn healthy_pipeline_loses_nothing() {
+        let s = vec![status("Recorder", true, Some(ComponentMetrics::default()))];
+        assert_eq!(lost_batches(&s), 0);
     }
 
     #[test]

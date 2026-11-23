@@ -21,6 +21,9 @@ pub enum AutoStopCause {
     DiskLow,
     /// A file write failed (TODO 69).
     WriteFailure,
+    /// Batches went missing between a source and the Recorder, e.g. a
+    /// dropped network link to a Recorder on another host (TODO 89).
+    DataLoss,
     /// A digitizer stopped taking data: its PLL is not locked, its status
     /// cannot be read, or its Reader is in Error (TODO 85).
     DigitizerFault,

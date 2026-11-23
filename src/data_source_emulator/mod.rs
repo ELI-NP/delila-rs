@@ -284,6 +284,7 @@ impl CommandHandlerExt for EmulatorCommandExt {
             backlog_level: 0,
             write_failed: false,
             unwritten_events: 0,
+            lost_batches: 0,
             disk_free_bytes: None,
             disk_level: 0,
             pll: None,

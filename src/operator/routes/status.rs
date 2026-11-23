@@ -697,9 +697,25 @@ async fn finish_run_bookkeeping(
             trigger_loss_count,
         };
 
+        // TODO 89: batches the Recorder found missing make the run an Error
+        // on every stop path (the run guard, a plain Stop, a drain-stop), and
+        // the record and eLog say how many.
+        let lost = crate::operator::run_guard::lost_batches(&components);
+        if lost > 0 {
+            tracing::error!(
+                lost_batches = lost,
+                "Run lost batches before the Recorder — recorded as Error"
+            );
+            response.message = format!(
+                "{} — WARNING: {lost} batches lost before the Recorder (sequence gaps)",
+                response.message
+            );
+        }
+        let stop_reason = crate::operator::run_guard::run_end_reason(stop_reason, lost);
+
         // TODO 58 L9: a partial stop failure used to be recorded as Completed —
         // record Error so the run history reflects the abnormal end.
-        let final_status = if response.success {
+        let final_status = if response.success && lost == 0 {
             RunStatus::Completed
         } else {
             RunStatus::Error
@@ -711,7 +727,7 @@ async fn finish_run_bookkeeping(
                 &run_info.exp_name,
                 final_status,
                 stats.clone(),
-                stop_reason.map(str::to_owned),
+                stop_reason.clone(),
             )
             .await
         {
@@ -729,7 +745,7 @@ async fn finish_run_bookkeeping(
             let elog_config = elog_config.clone();
             let run_number = run_info.run_number;
             let exp_name = run_info.exp_name.clone();
-            let comment = match stop_reason {
+            let comment = match &stop_reason {
                 Some(reason) => format!("{} [stop: {}]", run_info.comment, reason),
                 None => run_info.comment.clone(),
             };

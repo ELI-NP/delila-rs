@@ -1258,6 +1258,7 @@ impl CommandHandlerExt for ReaderCommandExt {
             backlog_level: 0,
             write_failed: false,
             unwritten_events: 0,
+            lost_batches: 0,
             disk_free_bytes: None,
             disk_level: 0,
             pll: crate::common::PllStatus::from_u8(self.metrics.pll_status.load(Ordering::Relaxed)),

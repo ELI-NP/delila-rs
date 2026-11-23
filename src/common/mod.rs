@@ -47,6 +47,7 @@ pub mod queue_accounting;
 
 /// Free-space probe for writer output directories (TODO 69).
 pub mod disk_space;
+pub mod sequence;
 pub use zmq_helper::{pub_no_hwm, sub_no_hwm};
 
 pub mod delila_schema;
@@ -122,6 +123,12 @@ pub struct ComponentMetrics {
     /// (TODO 69). Recorder only.
     #[serde(default)]
     pub unwritten_events: u64,
+    /// Batches missing from the sources' sequence numbers this run, as the
+    /// Recorder counts them (TODO 89): lost somewhere between a source and
+    /// the Recorder, e.g. a dropped network link. Reset on Start. The
+    /// Operator's run guard stops the run on it. Recorder only.
+    #[serde(default)]
+    pub lost_batches: u64,
     /// Free bytes on the output filesystem (TODO 69). `None` for components
     /// that write no files, or when the probe failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
