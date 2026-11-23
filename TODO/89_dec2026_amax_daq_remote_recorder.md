@@ -1,6 +1,6 @@
 # TODO 89 — 12 月の AMax 実験(Si + LaBr3、VX2730): 読み出しは DAQ ホスト、記録は side3(ネットワーク透過テストを兼ねる)
 
-**Status: 🚧 §3.3 リンク切れの見張り = 実装済み、Mac で E2E 合格 (2026-11-18、未コミット) — 残 = §2.3 中継 Merger、§3.1 / §3.2 別ホストでの起動、§3.4 ROOT 出力、ハード(§4)。日程と DAQ ホストは未定**
+**Status: 🚧 §3.3 リンク切れの見張り = 実装済み、Mac で E2E 合格 (2026-11-18、コミット済み 2026-11-23 `2a6b9bb`) — 残 = §2.3 中継 Merger、§3.1 / §3.2 別ホストでの起動、§3.4 ROOT 出力、ハード(§4)。日程と DAQ ホストは未定**
 
 **関連:** [80_generic_root_sink.md](80_generic_root_sink.md)(hits / events の 2 ファイル、ROOT の書き込み方) /
 [84_high_rate_investigation.md](84_high_rate_investigation.md)(Recorder と ROOT の速度の上限、バックログ自動停止) /

@@ -1,6 +1,6 @@
 # TODO 91 — Operator の画面から DAQ を再起動する(安全装置つき)
 
-**Status: 🔧 実装済み・Mac で E2E 済み (2026-11-20、未コミット) — 実機(pf-qaq)への配備は 11B_208Pb(11-22〜28)の後か、ユーザーが決める**
+**Status: 🔧 実装済み・Mac で E2E 済み (2026-11-20、コミット済み 2026-11-23 `40d195e`) — 実機(pf-qaq)への配備は 11B_208Pb(11-22〜28)の後か、ユーザーが決める**
 
 **関連:** [85_digitizer_pll_guard.md](85_digitizer_pll_guard.md)(「DAQ を再起動すれば直る」場面) /
 [84_high_rate_investigation.md](84_high_rate_investigation.md)(キューの大きさ) /

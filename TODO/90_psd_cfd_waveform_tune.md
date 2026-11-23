@@ -1,6 +1,6 @@
 # TODO 90 — 波形から CFD のパラメーターを決めるオフラインのツール(V1730 DPP-PSD、まず ThGEM)
 
-**Status: 🚧 ThGEM の実データで走査まで (2026-11-21、未コミット) — D4 で標本外 13.7/10.7 → 5.9/5.0 ns。残 = 設定の適用(ユーザー判断)、ほかの ThGEM の統計、P4(本番のランで --fw-only)**
+**Status: 🚧 ThGEM の実データで走査まで (2026-11-21、コミット済み 2026-11-23) — D4 で標本外 13.7/10.7 → 5.9/5.0 ns。残 = 設定の適用(ユーザー判断)、ほかの ThGEM の統計、P4(本番のランで --fw-only)**
 
 **関連:** [88_11B_208Pb_thgem_campaign.md](88_11B_208Pb_thgem_campaign.md)(ThGEM × 8、V1730 × 3) /
 [59_eliade_trap_autotune.md](59_eliade_trap_autotune.md)(HPGe の台形をプローブを重ねて逆算した前例、`pha_trap_tune`) /
