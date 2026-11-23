@@ -62,8 +62,25 @@ impl ComponentClient {
         address: &str,
         command: &Command,
     ) -> Result<CommandResponse, String> {
-        // Create REQ socket and connect
+        self.send_command_within(address, command, ZMQ_TIMEOUT)
+            .await
+    }
+
+    /// `send_command` with its own timeout for the send and for the reply.
+    async fn send_command_within(
+        &self,
+        address: &str,
+        command: &Command,
+        wait: Duration,
+    ) -> Result<CommandResponse, String> {
+        // Create REQ socket and connect. LINGER 0: a request that timed out
+        // (component dead) is discarded when the socket drops. With the
+        // default (-1) the closed socket stayed in the context forever, one
+        // per status poll, until the context's 1023-socket cap blocked every
+        // command (pf-qaq 2026-11-23). This is a command socket, not a data
+        // path: the HWM = 0 rule does not apply.
         let requester = request_reply::request(&self.context)
+            .set_linger(0)
             .connect(address)
             .map_err(|e| format!("Failed to connect to {}: {}", address, e))?;
 
@@ -74,13 +91,13 @@ impl ComponentClient {
 
         // Send command
         let msg: tmq::Multipart = vec![tmq::Message::from(cmd_bytes.as_slice())].into();
-        let responder = timeout(ZMQ_TIMEOUT, requester.send(msg))
+        let responder = timeout(wait, requester.send(msg))
             .await
             .map_err(|_| format!("Timeout sending to {}", address))?
             .map_err(|e| format!("Failed to send to {}: {}", address, e))?;
 
         // Receive response
-        let (mut response_msg, _) = timeout(ZMQ_TIMEOUT, responder.recv())
+        let (mut response_msg, _) = timeout(wait, responder.recv())
             .await
             .map_err(|_| format!("Timeout receiving from {}", address))?
             .map_err(|e| format!("Failed to receive from {}: {}", address, e))?;
@@ -647,5 +664,40 @@ impl ComponentClient {
 impl Default for ComponentClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A request to a component that is not there must not leave its socket
+    /// behind. pf-qaq 2026-11-23 (TODO 88 §5.13): with ZMQ's default LINGER
+    /// (-1) every status poll of a dead reader kept its socket in the context,
+    /// until the context hit its 1023-socket cap and Stop reached no component.
+    /// Dropping the last Context runs zmq_ctx_term, which waits for every such
+    /// lingering socket — forever with LINGER -1.
+    #[tokio::test]
+    async fn timed_out_request_to_absent_component_does_not_linger() {
+        let client = ComponentClient::new();
+        // Nothing listens on port 1: every connect is refused.
+        let address = "tcp://127.0.0.1:1";
+        for _ in 0..3 {
+            let result = client
+                .send_command_within(address, &Command::GetStatus, Duration::from_millis(100))
+                .await;
+            assert!(result.is_err(), "no component listens at {address}");
+        }
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        // A plain thread: if the context hangs, the test fails instead of hanging.
+        std::thread::spawn(move || {
+            drop(client);
+            let _ = done_tx.send(());
+        });
+        assert!(
+            done_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "ZMQ context did not terminate: timed-out request sockets still linger"
+        );
     }
 }

@@ -11,15 +11,20 @@
 //!   `pll_detail`, TODO 85 §5.3),
 //! - PLL `Unreadable` — the board does not answer (a board that lost its
 //!   clock usually does this rather than report FALSE), or
-//! - state `Error` — e.g. read errors for 30 s (`read_loop_dig1`).
+//! - state `Error` — e.g. read errors for 30 s (`read_loop_dig1`), or
+//! - no status reply at all — the Reader process is gone or hung (pf-qaq
+//!   2026-11-23, TODO 88 §5.11/§5.13: Readers died of segfaults inside the
+//!   CAEN library and the runs went on without those boards for hours).
 //!
 //! The failure must last [`CONFIRM`] on the same source before the guard
 //! acts: the DIG1 lock flag is sticky and may drop once during daisy-chain
 //! initialization (UM5678 rev5 p.45), and a single unreadable poll can be an
-//! optical-link transient that the Reader retries. The stop is drain-first,
-//! like a full disk: the other boards' data is good and is written out.
-//! Offline components are left alone (a slow status reply is not a dead
-//! board).
+//! optical-link transient that the Reader retries. A missing reply must last
+//! the longer [`OFFLINE_CONFIRM`]: one reply can time out (5 s) without the
+//! Reader being dead. When no component answers at all, the Operator cannot
+//! reach the pipeline: that is not one Reader's fault and is not counted.
+//! The stop is drain-first, like a full disk: the other boards' data is good
+//! and is written out.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,6 +43,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// How long a failure must last on one source before the run is stopped.
 pub const CONFIRM: Duration = Duration::from_secs(10);
 
+/// How long a source must give no status reply before the run is stopped.
+pub const OFFLINE_CONFIRM: Duration = Duration::from_secs(30);
+
 /// Why a source cannot take data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fault {
@@ -47,6 +55,8 @@ pub enum Fault {
     ClockUnreadable,
     /// The Reader is in Error.
     ReaderError,
+    /// The Reader gives no status reply: its process is gone or hung.
+    ReaderOffline,
 }
 
 impl Fault {
@@ -59,14 +69,18 @@ impl Fault {
                 "digitizer not answering (PLL status unreadable)".to_string()
             }
             (Fault::ReaderError, _) => "Reader in Error".to_string(),
+            (Fault::ReaderOffline, _) => "Reader not answering (process gone or hung)".to_string(),
         }
     }
 }
 
-/// The fault of one component, if it is an online source that has one.
+/// The fault of one component, if it is a source that has one.
 pub fn fault_of(s: &ComponentStatus) -> Option<Fault> {
-    if s.role != "source" || !s.online {
+    if s.role != "source" {
         return None;
+    }
+    if !s.online {
+        return Some(Fault::ReaderOffline);
     }
     if s.state == ComponentState::Error {
         return Some(Fault::ReaderError);
@@ -78,7 +92,7 @@ pub fn fault_of(s: &ComponentStatus) -> Option<Fault> {
     }
 }
 
-/// A fault that has lasted at least [`CONFIRM`].
+/// A fault that has lasted at least its confirm time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmedFault {
     pub name: String,
@@ -92,25 +106,37 @@ pub struct ConfirmedFault {
 /// Unlocked turning into Unreadable is one continuing failure).
 pub struct FaultTracker {
     confirm: Duration,
+    offline_confirm: Duration,
     since: HashMap<String, Instant>,
 }
 
 impl FaultTracker {
-    pub fn new(confirm: Duration) -> Self {
+    /// `confirm` for the faults a source reports, `offline_confirm` for a
+    /// source that gives no reply.
+    pub fn new(confirm: Duration, offline_confirm: Duration) -> Self {
         Self {
             confirm,
+            offline_confirm,
             since: HashMap::new(),
         }
     }
 
-    /// Feed one status poll; returns the sources failing for `confirm` or
-    /// longer. A source without a fault (or not in the poll) is forgotten.
+    /// Feed one status poll; returns the sources failing for their confirm
+    /// time or longer. A source without a fault (or not in the poll) is
+    /// forgotten.
     pub fn update(&mut self, statuses: &[ComponentStatus], now: Instant) -> Vec<ConfirmedFault> {
+        // Nothing answers: the Operator cannot reach the pipeline. Not one
+        // Reader's fault, and a stop would not get through either.
+        let reachable = statuses.iter().any(|s| s.online);
         let faults: Vec<(&str, Fault, Option<String>)> = statuses
             .iter()
             .filter_map(|s| {
+                let fault = fault_of(s)?;
+                if fault == Fault::ReaderOffline && !reachable {
+                    return None;
+                }
                 let detail = s.metrics.as_ref().and_then(|m| m.pll_detail.clone());
-                Some((s.name.as_str(), fault_of(s)?, detail))
+                Some((s.name.as_str(), fault, detail))
             })
             .collect();
         self.since
@@ -119,7 +145,12 @@ impl FaultTracker {
         for (name, fault, detail) in faults {
             let since = *self.since.entry(name.to_string()).or_insert(now);
             let lasted = now.duration_since(since);
-            if lasted >= self.confirm {
+            let needed = if fault == Fault::ReaderOffline {
+                self.offline_confirm
+            } else {
+                self.confirm
+            };
+            if lasted >= needed {
                 confirmed.push(ConfirmedFault {
                     name: name.to_string(),
                     fault,
@@ -156,10 +187,11 @@ pub async fn run_watcher(state: Arc<AppState>) {
     info!(
         poll_interval_secs = POLL_INTERVAL.as_secs(),
         confirm_secs = CONFIRM.as_secs(),
-        "Digitizer guard started (PLL not locked / unreadable or Reader in Error \
-         during a run → drain-first stop)"
+        offline_confirm_secs = OFFLINE_CONFIRM.as_secs(),
+        "Digitizer guard started (PLL not locked / unreadable, Reader in Error or \
+         not answering during a run → drain-first stop)"
     );
-    let mut tracker = FaultTracker::new(CONFIRM);
+    let mut tracker = FaultTracker::new(CONFIRM, OFFLINE_CONFIRM);
 
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -261,19 +293,95 @@ mod tests {
         );
     }
 
+    fn offline(mut s: ComponentStatus) -> ComponentStatus {
+        s.online = false;
+        s.metrics = None;
+        s
+    }
+
+    fn merger() -> ComponentStatus {
+        let mut m = source("Merger", RUN, None);
+        m.role = "pipeline".to_string();
+        m
+    }
+
     #[test]
-    fn offline_and_pipeline_components_are_ignored() {
-        let mut offline = source("A", ComponentState::Error, Some(PllStatus::Unreadable));
-        offline.online = false;
-        assert_eq!(fault_of(&offline), None);
-        let mut merger = source("Merger", ComponentState::Error, None);
-        merger.role = "pipeline".to_string();
-        assert_eq!(fault_of(&merger), None);
+    fn pipeline_components_are_ignored() {
+        let mut m = merger();
+        m.state = ComponentState::Error;
+        assert_eq!(fault_of(&m), None);
+        assert_eq!(fault_of(&offline(merger())), None);
+    }
+
+    /// pf-qaq 2026-11-23 (TODO 88 §5.11, §5.13): a Reader process died
+    /// (segfault inside the CAEN library) and the run went on without that
+    /// board for hours — an offline source was ignored.
+    #[test]
+    fn an_offline_source_is_a_reader_that_does_not_answer() {
+        assert_eq!(
+            fault_of(&offline(source("A", RUN, None))),
+            Some(Fault::ReaderOffline)
+        );
+    }
+
+    #[test]
+    fn an_offline_source_must_last_the_offline_confirm_time() {
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
+        let t0 = Instant::now();
+        let poll = vec![
+            source("PSD1-V1730-ThGEM1-3", RUN, Some(PllStatus::Locked)),
+            offline(source("PSD1-V1730-ThGEM7-8", RUN, None)),
+            merger(),
+        ];
+        assert!(t.update(&poll, t0).is_empty());
+        // One status reply can time out (5 s) without the Reader being dead.
+        assert!(t.update(&poll, t0 + Duration::from_secs(10)).is_empty());
+        let c = t.update(&poll, t0 + Duration::from_secs(30));
+        assert_eq!(
+            c,
+            vec![ConfirmedFault {
+                name: "PSD1-V1730-ThGEM7-8".into(),
+                fault: Fault::ReaderOffline,
+                seconds: 30,
+                detail: None,
+            }]
+        );
+        assert_eq!(
+            describe(&c),
+            "PSD1-V1730-ThGEM7-8: Reader not answering (process gone or hung) for 30 s"
+        );
+    }
+
+    #[test]
+    fn nothing_answering_is_not_a_dead_reader() {
+        // The Operator cannot reach the pipeline at all: not one Reader's
+        // fault, and a stop would not get through either.
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
+        let t0 = Instant::now();
+        let poll = vec![
+            offline(source("A", RUN, None)),
+            offline(source("B", RUN, None)),
+            offline(merger()),
+        ];
+        assert!(t.update(&poll, t0).is_empty());
+        assert!(t.update(&poll, t0 + Duration::from_secs(60)).is_empty());
+    }
+
+    #[test]
+    fn a_reader_that_answers_again_starts_from_zero() {
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
+        let t0 = Instant::now();
+        let gone = vec![offline(source("A", RUN, None)), merger()];
+        let back = vec![source("A", RUN, Some(PllStatus::Locked)), merger()];
+        t.update(&gone, t0);
+        t.update(&back, t0 + Duration::from_secs(20));
+        assert!(t.update(&gone, t0 + Duration::from_secs(40)).is_empty());
+        assert!(!t.update(&gone, t0 + Duration::from_secs(70)).is_empty());
     }
 
     #[test]
     fn a_fault_must_last_the_confirm_time() {
-        let mut t = FaultTracker::new(Duration::from_secs(10));
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
         let t0 = Instant::now();
         let poll = |ring3: Option<PllStatus>| {
             vec![
@@ -312,7 +420,7 @@ mod tests {
     /// on 2026-11-10 for what was a board error; the reason names the bits.
     #[test]
     fn a_dig2_board_error_is_named_not_called_a_clock_loss() {
-        let mut t = FaultTracker::new(Duration::from_secs(10));
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
         let t0 = Instant::now();
         let mut vx = source("VX2730", RUN, Some(PllStatus::Unlocked));
         if let Some(ref mut m) = vx.metrics {
@@ -326,7 +434,7 @@ mod tests {
         );
         // DIG1 has no bits to name: still the clock.
         let v1725 = source("Ring3", RUN, Some(PllStatus::Unlocked));
-        let mut t = FaultTracker::new(Duration::from_secs(10));
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
         assert!(t.update(std::slice::from_ref(&v1725), t0).is_empty());
         let c = t.update(std::slice::from_ref(&v1725), t0 + Duration::from_secs(10));
         assert_eq!(describe(&c), "Ring3: clock lost (PLL not locked) for 10 s");
@@ -335,7 +443,7 @@ mod tests {
     #[test]
     fn a_recovered_source_starts_again_from_zero() {
         // The DIG1 sticky flag: one FALSE, then TRUE again.
-        let mut t = FaultTracker::new(Duration::from_secs(10));
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
         let t0 = Instant::now();
         t.update(&[source("A", RUN, Some(PllStatus::Unlocked))], t0);
         t.update(
@@ -358,7 +466,7 @@ mod tests {
 
     #[test]
     fn several_failing_sources_are_all_named() {
-        let mut t = FaultTracker::new(Duration::from_secs(10));
+        let mut t = FaultTracker::new(Duration::from_secs(10), Duration::from_secs(30));
         let t0 = Instant::now();
         let poll = vec![
             source("dE-Sector", ComponentState::Error, None),
