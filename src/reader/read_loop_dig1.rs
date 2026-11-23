@@ -46,6 +46,59 @@ fn warn_if_couple_arbiter_active(dig_config: &DigitizerConfig, time_step_ns: f64
     );
 }
 
+/// Periodic forced flush of the DIG1 aggregates while running.
+///
+/// Why: a DIG1 board holds each couple's events until its aggregate is full
+/// (`eventaggr`, 1023 here) or flushed (UM4380 rev6 p.11 / p.14). The
+/// library's autoflush only fires when the board has nothing else to send, so
+/// on a busy board a slow couple waits for 1023 events: pf-qaq DAQ_Test run 16
+/// (2026-11-21), V1730 mod3 with one channel at 20 kHz — ch4 at 780 Hz came up
+/// to 1.22 s behind the newest hit, past thgem_sink's 1 s horizon (180 hits
+/// missing from the .root; the .delila had them). A 10 Hz trigger channel on
+/// such a board would wait ~100 s. Flushing every [`Self::INTERVAL`] bounds
+/// the wait without shrinking the aggregates (memory depth and readout
+/// efficiency stay as they are).
+struct Dig1Flusher {
+    last: Instant,
+    failures: u64,
+    last_warn: Option<Instant>,
+}
+
+impl Dig1Flusher {
+    const INTERVAL: Duration = Duration::from_millis(100);
+    const WARN_EVERY: Duration = Duration::from_secs(10);
+
+    fn new(now: Instant) -> Self {
+        Self {
+            last: now,
+            failures: 0,
+            last_warn: None,
+        }
+    }
+
+    /// Whether a flush is due at `now`; if so, the next one is counted from `now`.
+    fn due(&mut self, now: Instant) -> bool {
+        if now.saturating_duration_since(self.last) < Self::INTERVAL {
+            return false;
+        }
+        self.last = now;
+        true
+    }
+
+    /// Count a failed flush; true when it should be logged (first failure,
+    /// then at most once per [`Self::WARN_EVERY`]).
+    fn failed(&mut self, now: Instant) -> bool {
+        self.failures += 1;
+        let log = self
+            .last_warn
+            .is_none_or(|t| now.saturating_duration_since(t) >= Self::WARN_EVERY);
+        if log {
+            self.last_warn = Some(now);
+        }
+        log
+    }
+}
+
 /// ReadLoop task for the RAW endpoint (DIG1/DIG2 RAW format) — runs in
 /// `spawn_blocking`. Reads raw bytes from CAEN digitizer and forwards them
 /// to the decode pipeline. Uses lazy connection: if the digitizer is not
@@ -89,6 +142,9 @@ pub(crate) fn run(
     let mut last_dig2_poll = Instant::now();
     let mut last_dig2_warn = Instant::now();
     const DIG2_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+    // DIG1 aggregate flush while running (see Dig1Flusher).
+    let mut dig1_flush = Dig1Flusher::new(Instant::now());
 
     // Clock (PLL) health (TODO 85), polled in every state below.
     let mut pll_poller = pll::PllPoller::default();
@@ -570,6 +626,26 @@ pub(crate) fn run(
             std::thread::sleep(Duration::from_millis(100));
         }
 
+        // DIG1: close the partial aggregates so a slow couple on a busy board
+        // is not held back until it has `eventaggr` events (see Dig1Flusher).
+        if config.firmware.is_dig1() && dig1_flush.due(Instant::now()) {
+            if let Some(ref conn) = connection {
+                if conn.hw_running {
+                    if let Err(e) = conn.handle.set_value(devtree::par::MANUAL_FLUSH, "1") {
+                        if dig1_flush.failed(Instant::now()) {
+                            warn!(
+                                error = %e,
+                                code = e.code,
+                                failures = dig1_flush.failures,
+                                "DIG1 aggregate flush failed: events of a slow channel couple \
+                                 may arrive late (up to eventaggr events behind)"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // DIG2: Periodic trigger counter polling (separate borrow scope)
         if !config.firmware.is_dig1() && last_dig2_poll.elapsed() >= DIG2_POLL_INTERVAL {
             if let Some(ref conn) = connection {
@@ -589,4 +665,52 @@ pub(crate) fn run(
     }
     info!("ReadLoop (RAW) stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dig1_flush_is_due_every_interval() {
+        let t0 = Instant::now();
+        let mut f = Dig1Flusher::new(t0);
+        assert!(!f.due(t0));
+        assert!(!f.due(t0 + Duration::from_millis(99)));
+        assert!(f.due(t0 + Dig1Flusher::INTERVAL));
+        // counted from the flush just done
+        assert!(!f.due(t0 + Dig1Flusher::INTERVAL + Duration::from_millis(50)));
+        assert!(f.due(t0 + Dig1Flusher::INTERVAL * 2));
+    }
+
+    #[test]
+    fn dig1_flush_failures_are_counted_and_logged_at_most_every_10_s() {
+        let t0 = Instant::now();
+        let mut f = Dig1Flusher::new(t0);
+        assert!(f.failed(t0), "the first failure is logged");
+        assert!(!f.failed(t0 + Duration::from_secs(1)));
+        assert!(!f.failed(t0 + Duration::from_millis(9_900)));
+        assert!(f.failed(t0 + Dig1Flusher::WARN_EVERY));
+        assert_eq!(f.failures, 4);
+    }
+
+    /// The flush path must be a real, write-only, settable-in-run DIG1 parameter
+    /// of both firmwares this loop drives (DevTree dumps from the DT5730B).
+    #[test]
+    fn manual_flush_is_a_run_time_parameter_of_psd1_and_pha1() {
+        let name = devtree::par::MANUAL_FLUSH
+            .strip_prefix("/par/")
+            .expect("a board parameter");
+        for dump in [
+            "docs/devtree_examples/dt5730b_psd1_sn990.json",
+            "docs/devtree_examples/dt5730b_pha1_sn990.json",
+        ] {
+            let text = std::fs::read_to_string(dump).expect("DevTree dump");
+            let tree: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+            let par = &tree["par"][name];
+            assert_eq!(par["accessmode"]["value"], "WRITE_ONLY", "{dump}");
+            assert_eq!(par["setinrun"]["value"], "true", "{dump}");
+            assert_eq!(par["maxvalue"]["value"], "1", "{dump}");
+        }
+    }
 }

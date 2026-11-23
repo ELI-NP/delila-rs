@@ -101,6 +101,12 @@ pub mod par {
     /// events per readout, lower interrupt rate.
     pub const EVENT_AGGR: &str = "/par/eventaggr";
 
+    /// Write `"1"` to close the current incomplete aggregate of every couple
+    /// (DIG1 only, WRITE_ONLY, settable in run). An aggregate cannot be read
+    /// until it holds `eventaggr` events or is flushed (UM4380 rev6 p.11
+    /// "Number of Events per Aggregate", p.14 "Forced Data Flush" 0x8040).
+    pub const MANUAL_FLUSH: &str = "/par/manual_flush";
+
     /// Per-board extras-word select (DIG1 only). Encodes which extras
     /// fields ride alongside the event word (timestamp_ext, fine_ts, etc.).
     pub const EXTRAS: &str = "/par/extras";
