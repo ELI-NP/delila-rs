@@ -23,6 +23,11 @@ python3 tools/grafana/gen_dashboards.py --config config.toml
   experiment's Grafana folder (`foldersFromFilesStructure: true`). Generated
   files are gitignored (`json/*/rates_*.json`): generate on each host, never
   commit. Grafana loads new or changed files **within ~10 s, no restart**.
+  Not always: on pf-qaq (Grafana 12.4.2, 2026-11-17) a **new experiment folder**
+  (`json/11B_208Pb/`) had not appeared after 4 min. Ask Grafana to re-read the
+  files (admin login):
+  `curl -u admin:<admin password> -X POST http://localhost:3000/api/admin/provisioning/dashboards/reload`
+  (on the host: the password is `GRAFANA_ADMIN_PASSWORD` in `docker/.env`).
 - Without a map file every channel is shown as `M<module>/Ch<channel>`.
 
 ## Rename channels

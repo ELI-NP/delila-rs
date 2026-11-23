@@ -1,0 +1,139 @@
+{
+  "digitizer_id": 3,
+  "name": "PSD1-V1730-ThGEM-m3",
+  "firmware": "PSD1",
+  "serial_number": "53",
+  "model": "VX1730B",
+  "num_channels": 16,
+  "is_master": false,
+  "board": {
+    "start_source": "START_MODE_S_IN",
+    "gpio_mode": "OUT_PROPAGATION_RUN",
+    "record_length": 1000,
+    "waveforms_enabled": false,
+    "vtrace_probe_0": "VPROBE_INPUT",
+    "vtrace_probe_1": "VPROBE_CFD",
+    "vtrace_probe_2": "VPROBE_GATE",
+    "vtrace_probe_3": "VPROBE_TRIGGER",
+    "io_level": "FPIOTYPE_NIM",
+    "ext_clock": "FALSE",
+    "start_delay": 0,
+    "extras_enabled": "TRUE",
+    "event_aggregation": 1023,
+    "coinc_trgout": 1024
+  },
+  "channel_defaults": {
+    "enabled": "True",
+    "polarity": "POLARITY_NEGATIVE",
+    "dc_offset": 20.0,
+    "baseline_avg": "BLINE_NSMEAN_1024",
+    "pre_trigger_ns": 256,
+    "input_dynamic": "INDYN_0_5_VPP",
+    "discriminator_mode": "DISCR_MODE_CFD",
+    "trigger_threshold": 60,
+    "cfd_delay_ns": 60,
+    "cfd_fraction": "CFD_FRACTLIST_50",
+    "cfd_interpolation_point": 0,
+    "trigger_holdoff_ns": 1024,
+    "input_smoothing": "CFD_SMOOTH_EXP_8",
+    "self_trigger": "TRUE",
+    "global_trigger_gen": "FALSE",
+    "trigger_out_propagate": "FALSE",
+    "energy_coarse_gain": "CHARGESENS_10_FC_LSB_VPP",
+    "gate_long_ns": 256,
+    "gate_short_ns": 45,
+    "gate_pre_ns": 160,
+    "charge_pedestal_en": "TRUE",
+    "coincidence_mode": "TRIGGER_MODE_NORMAL",
+    "ch_veto_source": "VETO_SRC_DISABLED",
+    "pileup_rejection": "FALSE",
+    "trigger_latency": "TRG_LATENCY_MODE_NONE"
+  },
+  "channel_overrides": {
+    "15": {
+      "input_dynamic": "INDYN_2_0_VPP",
+      "energy_coarse_gain": "CHARGESENS_160_FC_LSB_VPP"
+    },
+    "10": {
+      "trigger_threshold": 4000
+    },
+    "12": {
+      "trigger_threshold": 4000
+    },
+    "5": {
+      "polarity": "POLARITY_POSITIVE",
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_75",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "gate_short_ns": 30,
+      "gate_pre_ns": 200
+    },
+    "8": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP",
+      "gate_pre_ns": 180
+    },
+    "13": {
+      "trigger_threshold": 4000,
+      "cfd_delay_ns": 6
+    },
+    "0": {
+      "polarity": "POLARITY_POSITIVE",
+      "cfd_delay_ns": 90,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_1",
+      "gate_short_ns": 30,
+      "gate_pre_ns": 200
+    },
+    "4": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP"
+    },
+    "6": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP"
+    },
+    "11": {
+      "trigger_threshold": 4000
+    },
+    "14": {
+      "trigger_threshold": 4000
+    },
+    "1": {
+      "trigger_threshold": 80,
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP"
+    },
+    "9": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP"
+    },
+    "7": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP"
+    },
+    "3": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP",
+      "gate_pre_ns": 180
+    },
+    "2": {
+      "trigger_threshold": 80,
+      "cfd_fraction": "CFD_FRACTLIST_25",
+      "input_smoothing": "CFD_SMOOTH_EXP_16",
+      "energy_coarse_gain": "CHARGESENS_40_FC_LSB_VPP"
+    }
+  }
+}

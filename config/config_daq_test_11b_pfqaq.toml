@@ -1,0 +1,205 @@
+# DAQ_Test on the 11B_208Pb hardware (2026-11-20, TODO 88 §5.5): board-delay
+# calibration runs with the pulser. A copy of config_11B_208Pb_pfqaq.toml with
+# experiment_name = DAQ_Test, output /data/DAQ_Test, and no InfluxDB / eLog (as the
+# 11-10 config_daq_test_pfqaq.toml): test runs stay out of the 11B run numbers,
+# files, archive, side3 pull and logbook. The digitizer JSONs are the 11B ones.
+# thgem_sink names its .root from the Operator's experiment_name, so a per-run
+# exp_name override is NOT enough (it would take the 11B file names).
+# DELILA DAQ Configuration - 11B_208Pb experiment @ pf-qaq (daq@192.168.144.142)
+#
+# TODO 88. Final cabling (user, 2026-11-20; names as config/channel_map_11B_208Pb.txt).
+# Five boards:
+#   module 0 : VX2730 DPP-PSD (master)   beam/100 ch0, Gamma1-6 + Gamma0 ch1-7, Neutron Wall ch8-31
+#   module 1 : V1730 DPP-PSD             ThGEM D1-D3 (ch0-4, 5-9, 10-14), ch15 = beam/1000
+#   module 2 : V1730 DPP-PSD             ThGEM D4-D6, ch15 = beam/1000
+#   module 3 : V1730 DPP-PSD             ThGEM D7-D8 (ch0-9; ch10-14 disabled), ch15 = beam/1000
+#   module 4 : V1725 DPP-PHA             Si-L ch4, Si-R ch8 (beam monitors), ch15 = PB-5 tail pulse
+# (user 2026-11-17: V1730 if available, else V1725 with DPP-PSD.) One ThGEM's five
+# channels stay on one board: x and y are then same-board time differences.
+# The same numbers are used by config/channel_map_11B_208Pb.txt (Grafana, thgem_sink,
+# offline) and config/event_def_11B_208Pb.json - change them together (thgem_sink
+# warns when the map and the event definition name different ThGEM triggers).
+#
+# --- VX2730 ---------------------------------------------------------------
+# Direct 1 GbE on eno1 (172.18.4.50/22) <-> board 172.18.4.57. Its JSON is a copy
+# of N_Wall's as tuned on pf-qaq on 2026-11-17 (N_Wall keeps its own).
+#
+# --- V1730 x3 on the A3818 ---------------------------------------------------
+# The JSONs start from October's ThGEM tuning of SN66 (config/digitizers/
+# thgem_v1730_psd1_0.json on pf-qaq): trigger channels as October's ThGEM1 trigger
+# (ch1), arms as its XL / XR / YU / YD (ch2, ch3, ch5, ch4). The ThGEMs themselves
+# are new (user), so expect to retune. ch15 = pulser, POSITIVE.
+# Identify a board with the DAQ STOPPED (board access is exclusive):
+#   LD_LIBRARY_PATH=/opt/delila-caen/lib caen-toolbox dig1 check -c OPTICAL_LINK -l <link> -n <node>
+# and copy the serial into the board's JSON ("serial_number", bookkeeping only).
+# A reader whose board cannot be opened makes Configure fail for the WHOLE DAQ:
+# comment out the blocks of boards that are not connected yet - the WHOLE block,
+# including its [[network.sources]] line (2026-11-16: one left uncommented line
+# stopped every component).
+#
+# --- Clock and start -------------------------------------------------------
+# As N_Wall: VX2730 TRG-OUT (Run) -> mod1 S-IN, mod1 TRG-OUT -> mod2 S-IN, ...;
+# common clock. V1730: START_MODE_S_IN, gpio_mode = OUT_PROPAGATION_RUN (on N_Wall
+# OUT_PROPAGATION_SYNCIN moved boards by 16 ns in half of the runs, Run kept them
+# within 0.03 ns). start_delay = 0 until the setup pulser run (TODO 88 §4.1).
+# A board in S_IN mode without the Run signal reports Running with ZERO events -
+# watch the per-board rates after every Start.
+#
+# Use:  ln -sfn config/config_11B_208Pb_pfqaq.toml config.toml && ./scripts/start_daq.sh
+#   (config.toml is a symlink - re-point it, never cp onto it. The Operator
+#    reads config.toml only at startup.)
+# Back to N_Wall: ln -sfn config/config_nwall_pfqaq.toml config.toml
+# thgem_sink: tools/root_sink/thgem/README.md (installed in ~/.local/bin).
+
+[operator]
+# Runs are numbered per experiment_name (DAQ_Test had runs 1-2 on 2026-11-10).
+experiment_name = "DAQ_Test"
+port = 9091
+# Drain-first stops may take minutes to write the queue (TODO 84).
+drain_stop_timeout_secs = 1800
+
+# Stop the run when the input rate is more than the recording path can write
+# (TODO 84): see config_nwall_pfqaq.toml.
+[operator.backlog_autostop]
+poll_interval_secs = 2
+
+# No [operator.influxdb] / [operator.elog]: test runs stay out of Grafana and the eLog.
+
+# Port auto-allocation: data = 7000 + id, command = 7100 + id
+
+[network]
+
+# --- module 0: VX2730 DPP-PSD, beam / gamma / Neutron Wall (master) ---
+[[network.sources]]
+id = 0
+name = "PSD2-VX2730"
+type = "psd2"
+digitizer_url = "dig2://172.18.4.57"
+config_file = "config/digitizers/11B_208Pb_vx2730_psd2_0.json"
+pipeline_order = 1
+
+# --- modules 1-3: V1730 DPP-PSD (500 MS/s -> 2 ns), ThGEM ---
+# Read on pf-qaq 2026-11-18 (caen_info): A3818 link 0 node 0 = VX1730B SN69,
+# link 1 node 0 = SN59, link 2 node 0 = SN53, all DPP-PSD. Link 2 node 1 is the
+# V1725S SN517 (role not decided yet; it failed to open with CAEN -6, reset timeout).
+[[network.sources]]
+id = 1
+name = "PSD1-V1730-ThGEM1-3"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=0&conet_node=0"
+config_file = "config/digitizers/11B_208Pb_v1730_psd1_1.json"
+# adc_min (all three V1730, user 2026-11-21): the Reader drops hits with Qlong < 3500.
+# ThGEM noise (the source-rotation motor, ~28 kHz common-mode bursts) sits at the
+# charge pedestal (~2000), real pulses >= ~4000: run 25 (arm threshold 100) had
+# 81 M hits < 2500, 115 in 3000-3500, 44 in 3500-4000, 22.6 k >= 4000. Dropped hits
+# are NOT in the .delila (counted in the Reader log). ch15 (beam 1/1000) must give
+# Qlong >= 3500: set its charge sensitivity accordingly (user). TODO 90 §4.3.
+adc_min = 3500
+pipeline_order = 1
+time_step_ns = 2.0
+
+[[network.sources]]
+id = 2
+name = "PSD1-V1730-ThGEM4-6"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=1&conet_node=0"
+config_file = "config/digitizers/11B_208Pb_v1730_psd1_2.json"
+adc_min = 3500
+pipeline_order = 1
+time_step_ns = 2.0
+
+[[network.sources]]
+id = 3
+name = "PSD1-V1730-ThGEM7-8"
+type = "psd1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=0"
+config_file = "config/digitizers/11B_208Pb_v1730_psd1_3.json"
+adc_min = 3500
+pipeline_order = 1
+time_step_ns = 2.0
+
+# --- module 4: V1725S SN517 DPP-PHA (250 MS/s -> 4 ns), two small Si beam monitors ---
+# (user, 2026-11-18: near the beam axis, as a beam monitor). A3818 link 2 node 1.
+# Enabled 2026-11-20 once its clock cable was in (before that the open failed
+# with CAEN -6, reset timeout: no CLK-IN = no PLL lock).
+# Si-L on ch4, Si-R on ch8 (final cabling, user 2026-11-20; different couples: a couple shares one buffer).
+# No LOGIC pulser on this PHA board (user: a PHA board can trigger on a logic pulse,
+# but that is not guaranteed). Instead ch15 gets a detector-like tail pulse from a
+# BNC NIM pulser triggered by the same TTL pulser (user, 2026-11-18). Set it to
+# decay 50 us and negative: then ch15 uses the Si pole-zero (trap_pole_zero 50 us).
+[[network.sources]]
+id = 4
+name = "PHA1-V1725-SiMon"
+type = "pha1"
+digitizer_url = "dig1://caen.internal/optical_link?link_num=2&conet_node=1"
+config_file = "config/digitizers/11B_208Pb_v1725_pha1_4.json"
+pipeline_order = 1
+time_step_ns = 4.0
+
+# --- Pipeline components ---
+# [network.merger] has no explicit `subscribe`: it is derived from the source list.
+
+[network.merger]
+publish = "tcp://*:5557"
+command = "tcp://*:5570"
+pipeline_order = 2
+
+[network.recorder]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5580"
+# /data = nvme1n1 (XFS, 3.5 TB). archive_sync must copy /data/11B_208Pb to
+# /archive/DELILA_data/11B_208Pb: a THIRD crontab line, as for N_Wall (2026-11-03:
+# N_Wall was not archived until its line was added). TODO 88 §5.
+output_dir = "/data/DAQ_Test"
+pipeline_order = 3
+# Hard watermark for [operator.backlog_autostop] (TODO 84): 40 GB of queue. The
+# Recorder writes about 2.7 M ev/s here; a 6.5 MHz noise run reaches 40 GB in about
+# 10 min and takes about 8 min to write out. RAM is 251 GB and thgem_sink grows too.
+backlog_hard_limit_mb = 40000
+# Free-space warning at 300 GB (TODO 88 §5.9, user 2026-11-21): the 20 GB default
+# gave 27 s of warning at the 670 MB/s of DAQ_Test run 17 (dual-trace waveforms on
+# noise). The hard watermark (default 2 GB) still stops the run drain-first.
+disk_soft_free_mb = 300000
+
+[network.monitor]
+subscribe = "tcp://localhost:5557"
+command = "tcp://*:5590"
+http_port = 8081
+pipeline_order = 3
+# keV coefficients for the display (TODO 83): the VX2730 lines of N_Wall's table
+# (not its Si lines: modules 1-3 are ThGEM boards here). mv a new table into
+# place and press Reload, no restart needed.
+energy_calib_file = "config/energy_calib_11B_208Pb.txt"
+
+# --- thgem_sink: ROOT recorder + live 11B_208Pb monitor (JSROOT :8090) ---
+# TODO 88, tools/root_sink/thgem/README.md. Trees: hits (every channel, aligned
+# time) + events (trigger = any ThGEM trigger, L2 flag pair = two or more ThGEMs).
+[network.root_sink]
+program = "thgem_sink"
+subscribe = "tcp://localhost:5557"
+# Must match [network.recorder].output_dir (.delila and .root side by side).
+output_dir = "/data/DAQ_Test"
+http_port = 8090
+hits_tree = true
+event_def_file = "config/event_def_11B_208Pb.json"
+channel_map = "config/channel_map_11B_208Pb.txt"
+# DIG1 boards deliver up to ~100 ms out of time order (channel-pair aggregates;
+# ThGEM run 52 on this host: 82 ms) - the default 50 ms would drop hits as late.
+# 5 s (TODO 88 §5.9, user 2026-11-21): V1730 hits arrive 0.1-0.3 s late normally,
+# 1.1-1.3 s with waveforms at high rate, up to 3 s for a slow couple on a busy board
+# (runs 16/17: 4.8 M hits missing from the run 17 .root; the .delila had them).
+safe_horizon_ms = 5000
+# Uncompressed ROOT (user, 2026-11-07): /archive is ZFS with its own compression, and
+# ZSTD-5 costs the sink's writer CPU at high rate (TODO 84). The sink's default is 505.
+compression = 0
+autosave_sec = 30
+workers = 3
+# XY centres once measured (TODO 88 §4.2): delayline_offsets_map() in
+# tools/root_sink/thgem/delayline_offsets.C writes this table from a source/beam run.
+# time_calib_file = "config/time_settings_11B_208Pb.json"
+# The same table as [network.monitor]: adds /hits/energy_keV_m<M>.
+energy_calib_file = "config/energy_calib_11B_208Pb.txt"
+# thgem_delay_ns = 0.0      # ThGEM trigger minus its bunch: picks the bunch of an event
+# arm_window_ns = 1000      # an arm = nearest hit to its ThGEM's trigger within +-this
+# rf_period_ns = 199.980    # nominal; measured per run from the beam channel
+# rf_t0_ns = 0.0            # shift putting the LS gamma flash at L/c
