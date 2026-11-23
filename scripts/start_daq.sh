@@ -23,9 +23,14 @@ done
 
 # Log level configuration
 # For specific component: RUST_LOG=info,delila_rs::merger=debug ./scripts/start_daq.sh
-# Force info level unless explicitly set before script runs
+# Force info level unless explicitly set before script runs.
+# psd1_pha1_common=error: its only two WARNs are the DIG1 rollover-tracker
+# underflow, one line per board aggregate from ~34 s into every run (tracker
+# width, timestamps not affected, TODO 84 §7). At high trigger rates they wrote
+# 1.5 TB of reader logs in 10 h (pf-qaq, 2026-11-22). Drop this filter once the
+# tracker is fixed.
 if [ -z "$RUST_LOG_SET" ]; then
-    export RUST_LOG="info"
+    export RUST_LOG="info,delila_rs::reader::decoder::psd1_pha1_common=error"
 fi
 export RUST_LOG_SET=1
 
@@ -46,10 +51,10 @@ for proc in operator monitor recorder merger reader emulator data_sink online_ev
         KILLED=true
     fi
 done
-# root_sink / nwall_sink are script-managed but live outside target/release
-# (deployed to ~/.local/bin / PATH), so match the exact process name — never a
-# broad -f.
-for sink in root_sink nwall_sink; do
+# root_sink / nwall_sink / thgem_sink are script-managed but live outside
+# target/release (deployed to ~/.local/bin / PATH), so match the exact process
+# name — never a broad -f.
+for sink in root_sink nwall_sink thgem_sink; do
     if pkill -x "$sink" 2>/dev/null; then
         KILLED=true
     fi
@@ -67,6 +72,7 @@ if [ "$KILLED" = true ]; then
         done
         pgrep -x root_sink &>/dev/null && STILL_RUNNING=true
         pgrep -x nwall_sink &>/dev/null && STILL_RUNNING=true
+        pgrep -x thgem_sink &>/dev/null && STILL_RUNNING=true
         [ "$STILL_RUNNING" = false ] && break
         sleep 0.5
     done
@@ -76,6 +82,7 @@ if [ "$KILLED" = true ]; then
     done
     pkill -9 -x root_sink 2>/dev/null
     pkill -9 -x nwall_sink 2>/dev/null
+    pkill -9 -x thgem_sink 2>/dev/null
     sleep 0.5  # brief wait for kernel to release sockets after SIGKILL
 fi
 
@@ -340,7 +347,13 @@ for id in $SOURCE_IDS; do
         COMP_PIDS+=($!)
     else
         echo "  Starting reader (source_id=$id) [type=$src_type]..."
-        $BINARY_DIR/reader --config "$CONFIG_FILE" --source-id "$id" > "$LOG_DIR/reader_$id.log" 2>&1 &
+        # Core dumps for readers only (TODO 88 §5.13: segfaults inside the CAEN
+        # library left nothing to debug). On Ubuntu apport writes them to
+        # /var/lib/apport/coredump/. The subshell keeps the limit off the other
+        # components (a Recorder core could hold its whole 40 GB queue); exec
+        # keeps $! = the reader's PID.
+        ( ulimit -c unlimited 2>/dev/null
+          exec $BINARY_DIR/reader --config "$CONFIG_FILE" --source-id "$id" ) > "$LOG_DIR/reader_$id.log" 2>&1 &
         COMP_NAMES+=("Reader $id ($src_type)")
         COMP_PIDS+=($!)
     fi
@@ -383,19 +396,21 @@ ROOT_SINK_LAUNCHED=false
 ROOT_SINK_HTTP_PORT=""
 if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
     # Which sink program (TODO 79 §5.3): one per experiment. root_sink (the
-    # default: ThGEM, ELIADE) or nwall_sink (N_Wall).
+    # default: ELIADE, October's ThGEM), nwall_sink (N_Wall) or thgem_sink
+    # (11B_208Pb, TODO 88).
     RS_PROGRAM=$(get_root_sink_key program)
     RS_PROGRAM=${RS_PROGRAM:-root_sink}
     case "$RS_PROGRAM" in
         root_sink)  RS_SRC_DIR=standard ;;
         nwall_sink) RS_SRC_DIR=nwall ;;
+        thgem_sink) RS_SRC_DIR=thgem ;;
         *)          RS_SRC_DIR="" ;;
     esac
     # Binary search order: ROOT_SINK_BIN env override > PATH > ~/.local/bin >
     # tools/root_sink/<dir>. An explicit env override that is not executable is caught
     # below rather than silently falling through.
     if [ -z "$RS_SRC_DIR" ]; then
-        echo -e "  ${YELLOW}[network.root_sink] program = \"$RS_PROGRAM\" is not root_sink or nwall_sink — skipping the sink${NC}"
+        echo -e "  ${YELLOW}[network.root_sink] program = \"$RS_PROGRAM\" is not root_sink, nwall_sink or thgem_sink — skipping the sink${NC}"
         ROOT_SINK_BIN=""
     elif [ -z "$ROOT_SINK_BIN" ]; then
         if command -v "$RS_PROGRAM" &>/dev/null; then
@@ -434,6 +449,7 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg dt_max       --dt-max
         rs_add_arg autosave_sec --autosave-sec
         rs_add_arg workers      --workers
+        rs_add_arg sort_threads --sort-threads
         rs_add_arg chunk_span_ms --chunk-span-ms
         rs_add_arg safe_horizon_ms --safe-horizon-ms
         # nwall_sink only (TODO 84): ROOT compression, 0 = uncompressed.
@@ -446,11 +462,15 @@ if grep -q "^\[network\.root_sink\]" "$CONFIG_FILE" 2>/dev/null; then
         rs_add_arg time_calib_file --time-calib
         rs_add_arg energy_calib_file --energy-calib
         rs_add_arg event_def_file  --event-def
-        # nwall_sink only (TODO 79): channel roles and the bunch clock.
+        # nwall_sink and thgem_sink (TODO 79, 88): channel roles and the bunch clock.
         rs_add_arg channel_map  --channel-map
         rs_add_arg rf_period_ns --rf-period-ns
         rs_add_arg rf_t0_ns     --rf-t0-ns
         rs_add_arg si_delay_ns  --si-delay-ns
+        rs_add_arg gamma_min_adc --gamma-min-adc
+        # thgem_sink only (TODO 88).
+        rs_add_arg thgem_delay_ns --thgem-delay-ns
+        rs_add_arg arm_window_ns  --arm-window-ns
         # hits_tree is a plain flag (no value), so rs_add_arg would pass
         # "--hits-tree true". The per-hit tree is opt-in since TODO 71, and
         # root_sink refuses to start when no tree at all is selected.
@@ -476,6 +496,11 @@ fi
 
 # Start operator (Web UI)
 echo "  Starting operator (Web UI)..."
+# Operator fd limit = the hard limit (pf-qaq: 1048576; soft default 1024). While a
+# reader was dead, every status poll leaked a ZMQ socket; at 1024 fds the UI and REST
+# stopped answering (TODO 88 §5.11, §5.13). The leak itself is fixed (LINGER 0 in
+# src/operator/client.rs); this stays as a margin.
+ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
 if [ "$MONGO_AVAILABLE" = true ]; then
     $BINARY_DIR/operator --config "$CONFIG_FILE" \
         --mongodb-uri "$MONGODB_URI" \
@@ -486,8 +511,9 @@ else
     $BINARY_DIR/operator --config "$CONFIG_FILE" > "$LOG_DIR/operator.log" 2>&1 &
     echo "    (without MongoDB)"
 fi
+OPERATOR_PID=$!
 COMP_NAMES+=("Operator")
-COMP_PIDS+=($!)
+COMP_PIDS+=("$OPERATOR_PID")
 
 echo ""
 
@@ -497,7 +523,16 @@ echo -n "  Waiting for Operator API (port $OPERATOR_PORT)..."
 MAX_RETRIES=15
 HEALTH_OK=false
 STATUS_JSON=""
+OPERATOR_EXITED=false
 for i in $(seq 1 $MAX_RETRIES); do
+    # The Operator exits at once on a missing or invalid config file: say why
+    # instead of waiting out the retries.
+    if ! kill -0 "$OPERATOR_PID" 2>/dev/null; then
+        OPERATOR_EXITED=true
+        echo -e " ${RED}operator exited${NC}"
+        tail -n 20 "$LOG_DIR/operator.log" | sed 's/^/    /'
+        break
+    fi
     STATUS_JSON=$(curl -s --max-time 2 "http://localhost:${OPERATOR_PORT}/api/status" 2>/dev/null)
     if [ $? -eq 0 ] && [ -n "$STATUS_JSON" ]; then
         HEALTH_OK=true
@@ -508,7 +543,7 @@ for i in $(seq 1 $MAX_RETRIES); do
     sleep 1
 done
 
-if [ "$HEALTH_OK" = false ]; then
+if [ "$HEALTH_OK" = false ] && [ "$OPERATOR_EXITED" = false ]; then
     echo -e " ${RED}timeout${NC}"
     echo -e "  ${YELLOW}Operator did not respond within ${MAX_RETRIES}s. Check $LOG_DIR/operator.log${NC}"
 fi
