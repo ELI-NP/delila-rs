@@ -668,8 +668,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
             let ty = meta.ty.clone().unwrap_or_else(|| "number".to_string());
-            // Board registers carry the *raw* address from the FW because
-            // there's no per-channel page offset to factor out.
+            // Board registers keep the *raw word address* from the FW here
+            // (no per-channel page offset to factor out). The Rust emitter
+            // converts it to a byte address (* 4); the TS tooltip shows the
+            // word address so it matches RegisterFile.json.
             out.push(ResolvedReg {
                 field: snake_case(&name),
                 word_offset: r.address,
@@ -1001,18 +1003,23 @@ fn emit_rust_registers(
         out.push_str("\n// ---- Board-level (global) register byte addresses ----\n//\n");
         out.push_str(
             "// These registers live outside the per-channel `page_amax_energy_*`\n\
-             // family — they're firmware-wide toggles. Byte addresses are taken\n\
-             // verbatim from RegisterFile.json (no PAGE_BASE math).\n\n",
+             // family (top page, `\"Path\": \"/<NAME>\"`) — firmware-wide settings.\n\
+             // Byte address = RegisterFile.json word address * 4 (no PAGE_BASE\n\
+             // math), the same word→byte rule as the channel pages.\n\n",
         );
         for r in board_resolved {
             out.push_str(&format!(
-                "/// {}-bit {} (FW reg `{}`)\n",
-                r.bits, r.label, r.fw_name
+                "/// {}-bit {} (FW reg `{}`, word address 0x{:X})\n",
+                r.bits, r.label, r.fw_name, r.word_offset
             ));
+            // `word_offset` holds the raw RegisterFile.json WORD address for
+            // board registers. FELib SetUserRegister wants a BYTE address.
+            // Until 2026-11-24 the word address was emitted verbatim, so the
+            // write landed on a different register (word / 4).
             out.push_str(&format!(
                 "pub const BOARD_REG_{}: u32 = 0x{:X};\n",
                 r.field.to_uppercase(),
-                r.word_offset
+                r.word_offset * 4
             ));
         }
     }
@@ -1859,6 +1866,68 @@ mod tests {
         assert!(
             assert_broadcast_layout_matches(&rf.registers, l.page_base, l.broadcast_base).is_ok(),
             "17June broadcast/per-channel layout is consistent"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Board-level (top page) registers: `"Path": "/<NAME>"`.
+    // -----------------------------------------------------------------------
+
+    fn board_reg(fw_name: &str, word_addr: u32) -> ResolvedReg {
+        ResolvedReg {
+            fw_name: fw_name.to_string(),
+            field: snake_case(fw_name),
+            word_offset: word_addr,
+            bits: 4,
+            default: 0,
+            label: fw_name.to_string(),
+            category: "trigger".to_string(),
+            ty: "number".to_string(),
+            options: Vec::new(),
+            ui_max: 15,
+            unit: None,
+            ui_order: None,
+        }
+    }
+
+    #[test]
+    fn top_page_path_is_board_level() {
+        // Rebeca's 2026-11 FW: `"Path": "/SEL_0_ROI"` on the top page.
+        let keys = vec!["SEL_0_ROI".to_string(), "SEL_1_ROI".to_string()];
+        assert!(reg("/SEL_0_ROI").is_board_level(&keys));
+        assert!(reg("/SEL_1_ROI").is_board_level(&keys));
+        // A channel-page register never becomes board-level, even when its
+        // name contains a board key.
+        assert!(!reg("page_amax_energy_1_0/SEL_0_ROI").is_board_level(&keys));
+        assert!(!reg("/energy_ch0").is_board_level(&keys));
+    }
+
+    #[test]
+    fn board_register_is_emitted_as_byte_address() {
+        // RegisterFile.json addresses are WORD addresses for every register,
+        // top page included; FELib SetUserRegister takes a BYTE address
+        // (= word * 4), exactly as the per-channel path and amax_viewer do.
+        // Emitting the word address verbatim writes to a different register.
+        let board = vec![
+            board_reg("SEL_0_ROI", 0x4),
+            board_reg("ENABLE_ACQ", 0x80008),
+        ];
+        let out = emit_rust_registers(
+            &[],
+            &board,
+            0x800000,
+            0x40000,
+            0x800000,
+            32,
+            std::path::Path::new("RegisterFile.json"),
+        );
+        assert!(
+            out.contains("pub const BOARD_REG_SEL_0_ROI: u32 = 0x10;"),
+            "word 0x4 must become byte 0x10:\n{out}"
+        );
+        assert!(
+            out.contains("pub const BOARD_REG_ENABLE_ACQ: u32 = 0x200020;"),
+            "word 0x80008 must become byte 0x200020:\n{out}"
         );
     }
 }

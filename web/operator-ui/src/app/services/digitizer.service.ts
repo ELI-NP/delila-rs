@@ -476,23 +476,23 @@ export class DigitizerService {
 
   /**
    * Compress flat board-level values (keyed by `amax.board.<field>`) back
-   * into an `AMaxBoardConfig`. Returns `undefined` when every value matches
-   * the FW defaults so the wire format stays minimal (and legacy configs
-   * without an `amax_board` block round-trip cleanly).
+   * into an `AMaxBoardConfig`. Every board register the firmware declares is
+   * sent, defaults included: the Reader writes only the fields present, so
+   * leaving a default out would skip the write and the register would keep
+   * whatever it held before (the power-on value, or the previous non-default
+   * setting after the operator sets it back). Returns `undefined` only when
+   * the firmware declares no board registers, so configs for such firmware
+   * stay without an `amax_board` block.
    */
   compressBoardValues(values: Record<string, unknown>): AMaxBoardConfig | undefined {
+    if (AMAX_BOARD_DOTTED_KEYS.length === 0) return undefined;
     const out: Record<string, unknown> = {};
-    let hasNonDefault = false;
     for (const dotted of AMAX_BOARD_DOTTED_KEYS) {
       const field = boardField(dotted);
       const v = values[dotted];
-      if (v === undefined || v === null) continue;
-      out[field] = v;
-      if (v !== AMAX_BOARD_DEFAULTS[field]) {
-        hasNonDefault = true;
-      }
+      out[field] = v === undefined || v === null ? AMAX_BOARD_DEFAULTS[field] : v;
     }
-    return hasNonDefault ? (out as AMaxBoardConfig) : undefined;
+    return out as AMaxBoardConfig;
   }
 
   // ===========================================================================

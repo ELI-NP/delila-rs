@@ -103,6 +103,20 @@ warning: 2 register(s) in RegisterFile.json have no entry in fw_params.json (ski
 ### C. 新しいカテゴリ（タブ）を増やす
 `fw_params.json` の `category` に既存以外の名前（例 `debug`）を書くだけ。codegen が `AMAX_DEBUG_PARAMS` と `AMAX_PARAMS_BY_CATEGORY` を生成し、**Operator UI の Settings / Tune Up に新タブが自動で出る**（TS の手編集不要、タブ名は PascalCase で自動付与）。
 
+### D. トップページ（ボードレベル）のレジスタ
+RegisterFile.json の `"Path"` が `page_amax_energy_*` ではなく `"/SEL_0_ROI"` のように **`/` 直下**にあるレジスタは、チャンネルごとではなくボードに1つ。`params` ではなく **`board_params`** に書く（書式は `params` と同じ）：
+
+```json
+"board_params": {
+  "SEL_0_ROI": { "bits": 4, "default": 0, "label": "SEL_ROI_0", "type": "number" }
+}
+```
+
+- サマリの `N board-level` が増えていれば拾われている。
+- UI は **Settings → Board タブ → "Firmware Registers (board-level)"** に出る（`category` はボードレジスタでは使わない）。
+- 書き込みは Configure / Apply のとき、チャンネルページの後。UI は全ボードレジスタを毎回送る（デフォルト値も書く）。
+- アドレスは RegisterFile.json の word アドレス × 4（チャンネルページと同じ換算）。2026-11-24 より前の codegen は ×4 を忘れていて、別のレジスタに書いていた。
+
 ---
 
 ## 5. 安全装置
