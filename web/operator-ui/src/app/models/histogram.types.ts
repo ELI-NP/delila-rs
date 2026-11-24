@@ -570,6 +570,9 @@ export const DIGITAL_PROBE_TYPE_LABELS: Record<number, string> = {
   0x42: 'Energy Ready',
   0x43: 'Shaping Ready',
   0x44: 'Shaping Tracking',
+  0x45: 'AMax Trigger',
+  0x46: 'Trigger Acq',
+  0x47: 'Wave Enable (Trig Logic)',
 };
 
 // Latest waveform response

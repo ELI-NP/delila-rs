@@ -21,6 +21,16 @@ use super::common::{DataType, EventData, RawData, Waveform};
 /// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` Wire Merge U75
 /// (`OutputOrder = IN_0 LEFT (MSBs)`, IN_0=Trigger_out, IN_1=BL_Hold,
 /// IN_2=Energy_Dv, IN_3=shaping_dv, IN_4=shaping_track, IN_5..15=const 0).
+///
+/// 2026-11 FW (`AMAX_firmware32_caenlist_triggrer_logic_32channels_debug`,
+/// Magic 658635C0): the Wire Merge is now U124 and three more inputs are
+/// wired, IN_5=amax_trigg, IN_6=trigger_acq_oficial, IN_7=WAVE_enable (the
+/// trigger-logic output); IN_8..15 stay const 0 and the output order is
+/// still `IN_0 LEFT (MSBs)`. Source: the FW author's schematic screenshot
+/// (`FW/24noiembrie/wire_merge_U124.png`) and her written confirmation of
+/// IN_6 / IN_7 and the output order. Older FW drives these bits with 0, so
+/// the same decode serves both. Hardware check of the three new bits is
+/// still to be done (Tune Up on the AMax board).
 pub mod amax_probe_types {
     pub const ANA_RAW: u8 = 0x40;
     pub const ANA_TRAP: u8 = 0x41;
@@ -31,15 +41,20 @@ pub mod amax_probe_types {
     pub const DIG_ENERGY_DV: u8 = 0x42;
     pub const DIG_SHAPING_DV: u8 = 0x43;
     pub const DIG_SHAPING_TRACK: u8 = 0x44;
-    // Reserved namespace for future bits 10..0 of the digital lane:
-    // 0x45..0x4F. When Rebeca wires up additional digital signals
-    // (currently bits 10..0 are constant 0), assign them codes from
-    // this range and add the bit extraction in `decode_debug_waveform`.
-    // The carrier `Waveform` already has `digital_probe6..16` slots
-    // ready (struct expansion 2026-05-08 per Round 2 plan H.2); only
-    // the decoder + frontend label map (`DIGITAL_PROBE_TYPE_LABELS`
-    // in `web/operator-ui/src/app/models/histogram.types.ts`) need
-    // updating per new bit assignment.
+    /// IN_5 / bit 10, 2026-11 FW.
+    pub const DIG_AMAX_TRIGG: u8 = 0x45;
+    /// IN_6 / bit 9, 2026-11 FW (`trigger_acq_oficial`).
+    pub const DIG_TRIGGER_ACQ: u8 = 0x46;
+    /// IN_7 / bit 8, 2026-11 FW (`WAVE_enable`, trigger-logic output).
+    pub const DIG_WAVE_ENABLE: u8 = 0x47;
+    // Reserved namespace for bits 7..0 of the digital lane: 0x48..0x4F.
+    // When more digital signals are wired (bits 7..0 are constant 0 today),
+    // assign them codes from this range, add the bit extraction in
+    // `decode_debug_waveform` and in `unpack_amax_debug_waveform`
+    // (`src/reader/mod.rs`, the online path), and add the label to
+    // `DIGITAL_PROBE_TYPE_LABELS` in
+    // `web/operator-ui/src/app/models/histogram.types.ts`. The carrier
+    // `Waveform` already has `digital_probe9..16` slots.
 }
 
 /// AMax constants (64-bit words, Big Endian from digitizer)
@@ -468,14 +483,16 @@ impl AMaxDecoder {
     /// | 0-15  | 0    | raw waveform (signed 16-bit)  | `analog_probe1`   |
     /// | 16-31 | 1    | trapezoidal filter (signed)   | `analog_probe2`   |
     /// | 32-47 | 2    | triangle filter (signed)      | `analog_probe3`   |
-    /// | 48-63 | 3    | digital lane (16 wires)       | `digital_probe1..5` |
+    /// | 48-63 | 3    | digital lane (16 wires)       | `digital_probe1..8` |
     ///
-    /// Digital lane bit map (Wire Merge U75, `IN_0 LEFT (MSBs)`):
+    /// Digital lane bit map (Wire Merge U75 / U124, `IN_0 LEFT (MSBs)`):
     ///   bit15=Trigger_out, bit14=BL_Hold, bit13=Energy_Dv,
-    ///   bit12=shaping_dv, bit11=shaping_track, bits10..0 = const 0 (padding).
+    ///   bit12=shaping_dv, bit11=shaping_track,
+    ///   bit10=amax_trigg, bit9=trigger_acq_oficial, bit8=WAVE_enable
+    ///   (bits 10..8: 2026-11 FW; const 0 in older FW),
+    ///   bits7..0 = const 0 (padding).
     ///
-    /// Spec ref: `FW/debug/debug_config.pdf` (block diagram) +
-    /// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U75 connections.
+    /// Spec ref: see `amax_probe_types` above.
     fn decode_debug_waveform(&self, data: &[u8], word_index: &mut usize) -> Option<Waveform> {
         let total_words = data.len() / constants::WORD_SIZE;
 
@@ -505,6 +522,9 @@ impl AMaxDecoder {
         let mut digital_probe3 = Vec::with_capacity(wave_word_count); // Energy_Dv
         let mut digital_probe4 = Vec::with_capacity(wave_word_count); // shaping_dv
         let mut digital_probe5 = Vec::with_capacity(wave_word_count); // shaping_track
+        let mut digital_probe6 = Vec::with_capacity(wave_word_count); // amax_trigg
+        let mut digital_probe7 = Vec::with_capacity(wave_word_count); // trigger_acq_oficial
+        let mut digital_probe8 = Vec::with_capacity(wave_word_count); // WAVE_enable
 
         for _ in 0..wave_word_count {
             if *word_index >= total_words {
@@ -525,6 +545,9 @@ impl AMaxDecoder {
             digital_probe3.push(((dig >> 13) & 0x1) as u8);
             digital_probe4.push(((dig >> 12) & 0x1) as u8);
             digital_probe5.push(((dig >> 11) & 0x1) as u8);
+            digital_probe6.push(((dig >> 10) & 0x1) as u8);
+            digital_probe7.push(((dig >> 9) & 0x1) as u8);
+            digital_probe8.push(((dig >> 8) & 0x1) as u8);
         }
 
         Some(Waveform {
@@ -536,12 +559,12 @@ impl AMaxDecoder {
             digital_probe3,
             digital_probe4,
             digital_probe5,
-            // Slots 6..16 reserved for future digital-lane bit assignments
-            // (currently bits 10..0 are constant 0 in hardware — see
-            // `amax_probe_types` mod and Round 2 plan H.2).
-            digital_probe6: Vec::new(),
-            digital_probe7: Vec::new(),
-            digital_probe8: Vec::new(),
+            digital_probe6,
+            digital_probe7,
+            digital_probe8,
+            // Slots 9..16 reserved for future digital-lane bit assignments
+            // (bits 7..0 are constant 0 in hardware — see the
+            // `amax_probe_types` mod).
             digital_probe9: Vec::new(),
             digital_probe10: Vec::new(),
             digital_probe11: Vec::new(),
@@ -570,9 +593,9 @@ impl AMaxDecoder {
                 amax_probe_types::DIG_ENERGY_DV,
                 amax_probe_types::DIG_SHAPING_DV,
                 amax_probe_types::DIG_SHAPING_TRACK,
-                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
-                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
-                crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
+                amax_probe_types::DIG_AMAX_TRIGG,
+                amax_probe_types::DIG_TRIGGER_ACQ,
+                amax_probe_types::DIG_WAVE_ENABLE,
                 crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
                 crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
                 crate::reader::decoder::common::UNKNOWN_PROBE_TYPE,
@@ -878,7 +901,13 @@ mod tests {
                 amax_probe_types::ANA_TRIANGLE,
             ]
         );
-        // Slots 5..15 are reserved for future digital-lane bit assignments;
+        // 0xF800 leaves bits 10..8 clear: the three signals added in the
+        // 2026-11 FW decode as 0, they are not left empty.
+        assert_eq!(wf.digital_probe6, vec![0u8]);
+        assert_eq!(wf.digital_probe7, vec![0u8]);
+        assert_eq!(wf.digital_probe8, vec![0u8]);
+        assert!(wf.digital_probe9.is_empty());
+        // Slots 8..15 are reserved for future digital-lane bit assignments;
         // padded with UNKNOWN_PROBE_TYPE today.
         let mut expected = [crate::reader::decoder::common::UNKNOWN_PROBE_TYPE; 16];
         expected[0] = amax_probe_types::DIG_TRIGGER_OUT;
@@ -886,6 +915,9 @@ mod tests {
         expected[2] = amax_probe_types::DIG_ENERGY_DV;
         expected[3] = amax_probe_types::DIG_SHAPING_DV;
         expected[4] = amax_probe_types::DIG_SHAPING_TRACK;
+        expected[5] = amax_probe_types::DIG_AMAX_TRIGG;
+        expected[6] = amax_probe_types::DIG_TRIGGER_ACQ;
+        expected[7] = amax_probe_types::DIG_WAVE_ENABLE;
         assert_eq!(wf.digital_probe_type, expected);
     }
 
@@ -893,26 +925,29 @@ mod tests {
     fn decode_debug_waveform_bit_unpack_per_signal() {
         // Pin the digital lane bit-position mapping so future edits can't
         // silently swap probe slots: each sample lights exactly one bit in
-        // the 16-bit digital lane (bits 15..11), and we expect that bit to
+        // the 16-bit digital lane (bits 15..8), and we expect that bit to
         // land in the matching probe vec at the matching sample index.
         let decoder = AMaxDecoder::with_defaults();
 
         // Same header/data envelope as test 2.
         let word0: u64 = (1u64 << constants::SPECIAL_EVENT_SHIFT) | 0x0001_2345;
         let word1: u64 = (1u64 << constants::WAVEFORM_FLAG_SHIFT) | 42;
-        // 5 wave words (samples 0..4)
-        let wave_hdr: u64 = 0x0000_0000_0000_0005;
+        // 8 wave words (samples 0..7)
+        let wave_hdr: u64 = 0x0000_0000_0000_0008;
 
         // Build per-sample digital lanes. Lanes 0/1/2 = 0 (analog probes
         // checked elsewhere); lane 3 lights one bit per sample.
-        let lane3_per_sample: [u64; 5] = [
+        let lane3_per_sample: [u64; 8] = [
             0x8000, // sample 0: bit 15 → digital_probe1 (Trigger_out)
             0x4000, // sample 1: bit 14 → digital_probe2 (BL_Hold)
             0x2000, // sample 2: bit 13 → digital_probe3 (Energy_Dv)
             0x1000, // sample 3: bit 12 → digital_probe4 (shaping_dv)
             0x0800, // sample 4: bit 11 → digital_probe5 (shaping_track)
+            0x0400, // sample 5: bit 10 → digital_probe6 (amax_trigg)
+            0x0200, // sample 6: bit 9  → digital_probe7 (trigger_acq_oficial)
+            0x0100, // sample 7: bit 8  → digital_probe8 (WAVE_enable)
         ];
-        let mut wave_words = Vec::with_capacity(5);
+        let mut wave_words = Vec::with_capacity(8);
         for dig in lane3_per_sample.iter() {
             // No last_word bit on wave words (would alias into the same
             // bit-15 slot as Trigger_out and corrupt digital_probe1).
@@ -936,15 +971,20 @@ mod tests {
             .as_ref()
             .expect("SE=1 debug waveform expected");
 
-        assert_eq!(wf.digital_probe1, vec![1u8, 0, 0, 0, 0]); // Trigger_out @ s0
-        assert_eq!(wf.digital_probe2, vec![0u8, 1, 0, 0, 0]); // BL_Hold @ s1
-        assert_eq!(wf.digital_probe3, vec![0u8, 0, 1, 0, 0]); // Energy_Dv @ s2
-        assert_eq!(wf.digital_probe4, vec![0u8, 0, 0, 1, 0]); // shaping_dv @ s3
-        assert_eq!(wf.digital_probe5, vec![0u8, 0, 0, 0, 1]); // shaping_track @ s4
+        assert_eq!(wf.digital_probe1, vec![1u8, 0, 0, 0, 0, 0, 0, 0]); // Trigger_out @ s0
+        assert_eq!(wf.digital_probe2, vec![0u8, 1, 0, 0, 0, 0, 0, 0]); // BL_Hold @ s1
+        assert_eq!(wf.digital_probe3, vec![0u8, 0, 1, 0, 0, 0, 0, 0]); // Energy_Dv @ s2
+        assert_eq!(wf.digital_probe4, vec![0u8, 0, 0, 1, 0, 0, 0, 0]); // shaping_dv @ s3
+        assert_eq!(wf.digital_probe5, vec![0u8, 0, 0, 0, 1, 0, 0, 0]); // shaping_track @ s4
+        assert_eq!(wf.digital_probe6, vec![0u8, 0, 0, 0, 0, 1, 0, 0]); // amax_trigg @ s5
+        assert_eq!(wf.digital_probe7, vec![0u8, 0, 0, 0, 0, 0, 1, 0]); // trigger_acq_oficial @ s6
+        assert_eq!(wf.digital_probe8, vec![0u8, 0, 0, 0, 0, 0, 0, 1]); // WAVE_enable @ s7
+                                                                       // Bits 7..0 are still constant 0 in the FW: slots 9..16 stay empty.
+        assert!(wf.digital_probe9.is_empty());
 
         // Sanity: analog lanes were all zero in this test.
-        assert_eq!(wf.analog_probe1, vec![0i16; 5]);
-        assert_eq!(wf.analog_probe2, vec![0i16; 5]);
-        assert_eq!(wf.analog_probe3, vec![0i16; 5]);
+        assert_eq!(wf.analog_probe1, vec![0i16; 8]);
+        assert_eq!(wf.analog_probe2, vec![0i16; 8]);
+        assert_eq!(wf.analog_probe3, vec![0i16; 8]);
     }
 }

@@ -728,16 +728,21 @@ pub(crate) fn opendpp_to_event_data(
 /// | 0              | 0    | raw waveform (signed 16-bit ADC)       | `analog_probe1`   |
 /// | 1              | 1    | trapezoidal filter (signed)            | `analog_probe2`   |
 /// | 2              | 2    | triangle filter (signed)               | `analog_probe3`   |
-/// | 3              | 3    | digital lane (16 wires; bits 11..15)   | `digital_probe1..5` |
+/// | 3              | 3    | digital lane (16 wires; bits 8..15)    | `digital_probe1..8` |
 ///
 /// Digital lane bit map (from FW SCH `OutputOrder = IN_0 LEFT (MSBs)`,
-/// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U75):
+/// `FW/debug/AMAX_firmware32_channel_4input_caenlist.scf` U75; bits 10..8
+/// from the 2026-11 FW, Wire Merge U124 — spec ref in
+/// `decoder::amax::amax_probe_types`):
 ///   * bit 15 = Trigger_out → `digital_probe1`
 ///   * bit 14 = BL_Hold     → `digital_probe2`
 ///   * bit 13 = Energy_Dv   → `digital_probe3`
 ///   * bit 12 = shaping_dv  → `digital_probe4`
 ///   * bit 11 = shaping_track → `digital_probe5`
-///   * bits 10..0 = constant 0 (padding for future wires)
+///   * bit 10 = amax_trigg  → `digital_probe6` (const 0 before the 2026-11 FW)
+///   * bit 9  = trigger_acq_oficial → `digital_probe7` (same)
+///   * bit 8  = WAVE_enable → `digital_probe8` (same)
+///   * bits 7..0 = constant 0 (padding for future wires)
 ///
 /// Mirrors `AMaxDecoder::decode_debug_waveform` in
 /// [src/reader/decoder/amax.rs] (offline raw-bytes path) — keep them in
@@ -755,6 +760,9 @@ fn unpack_amax_debug_waveform(samples: &[u16]) -> decoder::common::Waveform {
     let mut digital_probe3 = Vec::with_capacity(n);
     let mut digital_probe4 = Vec::with_capacity(n);
     let mut digital_probe5 = Vec::with_capacity(n);
+    let mut digital_probe6 = Vec::with_capacity(n);
+    let mut digital_probe7 = Vec::with_capacity(n);
+    let mut digital_probe8 = Vec::with_capacity(n);
 
     let (chunks, _) = samples.as_chunks::<4>();
     for chunk in chunks {
@@ -767,6 +775,9 @@ fn unpack_amax_debug_waveform(samples: &[u16]) -> decoder::common::Waveform {
         digital_probe3.push(((dig >> 13) & 0x1) as u8);
         digital_probe4.push(((dig >> 12) & 0x1) as u8);
         digital_probe5.push(((dig >> 11) & 0x1) as u8);
+        digital_probe6.push(((dig >> 10) & 0x1) as u8);
+        digital_probe7.push(((dig >> 9) & 0x1) as u8);
+        digital_probe8.push(((dig >> 8) & 0x1) as u8);
     }
 
     Waveform {
@@ -778,12 +789,12 @@ fn unpack_amax_debug_waveform(samples: &[u16]) -> decoder::common::Waveform {
         digital_probe3,
         digital_probe4,
         digital_probe5,
-        // Slots 6..16 reserved for future digital-lane bit assignments
-        // (bits 10..0 are constant 0 in hardware today; see
-        // `decoder::common::amax_probe_types` for the reserved range).
-        digital_probe6: Vec::new(),
-        digital_probe7: Vec::new(),
-        digital_probe8: Vec::new(),
+        digital_probe6,
+        digital_probe7,
+        digital_probe8,
+        // Slots 9..16 reserved for future digital-lane bit assignments
+        // (bits 7..0 are constant 0 in hardware today; see
+        // `decoder::amax::amax_probe_types` for the reserved range).
         digital_probe9: Vec::new(),
         digital_probe10: Vec::new(),
         digital_probe11: Vec::new(),
@@ -811,9 +822,9 @@ fn unpack_amax_debug_waveform(samples: &[u16]) -> decoder::common::Waveform {
             amax_probe_types::DIG_ENERGY_DV,
             amax_probe_types::DIG_SHAPING_DV,
             amax_probe_types::DIG_SHAPING_TRACK,
-            UNKNOWN_PROBE_TYPE,
-            UNKNOWN_PROBE_TYPE,
-            UNKNOWN_PROBE_TYPE,
+            amax_probe_types::DIG_AMAX_TRIGG,
+            amax_probe_types::DIG_TRIGGER_ACQ,
+            amax_probe_types::DIG_WAVE_ENABLE,
             UNKNOWN_PROBE_TYPE,
             UNKNOWN_PROBE_TYPE,
             UNKNOWN_PROBE_TYPE,
@@ -3313,8 +3324,13 @@ mod tests {
         assert_eq!(wf.digital_probe4, vec![0u8, 1u8]);
         // shaping_track (bit 11): 1, 0
         assert_eq!(wf.digital_probe5, vec![1u8, 0u8]);
-        // Slots 6..16 stay empty in the current digital lane layout.
-        assert!(wf.digital_probe6.is_empty());
+        // Bits 10..8 (amax_trigg / trigger_acq_oficial / WAVE_enable, added
+        // in the 2026-11 FW) are clear in both samples: decoded as 0.
+        assert_eq!(wf.digital_probe6, vec![0u8, 0u8]);
+        assert_eq!(wf.digital_probe7, vec![0u8, 0u8]);
+        assert_eq!(wf.digital_probe8, vec![0u8, 0u8]);
+        // Bits 7..0 are constant 0 in the FW: slots 9..16 stay empty.
+        assert!(wf.digital_probe9.is_empty());
         // Debug-FW analog lanes are signed.
         assert!(wf.analog_probe1_is_signed);
         assert!(wf.analog_probe2_is_signed);
@@ -3340,6 +3356,42 @@ mod tests {
         assert_eq!(wf.digital_probe1, vec![1u8]);
         assert_eq!(wf.digital_probe2, vec![0u8]);
         assert_eq!(wf.digital_probe3, vec![1u8]);
+    }
+
+    /// Digital lane bits 10..8, added in the 2026-11 FW (Wire Merge U124:
+    /// IN_5 = amax_trigg, IN_6 = trigger_acq_oficial, IN_7 = WAVE_enable,
+    /// `IN_0 LEFT (MSBs)`). One sample per bit pins the slot mapping.
+    #[test]
+    fn opendpp_to_event_data_unpacks_digital_bits_10_to_8() {
+        use decoder::amax::amax_probe_types;
+
+        let mut evt = make_opendpp_event(Vec::new());
+        evt.channel = 0;
+        evt.waveform = Some(vec![
+            0u16, 0u16, 0u16, 0x0400u16, // sample 0: bit 10 = amax_trigg
+            0u16, 0u16, 0u16, 0x0200u16, // sample 1: bit 9  = trigger_acq_oficial
+            0u16, 0u16, 0u16, 0x0100u16, // sample 2: bit 8  = WAVE_enable
+        ]);
+        let ed = opendpp_to_event_data(&evt, 0, true);
+        let wf = ed.waveform.expect("waveform should be present");
+        assert_eq!(wf.digital_probe6, vec![1u8, 0u8, 0u8]);
+        assert_eq!(wf.digital_probe7, vec![0u8, 1u8, 0u8]);
+        assert_eq!(wf.digital_probe8, vec![0u8, 0u8, 1u8]);
+        // The five older signals are untouched by these bits.
+        assert_eq!(wf.digital_probe1, vec![0u8, 0u8, 0u8]);
+        assert_eq!(wf.digital_probe5, vec![0u8, 0u8, 0u8]);
+        assert_eq!(
+            &wf.digital_probe_type[5..8],
+            &[
+                amax_probe_types::DIG_AMAX_TRIGG,
+                amax_probe_types::DIG_TRIGGER_ACQ,
+                amax_probe_types::DIG_WAVE_ENABLE,
+            ]
+        );
+        assert_eq!(
+            wf.digital_probe_type[8],
+            decoder::common::UNKNOWN_PROBE_TYPE
+        );
     }
 
     /// `amax_enable_acq_from_config`: reads `channel_defaults.amax.enable_acq`
