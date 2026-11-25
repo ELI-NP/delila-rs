@@ -2806,6 +2806,46 @@ mod tests {
         assert_eq!(config.board.start_source, Some("SWcmd".to_string()));
     }
 
+    /// LVDS quartet settings (DIG2: PSD2 / PHA2 / AMax) live outside `/par`,
+    /// at `/lvds/<quartet>/par/lvdsmode` and `.../lvdsdirection` (verified in
+    /// `docs/devtree_examples/vx2730_dppopen_sn52622.json`). The Settings UI
+    /// stores them in `board.extra` under the full path; a key starting with
+    /// `/` must reach the hardware verbatim. Both are setinrun=false in the
+    /// DevTree, so they must not be in the Running-time subset.
+    #[test]
+    fn test_lvds_quartet_full_path_extra_is_written_on_configure_only() {
+        let mut config = DigitizerConfig::new(0, "Test AMax", FirmwareType::AMax);
+        config.board.extra.insert(
+            "/lvds/2/par/lvdsmode".to_string(),
+            serde_json::json!("User"),
+        );
+        config.board.extra.insert(
+            "/lvds/2/par/lvdsdirection".to_string(),
+            serde_json::json!("Output"),
+        );
+
+        let params = config.to_caen_parameters();
+        let find = |path: &str| {
+            params
+                .iter()
+                .find(|p| p.path == path)
+                .map(|p| p.value.clone())
+        };
+        assert_eq!(find("/lvds/2/par/lvdsmode"), Some("User".to_string()));
+        assert_eq!(
+            find("/lvds/2/par/lvdsdirection"),
+            Some("Output".to_string())
+        );
+        // No `/par/` prefix must be glued onto a full path.
+        assert!(!params.iter().any(|p| p.path.starts_with("/par//lvds")));
+
+        let running = config.to_caen_parameters_set_in_run();
+        assert!(
+            !running.iter().any(|p| p.path.starts_with("/lvds/")),
+            "LVDS quartet settings are not SetInRun"
+        );
+    }
+
     /// `deserialize_u32_hex_or_dec` accepts hex strings, decimal strings, and
     /// integer literals. All four forms below must produce 0x8108 = 33032.
     #[test]

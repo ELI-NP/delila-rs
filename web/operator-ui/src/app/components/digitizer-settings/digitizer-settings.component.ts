@@ -438,6 +438,45 @@ import {
                     }
                   </div>
 
+                  @if (isDig2(config.firmware)) {
+                    <!-- LVDS quartets (DIG2: PSD2 / PHA2 / AMax). The DevTree has them at
+                         /lvds/N/par/lvdsmode and /lvds/N/par/lvdsdirection, outside /par, so
+                         they are stored in board.extra under the full path (the Reader writes
+                         a key starting with "/" verbatim). Allowed values taken from the live
+                         DevTree dump docs/devtree_examples/vx2730_dppopen_sn52622.json. -->
+                    <mat-divider></mat-divider>
+                    <h3 class="section-title">LVDS I/O</h3>
+                    <p class="hint-text">
+                      16 LVDS lines in four quartets (LVDS 0 to 3); each quartet has one mode and one direction.
+                      "Board default" writes nothing, so the board keeps what the Configure reset
+                      gives (IORegister / Input). Mode "User" connects the pins to the user
+                      firmware logic. Applied on Configure, not while Running.
+                    </p>
+                    <div class="form-grid">
+                      @for (q of lvdsQuartets; track q) {
+                        <mat-form-field appearance="outline">
+                          <mat-label>LVDS {{ q }} Mode</mat-label>
+                          <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra![lvdsKey(q, 'lvdsmode')]">
+                            <mat-option [value]="undefined">Board default</mat-option>
+                            <mat-option value="SelfTriggers" matTooltip="SelfTriggers — masked OR of the channel self-triggers">SelfTriggers</mat-option>
+                            <mat-option value="Sync" matTooltip="Sync — board synchronisation signals">Sync</mat-option>
+                            <mat-option value="IORegister" matTooltip="IORegister — level set by the LVDS I/O register">IORegister</mat-option>
+                            <mat-option value="User" matTooltip="User — pins driven / read by the user firmware logic">User</mat-option>
+                          </mat-select>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                          <mat-label>LVDS {{ q }} Direction</mat-label>
+                          <mat-select panelClass="fit-content-panel" [(value)]="config.board.extra![lvdsKey(q, 'lvdsdirection')]">
+                            <mat-option [value]="undefined">Board default</mat-option>
+                            <mat-option value="Input">Input</mat-option>
+                            <mat-option value="Output">Output</mat-option>
+                          </mat-select>
+                        </mat-form-field>
+                      }
+                    </div>
+                  }
+
                   <mat-divider></mat-divider>
                   <h3 class="section-title">Test Pulse</h3>
                   <div class="form-grid">
@@ -1213,6 +1252,15 @@ export class DigitizerSettingsComponent {
    *  for AMax at all). Verified against the live AMax DevTree (2026-06-09,
    *  VX2730 SN52622): gpiomode / trgoutmode / iolevel / startsource /
    *  clocksource / enclockoutfp / syncoutmode / rundelay are all present. */
+  /** LVDS quartet indices of a DIG2 board (`/lvds/0..3` in the DevTree). */
+  readonly lvdsQuartets = [0, 1, 2, 3];
+
+  /** `board.extra` key of an LVDS quartet parameter: the full DevTree path,
+   *  which the Reader writes verbatim because it starts with "/". */
+  lvdsKey(quartet: number, param: 'lvdsmode' | 'lvdsdirection'): string {
+    return `/lvds/${quartet}/par/${param}`;
+  }
+
   isDig2(fw: FirmwareType): boolean {
     return fw === 'PSD2' || fw === 'PHA2' || fw === 'AMax';
   }
